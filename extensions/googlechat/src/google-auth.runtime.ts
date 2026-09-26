@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import type { ConnectionOptions } from "node:tls";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
@@ -274,6 +277,15 @@ function validateGoogleChatServiceAccountCredentials(
   };
 }
 
+function sanitizeCredentialFileReadError(error: unknown): Error {
+  // Filesystem messages and causes can contain the private credential path.
+  return new Error(
+    extractErrorCode(error) === "too-large"
+      ? `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`
+      : "Failed to load Google Chat service account file.",
+  );
+}
+
 async function readCredentialsFile(filePath: string): Promise<Record<string, unknown>> {
   const resolvedPath = resolveUserPath(filePath);
   if (!resolvedPath) {
@@ -283,8 +295,8 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
   let handle: Awaited<ReturnType<typeof fs.open>> | null;
   try {
     handle = await fs.open(resolvedPath, "r");
-  } catch {
-    throw new Error("Failed to load Google Chat service account file.");
+  } catch (error) {
+    throw sanitizeCredentialFileReadError(error);
   }
 
   try {
@@ -292,22 +304,13 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
     if (!stat.isFile()) {
       throw new Error("Google Chat service account file must be a regular file.");
     }
-    if (stat.size > MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES) {
-      throw new Error(
-        `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`,
-      );
-    }
-
     let raw: string;
     try {
-      raw = await handle.readFile({ encoding: "utf8" });
-    } catch {
-      throw new Error("Failed to load Google Chat service account file.");
-    }
-    if (Buffer.byteLength(raw, "utf8") > MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES) {
-      throw new Error(
-        `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`,
-      );
+      raw = (
+        await readFileHandleBounded(handle, MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES)
+      ).toString("utf8");
+    } catch (error) {
+      throw sanitizeCredentialFileReadError(error);
     }
 
     let parsed: unknown;
@@ -424,12 +427,9 @@ function createGoogleAuthFetch(): FetchLike {
         statusText: response.statusText,
       });
     } finally {
-      // The size guard can reject before the stream is touched, leaving an
-      // unread body. Start cancellation before release; awaiting it can
-      // deadlock when debug capture tees the stream.
-      if (!response.bodyUsed) {
-        void response.body?.cancel().catch(() => undefined);
-      }
+      // The reader releases its lock before cancellation. Capture tees can
+      // retain cancellation until dispatcher release, so do not await it.
+      void response.body?.cancel().catch(() => undefined);
       await release();
     }
   };
@@ -444,44 +444,16 @@ async function readGoogleAuthResponseBytes(response: Response): Promise<Uint8Arr
     }
   }
 
-  const reader = response.body?.getReader();
-  if (!reader) {
+  if (!response.body) {
     throw new Error(
       "Google auth response body stream unavailable; refusing to buffer unbounded response.",
     );
   }
 
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value) {
-        continue;
-      }
-      total += value.byteLength;
-      if (total > MAX_GOOGLE_AUTH_RESPONSE_BYTES) {
-        throw new Error(`Google auth response exceeds ${MAX_GOOGLE_AUTH_RESPONSE_BYTES} bytes.`);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    // A capture tee can retain cancellation until the caller releases its request.
-    void reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
-
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  return await readResponseWithLimit(response, MAX_GOOGLE_AUTH_RESPONSE_BYTES, {
+    onOverflow: () =>
+      new Error(`Google auth response exceeds ${MAX_GOOGLE_AUTH_RESPONSE_BYTES} bytes.`),
+  });
 }
 
 export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {

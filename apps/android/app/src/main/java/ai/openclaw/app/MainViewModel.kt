@@ -60,6 +60,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -528,6 +529,8 @@ class MainViewModel private constructor(
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
   val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> =
     runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
+  val nodeApprovalAction: StateFlow<GatewayNodeApprovalActionState> =
+    runtimeState(initial = GatewayNodeApprovalActionState()) { it.nodeApprovalAction }
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
@@ -681,6 +684,7 @@ class MainViewModel private constructor(
   val chatThinkingLevelSelection: StateFlow<ChatThinkingLevelSelection> =
     runtimeState(initial = defaultChatThinkingLevelSelection) { it.chatThinkingLevelSelection }
   val chatSelectedModelRef: StateFlow<String?> = runtimeState(initial = null) { it.chatSelectedModelRef }
+  val chatDefaultModelRef: StateFlow<String?> = runtimeState(initial = null) { it.chatDefaultModelRef }
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> =
     runtimeState(initial = emptySet()) { it.chatPendingSessionSettingsKeys }
@@ -1657,6 +1661,10 @@ class MainViewModel private constructor(
     ensureRuntime().refreshNodesDevices()
   }
 
+  fun approveNodeCapabilities(requestId: String) {
+    ensureRuntime().approveNodeCapabilities(requestId)
+  }
+
   fun approveDevicePairing(
     requestId: String,
     deviceId: String,
@@ -1991,10 +1999,10 @@ class MainViewModel private constructor(
     mainSessionKey: String,
     expectedCount: Int,
     load: suspend () -> List<PendingAttachment>,
-  ) {
+  ): Job? {
     val importId =
-      chatComposerState.beginMediaImport(owner, mediaAuthorizationId, mainSessionKey) ?: return
-    viewModelScope.launch(Dispatchers.IO) {
+      chatComposerState.beginMediaImport(owner, mediaAuthorizationId, mainSessionKey) ?: return null
+    return viewModelScope.launch(Dispatchers.IO) {
       try {
         val loaded =
           try {

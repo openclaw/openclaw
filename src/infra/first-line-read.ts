@@ -1,13 +1,9 @@
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
-import { readFileWindowFullySync } from "./file-read.js";
+import { readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
 
-// A session header is one JSON line that may be longer than a single read. Scan it
-// in chunks and stop at the first newline: `StringDecoder` carries a multibyte
-// sequence that a chunk boundary splits, whereas decoding one fixed window with
-// `toString("utf8")` turns that split character into U+FFFD and the header stops
-// parsing. HEADER_MAX_CHARS bounds the scan so an unterminated file cannot be read
-// indefinitely.
+// StringDecoder preserves UTF-8 sequences split across chunks. Bound the scan
+// so a missing newline cannot read indefinitely.
 const HEADER_CHUNK_BYTES = 8192;
 const HEADER_MAX_CHARS = 1024 * 1024;
 

@@ -17,6 +17,7 @@ type FrameSample = {
   rowKeys: string[];
   imageCount: number;
   loadedImageCount: number;
+  enteringBubbleCount: number;
 };
 
 type SamplerWindow = Window & {
@@ -58,6 +59,10 @@ async function startFrameSampler(currentPage: Page, probeText = PROBE_TEXT): Pro
         loadedImageCount: images.filter(
           (image) => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0,
         ).length,
+        enteringBubbleCount: rows.reduce(
+          (count, row) => count + row.querySelectorAll(".chat-bubble--enter").length,
+          0,
+        ),
       });
       requestAnimationFrame(sample);
     };
@@ -658,6 +663,14 @@ suite.define(() => {
             ),
           )
           .toBe(true);
+        // A locally submitted turn plays the composer entry animation exactly once.
+        expect(
+          await currentPage.evaluate(() =>
+            ((window as SamplerWindow).openclawSendFrameSamples ?? []).some(
+              (frame) => frame.enteringBubbleCount === 1,
+            ),
+          ),
+        ).toBe(true);
         await gateway.resolveDeferred("chat.send");
 
         const frames = await finishRunAndSettle(currentPage, gateway, runId, {

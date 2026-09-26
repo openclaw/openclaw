@@ -1,4 +1,5 @@
 // Linux OOM score helpers adjust child process OOM priority when supported.
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 
 /**
@@ -93,6 +94,49 @@ function shouldWrapChildForOomScore(options: OomWrapOptions | undefined): boolea
 
 function isWrapped(command: string, args: readonly string[]): boolean {
   return command === OOM_SCORE_WRAP_SHELL && args[0] === "-c" && args[1] === OOM_SCORE_WRAP_SCRIPT;
+}
+
+/** Only small spawn owners may temporarily raise their score; never call from the Gateway. */
+export function spawnWithInheritedOomScore(
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+): ChildProcess {
+  if (
+    process.platform !== "linux" ||
+    !isWrapped(command, args) ||
+    !args[2] ||
+    options.shell ||
+    options.argv0 !== undefined
+  ) {
+    return spawn(command, args, options);
+  }
+  let scoreFd: number | undefined;
+  let original: string;
+  try {
+    scoreFd = fs.openSync("/proc/self/oom_score_adj", "r+");
+    original = fs.readFileSync(scoreFd, "utf8").trim();
+    fs.writeSync(scoreFd, "1000", 0, "utf8");
+  } catch {
+    if (scoreFd !== undefined) {
+      fs.closeSync(scoreFd);
+    }
+    return spawn(command, args, options);
+  }
+  try {
+    // No await: only this fork inherits the raised score, including its earliest descendants.
+    return spawn(args[2], args.slice(3), options);
+  } finally {
+    try {
+      // Linux permits restoring the inherited minimum without CAP_SYS_RESOURCE.
+      fs.writeSync(scoreFd, original, 0, "utf8");
+    } catch {
+      // Preserve the child handle so its owner can still supervise and clean it up.
+      process.emitWarning("Could not restore spawn owner's Linux OOM score");
+    } finally {
+      fs.closeSync(scoreFd);
+    }
+  }
 }
 
 function canUseShellExecCommand(command: string): boolean {

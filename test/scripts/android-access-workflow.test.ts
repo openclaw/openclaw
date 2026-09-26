@@ -52,7 +52,9 @@ with zipfile.ZipFile(apk, 'w') as archive:
 describe("Android Access native workflow", () => {
   it("runs the packaged class on current Android targets and includes its result in CI", () => {
     expect(job.permissions).toEqual({ contents: "read" });
-    expect(evaluateWorkflowRunner(job["runs-on"])).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(job["runs-on"], { eventName: "pull_request" })).toBe(
+      "ubuntu-24.04",
+    );
     expect(workflow.jobs.preflight.outputs.run_android_access_native).toBe(
       "${{ steps.manifest.outputs.run_android_access_native }}",
     );
@@ -64,7 +66,10 @@ describe("Android Access native workflow", () => {
     expect(step.run).toContain('zipalign" -c -P 16 -v 4');
     expect(step.run).toContain('zipalign" -c -P 16 -v 4 "$apk"');
     expect(workflow.jobs["ci-gate"].needs).toContain("android-access-native");
-    expect(workflow.jobs["ci-gate"].steps[0].env.JOB_RESULTS).toContain(
+    const aggregate = workflow.jobs["ci-gate"].steps.find(
+      (entry: { name?: string }) => entry.name === "Verify selected CI lanes",
+    );
+    expect(aggregate.env.JOB_RESULTS).toContain(
       "android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}",
     );
   });

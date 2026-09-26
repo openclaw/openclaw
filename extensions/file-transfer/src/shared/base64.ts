@@ -1,5 +1,3 @@
-// File Transfer plugin module implements strict base64 preflight validation.
-
 function isBase64DataChar(code: number): boolean {
   return (
     (code >= 0x41 && code <= 0x5a) ||

@@ -7,28 +7,6 @@ import Synchronization
 /// Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
-private func gatewayErrorDetails(_ error: ErrorShape?) -> [String: ProtoAnyCodable] {
-    var details: [String: ProtoAnyCodable] = [:]
-    if let nested = error?.details?.value as? [String: ProtoAnyCodable] {
-        details.merge(nested) { _, nestedValue in nestedValue }
-    }
-    if let error {
-        if details["code"] == nil {
-            details["code"] = ProtoAnyCodable(error.code)
-        } else {
-            details["errorCode"] = ProtoAnyCodable(error.code)
-        }
-        details["message"] = ProtoAnyCodable(error.message)
-        if let retryable = error.retryable {
-            details["retryable"] = ProtoAnyCodable(retryable)
-        }
-        if let retryAfterMs = error.retryafterms {
-            details["retryAfterMs"] = ProtoAnyCodable(retryAfterMs)
-        }
-    }
-    return details
-}
-
 extension String {
     fileprivate var nilIfEmpty: String? {
         self.isEmpty ? nil : self
@@ -357,7 +335,14 @@ public actor GatewayChannelActor {
 
         // External authorization can suspend. A canceled route must never create a socket
         // with a grant returned after its disconnect or replacement.
-        let request = try await self.makeUpgradeRequest()
+        let request: URLRequest
+        do {
+            request = try await self.makeUpgradeRequest()
+        } catch let error as GatewayExternalAuthorizationError {
+            // No physical socket exists yet; pause the watchdog at this admission boundary.
+            self.reconnectPausedForAuthFailure = true
+            throw error
+        }
         try Task.checkCancellation()
         guard self.shouldReconnect else { throw CancellationError() }
         if let disconnectError { throw disconnectError }
@@ -1332,6 +1317,7 @@ extension GatewayChannelActor {
     }
 
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
+        if error is GatewayExternalAuthorizationError { return true }
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }

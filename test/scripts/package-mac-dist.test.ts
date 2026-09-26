@@ -31,6 +31,7 @@ function makeCheckpointFixture() {
     "lib/mac-notarization-recovery.py",
     "lib/swift-toolchain.sh",
     "lib/plistbuddy.sh",
+    "lib/mac-signing-identity.sh",
   ]) {
     writeFileSync(
       path.join(root, "scripts", file),
@@ -53,7 +54,8 @@ def archive(source, target):
     with zipfile.ZipFile(target, "w") as z:
         for p in source.rglob("*"):
             if p.is_file(): z.write(p, p.relative_to(source.parent))
-if name == "swift": print("Apple Swift version 6.3")
+if name == "security": print('1) ABCDEF "Developer ID Application: Fixture"')
+elif name == "swift": print("Apple Swift version 6.3")
 elif name == "xcrun": print("Xcode 26.4")
 elif name == "node": print("2608000290")
 elif name == "git": print("a" * 40)
@@ -64,7 +66,7 @@ elif name == "package-mac-app.sh":
     app = root / "dist/OpenClaw.app/Contents"
     app.mkdir(parents=True, exist_ok=True)
     (app / "Info.plist").write_text(json.dumps(dict(CFBundleShortVersionString="2026.8.2", CFBundleVersion="2608000290", CFBundleIdentifier="ai.openclaw.mac", SUFeedURL="https://example.com/appcast.xml")))
-    (app / "signature").write_text("adhoc" if os.environ.get("ALLOW_ADHOC_SIGNING") == "1" else "developer")
+    (app / "signature").write_text("adhoc" if os.environ.get("SIGN_IDENTITY") == "-" else "developer")
 elif name == "codesign":
     target = pathlib.Path(args[-1])
     if "--sign" in args:
@@ -100,6 +102,7 @@ else: sys.exit("unexpected fake tool: " + name)
     { mode: 0o755 },
   );
   for (const name of [
+    "security",
     "swift",
     "xcrun",
     "node",
@@ -185,20 +188,38 @@ describe("macOS packaging checkpoint boundary", () => {
     ).toBe(true);
   });
 
-  it("allows explicitly ad-hoc smoke resume without notarization", () => {
+  it.each(["-", ""])(
+    "allows ad-hoc smoke resume with identity %j on a signer-equipped host",
+    (identity) => {
+      const f = makeCheckpointFixture();
+      const smoke = {
+        ALLOW_ADHOC_SIGNING: "1",
+        SIGN_IDENTITY: identity,
+        SKIP_NOTARIZE: "1",
+        EXPECTED_DEVELOPER_TEAM_ID: "FIXTURE",
+      };
+      expect(f.run("--checkpoint-only", smoke).status).toBe(0);
+      const resumed = f.run("--resume-notarization", smoke);
+      expect(resumed.status, resumed.stderr).toBe(0);
+      expect(f.events()).not.toContain("notarize-mac-artifact.sh");
+      expect(existsSync(path.join(f.root, "dist/OpenClaw.app/Contents/stapled"))).toBe(false);
+      expect(existsSync(path.join(f.root, "appcast.xml"))).toBe(false);
+    },
+  );
+
+  it("uses the automatically selected app identity for the checkpoint DMG", () => {
     const f = makeCheckpointFixture();
-    const smoke = {
-      ALLOW_ADHOC_SIGNING: "1",
-      SIGN_IDENTITY: "-",
-      SKIP_NOTARIZE: "1",
-      EXPECTED_DEVELOPER_TEAM_ID: "FIXTURE",
-    };
-    expect(f.run("--checkpoint-only", smoke).status).toBe(0);
-    const resumed = f.run("--resume-notarization", smoke);
-    expect(resumed.status, resumed.stderr).toBe(0);
-    expect(f.events()).not.toContain("notarize-mac-artifact.sh");
-    expect(existsSync(path.join(f.root, "dist/OpenClaw.app/Contents/stapled"))).toBe(false);
-    expect(existsSync(path.join(f.root, "appcast.xml"))).toBe(false);
+    const built = f.run("--checkpoint-only", { SIGN_IDENTITY: "" });
+    expect(built.status, built.stderr).toBe(0);
+    expect(f.events()).toContain("--sign Developer ID Application: Fixture --timestamp");
+  });
+
+  it("preserves an explicit signed identity when smoke flags are present", () => {
+    const f = makeCheckpointFixture();
+    const built = f.run("--checkpoint-only", { ALLOW_ADHOC_SIGNING: "1", SKIP_NOTARIZE: "1" });
+    expect(built.status).not.toBe(0);
+    expect(built.stderr).toContain("requires an ad-hoc signed smoke app");
+    expect(existsSync(f.checkpoint)).toBe(false);
   });
 
   it.each(["release", "release with smoke flag", "tampered app", "missing DMG", "audit"])(
@@ -260,6 +281,7 @@ function makeDistributionFixture(layout: "native" | "xcode", missingArch?: strin
     "notarize-mac-artifact.sh",
     "lib/mac-notarization-recovery.py",
     "lib/plistbuddy.sh",
+    "lib/mac-signing-identity.sh",
     "lib/swift-toolchain.sh",
   ]) {
     copyFileSync(path.join("scripts", file), path.join(scripts, file));

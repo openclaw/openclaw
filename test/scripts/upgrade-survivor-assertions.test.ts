@@ -26,6 +26,8 @@ import {
 } from "./plugin-inspect.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+// Extracted and sourced snippets do not execute the production Darwin Bash fallback.
+const testBashExecPath = process.platform === "darwin" ? "/bin/bash" : "bash";
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 
@@ -89,7 +91,7 @@ function selectFrozenUpgradeOracle(
     source.indexOf("\nIMAGE_NAME="),
   );
   const result = spawnSync(
-    "bash",
+    testBashExecPath,
     [
       "-euo",
       "pipefail",
@@ -1005,7 +1007,7 @@ function seedSessionSourceFixture(stateDir: string, scenario = "base", missingPa
   writeJson(env.OPENCLAW_CONFIG_PATH, { plugins: { allow: [], entries: {} } });
   // Use the production shell seed boundary before the same assertions seed used by artifact-only.
   env.OPENCLAW_UPGRADE_SURVIVOR_MISSING_LOAD_PATH_SEEDED = execFileSync(
-    "bash",
+    testBashExecPath,
     [
       "-euc",
       `source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh

@@ -27,7 +27,6 @@ import {
 import {
   inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyLocationInProcess,
-  prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
@@ -41,7 +40,10 @@ import {
   sealUpdateCandidatePluginCodeLinks,
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
-import type { UpdateStateInspectionProgress } from "./update-candidate-state.diagnostics.js";
+import {
+  createUpdateStateSnapshotReporter,
+  type UpdateStateInspectionProgress,
+} from "./update-candidate-state.diagnostics.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
@@ -188,16 +190,19 @@ async function withStateDatabaseSnapshot<T>(
   file: string,
   read: (location: string) => T | Promise<T>,
   stagingRoot?: string,
-  acquisition: "inspection" | "rehearsal" = "inspection",
+  onProgress?: (progress: UpdateStateInspectionProgress) => void,
 ): Promise<T> {
-  // Rehearsal runs in a dedicated child and pins a WAL generation with online
-  // backup. Schema/rollback inspection keeps its non-attaching source contract.
-  const prepare =
-    acquisition === "rehearsal"
-      ? prepareSqliteReadOnlyLocationInProcess
-      : prepareSqliteReadOnlyLocationSyncInProcess;
-  const snapshot = await prepare(file, stagingRoot);
-  return withPreparedSqliteSnapshot(snapshot, read);
+  const progress = createUpdateStateSnapshotReporter(file, "shared database snapshot", onProgress);
+  const snapshot = await prepareSqliteReadOnlyLocationInProcess(
+    file,
+    stagingRoot,
+    undefined,
+    progress.onProgress,
+  );
+  return withPreparedSqliteSnapshot(snapshot, async (location) => {
+    progress.complete((await fs.stat(location)).size);
+    return read(location);
+  });
 }
 
 export async function collectStateDatabasePaths(
@@ -272,7 +277,11 @@ function publishStateDatabaseVersions(
 
 /** Read registrations and plugin ownership from one private shared copy before budgeting. */
 export async function readUpdateCandidateStateInventoryInProcess(
-  input: StateInput & { targetStateDir: string; candidateRoot: string },
+  input: StateInput & {
+    targetStateDir: string;
+    candidateRoot: string;
+    onProgress?: (progress: UpdateStateInspectionProgress) => void;
+  },
 ): Promise<z.infer<typeof UpdateCandidateSnapshotInventorySchema>> {
   await fs.mkdir(input.targetStateDir, { recursive: true, mode: 0o700 });
   const planPath = path.join(input.targetStateDir, UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME);
@@ -317,7 +326,7 @@ export async function readUpdateCandidateStateInventoryInProcess(
         return measure(location);
       },
       input.targetStateDir,
-      "rehearsal",
+      input.onProgress,
     );
   }
   return measure();
@@ -363,6 +372,7 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
       ...readStateDatabaseVersion(location, shared, shared, files),
     }),
     input.stagingRoot,
+    input.onProgress,
   );
   return { files: [...files], sharedVersion };
 }
@@ -414,6 +424,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
         file,
         (location) => readStateDatabaseVersion(location, file, shared, files),
         input.stagingRoot,
+        input.onProgress,
       ),
     );
   }
@@ -573,6 +584,7 @@ export async function snapshotUpdateCandidateState(
     candidateRoot: string;
     pluginPlanPath: string;
     databaseInventory: string[];
+    onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<z.infer<typeof UpdateCandidateStateSnapshotSchema>> {
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
@@ -584,11 +596,14 @@ export async function snapshotUpdateCandidateState(
   const admittedDatabases = new Set(input.databaseInventory);
   const sourceRoot = path.resolve(input.stateDir);
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
+  const { createUpdateCandidateExecApprovalsProjection } =
+    await import("./update-candidate-exec-approvals.js");
   const targetPath = (source: string) =>
     path.join(
       resolveUpdateCandidateStatePath(sourceRoot, input.targetStateDir, path.dirname(source)),
       path.basename(source),
     );
+  const execApprovals = createUpdateCandidateExecApprovalsProjection(sourceRoot, targetPath);
   // Physical copies dedupe on projection identity; the published versions
   // keep every raw alias so released rollback baselines still match.
   const files = await collectStateDatabasePaths(input);
@@ -607,15 +622,18 @@ export async function snapshotUpdateCandidateState(
     const target = targetPath(file);
     let contentVersion: number | undefined;
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    const progress = createUpdateStateSnapshotReporter(file, "database snapshot", input.onProgress);
     const snapshot = await createVerifiedSqliteSnapshot({
       sourcePath: file,
       targetPath: target,
       sourceAcquisition: { mode: "isolated-process", stagingRoot: input.targetStateDir },
+      onProgress: progress.onProgress,
       ...(file === shared
         ? {
             transform: (db: DatabaseSync) => {
               contentVersion = readStateSchemaContentVersion(db);
               const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
+              execApprovals.rebaseReceipt(db);
               // Source process leases cannot own the independently opened rehearsal copy.
               for (const table of ["agent_database_leases", "state_leases"] as const) {
                 if (tableExists(db, table)) {
@@ -666,11 +684,13 @@ export async function snapshotUpdateCandidateState(
           }
         : {}),
     });
+    progress.complete((await fs.stat(target)).size);
     inspected.set(identity, {
       userVersion: snapshot.userVersion,
       ...(contentVersion === undefined ? {} : { contentVersion }),
     });
   }
+  await execApprovals.copySources();
   const versions = publishStateDatabaseVersions(files, inspected);
   const pluginCodeLinks: UpdateCandidatePluginCodeLink[] = [];
   const pluginPaths = await copyUpdateCandidatePlugins(plugins, {

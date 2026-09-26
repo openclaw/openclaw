@@ -70,28 +70,44 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       return { generation: registration.generation, release: registration.release };
     },
     /** Caller must authenticate its private transport before parsing any model request. */
-    prepare(body: JsonObject, preparedMetadata?: CodexInferenceMetadata) {
+    // Host-held OAuth may fund only admitted generations; native background work has no such grant.
+    prepare(body: JsonObject, preparedMetadata?: CodexInferenceMetadata, requireAdmission = false) {
       assertOpen();
       const metadata = preparedMetadata ?? readCodexInferenceMetadata(body);
       const child = Boolean(metadata.parentThreadId || metadata.subagentKind || metadata.subagent);
       const kind = metadata.requestKind;
       // Native children/reviewers and compaction/memory keep their original instructions.
-      if (child || kind === "compaction" || kind === "memory") {
+      if (!requireAdmission && (child || kind === "compaction" || kind === "memory")) {
         return { body, assertCurrent: assertOpen, signal: undefined };
       }
-      if (kind !== "turn" && kind !== "prewarm") {
+      if (
+        child ||
+        (kind !== "turn" && kind !== "prewarm" && !(requireAdmission && kind === "compaction"))
+      ) {
         throw new Error("Codex inference request has an unsupported native purpose");
       }
       const registration = metadata.threadId ? roots.get(metadata.threadId) : undefined;
       const generation = metadata.generation;
       // Startup prewarm precedes host admission; it must never borrow a later turn's persona.
-      if (kind === "prewarm" && body.generate === false && generation == null) {
+      if (
+        !requireAdmission &&
+        kind === "prewarm" &&
+        body.generate === false &&
+        generation == null
+      ) {
         return { body, assertCurrent: assertOpen, signal: undefined };
       }
       if (!registration || generation !== registration.generation) {
         throw new Error("Codex inference has no current admitted parent generation");
       }
       registration.assertCurrent();
+      if (kind === "compaction") {
+        return {
+          body,
+          assertCurrent: registration.assertCurrent,
+          signal: registration.controller.signal,
+        };
+      }
       // Responses Lite carries native base instructions in input and omits this optional field.
       const instructions = body.instructions;
       if (instructions !== undefined && typeof instructions !== "string") {

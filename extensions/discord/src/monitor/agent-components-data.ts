@@ -113,22 +113,17 @@ export function resolveInteractionCustomId(
 }
 
 export function mapSelectValues(entry: DiscordComponentEntry, values: string[]): string[] {
-  if (entry.selectType === "string") {
-    return mapOptionLabels(entry.options, values);
+  switch (entry.selectType) {
+    case "string":
+      return mapOptionLabels(entry.options, values);
+    case "user":
+    case "role":
+    case "mentionable":
+    case "channel":
+      return values.map((value) => `${entry.selectType}:${value}`);
+    default:
+      return values;
   }
-  if (entry.selectType === "user") {
-    return values.map((value) => `user:${value}`);
-  }
-  if (entry.selectType === "role") {
-    return values.map((value) => `role:${value}`);
-  }
-  if (entry.selectType === "mentionable") {
-    return values.map((value) => `mentionable:${value}`);
-  }
-  if (entry.selectType === "channel") {
-    return values.map((value) => `channel:${value}`);
-  }
-  return values;
 }
 
 export function resolveModalFieldValues(

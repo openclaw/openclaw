@@ -1,5 +1,6 @@
 import type { MessageReceiptPartKind } from "openclaw/plugin-sdk/channel-outbound";
 import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { CoreConfig } from "../types.js";
@@ -10,7 +11,6 @@ import {
   resolveMatrixDurableDeliveryIdentity,
   type MatrixPreparedEvent,
 } from "./delivery-plan.js";
-import { loadOutboundMediaFromUrl } from "./outbound-media-runtime.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { buildMatrixReactionContent } from "./reaction-common.js";
 import { buildMatrixMessageRelation, resolveMatrixReplyToEventId } from "./relations.js";
@@ -209,7 +209,7 @@ export async function sendMessageMatrix(
             fileName: media.fileName,
             kind: media.kind === "sticker" ? "unknown" : (media.kind ?? "unknown"),
           });
-          const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
+          const baseMsgType = resolveMatrixMsgType(media.contentType);
           const useVoice = opts.audioAsVoice === true && isVoiceMessageCompatibleAudio(media);
           const msgtype = useVoice ? MsgType.Audio : baseMsgType;
           const receiptKind: MessageReceiptPartKind = useVoice ? "voice" : "media";

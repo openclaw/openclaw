@@ -1,4 +1,3 @@
-// File Transfer plugin module implements node invoke policy commands behavior.
 export const FILE_TRANSFER_NODE_INVOKE_COMMANDS = [
   "file.fetch",
   "file.stat",

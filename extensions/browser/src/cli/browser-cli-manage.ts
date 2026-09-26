@@ -5,6 +5,8 @@
 import type { Command } from "commander";
 import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { danger, defaultRuntime, info } from "openclaw/plugin-sdk/runtime-env";
+import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
 import type {
   BrowserCreateProfileResult,
@@ -27,7 +29,6 @@ import {
   runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { danger, defaultRuntime, info, shortenHomePath } from "./core-api.js";
 
 const BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
 
@@ -288,13 +289,6 @@ function usesChromeMcpTransport(params: {
   return params.transport === "chrome-mcp" || params.driver === "existing-session";
 }
 
-function usesExtensionTransport(params: {
-  transport?: BrowserTransport;
-  driver?: BrowserProfileDriver;
-}): boolean {
-  return params.transport === "extension" || params.driver === "extension";
-}
-
 function formatBrowserConnectionSummary(params: {
   transport?: BrowserTransport;
   driver?: BrowserProfileDriver;
@@ -312,7 +306,7 @@ function formatBrowserConnectionSummary(params: {
       ? `transport: chrome-mcp, userDataDir: ${userDataDir}`
       : "transport: chrome-mcp";
   }
-  if (usesExtensionTransport(params)) {
+  if (params.transport === "extension" || params.driver === "extension") {
     return `transport: extension, relayPort: ${params.cdpPort ?? "(unset)"}`;
   }
   if (params.isRemote) {

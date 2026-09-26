@@ -31,6 +31,11 @@ Closed Terminal, Browser, and Desktop panels initialize when you open them rathe
 
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Ordinary session patches and command changes wait for a 2.5-second quiet period before refreshing commands and session facts. They reuse the model catalog unless the returned metadata indicates a changed model or account projection. Explicit model, account, and runtime selections refresh promptly. Configuration, catalog, and session lifecycle changes still invalidate the full metadata bundle. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
+New Session keeps previously fetched model choices selectable while their catalog
+refreshes in the background. Before the first catalog arrives, it does not turn a
+configured default into a model option. Command palette model results use the same
+catalog cache and appear independently of slower search categories.
+
 Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
 
 The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
@@ -47,8 +52,8 @@ dashboard turns collapse their narration and tool activity under **Worked for â€
 above the answer. Expanding it restores the sequence with the existing tool-call
 groups. When no run duration is available, the heading reads **Worked**.
 
-Subagent runs appear in inline transcript activity rows, the chat **Tasks** tab,
-and the [Tasks page](/automation/tasks#control-ui), outside sidebar navigation.
+Subagent runs appear in inline transcript activity rows and the chat **Tasks** tab,
+outside sidebar navigation. Use the [Tasks CLI](/cli/tasks) to inspect work across conversations.
 Their activity rows lead with the child task's display title, using its configured
 `label` when present, followed by the latest activity. The leading claw moves only
 while running; queued and cancelled tasks stay still, and completion briefly turns
@@ -167,7 +172,7 @@ gateway. It survives reloads and switching to another gateway and back, even if
 you open a different agent's chat in team mode. Turning team mode off clears the
 remembered value after restoring it. You can still
 choose a narrower scope; navigating between pages does not reset that choice.
-Automations, Dashboards, Sessions, Tasks, and Usage support all-agent views, with
+Automations, Dashboards, Sessions, and Usage support all-agent views, with
 agent identity shown on mixed-agent rows. In Settings, choose an agent below the
 sidebar title to keep the same target across Agents, Models, Memory, and Skills.
 Global settings remain global. Skill Workshop uses the agent selected through

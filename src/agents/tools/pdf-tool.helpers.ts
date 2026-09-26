@@ -4,6 +4,10 @@
  * Normalizes PDF inputs, page ranges, provider native support, model config, and assistant text output.
  */
 import {
+  filterStringEntries,
+  normalizeUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
+import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
@@ -20,24 +24,10 @@ type PdfModelConfig = { primary?: string; fallbacks?: string[] };
 
 /** Reads `pdf` and `pdfs` tool arguments into a trimmed, de-duplicated PDF input list. */
 export function resolvePdfInputs(record: Record<string, unknown>): string[] {
-  const pdfCandidates: string[] = [];
-  if (typeof record.pdf === "string") {
-    pdfCandidates.push(record.pdf);
-  }
-  if (Array.isArray(record.pdfs)) {
-    pdfCandidates.push(...record.pdfs.filter((v): v is string => typeof v === "string"));
-  }
-
-  const seenPdfs = new Set<string>();
-  const pdfInputs: string[] = [];
-  for (const candidate of pdfCandidates) {
-    const trimmed = candidate.trim();
-    if (!trimmed || seenPdfs.has(trimmed)) {
-      continue;
-    }
-    seenPdfs.add(trimmed);
-    pdfInputs.push(trimmed);
-  }
+  const pdfInputs = normalizeUniqueTrimmedStringList([
+    record.pdf,
+    ...filterStringEntries(record.pdfs),
+  ]);
   if (pdfInputs.length === 0) {
     throw new Error("pdf required: provide a path or URL to a PDF document");
   }

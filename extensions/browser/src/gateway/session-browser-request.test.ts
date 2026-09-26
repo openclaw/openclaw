@@ -1,5 +1,5 @@
+import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayRequestHandlers } from "../core-api.js";
 import { handleSessionBrowserGatewayRequest } from "./session-browser-request.js";
 
 const mocked = vi.hoisted(() => ({

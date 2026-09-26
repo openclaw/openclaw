@@ -44,9 +44,8 @@ Bun-compatible selection on Bun. Both results are required; they share existing
 jobs and execute sequentially within each worker slot. Older targets without this
 capability retain Node-only testing.
 This includes the Control UI config when the target's runtime owner admits it;
-the targeted CSS-tokenizer optimizer workaround applies to its Bun pass, which excludes two
-GC-sensitive files retained in the full Node pass. An older unit-only runtime
-owner retains the UI's Node pass.
+its Bun pass excludes two GC-sensitive files retained in the full Node pass.
+An older unit-only runtime owner retains the UI's Node pass.
 
 Package Acceptance separately retains expanded published-upgrade scenarios:
 current unpublished candidates include native operator state, and stable/full
@@ -92,7 +91,7 @@ secrets. Failed preparation, denied approval and cancellation cannot publish.
 
 Historical recovery may still supply a separate successful `OpenClaw NPM Release`
 preflight run ID alongside the matching successful Full Release Validation run
-and attempt. Create the tooling tag with the [release publish commands](/reference/RELEASING#regular-release-publish-automation);
+and attempt. Create the tooling tag with the [release publish commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/regular-release.md#qualify-publication-bytes);
 real core npm, plugin npm, or ClawHub publication from `main` is rejected before
 child dispatch. Docker-only recovery may still use `main`.
 

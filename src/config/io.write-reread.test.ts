@@ -15,7 +15,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { readConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
+import { readLatestConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.factory.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
@@ -163,7 +163,7 @@ describe("writeConfigFile canonical reread", () => {
           });
           const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
           const auditSnapshot = () =>
-            readConfigSnapshotAuditRecord({ env, homedir: () => home, configPath });
+            readLatestConfigSnapshotAuditRecord({ env, homedir: () => home });
           const beforeAuditSnapshot = auditSnapshot();
           let compensating = false;
           let committedRaw: string | Buffer | undefined;

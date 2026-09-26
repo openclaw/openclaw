@@ -258,24 +258,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 67354,
-    "roughTokens": 16839
+    "chars": 68132,
+    "roughTokens": 17033
   },
   "openClawDeveloperInstructions": {
-    "chars": 2745,
-    "roughTokens": 687
+    "chars": 2992,
+    "roughTokens": 748
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 26808,
-    "roughTokens": 6702
+    "chars": 27055,
+    "roughTokens": 6764
   },
   "totalWithDynamicToolsJson": {
-    "chars": 94164,
-    "roughTokens": 23541
+    "chars": 95189,
+    "roughTokens": 23798
   },
   "userInputText": {
     "chars": 879,
@@ -492,6 +492,7 @@ Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other 
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
+Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.
 For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.
 
 ### Message Context

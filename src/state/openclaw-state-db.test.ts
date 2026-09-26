@@ -52,6 +52,11 @@ import {
   FIRST_USE_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
+import {
+  createCorruptionRefusalStateDatabaseFixture,
+  createDanglingSkillWorkshopReviewIndex,
+  readDanglingSkillWorkshopReviewIndex,
+} from "./openclaw-state-db-corruption.test-support.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-journal.test-support.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
@@ -93,6 +98,7 @@ import {
 import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
 import {
   collectSqliteSchemaShape,
+  hashSqliteSchema,
   normalizeSqliteSchemaShapeSql,
   replaceNamedIndexesWithNoncanonicalIndexes,
 } from "./sqlite-schema-shape.test-support.js";
@@ -117,6 +123,9 @@ type StateDbTestDatabase = Pick<
 
 const stateDbTempDirs: string[] = [];
 let canonicalStateDatabaseTemplatePath: string | undefined;
+const materializeCorruptionRefusalStateDatabase = createCorruptionRefusalStateDatabaseFixture(() =>
+  materializeCurrentStateDatabase(createTempStateDir()),
+);
 
 const V2026_7_1_2_STATE_FIXTURE_URL = new URL(
   "../../test/fixtures/sqlite/openclaw-state-v2026.7.1-2.sqlite.gz",
@@ -135,18 +144,6 @@ function createTempStateDir(): string {
 
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-function hashSqliteSchema(database: DatabaseSync): string {
-  const schema = database
-    .prepare(
-      `SELECT type, name, tbl_name, sql
-         FROM sqlite_schema
-        WHERE name NOT LIKE 'sqlite_%'
-        ORDER BY type, name`,
-    )
-    .all();
-  return sha256(JSON.stringify(schema));
 }
 
 function materializeV2026_7_1_2StateDatabase(stateDir: string): {
@@ -726,58 +723,6 @@ function materializeCurrentStateDatabase(stateDir: string): string {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   fs.copyFileSync(canonicalStateDatabaseTemplatePath, databasePath);
   return databasePath;
-}
-
-function createDanglingSkillWorkshopReviewIndex(databasePath: string): number {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec(
-      "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
-    );
-    const index = database
-      .prepare(
-        "SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND name = 'idx_skill_workshop_collection_reviews_workspace_time'",
-      )
-      .get() as { rootpage?: number } | undefined;
-    if (typeof index?.rootpage !== "number") {
-      throw new Error("failed to create legacy Skill Workshop review index fixture");
-    }
-    database.enableDefensive?.(false);
-    database.exec("PRAGMA writable_schema = ON;");
-    database
-      .prepare(
-        `UPDATE sqlite_schema
-            SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
-                         ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
-          WHERE type = 'index'
-            AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
-      )
-      .run();
-    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
-    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
-    return index.rootpage;
-  } finally {
-    database.close();
-  }
-}
-
-function readDanglingSkillWorkshopReviewIndex(
-  databasePath: string,
-): { rootpage: number; sql: string } | undefined {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    database.enableDefensive?.(false);
-    database.exec("PRAGMA writable_schema = ON;");
-    return database
-      .prepare(
-        "SELECT rootpage, sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_skill_workshop_collection_reviews_workspace_time'",
-      )
-      .get() as { rootpage: number; sql: string } | undefined;
-  } finally {
-    database.close();
-  }
 }
 
 function downgradeWorkerPlacementsToV7(db: DatabaseSync): void {
@@ -1656,11 +1601,9 @@ describe("openclaw state database", () => {
     ({ refusal, generationBound }) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const sourcePath = materializeCurrentStateDatabase(
+      const sourcePath = materializeCorruptionRefusalStateDatabase(
         generationBound ? createTempStateDir() : stateDir,
       );
-      createUnsafeIndexDrift(sourcePath);
-      createDanglingSkillWorkshopReviewIndex(sourcePath);
       const databasePath = resolveOpenClawStateSqlitePath(options.env);
       if (generationBound) {
         const { DatabaseSync } = requireNodeSqlite();
@@ -4882,7 +4825,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
-  it("validates each healthy doctor repair once and detects corruption after a clean repair", () => {
+  it("bounds healthy Doctor integrity scans and repairs later index corruption explicitly", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -4894,6 +4837,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({ changes: [], warnings: [] });
         const statements = prepare.mock.calls.map(([sql]) => sql);
         expect(statements.filter((sql) => /^PRAGMA integrity_check/iu.test(sql))).toEqual([
+          "PRAGMA integrity_check(2147483647)",
           "PRAGMA integrity_check;",
         ]);
         expect(statements.filter((sql) => /^PRAGMA foreign_key_check/iu.test(sql))).toHaveLength(1);
@@ -4904,8 +4848,13 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     createUnsafeIndexDrift(databasePath);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [],
-      warnings: [expect.stringMatching(/integrity_check failed.*unsafe_index_records_value/iu)],
+      changes: [
+        expect.stringContaining("Saved pre-repair SQLite backup:"),
+        expect.stringContaining(
+          "Rebuilt corrupt shared-state SQLite indexes: unsafe_index_records_value",
+        ),
+      ],
+      warnings: [],
     });
   });
 
@@ -5021,7 +4970,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     );
   });
 
-  it("repairs same-version Claw bootstrap columns with physical index drift", () => {
+  it("requires Doctor before repairing bootstrap columns alongside physical index damage", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -5037,6 +4986,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       shippedSchema.close();
     }
     createTaskRunStatusIndexPhysicalDrift(databasePath);
+
+    expect(() => openOpenClawStateDatabase({ env })).toThrow(/integrity_check failed/);
+    expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
 
     const reopened = openOpenClawStateDatabase({ env });
     const columns = reopened.db.prepare("PRAGMA table_info(claw_installs)").all() as Array<{
@@ -5062,7 +5014,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     { columnName: "desktop_json", tableName: "worker_environments" },
     { columnName: "shared_host", tableName: "worker_environments" },
   ])(
-    "appends same-version $columnName to $tableName before schema validation",
+    "requires Doctor for index damage before adding $columnName to $tableName",
     ({ columnName, tableName }) => {
       const stateDir = createTempStateDir();
       const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -5079,6 +5031,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         shippedSchema.close();
       }
       createTaskRunStatusIndexPhysicalDrift(databasePath);
+
+      expect(() => openOpenClawStateDatabase({ env })).toThrow(/integrity_check failed/);
+      expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
 
       const reopened = openOpenClawStateDatabase({ env });
       const columns = reopened.db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
@@ -5225,50 +5180,34 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
-  it.each(["runtime", "doctor"])(
-    "repairs physical ordinary-index drift through %s",
-    (repairPath) => {
-      const stateDir = createTempStateDir();
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const databasePath = materializeCurrentStateDatabase(stateDir);
-      createTaskRunStatusIndexPhysicalDrift(databasePath);
+  it("requires explicit Doctor repair for physical ordinary-index damage", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    createTaskRunStatusIndexPhysicalDrift(databasePath);
 
-      if (repairPath === "doctor") {
-        const { DatabaseSync } = requireNodeSqlite();
-        const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-        try {
-          expect(repairOpenClawStateDatabaseSchema({ env })).toEqual({
-            changes: [
-              expect.stringMatching(
-                /^Rebuilt canonical shared-state SQLite indexes \([1-9]\d*\)$/u,
-              ),
-            ],
-            warnings: [],
-          });
-          const statements = prepare.mock.calls.map(([sql]) => sql);
-          expect(statements.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
-          expect(statements.some((sql) => /^PRAGMA integrity_check\(/iu.test(sql))).toBe(true);
-          expect(statements.filter((sql) => /^PRAGMA foreign_key_check/iu.test(sql))).toHaveLength(
-            1,
-          );
-        } finally {
-          prepare.mockRestore();
-        }
-      }
-
-      const reopened = openOpenClawStateDatabase({ env });
-      expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(
-        reopened.db
-          .prepare(
-            "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_status WHERE status = 'running'",
-          )
-          .all(),
-      ).toEqual([{ task_id: "task-index-repair" }]);
-    },
-  );
+    expect(() => openOpenClawStateDatabase({ env })).toThrow(
+      /integrity_check failed.*doctor --fix/,
+    );
+    expect(repairOpenClawStateDatabaseSchema({ env })).toEqual({
+      changes: [
+        expect.stringContaining("Saved pre-repair SQLite backup:"),
+        expect.stringContaining(
+          "Rebuilt corrupt shared-state SQLite indexes: idx_task_runs_status",
+        ),
+      ],
+      warnings: [],
+    });
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_status WHERE status = 'running'",
+        )
+        .all(),
+    ).toEqual([{ task_id: "task-index-repair" }]);
+  });
 
   it("rejects a missing current-schema table instead of recreating it empty", () => {
     const stateDir = createTempStateDir();
@@ -6387,19 +6326,23 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(() => openOpenClawStateDatabase(options)).toThrow(
       /integrity_check failed.*missing from index unsafe_index_records_value/iu,
     );
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [],
-      warnings: [
-        expect.stringMatching(
-          /integrity_check failed.*missing from index unsafe_index_records_value/iu,
-        ),
-      ],
-    });
     const checkpointCallback = vi.fn();
     expect(() =>
       withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
     ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
     expect(checkpointCallback).not.toHaveBeenCalled();
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [
+        expect.stringContaining("Saved pre-repair SQLite backup:"),
+        expect.stringContaining(
+          "Rebuilt corrupt shared-state SQLite indexes: unsafe_index_records_value",
+        ),
+      ],
+      warnings: [],
+    });
+    expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
   });
 
   it("configures checkpoint lock waits before schema mutation", () => {
@@ -6554,7 +6497,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     },
   );
 
-  it.each(["unrelated foreign key", "trigger", "generated column"])(
+  it.each(["unrelated foreign key", "trigger", "generated column", "foreign role"])(
     "refuses orphan delivery recovery with %s without changing data",
     (variant) => {
       const stateDir = createTempStateDir();
@@ -6573,6 +6516,8 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
           seed.exec(
             "CREATE TRIGGER unknown_delivery_cleanup AFTER DELETE ON task_delivery_state BEGIN DELETE FROM task_runs; END",
           );
+        } else if (variant === "foreign role") {
+          seed.exec("UPDATE schema_meta SET role = 'agent' WHERE meta_key = 'primary'");
         } else {
           seed.exec(
             "ALTER TABLE task_delivery_state ADD COLUMN extra TEXT GENERATED ALWAYS AS (task_id) VIRTUAL",
@@ -6584,7 +6529,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         expect(result.warnings.join("\n")).toMatch(
           variant === "unrelated foreign key"
             ? /foreign_key_check failed/
-            : /refused an unrecognized/,
+            : variant === "foreign role"
+              ? /schema role agent; expected global/
+              : /refused an unrecognized/,
         );
         expect(
           seed

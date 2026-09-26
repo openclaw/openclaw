@@ -19,6 +19,11 @@ worker concurrency, heap limits, or individual file boundaries. Raw Vitest and
 existing single-invocation selections, such as explicit targets, coverage, report
 output, bail, and watch mode, retain their existing behavior.
 
+Expanded full-suite runs split infrastructure and host-owned SQLite tests into
+batches of at most 64 files. Each batch keeps isolated fork workers within the
+existing full-suite worker budget. Focused selections and watch mode retain their
+usual routing.
+
 Tests that create real managed worktrees must satisfy the
 [capacity and disk-space requirements](/concepts/managed-worktrees#capacity-and-disk-space),
 including the additional allowance for executable setup scripts. Keep that space
@@ -107,11 +112,6 @@ OPENCLAW_CI_TEST_RUNTIME_POLICY=dual \
 node --import tsx scripts/ci-run-node-test-shard.mts
 ```
 
-The pinned fork can loop in CSS tokenization after particular UI file orders.
-The nonbrowser UI setup prevents inlining the native tokenizer's `endOfFile`
-predicate on Bun while retaining baseline, DFG, and FTL JIT. It does nothing on Node, and
-Chromium keeps its existing setup. See the
-[CI runtime policy](/ci/pipeline#test-runtime-selection) for the removal proof.
 The Bun partition deliberately excludes two whole GC-sensitive files, which
 remain covered by Node. Running the complete UI config directly with
 `OPENCLAW_VITEST_RUNTIME=bun` also runs those currently incompatible assertions.
@@ -339,6 +339,12 @@ For local PR land/gate checks, run:
 - `pnpm build`
 - `pnpm test`
 - `pnpm check:docs`
+
+`pnpm check --base <ref>` pins the line-cap, max-lines suppression, and assertion
+safety ratchets to the merge base of `HEAD` and that ref. Native PR gates pass
+their candidate's fork from the captured main snapshot, so inherited main
+changes retain their allowance even when the shared `origin/main` ref is stale.
+Other check stages still run normally.
 
 If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm test <path/to/test>`. For memory-constrained hosts:
 

@@ -23,6 +23,7 @@ export type KnownApi =
   | "anthropic-messages"
   | "bedrock-converse-stream"
   | "google-generative-ai"
+  | "google-interactions"
   | "google-vertex";
 
 /** Provider API id; custom providers can use ids outside the built-in set. */
@@ -372,6 +373,8 @@ export interface UserMessage {
    * carriers are stable prompt-cache anchors.
    */
   runtimeContextCarrier?: boolean;
+  /** Explicit replay-policy retention decision; absent preserves model-derived behavior. */
+  runtimeContextCarrierRetained?: boolean;
 }
 
 /** Assistant turn, including provider identity and final stop state. */

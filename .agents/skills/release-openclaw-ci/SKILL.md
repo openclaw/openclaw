@@ -26,7 +26,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   the initial Tooling SHA selection; it does not authorize replacing that
   tooling after `main` advances.
 - Apply a release firebreak after the Code SHA is frozen. Admit only confirmed
-  product defects, package/provenance defects in the bytes to publish, security
+  product defects, wrong or unverifiable package bytes, security
   defects, or failures that make publication impossible. Queue other findings
   for postpublish confidence or the next beta.
 - Frozen CI children use the pinned Tooling SHA's Node shard planner and measured
@@ -42,46 +42,36 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Once publication binds the Tooling SHA to an exact protected lightweight
   `release-publish/<12sha>-<provenance-run>` tag, that live tag-to-SHA mapping
   remains authoritative when `main` advances. The suffix records tag-creation
-  provenance; it is not the current parent run id.
+  provenance; it is not the current parent run id. The regular release helpers
+  mint or reuse that tag from `--workflow-sha <tooling-sha>`.
 - Touch `main` only for an operator-requested change or the smallest critical
   main-owned blocker that prevents this release and cannot be handled from the
   release branch. If the required main landing policy is blocked by unrelated
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
+- Land tooling-only fixes on `main` with the `release-fast-lane` label added
+  before the push (see [Release tooling fast lane](#release-tooling-fast-lane)): `openclaw/ci-gate`
+  then runs lint, types, guards, dependencies, docs, and the changed Node rows
+  only. Land through the native `scripts/pr` path with its completed ClawSweeper
+  review; findings are advisory for that label, so record any P1 the release
+  owner declines to fix in the PR with its follow-up before landing.
 - `OPENCLAW_RELEASE_RUNNER_GROUP` optionally routes validation parents and workers
-  to reserved capacity with unchanged labels. Configure eligible runners and repo
+  and the Release Publish parent plus its publish children to reserved capacity
+  with unchanged labels; credentialed publish and approval jobs stay on default
+  GitHub-hosted labels. Configure eligible runners and repo
   access first; unset preserves ordinary routing. Shared workers inherit the
   caller group; PR/main CI and unrelated scheduled work remain outside it.
 - Validate provider secrets before dispatching expensive full release matrices.
-- Two publication modes (RELEASING.md "Publication modes"). Strict default: a
-  stable tag needs stable/full evidence with soak and blocking performance and no
-  failed non-proof lane. Operator fast path: `stable_soak_waiver` /
-  `lane_waiver` (input or repository variable, reason prefixed with the target
-  version) are the only way past that; waivers are recorded in the manifest,
-  decision, receipt, release evidence, and closeout, and reported as warnings.
-  Every lane runs once on every OS; first failures are recorded, never retried.
-  Required in every mode: artifact children, install-smoke, survivors,
-  first-hop compat, pack/npm qualification, package integrity, target
-  resolution, Linux Gateway cross-OS lanes, and their aggregators.
+- Check the nightly parent for the Code SHA before dispatching a fresh main validation; it seals per-child receipts that exact-target dispatches adopt when inputs match.
+- Every selected validation lane must pass. Stable tags require stable/full
+  evidence, soak, and blocking performance. Beta-profile evidence cannot qualify
+  stable. No lane or soak waiver bypasses these requirements. All-group
+  qualification requires all nine Linux/Windows/macOS Gateway install/upgrade
+  combinations. Preserve first failures, identity, and complete evidence.
 - Native macOS, Windows, Linux, and Android publication is independent of
   npm/ClawHub, GitHub finalization, and main closeout. Each platform retains
   its own signing, qualification, artifact, and updater requirements; report
   pending platforms accurately and repair native-only failures in parallel.
-- Release priority: release runs always beat PR-side hosted-runner work. The
-  repo variable `OPENCLAW_RELEASE_PRIORITY_RUN` names the active FRV parent;
-  `pnpm ci:full-release` records the pause window, sets it on dispatch, and
-  clears it when the operation ends; `pnpm frv continue --failed` and
-  `pnpm frv verify` clear it on seal. While set, `CI`, Auto response, PR
-  context and evidence, Labeler, CodeQL, Periphery, Workflow Sanity,
-  ClawSweeper Dispatch, and Maintainer Command Reactions skip at the job level
-  unless dispatched or on a `release*/` branch (Security Review never pauses);
-  deferred CI fails its gate with `Deferred for release <run>`. When release
-  children starve behind queued PR runs, `pnpm frv prioritize --run <parent>`
-  records and cancels the still-queued non-release runs of those workflows;
-  after the seal, `pnpm frv prioritize --restore <record>` clears the variable
-  first and reruns the cancelled and deferred runs, newest per workflow and
-  branch. Never leave the variable set after a release. Keep the required
-  publication proofs and soak gates intact.
 - Do not set GitHub secrets from unvalidated 1Password candidates. If a candidate returns 401/403, leave the existing secret alone and report the exact missing provider.
 - Use `$one-password` for secret reads/writes: one persistent tmux session, targeted items only, no secret output.
 - Watch one parent run plus compact child summaries. Avoid broad `gh run view` polling loops; REST quota is easy to burn.
@@ -176,7 +166,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   task-owned box and warm a fresh one before testing. Testbox source sync is
   relative to the warmed source tree; continuing can mix an old base file with
   a new candidate diff and produce false lockfile or Docker failures.
-- Reused Testboxes are provenance-gated after their first successful run.
+- Reused Testboxes are checked against their recorded source after their first successful run.
   Source-only edits may reuse the lease; base, dependency, wrapper, or Testbox
   workflow drift requires a fresh lease. Do not set
   `OPENCLAW_TESTBOX_ALLOW_STALE=1` for release evidence.
@@ -185,13 +175,63 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   on source sync to overlay committed branch changes onto the workflow's
   default ref.
 
+## Deferred CI recovery
+
+Release validation does not pause CI or supporting workflows. The legacy
+`OPENCLAW_RELEASE_PRIORITY_RUN` variable is ignored by current workflow
+admission. Do not use `pnpm frv prioritize --run` for routine validation;
+it still cancels queued runs. Use `pnpm frv prioritize --restore <record>`
+to recover runs deferred by older workflow revisions and clear their variable.
+Keep the required publication proofs and soak gates intact.
+
+## Continuous release readiness
+
+The 04:00 UTC nightly seals a direct-root manifest and per-child receipts for the exact main SHA.
+For a same-day cut, start the release train on `main` (version and changelog) before 04:00 UTC,
+then cut `release/YYYY.M.PATCH` at the nightly SHA so the Code SHA equals the validated SHA.
+Per-child adoption matches exact target SHA, role, and dispatch inputs minus `dispatch_id`:
+`productPerformance` is adopted because its inputs are context-free and match.
+A stable candidate dispatched with `--target-ref release/YYYY.M.PATCH` resolves
+`coveragePolicy=npm-stable-v1` and `ci_release_scope=npm-stable`, versus `full` scope on `main`.
+`normalCi`, plugin prerelease, and release checks are re-dispatched because their inputs add
+`target_context_ref`, plugin prerelease and release checks add `allow_frozen_target_scenario_omissions=true`, and scope differs.
+Whole-parent adoption requires byte-identical manifest `validationInputs`, including `validationPurpose`,
+`publicationSelectionJson`, `targetContextRef`, `targetVersion`, `allowUnreleasedChangelog`, and `coveragePolicy`;
+a `main-qualification` nightly is never adopted wholesale by a `publish`-purpose stable candidate.
+Purpose/context-crossing adoption is a verifier policy follow-up.
+
+## Release tooling fast lane
+
+Add the `release-fast-lane` label to a pull request before the push that should
+use it; PR CI reads labels from the triggering event, and label events do not
+start CI. For an already-pushed head, `gh pr ready --undo` then `gh pr ready`
+re-triggers PR CI with the current labels. The label narrows `openclaw/ci-gate`
+only on a canonical pull request whose changed paths are all release tooling:
+`.github/workflows/**`, `scripts/**`, `test/scripts/**`,
+`.agents/skills/release-*/**`, `docs/reference/RELEASING.md`, or independently
+checked documentation. Admitted runs keep `security-fast`, `check-shard` (lint,
+prod/test types, guards, dependencies, npm lock), `check-docs` when docs
+changed, and the changed Node rows; the compact packing-policy full-plan proof
+for planner edits is relaxed to those rows. Contracts, baseline ratchets,
+bundled protocol, Bun launcher, additional checks, build artifacts (unless a
+changed row needs `dist`), Control UI, Windows, macOS, iOS, Android, i18n, and
+skills lanes are skipped and listed under "Release fast lane" in the preflight
+step summary. A declined label (out-of-scope path, global Node input, fork,
+push, dispatch, docs-only) logs a warning and leaves ordinary selection
+untouched. The gate stays complete: every selected lane must pass, and hourly
+full main CI covers the merged result. The label narrows only the CI gate: fork
+heads are declined, and the native `scripts/pr` landing path with its completed
+ClawSweeper review is unchanged. ClawSweeper findings are advisory for labelled
+PRs: a P1 that the release owner decides not to fix in the PR is recorded there
+with its follow-up before landing.
+
 ## Run identity and retry budget
 
 Record Validation SHA, Tooling SHA/ref, target context ref, parent run id,
 attempt, and phase before watching or recovering Full Release Validation. Keep
 Code SHA and Release SHA as lifecycle roles in the ledger; they may name the
 same commit. Record the
-immutable Release Publish parent receipt separately from tag provenance.
+immutable Release Publish parent receipt separately from the tag's recorded source.
 
 For the core and plugin npm mutations enforced by this foundation, re-read the
 exact protected lightweight tag and revalidate the exact parent run tuple
@@ -205,14 +245,12 @@ until their dependent enforcement changes land.
   - `beta-publish`: `release_profile=beta`, `run_release_soak=false`
   - `postpublish-confidence`: published package inputs with
     `run_release_soak=true` or explicit focused groups
-  - `stable-publish`: `release_profile=stable` with soak and performance by
-    default (strict); beta-profile evidence publishes a stable only with an
-    approved `stable_soak_waiver` (operator fast path)
+  - `stable-publish`: `release_profile=stable` or `full`, with soak and blocking performance
 - An `all` run without soak for an actual beta package on its matching canonical
   release branch or beta tag records `coveragePolicy=npm-beta-v1`. It keeps
   Linux/macOS/Windows Node, Control UI, plugin, package, install/update,
-  Linux cross-OS, QA parity, runtime-pair/restart, and tool coverage. Only the
-  required install/update/package proofs gate npm/ClawHub; other tests are advisory. Native app
+  Linux/Windows/macOS cross-OS, QA parity, runtime-pair/restart, and tool coverage.
+  All selected tests gate npm/ClawHub. Native app
   CI, performance, and published-package Telegram are deferred to confidence.
   Beta `all` without soak also defers Package Acceptance Telegram, including
   beta-profile checks of `main` or alpha. Record deferred checks as not run,
@@ -288,7 +326,7 @@ and continue dispatch; source changes and the serialized locale-refresh workflow
 can temporarily leave generated output behind. Do not require regeneration before
 starting validation. FRV's normal-CI child retains the strict `control-ui-i18n`
 and `native-i18n` jobs and reports their actual results in the run summary;
-a failed locale job is recorded as advisory for npm/ClawHub. PR-side checks and
+a failed selected locale job blocks npm/ClawHub publication. PR-side checks and
 release-prep gates stay unchanged. Keep target execution outside the trusted
 dispatch helper—do not execute an arbitrary target checkout as helper code.
 
@@ -333,8 +371,8 @@ non-billable credentials fail before the expensive release matrix.
 
 For regular beta/stable protected publication, after evidence validation run
 `pnpm release:publish-preflight` with the intended tag, exact Full Release
-Validation run and attempt, npm dist-tag, plugin scope, approved soak waiver when
-applicable, and protected publication tooling ref. `pnpm release:candidate`
+Validation run and attempt, npm dist-tag, plugin scope, and protected publication
+tooling ref. `pnpm release:candidate`
 invokes this check with its downloaded manifests; do not redownload them or
 replace the selected attempt. Use the report's exact dispatch command for the
 chosen publication route only after resolving every `FAIL` and owner-action
@@ -348,7 +386,7 @@ before cancellation. Preflight is read-only and does not authorize publication,
 cancel children, or prove a repository secret from local credentials. Bootstrap
 candidates need a read-only `npm whoami` probe using the repository's actual
 `NPM_TOKEN`; follow the secret-isolated step in
-[Release policy](https://docs.openclaw.ai/reference/RELEASING#probe-the-bootstrap-token)
+[bootstrap token probe](../release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token)
 and retain its run URL. Do not rotate credentials as part of a diagnostic check.
 
 ## Dispatch
@@ -382,7 +420,7 @@ An early standalone product-performance run is optional beta confidence. If
 useful, start it against the frozen Code SHA in parallel with release work:
 
 ```bash
-# Advisory for beta; stable publication needs blocking performance evidence unless waived.
+# Optional beta confidence; stable/full qualification requires blocking performance.
 fail_on_regression=false
 gh workflow run openclaw-performance.yml \
   --repo openclaw/openclaw \
@@ -399,8 +437,8 @@ gh workflow run openclaw-performance.yml \
 - Compare available Kova, gateway startup, and CLI startup metrics with earlier
   release evidence or clawgrit reports before publish/closeout.
 - Record regressions in release evidence and investigate their product impact.
-  Performance results are advisory for beta, stable, and full profiles; no
-  performance waiver is needed for npm/ClawHub publication or main closeout.
+  Stable/full qualification requires blocking performance. Every selected
+  performance child must succeed; failures cannot be waived.
 - `npm-beta-v1` defers the performance child. Every selected child still needs
   terminal evidence and must prove artifact-only publication.
 
@@ -502,36 +540,39 @@ postpublish confidence with the exact published package and
 release soak. Native artifact publication still requires its own build,
 signing, notarization, and promotion gates. Use a narrow `rerun_group` after
 focused fixes; never widen automatically.
-At seal time the parent records the SDK evidence digest from the exact qualified
-npm receipt, resolves per-package npm plans against the registry, and captures
-`vars.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER` when configured. The manifest's
-`publishInputs` supplies publisher/preflight defaults; explicit SDK and soak
-inputs override them. The sealed digest is evidence only: SDK API changes still
-need an operator-supplied `plugin_sdk_api_acknowledgement` at publication, and
-the sealed waiver applies only while the repository variable still holds it. Mutation owners still recheck live publication authority,
-registry selectors, and immutable bytes. Clear temporary waiver text at closeout.
+At seal time the parent records the SDK evidence digest from the qualified npm
+receipt and resolves per-package npm plans against the registry. The manifest's
+`publishInputs` supplies publisher/preflight defaults. SDK API changes still
+need the operator's acknowledgement; sealed evidence does not grant authority.
+Mutation owners recheck live publication authority, selectors, and immutable bytes.
 
-Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
-unless a maintainer intentionally wants to cross-check a specific profile; the
-publish workflow reads the effective profile from the full-validation manifest.
-Stable publication requires soak or an approved reason from sealed `publishInputs`
-or the explicit `stable_soak_waiver` override; the publisher records that reason in release evidence
-without changing validation coverage or other publication gates.
-For npm/ClawHub, artifact children, install smoke, both survivor lanes, all
-`update-first-hop-compat*` lanes, pack budget/npm qualification, and target
-resolution remain required. Verify aggregators follow their required inputs.
-Normal CI, plugin prerelease, cross-OS, performance, and QA test failures are
-advisory by default and remain recorded evidence; no lane waiver is needed.
-Provenance and complete evidence checks still apply. The explicit first-hop
-escape hatch uses `OPENCLAW_FRV_LANE_WAIVER="<target version> <reason>"` only
-when survivor lanes in the same child passed, requires `lane_waiver` at publish,
-and must be cleared after the release.
+### Publication requirements
+
+Publish with `release_profile=from-validation` to consume the sealed profile.
+Stable publication requires stable/full evidence, soak, and blocking performance.
+Every selected validation lane must succeed, including first-hop compatibility,
+Telegram, and Linux/Windows/macOS Gateway checks. No lane or soak waiver applies.
 
 ### Publish children
 
-- npm children (`Plugin NPM Release`, `openclaw-npm-release.yml`) need their
-  own `npm-release` approval; the parent's approval does not always propagate,
-  and an unapproved core child sits `waiting` silently. Watch every child and
+Use the maintainer [publication recovery guide](../release-openclaw-maintainer/references/publication-recovery.md)
+for publication ordering and prepared/direct recovery.
+
+- `pnpm release:stable <version>` ([orchestrated stable release](../release-openclaw-maintainer/references/regular-release.md#orchestrated-stable-release))
+  dispatches the parent once, approves the parent's `npm-release` gate, prints
+  the child-approval and stale-child sweep commands below instead of running
+  them (it never mutates a child run), and on any refusal prints `Next:` with
+  the exact recovery command.
+- The parent's `npm-release` approval mints the attested
+  `openclaw-release-approval-v1-<parent run>-<attempt>` receipt; bot-dispatched
+  children verify it (`scripts/release-approval-receipt.mjs verify`) before
+  their gates. The ClawHub OIDC child skips its `clawhub-plugin-release` gate
+  on a verified receipt and instead waits for the parent's
+  `openclaw-clawhub-parent-authorization-v2-*` receipt before publishing. npm
+  children (`Plugin NPM Release`, `openclaw-npm-release.yml`) keep
+  `npm-release` (npm trusted publishers are bound to it, `npm trust list
+openclaw`) and the workflow token cannot approve it (`canApprove=false`), so
+  an unapproved npm child sits `waiting` silently. Watch every child and
   approve npm children only (environment id `13010111854`):
   ```bash
   gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments
@@ -539,16 +580,24 @@ and must be cleared after the release.
     -f state=approved -f comment="<reason>" -F 'environment_ids[]=13010111854'
   ```
 - Never approve ClawHub children (`plugin-clawhub-release.yml`,
-  `plugin-clawhub-new.yml`) by hand: `Revalidate trusted tooling identity`
-  downloads `openclaw-clawhub-recovery-approval-<run>-1`, which only the
-  parent's approval path uploads, so every publish job fails
-  `Artifact not found`. If the parent died before approving them, cancel them
-  and re-dispatch the parent.
-- Before re-dispatching a failed publish parent, sweep its stale children;
-  otherwise the next parent fails at `Dispatch publish workflows` with
-  `ClawHub dispatch blocked by waiting run`. The parent's own cleanup misses
-  children that reach `waiting` after it dies. List `workflow_dispatch` runs by
-  `github-actions[bot]` created for this release, reject their gate, cancel:
+  `plugin-clawhub-new.yml`) by hand. `plugin-clawhub-release.yml` needs no
+  approval on the bot route (receipt-verified); the `Artifact not found` line
+  for `openclaw-clawhub-recovery-approval-<run>-1` is a non-fatal probe, and a
+  late human approval fails at `Revalidate trusted tooling identity` with
+  `parent state completed/failure is not allowed by authorization route`
+  once the parent has died (2026.9.6: runs 35930335388/35930341394). If the
+  parent died, cancel the children and re-dispatch the parent.
+- Before every child dispatch the parent sweeps a failed earlier parent's
+  `waiting`/`queued` children of the same release (ClawHub and core by the
+  `parent=<run>/<attempt>` run title; plugin npm by the release SHA, only
+  while no other publish parent is live): it
+  rejects their gate, cancels, and waits up to 5 minutes for GitHub to report
+  them cancelled (a waiting run takes ~2 minutes). A parent failure also
+  cancels its own waiting npm children. Only legacy children without a parent
+  identity in their title, or a live publisher job, still block with
+  `ClawHub dispatch blocked by waiting run`; sweep those by hand. List
+  `workflow_dispatch` runs by `github-actions[bot]` created for this release,
+  reject their gate, cancel:
   ```bash
   for s in waiting queued; do gh api "repos/openclaw/openclaw/actions/runs?status=$s&per_page=100" \
     --jq '.workflow_runs[] | select(.event=="workflow_dispatch" and .actor.login=="github-actions[bot]") | select(.name | test("plugin-clawhub|Plugin NPM Release|openclaw-npm-release")) | [.id,.name,.created_at] | @tsv'; done
@@ -562,10 +611,6 @@ and must be cleared after the release.
   settle and propagates its failure without dispatching a replacement.
   Diagnose and fix the failed owner before explicitly recovering publication;
   preserve successful immutable packages and evidence.
-- Core child `Verify full release validation target` failing with
-  `pass lane_waiver=<reason> to acknowledge it`: the tooling tag predates
-  #156816 (waiver forwarded to children). Cut a new tooling tag from a `main`
-  that includes it; the candidate and validation evidence stay valid.
 
 ### Extended-stable validation
 
@@ -701,6 +746,12 @@ node scripts/release-ci-summary.mjs <full-release-run-id>
 Diverged release-branch logs: `--first-parent` plus a bounded count.
 Stop watchers before ending the turn or switching strategy.
 
+For PR and child gates, read the exact workflow run, not the commit's check-run
+list: `commits/<sha>/check-runs` keeps entries from superseded or cancelled
+runs for the same head, so a stale `cancelled` or `failure` can mask a newer
+success. Resolve the newest `CI` run for the head (`actions/runs?head_sha=<sha>`)
+and read `openclaw/ci-gate` from that run's jobs before retrying or reporting.
+
 Interpret state precisely:
 
 - `qualifying`: no decisive blocker yet; selected children are still active.
@@ -712,16 +763,13 @@ Interpret state precisely:
 - `blocked_complete`: publication is blocked and all selected diagnostics are
   terminal.
 - `orchestration_error`: GitHub API or collector failure prevented a verdict.
-  This is not a provenance mismatch. Recover the collector against the same
+  This does not mean the wrong source was used. Recover the collector against the same
   exact children; never redispatch tests to repair collection.
 - `cancelled_with_children`: the collector was cancelled while exact children
   remained active.
 
-Read **advisory** entries separately from Release Decision. Non-proof lanes
-retain actual conclusions in the manifest and summary; `passed` does not mean
-they passed, and a stable publishes with failed ones only under `lane_waiver`.
-Selected lanes still need terminal evidence, and filtered-out lanes are not
-run, never passed.
+Read every selected lane's actual conclusion. `passed` requires all selected
+validation lanes to succeed; omitted coverage is not run, never passed.
 
 The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
 failure and timing manifest. Use it after an early blocker instead of
@@ -747,7 +795,7 @@ run-ID-cached bytes first.
 6. Classify before editing:
    - confirmed product/code failure: fix the release branch, freeze a new Code
      SHA, and invalidate product evidence
-   - harness/tooling/provenance failure: keep the Code SHA, fix the smallest
+   - harness, tooling, or source mismatch: keep the Code SHA, fix the smallest
      owning surface, and retry only the failed surface with the required Tooling
      SHA
    - infrastructure/credential failure: keep both SHAs, repair the external
@@ -760,13 +808,14 @@ run-ID-cached bytes first.
    - publish child/registry selector failure: keep Release SHA and resume the
      failed child; never rebuild an immutable version that already published
    - parent failed after core npm published (for example a stale `beta`
-     dist-tag failing the completion verify): flip the GitHub release public
-     immediately with
-     `gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`;
-     never leave it drafted waiting for Docker, ClawHub, apps, or the resume.
-     Then run the beta-to-stable dist-tag sync, sweep stale children, and
-     dispatch a new parent with the same inputs: it recognizes published bytes
-     and only runs ClawHub, GitHub release evidence, and Docker
+     dist-tag failing the completion verify): retain the successful original
+     npm run and qualified bytes, repair the selector, and reconcile the exact
+     failed parent's children before resuming the selected publication route.
+     Direct finalization normally waits for npm and Docker verification; the
+     prepared button also verifies ClawHub downloads. Do not manually un-draft
+     a release to bypass those gates. Follow
+     [publication recovery](../release-openclaw-maintainer/references/publication-recovery.md#published-version-failed-parent)
+     for direct resume or a new prepared button run.
    - child stuck `waiting`, ClawHub `Artifact not found`, or parent failing
      `ClawHub dispatch blocked by waiting run`: see [Publish children](#publish-children)
      Only the first class changes the Code SHA. After one diagnosis/fix/narrow
@@ -801,7 +850,7 @@ Record:
 - active full parent run URL, attempt, workflow SHA, and any superseded parent
   with the exact replacement reason
 - selected child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram, Product Performance; record deferred confidence as not run
-- all advisory lane classifications and actual conclusions, including cross-OS
+- all selected lane conclusions, including Linux/Windows/macOS cross-OS
 - performance comparison result versus earlier releases when available
 - targeted local proof commands
 - provider-secret preflight result

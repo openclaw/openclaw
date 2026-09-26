@@ -345,6 +345,13 @@ export async function resolveUsageCostTranscriptFile(
   access?: UsageCostCollectionAccess,
 ): Promise<UsageCostTranscriptFile | undefined> {
   const source = await resolveUsageCostTranscriptSource(sessionFile, access);
+  return materializeUsageCostTranscriptSourceBestEffort(source, access);
+}
+
+async function materializeUsageCostTranscriptSourceBestEffort(
+  source: UsageCostTranscriptSource | undefined,
+  access?: UsageCostCollectionAccess,
+): Promise<UsageCostTranscriptFile | undefined> {
   if (!source) {
     return undefined;
   }
@@ -361,16 +368,9 @@ export async function resolveUsageCostTranscriptFiles(
 ): Promise<Array<UsageCostTranscriptFile | undefined>> {
   const sources = await resolveUsageCostTranscriptSources(sessionFiles, access);
   const { results } = await runTasksWithConcurrency({
-    tasks: sources.map((source) => async () => {
-      if (!source) {
-        return undefined;
-      }
-      try {
-        return await materializeUsageCostTranscriptSource(source, access);
-      } catch {
-        return undefined;
-      }
-    }),
+    tasks: sources.map(
+      (source) => () => materializeUsageCostTranscriptSourceBestEffort(source, access),
+    ),
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
   });
   return results;

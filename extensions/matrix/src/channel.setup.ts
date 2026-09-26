@@ -10,7 +10,7 @@ import {
 import { createMatrixSetupWizardProxy, matrixSetupContract } from "./setup-core.js";
 
 const matrixSetupWizard = createMatrixSetupWizardProxy(async () => ({
-  matrixSetupWizard: (await import("./setup-surface.js")).matrixSetupWizard,
+  matrixSetupWizard: (await import("./onboarding.js")).matrixOnboardingAdapter,
 }));
 
 export const matrixPluginBase = {

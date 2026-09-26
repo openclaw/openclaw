@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { PLUGIN_UI_CAPABILITIES } from "../plugin-ui-capabilities.js";
 import { closedObject } from "./closed-object.js";
 import {
   ControlUiLinkReaderMetadataSchema,
@@ -17,6 +18,12 @@ import {
   PluginOperatorGrantsSchema,
 } from "./plugin-inspection.js";
 import { NonEmptyString } from "./primitives.js";
+
+export {
+  PLUGIN_UI_CAPABILITIES,
+  validatePluginUiCapabilities,
+  type PluginUiCapability,
+} from "../plugin-ui-capabilities.js";
 
 export {
   PluginInstallActivitySchema,
@@ -110,12 +117,19 @@ export const PluginsUiDescriptorsResultSchema = closedObject({
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
 });
 
+export const PluginUiCapabilitySchema = Type.Enum(PLUGIN_UI_CAPABILITIES, { type: "string" });
+const PluginUiCapabilitiesSchema = Type.Array(PluginUiCapabilitySchema, {
+  maxItems: PLUGIN_UI_CAPABILITIES.length,
+  uniqueItems: true,
+});
+
 /** One immutable browser build owned by an active native plugin. */
 export const PluginControlUiModuleSchema = closedObject({
   pluginId: NonEmptyString,
   name: NonEmptyString,
   revision: NonEmptyString,
   entryUrl: NonEmptyString,
+  uiCapabilities: Type.Optional(PluginUiCapabilitiesSchema),
   styles: Type.Array(NonEmptyString, { maxItems: 16 }),
 });
 
@@ -223,7 +237,7 @@ export const PluginCatalogEntrySchema = closedObject({
   packageName: Type.Optional(NonEmptyString),
   /** Canonical ClawHub identity proven by install provenance or the official catalog. */
   clawhubPackage: Type.Optional(NonEmptyString),
-  /** Opaque discovery identity for loading optional ClawHub presentation metadata. */
+  /** Opaque discovery identity for loading local or ClawHub presentation metadata. */
   catalogId: Type.Optional(NonEmptyString),
   description: Type.Optional(Type.String()),
   version: Type.Optional(NonEmptyString),
@@ -478,6 +492,7 @@ export const PluginDiscoveryDetailSchema = closedObject({
   contracts: Type.Optional(Type.Record(NonEmptyString, Type.Array(NonEmptyString))),
   providers: Type.Optional(Type.Array(NonEmptyString)),
   channels: Type.Optional(Type.Array(NonEmptyString)),
+  uiCapabilities: Type.Optional(PluginUiCapabilitiesSchema),
   configuration: Type.Array(PluginDiscoveryConfigFieldSchema),
   mcpServers: Type.Array(NonEmptyString),
   skills: Type.Array(
@@ -514,6 +529,13 @@ export const PluginsCatalogGetResultSchema = closedObject({
   detail: PluginDiscoveryDetailSchema,
 });
 
+const PluginOverviewCapabilitiesSchema = closedObject({
+  ui: Type.Optional(PluginUiCapabilitiesSchema),
+  providers: Type.Array(NonEmptyString),
+  channels: Type.Array(NonEmptyString),
+  contracts: Type.Record(NonEmptyString, Type.Array(NonEmptyString)),
+});
+
 /** Consent snapshot plus the installed-version presentation projection used by Control UI. */
 export const PluginsInspectResultSchema = closedObject({
   ok: Type.Literal(true),
@@ -523,6 +545,8 @@ export const PluginsInspectResultSchema = closedObject({
       repositoryUrl: Type.Optional(NonEmptyString),
       documentationUrl: Type.Optional(NonEmptyString),
       publisherName: Type.Optional(NonEmptyString),
+      /** Selected plugin metadata; declared below remains the package-wide consent surface. */
+      capabilities: Type.Optional(PluginOverviewCapabilitiesSchema),
     }),
   ),
   credentials: Type.Optional(Type.Array(PluginCredentialDescriptorSchema)),
@@ -547,6 +571,8 @@ export const PluginsInspectResultSchema = closedObject({
 });
 
 const PluginInstallOptions = {
+  /** False preserves existing enablement policy while installing the source. */
+  enable: Type.Optional(Type.Boolean()),
   mode: Type.Optional(Type.Union([Type.Literal("install"), Type.Literal("update")])),
   acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
   acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
@@ -706,6 +732,7 @@ export type PluginsListParams = Static<typeof PluginsListParamsSchema>;
 export type PluginsListResult = Static<typeof PluginsListResultSchema>;
 export type PluginsInspectParams = Static<typeof PluginsInspectParamsSchema>;
 export type PluginsInspectResult = Static<typeof PluginsInspectResultSchema>;
+export type PluginOverviewCapabilities = Static<typeof PluginOverviewCapabilitiesSchema>;
 export type PluginHookGrant = Static<typeof PluginHookGrantSchema>;
 export type PluginInspectSource = Static<typeof PluginInspectSourceSchema>;
 export type PluginDeclaredSurface = Static<typeof PluginDeclaredSurfaceSchema>;

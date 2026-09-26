@@ -39,13 +39,7 @@ export async function seedClawPackageBootstrap(
       "A Claw add plan may contain only one package bootstrap action.",
     );
   }
-  const action = actions[0];
-  if (!action) {
-    throw new ClawBootstrapWriteError(
-      "bootstrap_plan_invalid",
-      "The package bootstrap action is missing.",
-    );
-  }
+  const action = actions[0]!;
   if (!action.source || !action.digest) {
     throw new ClawBootstrapWriteError(
       "bootstrap_plan_invalid",

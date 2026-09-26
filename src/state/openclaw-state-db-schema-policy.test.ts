@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { constants, DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { NodeWorkerPreparedWorkspaceStore } from "../node-host/node-worker-prepared-workspace-store.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
@@ -304,31 +305,41 @@ describe("existing shared-state schema admission", () => {
     },
   );
 
-  it("revalidates same-version schema changes before reusing a cached handle", () => {
+  it("inspects schema indexes once and revalidates same-version changes before handle reuse", () => {
     const { options } = createExistingState();
-    withExistingOpenClawStateSchema(options, () => {
-      const database = openOpenClawStateDatabase(options);
-      const external = new DatabaseSync(options.path);
-      try {
-        external.exec("ALTER TABLE worker_environments DROP COLUMN preparation_purpose");
-      } finally {
-        external.close();
-      }
-      expect(() => openOpenClawStateDatabase(options)).toThrow(/schema|repair/i);
-      expect(() =>
-        writeConfigMachineState("node.incompatible", true, { ...options, database }),
-      ).toThrow(/schema|repair/i);
-      expect(() => runWithOpenClawStateBusyTimeout(() => "must not run", options, 0)).toThrow(
-        /schema|repair/i,
-      );
-      expect(
-        database.db
-          .prepare(
-            "SELECT state_key FROM config_machine_state WHERE state_key = 'node.incompatible'",
-          )
-          .get(),
-      ).toBeUndefined();
-    });
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      withExistingOpenClawStateSchema(options, () => {
+        const database = openOpenClawStateDatabase(options);
+        expect(
+          reads.queries.filter(
+            (sql) => sql.includes("index_xinfo") && sql.includes("idx_plugin_state_listing"),
+          ).length,
+        ).toBeLessThanOrEqual(1);
+        const external = new DatabaseSync(options.path);
+        try {
+          external.exec("ALTER TABLE worker_environments DROP COLUMN preparation_purpose");
+        } finally {
+          external.close();
+        }
+        expect(() => openOpenClawStateDatabase(options)).toThrow(/schema|repair/i);
+        expect(() =>
+          writeConfigMachineState("node.incompatible", true, { ...options, database }),
+        ).toThrow(/schema|repair/i);
+        expect(() => runWithOpenClawStateBusyTimeout(() => "must not run", options, 0)).toThrow(
+          /schema|repair/i,
+        );
+        expect(
+          database.db
+            .prepare(
+              "SELECT state_key FROM config_machine_state WHERE state_key = 'node.incompatible'",
+            )
+            .get(),
+        ).toBeUndefined();
+      });
+    } finally {
+      reads.restore();
+    }
   });
 
   it("does not reuse validation from a rolled-back schema transaction", () => {

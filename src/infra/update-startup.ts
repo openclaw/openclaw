@@ -243,52 +243,6 @@ export function initializeGatewayUpdateStatus(): ReturnType<typeof resolveStartu
   return currentUpdateCheckLifecycle().initialize();
 }
 
-/** Refreshes the read-only Dev checkout comparison used by update.status. */
-export function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
-  const lifecycle = currentUpdateCheckLifecycle();
-  const pending = lifecycle.refreshes.get(cfg);
-  if (pending) {
-    return pending;
-  }
-  const refresh = lifecycle
-    .run(async (signal) => {
-      const scheduleAtStart = getUpdateSchedule();
-      const configured = normalizeUpdateChannel(cfg.update?.channel);
-      const channel =
-        configured ??
-        resolveEffectiveUpdateChannel({
-          currentVersion: VERSION,
-          ...(await lifecycle.initialize()).status,
-        }).channel;
-      const isCurrent = () =>
-        lifecycle.isCurrent() &&
-        !signal.aborted &&
-        (getUpdateSchedule() === scheduleAtStart || getUpdateSchedule()?.channel === channel);
-      if (channel !== "dev" || !isCurrent()) {
-        return;
-      }
-      const { root, status, installReceipt } = await resolveStartupInstallStatus(true, signal);
-      if (!isCurrent()) {
-        return;
-      }
-      const schedule = getUpdateSchedule();
-      const current =
-        schedule?.channel === channel
-          ? schedule
-          : { channel, autoEnabled: Boolean(cfg.update?.auto?.enabled) };
-      setUpdateScheduleCache({
-        next: withUpdateInstallStatus(current, status, true, installReceipt, root),
-      });
-    })
-    .finally(() => {
-      if (lifecycle.refreshes.get(cfg) === refresh) {
-        lifecycle.refreshes.delete(cfg);
-      }
-    });
-  lifecycle.refreshes.set(cfg, refresh);
-  return refresh;
-}
-
 function recordAutoUpdateAttempt(version: string): void {
   const attemptAt = resolveUpdateCheckNowMs(Date.now());
   const attemptState = readState();
@@ -325,6 +279,10 @@ async function runGatewayUpdateCheckOwned(
   params: Parameters<typeof runGatewayUpdateCheck>[0] & { signal: AbortSignal },
   lifecycle: UpdateCheckLifecycle,
 ): Promise<void> {
+  const setAvailable = (next: UpdateAvailable | null) =>
+    setUpdateAvailableCache({ next, onUpdateAvailableChange: params.onUpdateAvailableChange });
+  const setSchedule = (next: UpdateScheduleState) =>
+    setUpdateScheduleCache({ next, onUpdateScheduleChange: params.onUpdateScheduleChange });
   params.signal?.throwIfAborted();
   if (shouldSkipCheck(Boolean(params.allowInTests))) {
     return;
@@ -350,18 +308,12 @@ async function runGatewayUpdateCheckOwned(
   const autoDisabledByEnv = isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
   if (cfg.update?.checkOnStart === false || autoDisabledByEnv) {
     updateCampaign.clear();
-    setUpdateAvailableCache({
-      next: null,
-      onUpdateAvailableChange: params.onUpdateAvailableChange,
-    });
+    setAvailable(null);
     const schedule = getUpdateSchedule();
     const channel = configChannel ?? schedule?.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const currentSchedule =
       schedule?.channel === channel ? schedule : { channel, autoEnabled: false };
-    setUpdateScheduleCache({
-      next: withoutTarget({ ...currentSchedule, autoEnabled: false }),
-      onUpdateScheduleChange: params.onUpdateScheduleChange,
-    });
+    setSchedule(withoutTarget({ ...currentSchedule, autoEnabled: false }));
     return;
   }
   const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
@@ -417,10 +369,7 @@ async function runGatewayUpdateCheckOwned(
   const initialSchedule: UpdateScheduleState = priorSchedule
     ? { ...priorSchedule, autoEnabled }
     : { channel: configuredChannel, autoEnabled };
-  setUpdateScheduleCache({
-    next: autoDesired ? initialSchedule : withoutCampaign(initialSchedule),
-    onUpdateScheduleChange: params.onUpdateScheduleChange,
-  });
+  setSchedule(autoDesired ? initialSchedule : withoutCampaign(initialSchedule));
   if (!autoDesired) {
     updateCampaign.clear();
   }
@@ -455,35 +404,25 @@ async function runGatewayUpdateCheckOwned(
         ...(target === undefined ? {} : { target }),
       });
     }
-    setUpdateScheduleCache({
-      next: campaign ? { ...current, campaign } : withoutCampaign(current),
-      onUpdateScheduleChange: params.onUpdateScheduleChange,
-    });
+    setSchedule(campaign ? { ...current, campaign } : withoutCampaign(current));
   };
 
   if (configuredChannel === "extended-stable" || configuredChannel === "dev") {
-    setUpdateScheduleCache({
-      next: withUpdateInstallStatus(
+    setSchedule(
+      withUpdateInstallStatus(
         getUpdateSchedule() ?? initialSchedule,
         installStatus.status,
         configuredChannel === "dev",
         installStatus.installReceipt,
         installStatus.root,
       ),
-      onUpdateScheduleChange: params.onUpdateScheduleChange,
-    });
+    );
   }
   if (configuredChannel === "extended-stable") {
     if (installStatus.status.installKind !== "package") {
       updateCampaign.clear();
-      setUpdateAvailableCache({
-        next: null,
-        onUpdateAvailableChange: params.onUpdateAvailableChange,
-      });
-      setUpdateScheduleCache({
-        next: withoutTarget(getUpdateSchedule() ?? initialSchedule),
-        onUpdateScheduleChange: params.onUpdateScheduleChange,
-      });
+      setAvailable(null);
+      setSchedule(withoutTarget(getUpdateSchedule() ?? initialSchedule));
       return;
     }
   }
@@ -506,17 +445,11 @@ async function runGatewayUpdateCheckOwned(
     : resolvePersistedUpdateAvailable(state, configuredChannel);
   const cacheMatchesChannel = state.lastCheckedChannel === configuredChannel;
   const shouldBypassSharedThrottle = isDevGit || !cacheMatchesChannel;
-  setUpdateAvailableCache({
-    next: persistedAvailable,
-    onUpdateAvailableChange: params.onUpdateAvailableChange,
-  });
+  setAvailable(persistedAvailable);
   if (persistedAvailable) {
-    setUpdateScheduleCache({
-      next: {
-        ...(getUpdateSchedule() ?? initialSchedule),
-        target: { kind: "package", version: persistedAvailable.latestVersion },
-      },
-      onUpdateScheduleChange: params.onUpdateScheduleChange,
+    setSchedule({
+      ...(getUpdateSchedule() ?? initialSchedule),
+      target: { kind: "package", version: persistedAvailable.latestVersion },
     });
   }
   const checkIntervalMs = shouldRunAutoUpdate
@@ -534,16 +467,15 @@ async function runGatewayUpdateCheckOwned(
   }
 
   const { root, status, installReceipt } = installStatus;
-  setUpdateScheduleCache({
-    next: withUpdateInstallStatus(
+  setSchedule(
+    withUpdateInstallStatus(
       getUpdateSchedule() ?? initialSchedule,
       status,
       isDevGit,
       installReceipt,
       root,
     ),
-    onUpdateScheduleChange: params.onUpdateScheduleChange,
-  });
+  );
 
   const nextState: UpdateCheckState = {
     ...state,
@@ -566,14 +498,8 @@ async function runGatewayUpdateCheckOwned(
       !git.upstreamSha
     ) {
       updateCampaign.clear();
-      setUpdateAvailableCache({
-        next: null,
-        onUpdateAvailableChange: params.onUpdateAvailableChange,
-      });
-      setUpdateScheduleCache({
-        next: withoutTarget(getUpdateSchedule() ?? initialSchedule),
-        onUpdateScheduleChange: params.onUpdateScheduleChange,
-      });
+      setAvailable(null);
+      setSchedule(withoutTarget(getUpdateSchedule() ?? initialSchedule));
       writeState(nextState);
       return;
     }
@@ -609,14 +535,8 @@ async function runGatewayUpdateCheckOwned(
       commitsBehind,
       commits,
     };
-    setUpdateAvailableCache({
-      next: nextAvailable,
-      onUpdateAvailableChange: params.onUpdateAvailableChange,
-    });
-    setUpdateScheduleCache({
-      next: { ...(getUpdateSchedule() ?? initialSchedule), target },
-      onUpdateScheduleChange: params.onUpdateScheduleChange,
-    });
+    setAvailable(nextAvailable);
+    setSchedule({ ...(getUpdateSchedule() ?? initialSchedule), target });
 
     if (autoEnabled && autoDisabledByExternalSupervisor) {
       params.log.info("auto-update delegated to external supervisor", {
@@ -672,15 +592,9 @@ async function runGatewayUpdateCheckOwned(
   if (status.installKind !== "package") {
     clearAvailabilityState(nextState);
     clearAutoState(nextState);
-    setUpdateAvailableCache({
-      next: null,
-      onUpdateAvailableChange: params.onUpdateAvailableChange,
-    });
+    setAvailable(null);
     updateCampaign.clear();
-    setUpdateScheduleCache({
-      next: withoutTarget(getUpdateSchedule() ?? initialSchedule),
-      onUpdateScheduleChange: params.onUpdateScheduleChange,
-    });
+    setSchedule(withoutTarget(getUpdateSchedule() ?? initialSchedule));
     writeState(nextState);
     return;
   }
@@ -698,15 +612,9 @@ async function runGatewayUpdateCheckOwned(
   if (!resolved.version) {
     if (channel === "extended-stable") {
       clearAvailabilityState(nextState);
-      setUpdateAvailableCache({
-        next: null,
-        onUpdateAvailableChange: params.onUpdateAvailableChange,
-      });
+      setAvailable(null);
       updateCampaign.clear();
-      setUpdateScheduleCache({
-        next: withoutTarget(getUpdateSchedule() ?? initialSchedule),
-        onUpdateScheduleChange: params.onUpdateScheduleChange,
-      });
+      setSchedule(withoutTarget(getUpdateSchedule() ?? initialSchedule));
     }
     writeState(nextState);
     return;
@@ -727,14 +635,8 @@ async function runGatewayUpdateCheckOwned(
     if (!updateCampaign.reconcileTarget(target)) {
       return;
     }
-    setUpdateScheduleCache({
-      next: { ...(getUpdateSchedule() ?? initialSchedule), target },
-      onUpdateScheduleChange: params.onUpdateScheduleChange,
-    });
-    setUpdateAvailableCache({
-      next: nextAvailable,
-      onUpdateAvailableChange: params.onUpdateAvailableChange,
-    });
+    setSchedule({ ...(getUpdateSchedule() ?? initialSchedule), target });
+    setAvailable(nextAvailable);
     nextState.lastAvailableVersion = resolved.version;
     nextState.lastAvailableTag = tag;
     const shouldNotify =
@@ -816,21 +718,13 @@ async function runGatewayUpdateCheckOwned(
       }
     }
   } else {
-    if (channel === "extended-stable") {
-      clearAvailabilityState(nextState);
-    } else {
-      clearAvailabilityState(nextState);
+    clearAvailabilityState(nextState);
+    if (channel !== "extended-stable") {
       clearAutoState(nextState);
     }
-    setUpdateAvailableCache({
-      next: null,
-      onUpdateAvailableChange: params.onUpdateAvailableChange,
-    });
+    setAvailable(null);
     updateCampaign.clear();
-    setUpdateScheduleCache({
-      next: withoutTarget(getUpdateSchedule() ?? initialSchedule),
-      onUpdateScheduleChange: params.onUpdateScheduleChange,
-    });
+    setSchedule(withoutTarget(getUpdateSchedule() ?? initialSchedule));
   }
 
   writeState(nextState);
