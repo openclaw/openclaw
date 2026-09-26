@@ -22,6 +22,7 @@ import {
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
+import { recoverCronRunProposals } from "./run-recovery.js";
 import {
   claimCronRecoveryReceipt as claimReceipt,
   makeCronRecoveryState as makeState,
@@ -994,5 +995,36 @@ describe("atomic cron run recovery", () => {
     const persistedSecond = persisted.jobs.find((entry) => entry.id === secondJob.id)?.state;
     expect(persistedSecond).toMatchObject({ lastRunStatus: "ok" });
     expect(persistedSecond?.runningAtMs).toBeUndefined();
+  });
+
+  it("commits a recovery batch before publishing its first result", async () => {
+    const { storePath } = await makeStorePath();
+    const startedAtMs = Date.parse("2026-08-13T14:00:00.000Z");
+    const jobs = [makeJob("batch-first", startedAtMs), makeJob("batch-second", startedAtMs + 1)];
+    await writeCronStoreSnapshot({ storePath, jobs });
+    const receipts = jobs.map((job, index) => claimReceipt(storePath, job, startedAtMs + index));
+    for (const receipt of receipts) {
+      releaseLocalCronRunReceiptOwnership(receipt);
+    }
+    const state = makeState(logger, storePath, startedAtMs + 30_000);
+    const proposals = await Promise.all(
+      jobs.map((job, index) =>
+        observeCronRecoveryForTest(state, job.id, undefined, startedAtMs + index),
+      ),
+    );
+    const results: string[] = [];
+
+    await recoverCronRunProposals(state, proposals, {
+      mode: "startup",
+      onRecovery(proposal, result) {
+        results.push(`${proposal.jobId}:${result.kind}`);
+        // A published batch is already durable: a listener may inspect either job.
+        expect(inspectActiveCronRunReceipt({ storePath, jobId: jobs[1]!.id })).toBeUndefined();
+      },
+    });
+
+    expect(results).toEqual(["batch-first:repaired", "batch-second:repaired"]);
+    const persisted = await loadCronStore(storePath);
+    expect(persisted.jobs.map((job) => job.state.lastRunStatus)).toEqual(["error", "error"]);
   });
 });

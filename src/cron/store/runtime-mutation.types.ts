@@ -51,11 +51,11 @@ export type CronRuntimeMutationContracts = {
     preparation: Record<string, never>;
     outcome: { removed: number };
   };
-  "cron.repairRun": {
-    input: CronRuntimeMutationInputs["cron.repairRun"];
-    facts: Pick<CronJob, "id" | "delivery" | "failureAlert">;
-    preparation: CronRunRecoveryPreparation;
-    outcome: CronRunRecoveryOutcome;
+  "cron.repairRuns": {
+    input: CronRuntimeMutationInputs["cron.repairRuns"];
+    facts: Array<Pick<CronJob, "id" | "delivery" | "failureAlert">>;
+    preparation: CronRunRecoveryPreparation[];
+    outcome: { outcomes: CronRunRecoveryOutcome[] };
   };
   "cron.scheduleUnowned": {
     input: CronRuntimeMutationInputs["cron.scheduleUnowned"];

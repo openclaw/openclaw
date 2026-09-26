@@ -24,6 +24,8 @@ class RetiredCronRecoveryError extends Error {
   }
 }
 
+const CRON_RECOVERY_BATCH_SIZE = 64;
+
 function recoveryAuthority(
   state: CronServiceState,
   context: OpenClawStateWorkerContext,
@@ -109,24 +111,27 @@ function observedRecoveryResult(
     : { kind: "live", receipt };
 }
 
-async function repairRecoveryProposal(
+async function repairRecoveryProposals(
   state: CronServiceState,
   context: OpenClawStateWorkerContext,
-  proposal: CronRunRecoveryProposal,
+  proposals: readonly CronRunRecoveryProposal[],
   mode: "startup" | "reclaim",
   assertOwnerCurrent: () => void,
-  publish: (result: CronRunRecoveryResult) => void,
+  publish: (proposal: CronRunRecoveryProposal, result: CronRunRecoveryResult) => void,
 ): Promise<void> {
+  if (proposals.length === 0) {
+    return;
+  }
   const input = {
     storeKey: cronStoreKey(state.deps.storePath),
-    proposal: structuredClone(proposal),
+    proposals: structuredClone([...proposals]),
     mode,
   };
   let retired = false;
   try {
     await runCronRuntimeMutation({
       context,
-      type: "cron.repairRun",
+      type: "cron.repairRuns",
       input,
       assertCurrent() {
         try {
@@ -136,41 +141,54 @@ async function repairRecoveryProposal(
           throw error;
         }
       },
-      prepare(routing) {
-        if (routing.id !== proposal.jobId) {
-          throw new Error("Cron recovery policy differs from its admitted job");
-        }
-        const receiptIsStale = () =>
-          proposal.receipt
-            ? isCronRunReceiptOwnerStale(proposal.receipt, state.deps.nowMs())
-            : true;
-        const cronConfig = structuredClone(state.deps.cronConfig);
-        const value: CronRunRecoveryPreparation = {
-          proposedReceiptIsStale: receiptIsStale(),
-          nowMs: state.deps.nowMs(),
-          cronConfig,
-          failureAlert: resolveFailureAlert({ deps: { cronConfig } }, routing),
-        };
+      prepare(facts) {
+        const value = facts.map((fact, index) => {
+          const proposal = proposals[index];
+          if (!proposal || fact.id !== proposal.jobId) {
+            throw new Error("Cron recovery policy differs from its admitted job");
+          }
+          const receiptIsStale = () =>
+            proposal.receipt
+              ? isCronRunReceiptOwnerStale(proposal.receipt, state.deps.nowMs())
+              : true;
+          const cronConfig = structuredClone(state.deps.cronConfig);
+          return {
+            proposedReceiptIsStale: receiptIsStale(),
+            nowMs: state.deps.nowMs(),
+            cronConfig,
+            failureAlert: resolveFailureAlert({ deps: { cronConfig } }, fact),
+          } satisfies CronRunRecoveryPreparation;
+        });
         return {
           value,
           assertCurrent() {
-            if (
-              value.proposedReceiptIsStale !== receiptIsStale() ||
-              !isDeepStrictEqual(value.cronConfig, state.deps.cronConfig) ||
-              !isDeepStrictEqual(value.failureAlert, resolveFailureAlert(state, routing))
-            ) {
-              throw new Error("Cron recovery policy or receipt ownership changed before commit");
+            for (const [index, preparation] of value.entries()) {
+              const proposal = proposals[index]!;
+              const fact = facts[index]!;
+              const receiptIsStale = () =>
+                proposal.receipt
+                  ? isCronRunReceiptOwnerStale(proposal.receipt, state.deps.nowMs())
+                  : true;
+              if (
+                preparation.proposedReceiptIsStale !== receiptIsStale() ||
+                !isDeepStrictEqual(preparation.cronConfig, state.deps.cronConfig) ||
+                !isDeepStrictEqual(preparation.failureAlert, resolveFailureAlert(state, fact))
+              ) {
+                throw new Error("Cron recovery policy or receipt ownership changed before commit");
+              }
             }
           },
         };
       },
       publish(outcome) {
-        if (outcome.result.kind === "repaired") {
+        if (outcome.outcomes.some((entry) => entry.result.kind === "repaired")) {
           noteCronJobsStoreCommit(input.storeKey);
         }
-        publish(outcome.result);
-        for (const entry of outcome.logs) {
-          state.deps.log[entry.level](entry.fields, entry.message);
+        for (const [index, entry] of outcome.outcomes.entries()) {
+          publish(proposals[index]!, entry.result);
+          for (const log of entry.logs) {
+            state.deps.log[log.level](log.fields, log.message);
+          }
         }
       },
     });
@@ -209,15 +227,16 @@ export async function recoverCronRunProposals(
         repairs.push(proposal);
       }
     }
-    for (const proposal of repairs) {
+    for (let index = 0; index < repairs.length; index += CRON_RECOVERY_BATCH_SIZE) {
+      const batch = repairs.slice(index, index + CRON_RECOVERY_BATCH_SIZE);
       assertCurrent();
-      await repairRecoveryProposal(
+      await repairRecoveryProposals(
         state,
         context,
-        proposal,
+        batch,
         options.mode ?? "reclaim",
         assertCurrent,
-        (result) => options.onRecovery(proposal, result),
+        options.onRecovery,
       );
     }
   } catch (error) {

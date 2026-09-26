@@ -28,7 +28,7 @@ import { onTimer } from "./timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-settlement-" });
 
-it("publishes a committed repair once after reply loss and leaves the remaining batch for the next tick", async () => {
+it("publishes every committed batch repair once after reply loss", async () => {
   using deliveries = captureTaskDeliveryWork();
   const { storePath } = await makeStorePath();
   const nowMs = Date.now();
@@ -94,23 +94,19 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   await reply.waitForExit();
   expect(reply.wasDropped()).toBe(true);
   expect(reply.attempts).toEqual(["first"]);
-  expect(finishedIds()).toEqual(["first"]);
-  expect(notificationKeys()).toEqual(["cron:first:failure-alert"]);
+  expect(finishedIds()).toEqual(["first", "second"]);
+  expect(notificationKeys()).toEqual(["cron:first:failure-alert", "cron:second:failure-alert"]);
   const afterLoss = await loadCronStore(storePath);
   expect(afterLoss.jobs[0]?.state).toMatchObject({ lastRunStatus: "error", consecutiveErrors: 1 });
   expect(afterLoss.jobs[0]?.state.runningAtMs).toBeUndefined();
-  expect(afterLoss.jobs[1]?.state.runningAtMs).toBe(jobs[1]!.state.runningAtMs);
-  expect(inspectActiveCronRunReceipt({ storePath, jobId: "first" })).toBeUndefined();
-  expect(inspectActiveCronRunReceipt({ storePath, jobId: "second" })?.receiptId).toBe(
-    jobs[1]!.state.runningReceiptId,
-  );
+  expect(afterLoss.jobs[1]?.state).toMatchObject({ lastRunStatus: "error", consecutiveErrors: 1 });
+  expect(afterLoss.jobs[1]?.state.runningAtMs).toBeUndefined();
   expect(history("first")).toEqual([expect.objectContaining({ jobId: "first", status: "error" })]);
-  expect(history("second")).toEqual([]);
 
   const secondTick = onTimer(state);
   pending.push(secondTick);
   await secondTick;
-  expect(reply.attempts).toEqual(["first", "second"]);
+  expect(reply.attempts).toEqual(["first"]);
   expect(finishedIds()).toEqual(["first", "second"]);
   expect(notificationKeys()).toEqual(["cron:first:failure-alert", "cron:second:failure-alert"]);
   for (const job of jobs) {

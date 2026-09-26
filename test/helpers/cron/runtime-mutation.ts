@@ -7,7 +7,7 @@ import type { SqliteWorkerRequest } from "../../../src/infra/sqlite-worker-contr
 import * as workerAdmission from "../../../src/infra/sqlite-worker-operation-admission.js";
 import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
 
-export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron.repairRun") {
+export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron.repairRuns") {
   let target: { worker: Worker; requestId: number; nonce: string } | undefined;
   let stopped: Promise<number> | undefined;
   let dropped = false;
@@ -30,8 +30,10 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
         typeof command.input.nonce === "string"
       ) {
         attempts.push(
-          isRecord(command.input.proposal) && typeof command.input.proposal.jobId === "string"
-            ? command.input.proposal.jobId
+          Array.isArray(command.input.proposals) &&
+            isRecord(command.input.proposals[0]) &&
+            typeof command.input.proposals[0].jobId === "string"
+            ? command.input.proposals[0].jobId
             : type,
         );
         target ??= { worker: this, requestId: request.id, nonce: command.input.nonce };

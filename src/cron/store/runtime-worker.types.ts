@@ -41,9 +41,9 @@ export type CronRuntimeMutationInputs = {
     storeKey: string;
     family: CronJobFamilyIdentity;
   };
-  "cron.repairRun": {
+  "cron.repairRuns": {
     storeKey: string;
-    proposal: CronRunRecoveryProposal;
+    proposals: CronRunRecoveryProposal[];
     mode: "startup" | "reclaim";
   };
   "cron.scheduleUnowned": {

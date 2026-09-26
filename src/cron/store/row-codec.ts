@@ -246,21 +246,35 @@ export function loadCronRows(
   let query = getCronStoreKysely(db)
     .selectFrom(getCronStoreKysely(db).selectFrom("cron_jobs").selectAll().as("cron_rows"))
     .select(opts ? CRON_JOB_GENERATION_READ_COLUMNS : CRON_JOB_READ_COLUMNS)
-    .where("store_key", "=", storeKey)
-    .orderBy("sort_order", "asc")
-    .orderBy("updated_at", "asc")
-    .orderBy("job_id", "asc");
+    .where("store_key", "=", storeKey);
   if (jobIds) {
     const ids = [...jobIds];
     query =
       ids.length === 1
         ? query.where("job_id", "=", ids[0]!)
         : query.where("job_id", "in", sqliteStringSet(ids));
+  } else {
+    query = query
+      .orderBy("sort_order", "asc")
+      .orderBy("updated_at", "asc")
+      .orderBy("job_id", "asc");
   }
   const rows = executeSqliteQuerySync(db, query).rows;
   // SQLite replaces lone surrogates in bound IDs; keep exact caller identity
   // so an invalid ID cannot select the replacement-character job.
-  return jobIds ? rows.filter((row) => jobIds.has(row.job_id)) : rows;
+  if (!jobIds) {
+    return rows;
+  }
+  // SQL ORDER BY on an ID set favors the store-order index and scans every job;
+  // sort only the bounded target rows after SQLite looks them up by identity.
+  return rows
+    .filter((row) => jobIds.has(row.job_id))
+    .toSorted(
+      (left, right) =>
+        left.sort_order - right.sort_order ||
+        left.updated_at - right.updated_at ||
+        Buffer.compare(Buffer.from(left.job_id), Buffer.from(right.job_id)),
+    );
 }
 
 /** Fingerprints raw definition rows without mutating their config order. */
