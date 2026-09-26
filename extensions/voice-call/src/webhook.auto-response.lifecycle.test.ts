@@ -363,6 +363,48 @@ describe("automatic phone reply ownership", () => {
     },
   );
 
+  it("speaks the final reply after an early playback attempt failed", async () => {
+    const call = await startCall();
+    await call.speech("first question");
+    const first = await responseAt(0);
+    // The early handoff reaches the provider but playback fails.
+    const playback = vi
+      .spyOn(call.provider, "playTts")
+      .mockRejectedValueOnce(new Error("media stream gone"));
+    try {
+      expect(await first.early("the answer")).toBe(false);
+      expect(call.provider.playTtsCalls).toEqual([]);
+      // Duplicate suppression must not treat a failed attempt as delivered, or
+      // the caller is left with nothing at all for this turn.
+      await first.finish("the answer");
+      expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual(["the answer"]);
+    } finally {
+      playback.mockRestore();
+    }
+  });
+
+  it("does not speak an identical reply twice while early delivery is in flight", async () => {
+    const call = await startCall();
+    await call.speech("first question");
+    const first = await responseAt(0);
+    // Deliberately not awaited: the early handoff is still playing when the run
+    // completes with identical final text. Recording delivery only after it
+    // resolves would let both handoffs past the duplicate check.
+    const early = first.early("the answer");
+    await first.finish("the answer");
+    expect(await early).toBe(true);
+    expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual(["the answer"]);
+  });
+
+  it("does not repeat a reply that was already delivered early", async () => {
+    const call = await startCall();
+    await call.speech("first question");
+    const first = await responseAt(0);
+    expect(await first.early("the answer")).toBe(true);
+    await first.finish("the answer");
+    expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual(["the answer"]);
+  });
+
   it("invalidates on accepted carrier interim speech without blocking explicit speech", async () => {
     const call = await startCall();
     await call.speech("first question");

@@ -204,6 +204,10 @@ describe("TwilioProvider", () => {
       provider.setTTSProvider({
         synthesisTimeoutMs: 5000,
         synthesizeForTelephony: async () => await new Promise<Buffer>(() => {}),
+        prepareSpeech: async (text: string) => ({
+          segments: [text],
+          synthesizeSegment: async () => await new Promise<Buffer>(() => {}),
+        }),
       });
 
       const playExpectation = expect(
@@ -299,6 +303,10 @@ describe("TwilioProvider", () => {
       provider.setTTSProvider({
         synthesisTimeoutMs: 5000,
         synthesizeForTelephony: async () => Buffer.alloc(160 * 10, 0x80),
+        prepareSpeech: async (text: string) => ({
+          segments: [text],
+          synthesizeSegment: async () => Buffer.alloc(160 * 10, 0x80),
+        }),
       });
 
       const startedAt = Date.now();
