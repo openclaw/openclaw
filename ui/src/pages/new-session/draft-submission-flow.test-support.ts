@@ -132,6 +132,11 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         place?.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true }),
     },
   );
+  // Synchronous unit fixtures that omit catalog discovery model an already-loaded
+  // Gateway with no placement policy. Catalog tests exercise the real async owner.
+  if (!options.methods?.includes("environments.list")) {
+    vi.spyOn(gateway, "placementPolicyReady", "get").mockReturnValue(true);
+  }
   const browser = new DraftPlaceBrowser(
     host,
     gateway,

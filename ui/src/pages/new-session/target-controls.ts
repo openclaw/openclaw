@@ -58,6 +58,36 @@ export function renderAgentSelect(params: {
   `;
 }
 
+export function renderRequiredSessionPlacement(gateway: DraftGatewayState) {
+  const profile = gateway.cloudProfiles.find(
+    (candidate) => candidate.id === gateway.requiredProfile,
+  );
+  return html`<span class="new-session-page__select" role="status" data-required-placement>
+    ${
+      !gateway.placementPolicyReady
+        ? t("newSession.placementNotReady")
+        : !profile
+          ? t("newSession.requiredWorkerUnavailable")
+          : t(
+              profile.inference === "worker"
+                ? "newSession.openClawWorker"
+                : "newSession.requiredWorker",
+            )
+    }
+    ${
+      !gateway.cloudProfilesPending && (!gateway.placementPolicyReady || !profile)
+        ? html`<button
+            type="button"
+            class="btn btn--sm"
+            @click=${() => void gateway.refreshCloudProfiles()}
+          >
+            ${t("common.retry")}
+          </button>`
+        : nothing
+    }
+  </span>`;
+}
+
 export function renderNewSessionPlaceControls({
   idPrefix,
   context,
@@ -83,6 +113,9 @@ export function renderNewSessionPlaceControls({
   onFocusComposer: () => void;
   requestUpdate: () => void;
 }) {
+  if (!catalog.isTarget(data) && (!gateway.placementPolicyReady || place.requiredPlacement)) {
+    return renderRequiredSessionPlacement(gateway);
+  }
   const browser = place.browser;
   const { machineClass, os } = place.cloudSelection;
   const nativeTerminal = catalog.isTarget(data);

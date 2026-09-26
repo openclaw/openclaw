@@ -133,6 +133,8 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     );
   }
 
+  private configuredDefaults = false;
+
   private get catalog(): ModelCatalogEntry[] {
     return this.metadataState.catalog;
   }
@@ -367,6 +369,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       this.notify();
       return;
     }
+    this.configuredDefaults = options.configuredDefaults === true;
+    if (this.configuredDefaults) {
+      this.retireDraftSelection(true);
+    }
     const initialModel = options.initialModel;
     if (initialModel && initialModel !== this.initialModel) {
       this.resetSelection();
@@ -383,7 +389,9 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     const boundScope = this.bindMetadataSubscription(client, scope);
     const rebound = boundScope !== previousScope;
     this.pendingPreference = this.preferenceForDraft(options.preference, {
-      policy: context.config?.current.newSessionModelDefaults,
+      policy: this.configuredDefaults
+        ? "configured"
+        : context.config?.current.newSessionModelDefaults,
       initialModel: this.initialModel,
       initialModelPending: this.initialModelPending,
     });
@@ -498,6 +506,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       },
       !this.initialModelPending &&
         !policy?.restricted &&
+        !this.configuredDefaults &&
         this.pendingContext?.config?.current.newSessionModelDefaults !== "configured" &&
         this.pendingContext?.config?.current.newSessionModelDefaults !== null,
     );
@@ -527,7 +536,8 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   private applyPendingDraftSelection() {
     const selection = this.takeDraftSelection(
       this.agentId,
-      this.pendingContext?.config?.current.newSessionModelDefaults === "configured",
+      !this.configuredDefaults &&
+        this.pendingContext?.config?.current.newSessionModelDefaults === "configured",
       this.pendingPreference?.fastMode,
     );
     if (!selection) {

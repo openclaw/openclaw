@@ -19,6 +19,51 @@ SSH-backed `remote-exec` providers must return a trusted `hostKey` as exactly `a
 
 Node-backed providers return an authenticated node device id for either `worker-turn` or `remote-exec`. The Gateway installs the current pinned bundle and transfers the workspace through the node transport; these leases do not return or resolve OpenClaw SSH endpoint credentials. `worker-turn` requires a node lease and launches a restricted OpenClaw worker child. `remote-exec` can use either an enrolled node or an existing SSH-backed provider and keeps the harness plus model authentication on the Gateway.
 
+### Required worker profile
+
+Set `cloudWorkers.requiredProfile` to a configured profile ID when a Gateway
+must run every agent session on that OpenClaw worker profile. This is a server
+policy, not a suggested value for the placement picker. Leave it unset to retain
+optional per-session placement and Gateway-local execution.
+
+```json5
+{
+  cloudWorkers: {
+    requiredProfile: "dedicated-native",
+    profiles: {
+      "dedicated-native": {
+        provider: "device",
+        settings: { device: "PAIRED_DEVICE_ID", inference: "worker" },
+      },
+    },
+  },
+}
+```
+
+The Gateway advertises the required profile through `environments.list`. Control
+UI shows the required destination without a placement, operating-system, or
+machine selector. Ordinary session creation uses the server-owned placement
+flow; users do not need permission to choose or administer cloud workers. Manual
+placement administration retains its existing permissions.
+
+The Gateway enforces the policy for API and channel turns too. It prepares a
+session-owned empty workspace when no repository was selected, uses the existing
+durable dispatch/recovery flow, and does not run the turn locally if placement
+fails. A missing profile or disconnected worker is an actionable error, not a
+fallback to Gateway inference. The Gateway can still start when the required
+profile is not yet available so that an operator can enroll or repair the node.
+
+Existing placements keep their recorded workspace and worker identity. Changing
+the required profile does not silently move them. If a failed placement references
+a missing environment record, repair that record before retrying: the Gateway
+cannot prove its original profile and will not choose a new one automatically.
+Stop and recovery retain the normal placement lifecycle; stopping a worker does not authorize local turns.
+Sessionless model helpers and local CLI execution cannot bypass the policy.
+
+This setting selects execution, not provider credentials or an OS sandbox. For
+node-only credentials, configure the required profile and node as described in
+[Worker-local inference](/gateway/cloud-workers/native-inference).
+
 ### Crabbox profile
 
 In **Settings → Connections → Cloud workers**, the profile editor's **Advanced** group edits warm images, setup environment names, ready workers, and suspend-after duration. The page also exposes the shared **Prepared pool** cap. Clearing optional values restores their defaults; selecting **Auto** for warm images restores automatic selection. Changes apply without restarting the Gateway. To prepare an image after saving a profile, use **Snapshots → Build snapshot**. Saving does not start a build.

@@ -59,10 +59,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import {
-  isAgentHarnessSessionKeyOwnedBy,
-  resolveMissingAgentHarnessSessionError,
-} from "../sessions/agent-harness-session-key.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
 import {
   applyTraceOverride,
@@ -70,10 +66,6 @@ import {
   parseTraceOverride,
   parseVerboseOverride,
 } from "../sessions/level-overrides.js";
-import {
-  isModelSelectionLocked,
-  MODEL_SELECTION_LOCKED_MESSAGE,
-} from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   isSessionAgentAttentionIconId,
@@ -96,6 +88,7 @@ import {
 } from "./session-model-patch-origin.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 import { normalizeSessionToolOverrides } from "./session-tool-overrides.js";
+import { validateSessionPatchAdmission } from "./sessions-patch-admission.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
@@ -175,36 +168,9 @@ function* projectSessionPatchSteps(
   params: SessionPatchProjectionParams,
 ): Generator<void, SessionPatchProjectionResult, ModelCatalogSnapshot | undefined> {
   const { cfg, storeKey, patch, creation } = params;
-  if ("execSecurity" in patch || "execAsk" in patch) {
-    return invalid(
-      "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",
-    );
-  }
-  const authorizedHarnessCreation =
-    params.existingEntry === undefined &&
-    isAgentHarnessSessionKeyOwnedBy(storeKey, params.authorizedAgentHarnessId);
-  const harnessSessionError = authorizedHarnessCreation
-    ? undefined
-    : resolveMissingAgentHarnessSessionError(storeKey, params.existingEntry);
-  if (harnessSessionError) {
-    return invalid(harnessSessionError);
-  }
-  if (typeof patch.archived === "boolean") {
-    if (!params.existingEntry?.sessionId) {
-      return invalid(`session not found: ${storeKey}`);
-    }
-    if (patch.expectedSessionId === undefined) {
-      return invalid(`expectedSessionId required for session lifecycle patch: ${storeKey}`);
-    }
-  }
-  if (
-    ("model" in patch || "agentRuntime" in patch) &&
-    isModelSelectionLocked(params.existingEntry)
-  ) {
-    return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
-  }
-  if (typeof patch.agentRuntime === "string" && typeof patch.model !== "string") {
-    return invalid("agentRuntime requires an explicit canonical provider/model selection");
+  const invalidPatch = validateSessionPatchAdmission(params);
+  if (invalidPatch) {
+    return invalidPatch;
   }
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);

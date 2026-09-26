@@ -359,7 +359,9 @@ export async function prepareSessionWorkspace(params: {
         baseRef: pending.baseRef,
         checkoutCommit: pending.baseCommit,
         label: title ?? resolveExplicitSessionName(saved),
-        runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
+        runSetupScript:
+          !cfg.cloudWorkers?.requiredProfile &&
+          client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         signal,
         commitGuard: assertRunOwnership,
         onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
@@ -414,4 +416,41 @@ export async function prepareSessionWorkspace(params: {
   });
   assertRunOwnership();
   return assertRunOwnership;
+}
+
+/** Project the required destination onto cloned create inputs without doing filesystem work. */
+export function prepareRequiredWorkerWorkspaceInput(
+  params: SessionsCreateParams,
+  requiredProfile: string | undefined,
+): boolean {
+  if (!requiredProfile || params.repository || params.catalogId || params.worktree === true) {
+    return false;
+  }
+  params.worktree = true;
+  if (!params.cwd && !params.projectId && !params.projectGitUrl) {
+    params.worktreeSource = "empty";
+    return true;
+  }
+  return false;
+}
+
+/** An automatic empty checkout may never replace an already accepted workspace. */
+export function requiredWorkerWorkspaceReuseError(
+  automaticEmptyWorkspace: boolean,
+  existingTargetEntry: ReturnType<typeof loadSessionEntry>,
+): ErrorShape | undefined {
+  if (
+    automaticEmptyWorkspace &&
+    existingTargetEntry &&
+    !existingTargetEntry.worktree &&
+    (existingTargetEntry.sessionRoot ||
+      existingTargetEntry.spawnedCwd ||
+      existingTargetEntry.projectId)
+  ) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Required worker setup cannot replace an existing workspace with an empty one; create a managed-workspace session with the original source.",
+    );
+  }
+  return undefined;
 }
