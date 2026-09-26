@@ -53,7 +53,6 @@ describe("exa web search provider", () => {
         count: 1,
         results: [{ url: "https://example.com/first" }],
       });
-      expect(first.results).toHaveLength(1);
       expect(cached).toEqual({ ...first, cached: true });
     } finally {
       fetchMock.mockRestore();

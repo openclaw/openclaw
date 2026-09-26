@@ -405,7 +405,6 @@ describe("brave web search provider", () => {
         count: 1,
         results: [{ url: "https://example.com/first" }],
       });
-      expect(first.results).toHaveLength(1);
       expect(cached).toEqual({ ...first, cached: true });
 
       const larger = await tool.execute({ ...args, count: 2 });
@@ -414,7 +413,6 @@ describe("brave web search provider", () => {
         count: 2,
         results: [{ url: "https://example.com/first" }, { url: "https://example.com/second" }],
       });
-      expect(larger.results).toHaveLength(2);
       expect(await tool.execute({ ...args, count: 2 })).toEqual({ ...larger, cached: true });
       expect(mockFetch).toHaveBeenCalledTimes(2);
     },

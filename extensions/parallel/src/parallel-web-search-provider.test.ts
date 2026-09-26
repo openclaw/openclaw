@@ -145,7 +145,6 @@ describe.each(["paid", "free"] as const)("Parallel %s cache policy", (transport)
       usage: [{ count: 1 }],
       results: [{ url: "https://example.com/first" }],
     });
-    expect(first.results).toHaveLength(1);
     expect(cached).toEqual({ ...first, cached: true });
   });
 
@@ -654,9 +653,9 @@ describe("runParallelMcpSearch", () => {
       jsonResponse({}),
       jsonResponse(detailedEnvelope),
     );
-    await expect(runParallelMcpSearch({ searchQueries: ["test"], maxResults: 5 })).rejects.toThrow(
-      expectedPrefix,
-    );
+    const result = runParallelMcpSearch({ searchQueries: ["test"], maxResults: 5 });
+    await expect(result).rejects.toThrow(expectedPrefix);
+    await expect(result).rejects.toHaveProperty("message.length", expectedPrefix.length + 2 + 500);
   });
   it("runs the 3-step handshake and maps results into the REST-compatible shape", async () => {
     pushMcpHandshake(

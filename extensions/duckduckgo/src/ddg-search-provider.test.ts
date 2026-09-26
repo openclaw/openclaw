@@ -153,6 +153,7 @@ describe("duckduckgo web search provider", () => {
   });
 
   it("aborts an in-flight DuckDuckGo request without caching its result", async () => {
+    const controller = new AbortController();
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
       async (_url, init) =>
         await new Promise<Response>((_resolve, reject) => {
@@ -163,18 +164,17 @@ describe("duckduckgo web search provider", () => {
           init.signal.addEventListener("abort", () => reject(init.signal?.reason as Error), {
             once: true,
           });
+          controller.abort(new Error("DuckDuckGo request canceled in flight"));
         }),
     );
-    const controller = new AbortController();
     const result = runActualDuckDuckGoSearch({
       query: "duckduckgo in-flight cancellation",
       signal: controller.signal,
     });
 
     try {
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-      controller.abort(new Error("DuckDuckGo request canceled in flight"));
       await expect(result).rejects.toThrow("DuckDuckGo request canceled in flight");
+      expect(fetchMock).toHaveBeenCalledOnce();
       expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
       fetchMock.mockResolvedValueOnce(
         new Response('<a class="result__a" href="https://example.com">Example</a>', {

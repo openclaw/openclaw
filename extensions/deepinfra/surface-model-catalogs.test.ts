@@ -192,7 +192,11 @@ describe("listDeepInfraVideoGenCatalog", () => {
 });
 
 describe("resolveDeepInfraVideoModelCapabilities", () => {
-  it("returns capabilities for a discovered video-gen model", async () => {
+  it.each([
+    { model: "Wan-AI/Wan2.6-T2V", supported: true },
+    { model: "deepinfra/Wan-AI/Wan2.6-T2V", supported: true },
+    { model: "ByteDance/Seedance-2.0", supported: false },
+  ])("resolves $model with supported=$supported", async ({ model, supported }) => {
     const mockFetch = vi.fn().mockResolvedValue(
       Response.json({
         data: [
@@ -205,48 +209,13 @@ describe("resolveDeepInfraVideoModelCapabilities", () => {
 
     await withLiveFetch(mockFetch, async () => {
       const caps = await resolveDeepInfraVideoModelCapabilities({
-        model: "Wan-AI/Wan2.6-T2V",
+        model,
       } as Parameters<typeof resolveDeepInfraVideoModelCapabilities>[0]);
-      expect(caps).toBeDefined();
-      expect(caps?.generate?.supportsAspectRatio).toBe(true);
-    });
-  });
-
-  it("strips the deepinfra/ prefix when matching", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      Response.json({
-        data: [
-          surfaceEntry("Wan-AI/Wan2.6-T2V", "video-gen", {
-            pricing: { output_seconds: 0.05 },
-          }),
-        ],
-      }),
-    );
-
-    await withLiveFetch(mockFetch, async () => {
-      const caps = await resolveDeepInfraVideoModelCapabilities({
-        model: "deepinfra/Wan-AI/Wan2.6-T2V",
-      } as Parameters<typeof resolveDeepInfraVideoModelCapabilities>[0]);
-      expect(caps).toBeDefined();
-    });
-  });
-
-  it("returns undefined for an unknown model", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      Response.json({
-        data: [
-          surfaceEntry("Wan-AI/Wan2.6-T2V", "video-gen", {
-            pricing: { output_seconds: 0.05 },
-          }),
-        ],
-      }),
-    );
-
-    await withLiveFetch(mockFetch, async () => {
-      const caps = await resolveDeepInfraVideoModelCapabilities({
-        model: "ByteDance/Seedance-2.0",
-      } as Parameters<typeof resolveDeepInfraVideoModelCapabilities>[0]);
-      expect(caps).toBeUndefined();
+      if (supported) {
+        expect(caps).toMatchObject({ generate: { supportsAspectRatio: true } });
+      } else {
+        expect(caps).toBeUndefined();
+      }
     });
   });
 });

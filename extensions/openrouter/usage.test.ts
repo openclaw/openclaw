@@ -90,6 +90,10 @@ describe("OpenRouter usage", () => {
       fetchFn: fetchFn as unknown as typeof fetch,
     });
 
+    expect(fetchFn.mock.calls.map(([url]) => url)).toEqual([
+      "https://private.example.invalid/router/v1/credits",
+      "https://private.example.invalid/router/v1/key",
+    ]);
     for (const [, options] of fetchFn.mock.calls) {
       const headers = new Headers(options?.headers);
       expect(headers.get("x-private-proxy-tenant")).toBe("synthetic-tenant");

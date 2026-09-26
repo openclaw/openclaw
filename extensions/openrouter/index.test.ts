@@ -1118,7 +1118,10 @@ describe("openrouter provider hooks", () => {
         ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
       ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
         const payload = {
-          messages: [{ role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] }],
+          messages: [
+            { role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] },
+            { role: "assistant", content: "done" },
+          ],
         };
         void args[2]?.onPayload?.(payload, args[0]);
         payloads.push(payload);
@@ -1167,9 +1170,11 @@ describe("openrouter provider hooks", () => {
         role: "assistant",
         tool_calls: [{ id: "call_1", type: "function" }],
       },
+      { role: "assistant", content: "done", reasoning_content: "" },
     ]);
     expect(payloads[1]?.messages).toEqual([
       { role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] },
+      { role: "assistant", content: "done" },
     ]);
   });
 

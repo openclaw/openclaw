@@ -351,7 +351,6 @@ describe("perplexity web search provider", () => {
       count: 1,
       results: [{ url: "https://example.com/first" }],
     });
-    expect(first.results).toHaveLength(1);
     expect(cached).toEqual({ ...first, cached: true });
   });
 
@@ -410,6 +409,7 @@ describe("perplexity web search provider", () => {
       webSearch: { apiKey: "pplx-test", baseUrl: "https://api.perplexity.ai" },
     },
   ])("cancels an in-flight $name request", async ({ name, webSearch }) => {
+    const controller = new AbortController();
     withTrustedWebSearchEndpointMock.mockImplementation(
       async (params: { signal?: AbortSignal }) =>
         await new Promise<never>((_resolve, reject) => {
@@ -420,6 +420,7 @@ describe("perplexity web search provider", () => {
           params.signal.addEventListener("abort", () => reject(params.signal?.reason as Error), {
             once: true,
           });
+          controller.abort(new Error("Perplexity request canceled in flight"));
         }),
     );
     const tool = createPerplexityWebSearchProvider().createTool({
@@ -429,16 +430,13 @@ describe("perplexity web search provider", () => {
     if (!tool) {
       throw new Error("Expected tool definition");
     }
-    const controller = new AbortController();
     const result = tool.execute(
       { query: `perplexity in-flight cancellation ${name}` },
       { signal: controller.signal },
     );
 
-    await vi.waitFor(() => expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce());
-    controller.abort(new Error("Perplexity request canceled in flight"));
-
     await expect(result).rejects.toThrow("Perplexity request canceled in flight");
+    expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
     expect(withTrustedWebSearchEndpointMock.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
   });
 

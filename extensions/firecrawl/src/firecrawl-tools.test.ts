@@ -746,7 +746,6 @@ describe("firecrawl tools", () => {
       expect.fail("Expected invalid URL to be blocked");
     } catch (error) {
       expect((error as Error).message).toBe("Invalid URL supplied to Firecrawl scrape");
-      expect((error as Error).message).not.toContain("token=secret");
     }
   });
 
