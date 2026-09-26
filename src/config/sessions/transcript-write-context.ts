@@ -76,6 +76,11 @@ export type OwnedSessionTranscriptWriteContext = {
   metadataPublication?: { current?: MetadataPublication };
 };
 
+type SessionTranscriptWriteRequest = Pick<
+  OwnedSessionTranscriptWriteContext,
+  "sessionFile" | "sessionKey" | "sessionTarget"
+>;
+
 const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscriptWriteContext>();
 
 function captureWriteTarget(target: SessionTranscriptWriteTarget): SessionTranscriptWriteTarget {
@@ -191,12 +196,9 @@ function normalizeConcretePathForCompare(value: string | undefined): string | un
   return path.resolve(trimmed);
 }
 
-function contextMatches(params: {
-  context: OwnedSessionTranscriptWriteContext;
-  sessionFile?: string;
-  sessionKey?: string;
-  sessionTarget?: SessionTranscriptWriteTarget;
-}): boolean {
+function contextMatches(
+  params: SessionTranscriptWriteRequest & { context: OwnedSessionTranscriptWriteContext },
+): boolean {
   const normalizeTarget = (target: SessionTranscriptWriteTarget | undefined) => {
     const agentId = target?.agentId?.trim();
     const sessionId = target?.sessionId?.trim();
@@ -242,12 +244,9 @@ function contextMatches(params: {
  * "some other session". Compare keys in that case, and defer to the target comparison
  * whenever the caller can express one.
  */
-function ownsRequestedSession(params: {
-  context: OwnedSessionTranscriptWriteContext;
-  sessionFile?: string;
-  sessionKey?: string;
-  sessionTarget?: SessionTranscriptWriteTarget;
-}): boolean {
+function ownsRequestedSession(
+  params: SessionTranscriptWriteRequest & { context: OwnedSessionTranscriptWriteContext },
+): boolean {
   if (params.sessionTarget || params.sessionFile) {
     return contextMatches(params);
   }
@@ -311,11 +310,7 @@ export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResul
  * ambient claim itself and is only for diagnostics that observe the running writer.
  */
 export function getOwnedSessionTranscriptWriterFence(
-  params: {
-    sessionFile?: string;
-    sessionKey?: string;
-    sessionTarget?: SessionTranscriptWriteTarget;
-  } = {},
+  params: SessionTranscriptWriteRequest = {},
 ): SessionTranscriptWriterFence | undefined {
   const context = ownedTranscriptWriteContext.getStore();
   if (
@@ -346,11 +341,9 @@ export function getOwnedSessionTranscriptWriterFence(
 }
 
 /** Inherit only the exact host-minted first-insert owner across attempt preparation. */
-export function getOwnedSessionTranscriptInitialWriter(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-  sessionTarget?: SessionTranscriptWriteTarget;
-}): InitialSessionTranscriptWriter | undefined {
+export function getOwnedSessionTranscriptInitialWriter(
+  params: SessionTranscriptWriteRequest,
+): InitialSessionTranscriptWriter | undefined {
   const context = ownedTranscriptWriteContext.getStore();
   if (!context?.initialWriter) {
     return undefined;
@@ -421,11 +414,7 @@ export class SessionTranscriptWriterClaimReboundError extends Error {
 }
 
 export async function runWithOwnedSessionTranscriptWrite<T>(
-  params: {
-    sessionFile?: string;
-    sessionKey?: string;
-    sessionTarget?: SessionTranscriptWriteTarget;
-  },
+  params: SessionTranscriptWriteRequest,
   run: () => Promise<T> | T,
 ): Promise<T> {
   const context = ownedTranscriptWriteContext.getStore();

@@ -701,7 +701,9 @@ Automation task transcripts stay tied to the recorded run, including after its
 temporary continuation session is removed or the automation runs again. If that
 recorded transcript is unavailable, the viewer reports an error instead of
 showing a newer run. Select **View transcript** under **Automations → Run history**
-to read that exact run without opening its temporary session.
+to read that exact run without opening its temporary session. Selecting **All
+automations**, opening another automation, or starting a new automation closes the
+run viewer; refreshing the same panel keeps it open.
 
 The automation run viewer displays the supplied transcript. Core session transcripts
 are currently capped at 8,000 characters per text block. The Chat panel's full-text recovery may be unavailable

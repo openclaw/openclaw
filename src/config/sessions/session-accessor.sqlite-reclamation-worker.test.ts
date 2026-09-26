@@ -33,7 +33,7 @@ import {
 } from "./session-accessor.sqlite-reclamation.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
-test("retains one Worker across twenty interleaved entry, eviction, maintenance and archive operations", async () => {
+test("retains one Worker across twenty admission refusals and interleaved reclamation operations", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const databaseOptions = reclamation.resolveSessionReclamationDatabaseOptions(options);
@@ -60,7 +60,7 @@ test("retains one Worker across twenty interleaved entry, eviction, maintenance 
         }),
       };
     });
-    let refuseCommit = false;
+    let refusalPoint: "admission-request" | "commit-request" | undefined;
     let superseded = false;
     const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
     const spawn = vi
@@ -68,7 +68,7 @@ test("retains one Worker across twenty interleaved entry, eviction, maintenance 
       .mockImplementation((data) => {
         const worker = create(data);
         worker.prependListener("message", (message: { type: string }) => {
-          if (refuseCommit && message.type === "commit-request") {
+          if (message.type === refusalPoint) {
             superseded = true;
           }
         });
@@ -102,8 +102,12 @@ test("retains one Worker across twenty interleaved entry, eviction, maintenance 
           },
         ];
         for (const operation of plans) {
-          if (operation.kind === "maintenance-statistics") {
-            refuseCommit = true;
+          const refusals =
+            operation.kind === "maintenance-statistics"
+              ? (["admission-request", "commit-request"] as const)
+              : (["admission-request"] as const);
+          for (const point of refusals) {
+            refusalPoint = point;
             await expect(
               runSqliteSessionReclamation({
                 forceInProcess: false,
@@ -117,12 +121,13 @@ test("retains one Worker across twenty interleaved entry, eviction, maintenance 
                 },
               }),
             ).rejects.toThrow(SqliteReclamationInputsChangedError);
-            refuseCommit = false;
+            refusalPoint = undefined;
             superseded = false;
           }
           await expect(
             runSqliteSessionReclamation({ forceInProcess: false, plan: operation }),
           ).resolves.toMatchObject({ kind: operation.kind });
+          expect(spawn).toHaveBeenCalledTimes(1);
         }
         expect(loadSessionEntry(scope)).toBeUndefined();
       }
@@ -387,7 +392,7 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
   );
 });
 
-test("reschedules maintenance superseded by a write during Worker planning without a Worker failure warning", async () => {
+test("commits maintenance despite an unrelated write during Worker planning", async () => {
   await withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_TEST_FILE_LOG: "1" } },
     async (state) => {
@@ -418,48 +423,48 @@ test("reschedules maintenance superseded by a write during Worker planning witho
       });
       const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
       let raced = false;
-      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-        const worker = spawn(data);
-        worker.prependListener("message", (message: { type: string }) => {
-          if (message.type !== "admission-request" || raced) {
-            return;
-          }
-          // The Worker planned from older inputs; an ordinary write lands before its commit.
-          raced = true;
-          runOpenClawAgentWriteTransaction((owner) => {
-            writeSessionEntry(owner, sessionKey, {
-              sessionId: scope.sessionId,
-              updatedAt: Date.now(),
-              label: "concurrent-write",
-            });
-          }, scope);
-          kickSessionEntryMaintenanceAfterWrite(request);
+      const constructions = vi
+        .spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker")
+        .mockImplementation((data) => {
+          const worker = spawn(data);
+          worker.prependListener("message", (message: { type: string }) => {
+            if (message.type !== "admission-request" || raced) {
+              return;
+            }
+            // The protected active row is outside the plan's destructive candidates.
+            raced = true;
+            runOpenClawAgentWriteTransaction((owner) => {
+              writeSessionEntry(owner, sessionKey, {
+                sessionId: scope.sessionId,
+                updatedAt: Date.now(),
+                label: "concurrent-write",
+              });
+            }, scope);
+            kickSessionEntryMaintenanceAfterWrite(request);
+          });
+          return worker;
         });
-        return worker;
-      });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         kickSessionEntryMaintenanceAfterWrite(request);
         await firstRun.promise;
-        await expect(runs[0]).rejects.toThrow(SqliteReclamationInputsChangedError);
+        await expect(runs[0]).resolves.toMatchObject({ kind: "maintenance-plan" });
         expect(raced).toBe(true);
+        expect(loadSessionEntry(scope)?.label).toBe("concurrent-write");
+        expect(constructions).toHaveBeenCalledTimes(1);
         await flushLogger();
         const records: unknown[] = (await fs.readFile(file, "utf8"))
           .split("\n")
           .filter(Boolean)
           .map((line) => JSON.parse(line));
         const logged = (message: string) => expect.objectContaining({ message });
-        expect(records).toContainEqual(
+        expect(records).not.toContainEqual(
           logged("SQLite reclamation Worker superseded by newer inputs"),
         );
         expect(records).not.toContainEqual(logged("SQLite reclamation Worker failed"));
         expect(records).not.toContainEqual(logged("SQLite automatic session maintenance failed"));
 
-        // The maintenance owner retries once writes stay quiet.
         expect(plans).toHaveBeenCalledTimes(1);
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(plans).toHaveBeenCalledTimes(2);
-        await expect(runs[1]).resolves.toMatchObject({ kind: "maintenance-plan" });
       } finally {
         vi.useRealTimers();
         vi.restoreAllMocks();

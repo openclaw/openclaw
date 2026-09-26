@@ -13,6 +13,7 @@ import * as profileReader from "../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import {
   invalidateOperatorRolePolicy,
@@ -28,6 +29,51 @@ import {
   createContext,
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
+
+it("preserves the live operator source through principal capture without trusting copied labels", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const profile = ensureProfileForEmail("principal-source@example.test");
+    const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.read"] });
+    const principal = expectDefined(captureAgentTurnPrincipal(client), "captured principal");
+    const context = createContext();
+    const source = new AbortController();
+    const sourceAuthority = {
+      signal: source.signal,
+      assertCurrent: () => source.signal.throwIfAborted(),
+    };
+    const captures = await Promise.all(
+      [principal, client, { ...client }].map(async (input) =>
+        expectDefined(
+          await captureGatewayOperatorRunAuthority({
+            client: input,
+            context,
+            sourceAuthority,
+          }),
+          "operator source",
+        ),
+      ),
+    );
+    try {
+      const principalSource = expectDefined(captures[0], "principal authority").authority.source;
+      const originalSource = expectDefined(captures[1], "socket authority").authority.source;
+      const copiedSource = expectDefined(captures[2], "copied authority").authority.source;
+      expect(originalSource).toBeDefined();
+      expect(principalSource).toBe(originalSource);
+      expect(copiedSource).not.toBe(originalSource);
+      for (const capture of captures) {
+        expect(capture.authority.assertCurrent).not.toThrow();
+      }
+      source.abort(new Error("source revoked"));
+      for (const capture of captures) {
+        expect(capture.authority.assertCurrent).toThrow();
+      }
+    } finally {
+      for (const capture of captures) {
+        capture.release();
+      }
+    }
+  });
+});
 
 it.each(["capture", "operator tool"])(
   "prepares %s profile authority without parent data SQL",
