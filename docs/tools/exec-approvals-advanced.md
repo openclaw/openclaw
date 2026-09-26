@@ -250,6 +250,7 @@ Config:
       mode: "session", // "session" | "targets" | "both"
       agentFilter: ["main"],
       sessionFilter: ["discord"], // substring or regex
+      outcome: "message", // "message" | "none"
       targets: [
         { channel: "slack", to: "U12345678" },
         { channel: "telegram", to: "123456789" },
@@ -266,6 +267,28 @@ Reply in chat:
 /approve <id> allow-always
 /approve <id> deny
 ```
+
+### Controlling the resolved-outcome echo
+
+Each resolved forwarded approval also posts a second message to the target (`Exec approval: Allowed`
+/ `Exec approval: Denied`). In busy rooms that follow-up can account for a large share of the bot's
+traffic, so `outcome` controls it:
+
+| Value       | Behavior                                                                      |
+| ----------- | ----------------------------------------------------------------------------- |
+| `"message"` | Default. Publish the decision as a new message, as today.                     |
+| `"none"`    | Resolve the approval without publishing the decision to the forwarded target. |
+
+`"none"` suppresses only the resolved-outcome follow-up. The approval prompt itself and its expiry
+notification are unaffected, and the decision stays queryable through `/approve` and the CLI.
+
+Scope is **forwarded approvals only**. Native approval clients — reaction shortcuts, DM cards, and
+same-chat `/approve` — publish their own resolved outcome through their channel adapter, and this
+knob does not change them. The decision is still applied in every case; only the extra chat message
+is suppressed.
+
+A `"update"` mode that edits the original prompt instead of posting a new message is not available
+yet: it needs per-delivery message-id tracking plus edit support on every forwarded channel.
 
 The `/approve` command handles both exec approvals and plugin approvals. If the ID does not match a pending exec approval, it automatically checks plugin approvals instead. This fallback is bounded to "approval not found" failures; a real exec approval denial/error does not silently retry as a plugin approval.
 
@@ -293,7 +316,7 @@ For plugin-authoring behavior, request fields, and decision semantics, see
 ```
 
 The config shape is identical to `approvals.exec`: `enabled`, `mode`, `agentFilter`,
-`sessionFilter`, and `targets` work the same way.
+`sessionFilter`, `targets`, and `outcome` work the same way.
 
 Channels that support shared interactive replies render the same approval buttons for both exec and
 plugin approvals. Channels without shared interactive UI fall back to plain text with `/approve`

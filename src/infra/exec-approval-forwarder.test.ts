@@ -174,6 +174,56 @@ describe("exec approval forwarder", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
+  describe("exec approval forwarding outcome (#113262)", () => {
+    function makeOutcomeCfg(outcome?: "message" | "none"): OpenClawConfig {
+      return {
+        approvals: {
+          exec: {
+            ...TARGETS_CFG.approvals?.exec,
+            ...(outcome ? { outcome } : {}),
+          },
+        },
+      } as OpenClawConfig;
+    }
+
+    async function resolveWithOutcome(outcome?: "message" | "none") {
+      vi.useFakeTimers();
+      const { deliver, forwarder } = createForwarder({ cfg: makeOutcomeCfg(outcome) });
+      await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      await forwarder.handleResolved({
+        id: baseRequest.id,
+        decision: "allow-once",
+        resolvedBy: "reviewer",
+        ts: 2000,
+      });
+      return { deliver, forwarder };
+    }
+
+    it("keeps publishing the decision when outcome is unset (default)", async () => {
+      const { deliver } = await resolveWithOutcome();
+      expect(deliver).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps publishing the decision when outcome is message", async () => {
+      const { deliver } = await resolveWithOutcome("message");
+      expect(deliver).toHaveBeenCalledTimes(2);
+    });
+
+    it("suppresses the decision echo when outcome is none", async () => {
+      const { deliver } = await resolveWithOutcome("none");
+      expect(deliver).toHaveBeenCalledTimes(1);
+    });
+
+    it("still releases the pending expiry when outcome is none", async () => {
+      const { deliver } = await resolveWithOutcome("none");
+      await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
+      // A suppressed outcome must still settle the pending entry, otherwise the
+      // expiry timer stays armed and fires a notice for a resolved approval.
+      expect(deliver).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("joins started delivery and its queued real resolution while stopping future expiry", async () => {
     vi.useFakeTimers();
     const pendingDelivery = createDeferred();

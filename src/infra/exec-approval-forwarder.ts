@@ -511,12 +511,21 @@ function createApprovalHandlers<
   };
 
   const handleResolved = async (resolved: TResolved) => {
-    const settled = pending.settle(resolved.id, (entry) => deliverResolved(resolved, entry.value));
+    // `outcome: "none"` resolves the approval without publishing the decision
+    // to chat. The pending entry is still settled so its entry and expiry timer
+    // are released exactly as they are for a delivered outcome.
+    const suppressOutcome = params.strategy.config(params.getConfig())?.outcome === "none";
+    const settled = pending.settle(resolved.id, (entry) =>
+      suppressOutcome ? Promise.resolve() : deliverResolved(resolved, entry.value),
+    );
     if (settled.status === "queued") {
       return;
     }
     if (settled.status === "taken") {
       await settled.terminal(settled.entry);
+      return;
+    }
+    if (suppressOutcome) {
       return;
     }
     // Only this forwarder's own entry proves the chat was asked; without it the

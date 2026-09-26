@@ -20,6 +20,11 @@ const ExecApprovalForwardingSchema = z
     agentFilter: z.array(z.string()).optional(),
     sessionFilter: z.array(z.string()).optional(),
     targets: z.array(ExecApprovalForwardTargetSchema).optional(),
+    /**
+     * How the resolved decision is published. "message" (default) keeps today's
+     * follow-up echo; "none" resolves the approval without sending it.
+     */
+    outcome: z.union([z.literal("message"), z.literal("none")]).optional(),
   })
   .strict()
   .optional();
