@@ -16,7 +16,7 @@ import type {
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setActiveNodeContext } from "../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../infra/active-node-context.js";
 import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state.js";
 import { isPrivateNodeInvokeCommand, NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import {
@@ -75,6 +75,8 @@ import {
 import {
   updateNodePresenceActivity,
   clearNodePresenceActivity,
+  selectActiveNode,
+  selectActiveNodesByProfile,
   type NodePresenceActivityUpdate,
 } from "./node-registry.presence.js";
 import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
@@ -851,48 +853,33 @@ export class NodeRegistry {
   getActiveNode(
     connectedNodes: readonly NodeSession[] = this.listConnected(),
   ): NodeSession | undefined {
-    let active: NodeSession | undefined;
-    for (const node of connectedNodes) {
-      if (node.lastActiveAtMs === undefined) {
-        continue;
-      }
-      if (
-        !active ||
-        node.lastActiveAtMs > (active.lastActiveAtMs ?? 0) ||
-        (node.lastActiveAtMs === active.lastActiveAtMs &&
-          (node.presenceUpdatedAtMs ?? 0) > (active.presenceUpdatedAtMs ?? 0))
-      ) {
-        active = node;
-      }
-    }
-    return active;
+    return selectActiveNode(connectedNodes);
   }
 
   private publishActiveNodeContext(): void {
-    const active = this.getActiveNode(this.listConnectedSessions()) as
-      | PairingBoundNodeSession
-      | undefined;
-    const lease = active ? this.capturePairingLease(active) : undefined;
-    setActiveNodeContext(
-      active
-        ? {
-            nodeId: active.nodeId,
-            ...(active.pairingGeneration ? { pairingGeneration: active.pairingGeneration } : {}),
-          }
-        : null,
-      lease
-        ? {
-            prepare: () => this.getCurrentConnected(lease.nodeId),
-            isCurrent: () => {
-              if (!this.currentSessionForLease(lease)) {
-                return false;
-              }
-              return this.options.isPairingStateCurrent
-                ? this.options.isPairingStateCurrent(lease.nodeId, lease.binding)
-                : true;
-            },
-          }
-        : undefined,
+    const selected = selectActiveNodesByProfile(this.listConnectedSessions());
+    setActiveNodeContexts(
+      [...selected].map(([profileId, active]) => {
+        const lease = this.capturePairingLease(active);
+        const authenticatedProfileId = active.client.authenticatedUserProfile?.profileId;
+        return {
+          nodeId: active.nodeId,
+          profileId,
+          pairingGeneration: active.pairingGeneration,
+          prepare: () => this.getCurrentConnected(lease.nodeId),
+          isCurrent: () => {
+            if (
+              !this.currentSessionForLease(lease) ||
+              active.client.authenticatedUserProfile?.profileId !== authenticatedProfileId
+            ) {
+              return false;
+            }
+            return this.options.isPairingStateCurrent
+              ? this.options.isPairingStateCurrent(lease.nodeId, lease.binding)
+              : true;
+          },
+        };
+      }),
     );
   }
 

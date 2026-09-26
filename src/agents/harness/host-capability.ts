@@ -1,6 +1,4 @@
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { buildActiveNodeContextText } from "../../infra/active-node-context.js";
 import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
@@ -21,6 +19,7 @@ import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
 import {
   getAdmittedRunDelegatedAuthority,
+  readAdmittedRunOperatorAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
 } from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
@@ -56,7 +55,7 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
-import { prepareAgentHarnessEnvironment } from "./host-environment.js";
+import { normalizeNativeOperationCwd, prepareAgentHarnessEnvironment } from "./host-environment.js";
 import { bindHarnessMedia } from "./host-media.js";
 import {
   registerAgentHarnessBeforeToolCallRetention,
@@ -75,25 +74,6 @@ type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
 type AgentHarnessHostApprovalResult = NonNullable<
   Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>
 >;
-
-const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
-
-function normalizeNativeOperationCwd(value: unknown, attemptCwd: string | undefined): string {
-  if (typeof value !== "string") {
-    throw new Error("native operation cwd must be a string");
-  }
-  const normalized = value.trim();
-  if (!normalized) {
-    throw new Error("native operation cwd must not be empty");
-  }
-  if (Buffer.byteLength(normalized, "utf8") > MAX_NATIVE_OPERATION_CWD_BYTES) {
-    throw new Error(`native operation cwd must not exceed ${MAX_NATIVE_OPERATION_CWD_BYTES} bytes`);
-  }
-  if (containsAsciiControlCharacter(normalized)) {
-    throw new Error("native operation cwd must not contain control characters");
-  }
-  return path.resolve(attemptCwd ?? process.cwd(), normalized);
-}
 
 function freezeSnapshot<T>(value: T, seen = new WeakSet<object>()): T {
   if (!value || typeof value !== "object" || seen.has(value as object)) {
@@ -203,6 +183,9 @@ export function createAgentHarnessHostCapabilities(params: {
   const nativeModelPolicySupported = params.nativeModelPolicySupport === "exact";
   const operationalRunInstance = attempt.admittedRunContext.operationalRunInstance;
   const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
+  const requesterProfileId = readAdmittedRunOperatorAuthority(
+    attempt.admittedRunContext,
+  )?.profileId;
   if (!delegatedAuthority) {
     throw new Error("agent harness host capability requires active admitted run authority");
   }
@@ -516,7 +499,7 @@ export function createAgentHarnessHostCapabilities(params: {
     },
     activeComputerContext: () => {
       assertActive();
-      return buildActiveNodeContextText();
+      return buildActiveNodeContextText(requesterProfileId);
     },
     bindToolSurface,
     createToolSurface: (options, bindingOptions) => {

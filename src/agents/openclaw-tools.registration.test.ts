@@ -137,6 +137,26 @@ describe("openclaw-tools progress_card gating", () => {
     },
   );
 
+  it("exposes presence to non-owner readers without shell access", () => {
+    const tools = createOpenClawCodingTools({
+      sessionKey: "agent:main:dashboard:presence",
+      cwd: "/project/worktree",
+      workspaceDir: "/project/worktree",
+      senderIsOwner: false,
+      config: {
+        agents: { entries: { main: { default: true, workspace: "/agent/workspace" } } },
+        tools: { allow: ["presence"], fs: { workspaceOnly: true } },
+      },
+      disableMessageTool: true,
+      wrapBeforeToolCallHook: false,
+    });
+    expect(toolNames(tools)).toContain("presence");
+    expect(toolNames(tools)).not.toContain("gateway");
+    expect(toolNames(tools)).not.toContain("exec");
+    setEmbeddedMode(true);
+    expect(createFastToolNames({ agentSessionKey: "agent:main:main" })).not.toContain("presence");
+  });
+
   it("exposes progress_card from default tool construction for every embedded model", () => {
     const defaultTools = createFastToolNames({
       config: {} as OpenClawConfig,

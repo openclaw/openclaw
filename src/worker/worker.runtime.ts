@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   WORKER_PORTAL_PROTOCOL_FEATURE,
+  WORKER_PRESENCE_PROTOCOL_FEATURE,
   type WorkerHelloOk,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
@@ -272,7 +273,10 @@ export async function runWorkerDescriptor(
         inferenceOptions: descriptor.assignment.inferenceOptions,
         allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames.filter(
           (name) =>
-            name !== "portal" || hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE),
+            (name !== "portal" ||
+              hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE)) &&
+            (name !== "presence" ||
+              hello.protocolFeatures.includes(WORKER_PRESENCE_PROTOCOL_FEATURE)),
         ),
         execAuthority: descriptor.assignment.toolAuthority.exec,
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),

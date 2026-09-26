@@ -1,12 +1,14 @@
 /**
- * Geolocation plugin entry. It exposes one authenticated lookup route and keeps
+ * Geolocation plugin entry. It exposes authenticated lookups and keeps
  * the database download lazy, so an install that nobody queries costs nothing.
  */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolveGeolocationSettings } from "./src/config.js";
 import { createGeolocationDatabaseStore } from "./src/database-store.js";
+import { registerGeolocationGatewayMethods } from "./src/gateway-methods.js";
 import { createGeolocationLookupHandler } from "./src/lookup-route.js";
+import { createGeolocationLookup } from "./src/lookup.js";
 
 export default definePluginEntry({
   id: "geolocation",
@@ -21,15 +23,17 @@ export default definePluginEntry({
       fetchImpl: fetch,
       logger: api.logger,
     });
+    const lookup = createGeolocationLookup({
+      loadDatabase: () => store.load(),
+      settings,
+      logger: api.logger,
+    });
+    registerGeolocationGatewayMethods(api, lookup);
     api.registerHttpRoute({
       path: "/plugins/geolocation",
       auth: "gateway",
       match: "prefix",
-      handler: createGeolocationLookupHandler({
-        loadDatabase: () => store.load(),
-        settings,
-        logger: api.logger,
-      }),
+      handler: createGeolocationLookupHandler(lookup),
     });
   },
 });

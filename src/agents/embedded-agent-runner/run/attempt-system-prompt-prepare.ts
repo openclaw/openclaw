@@ -5,7 +5,10 @@ import {
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
@@ -148,6 +151,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     channel: attempt.messageChannel ?? attempt.messageProvider,
     accountId: attempt.agentAccountId,
     chatType: attempt.chatType,
+    requesterProfileId: readAdmittedRunOperatorAuthority(attempt.admittedRunContext)?.profileId,
   });
   const promptMode =
     attempt.promptMode ??

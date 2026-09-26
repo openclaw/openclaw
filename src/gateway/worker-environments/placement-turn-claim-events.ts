@@ -56,6 +56,8 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   operationalRunInstance: OperationalRunInstanceRef;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Original presence reader, retained on the Gateway without a worker-writable claim. */
+  assertPresenceSourceCurrent?: () => void;
   receiptAuthority: () => void;
   sessionKey: string;
   sessionTarget: Readonly<BoundAgentRunSessionTarget>;
@@ -135,6 +137,7 @@ export async function bindWorkerTurnOwner(
   assertRunActive: () => void,
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  assertPresenceSourceCurrent?: () => void,
 ): Promise<
   Readonly<{
     capability: WorkerTurnExecutionIdentityCapability;
@@ -204,6 +207,7 @@ export async function bindWorkerTurnOwner(
     ...(token ? { executionIdentityToken: token } : {}),
     operationalRunInstance,
     ...(operatorAuthority ? { operatorAuthority } : {}),
+    ...(assertPresenceSourceCurrent ? { assertPresenceSourceCurrent } : {}),
     receiptAuthority: assertActive,
     sessionKey: sessionTarget.sessionKey,
     sessionTarget,

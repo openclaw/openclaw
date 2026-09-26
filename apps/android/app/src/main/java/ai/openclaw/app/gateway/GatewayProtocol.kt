@@ -979,6 +979,7 @@ enum class GatewayMethod(
   PortalSessionOpen("portal.session.open"),
   PortalSessionClose("portal.session.close"),
   CronHistory("cron.history"),
+  PresenceQuery("presence.query"),
 }
 
 enum class GatewayEvent(

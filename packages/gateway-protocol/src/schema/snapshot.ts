@@ -17,6 +17,8 @@ import { SessionPersonSchema } from "./session-participant.js";
  */
 /** One gateway-visible presence record for a node/client/runtime. */
 export const PresenceEntrySchema = closedObject({
+  /** Gateway-assigned id for this connection; changes after reconnect. */
+  connectionId: Type.Optional(NonEmptyString),
   host: Type.Optional(NonEmptyString),
   clientId: Type.Optional(NonEmptyString),
   ip: Type.Optional(NonEmptyString),
@@ -35,6 +37,8 @@ export const PresenceEntrySchema = closedObject({
   /** Server timestamps for the person's continuous online interval and last accepted activity. */
   onlineSince: Type.Optional(Type.Integer({ minimum: 0 })),
   lastActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  /** Latest accepted OpenClaw interaction on this connection, independent of person timing. */
+  connectionLastActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
   deviceId: Type.Optional(NonEmptyString),
   roles: Type.Optional(Type.Array(NonEmptyString)),
   scopes: Type.Optional(Type.Array(NonEmptyString)),

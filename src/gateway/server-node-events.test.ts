@@ -3,12 +3,13 @@
 import "./server-node-events.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.js";
-import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
+import {
+  getCurrentActiveNodeContext,
+  setActiveNodeContexts,
+} from "../infra/active-node-context.js";
 import {
   prepareGatewaySuspend,
   resumeGatewaySuspend,
@@ -22,10 +23,10 @@ import type { HealthSummary } from "./health/types.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 
 const {
   buildSessionLookup,
+  makeNodeClient,
   loadOrCreateProcessDeviceIdentityMock,
   parseMessageWithAttachmentsMock,
   persistInboundImagesForTranscriptMock,
@@ -148,34 +149,6 @@ function buildCtx(
 
 function buildExecCtx() {
   return buildCtx({ authorizeNodeSystemRunEvent: () => true });
-}
-
-function makeNodeClient(connId: string, nodeId: string): GatewayWsClient {
-  return {
-    connId,
-    usesSharedGatewayAuth: false,
-    socket: {
-      readyState: WebSocket.OPEN,
-      send: () => {},
-    } as unknown as GatewayWsClient["socket"],
-    connect: {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "node-host",
-        version: "1.0.0",
-        platform: "linux",
-        mode: "node",
-      },
-      device: {
-        id: nodeId,
-        publicKey: "public-key",
-        signature: "signature",
-        signedAt: 1,
-        nonce: "nonce",
-      },
-    } as GatewayWsClient["connect"],
-  };
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
@@ -1908,7 +1881,7 @@ describe("agent request events", () => {
       diskAvailableBytes: 16384,
     };
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100_000);
-    setActiveNodeContext({ nodeId: "active-computer" });
+    setActiveNodeContexts([{ nodeId: "active-computer" }]);
     try {
       await expect(
         handleNodeEvent(ctx, session.nodeId, nodeEvent("node.host.stats", stats), {
@@ -1932,7 +1905,7 @@ describe("agent request events", () => {
       expect(updatePairedDevicePresenceMock).not.toHaveBeenCalled();
     } finally {
       nowSpy.mockRestore();
-      setActiveNodeContext(null);
+      setActiveNodeContexts([]);
       registry.unregister(client.connId);
     }
   });

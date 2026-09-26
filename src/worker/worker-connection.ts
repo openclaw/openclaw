@@ -8,6 +8,8 @@ import type {
   WorkerLiveEventResponseFrame,
   WorkerPortalParams,
   WorkerPortalResponseFrame,
+  WorkerPresenceParams,
+  WorkerPresenceResponseFrame,
   WorkerProtocolCloseReason,
   WorkerSessionsSendParams,
   WorkerSessionsSendResponseFrame,
@@ -32,6 +34,7 @@ import type {
   WorkerSkillWorkshopParams,
   WorkerSkillWorkshopResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
+import { PRESENCE_QUERY_TIMEOUT_MS } from "../agents/tools/presence-tool-contract.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
 import { notifyListeners } from "../shared/listeners.js";
 import {
@@ -224,6 +227,11 @@ export class WorkerConnection {
 
   requestPortal(params: WorkerPortalParams): Promise<WorkerPortalResponseFrame> {
     return this.frames.request("portal", params);
+  }
+
+  requestPresence(params: WorkerPresenceParams): Promise<WorkerPresenceResponseFrame> {
+    const timeoutMs = Math.max(this.requestTimeoutMs, PRESENCE_QUERY_TIMEOUT_MS);
+    return this.frames.request("presence", params, undefined, timeoutMs);
   }
   requestSkillWorkshop(
     params: WorkerSkillWorkshopParams,

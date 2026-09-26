@@ -19,6 +19,74 @@ This page covers the Gateway client roster. To detect the Mac you most recently
 used and route node alerts there, see
 [Active computer presence](/nodes/presence).
 
+## Ask the agent about presence
+
+The core `presence` tool reads a current snapshot of people, their connected
+clients and devices, and observed activity. It works on personal and shared
+Gateways without shell access. The same read model is available over Gateway
+RPC as `presence.query`.
+
+| Parameter  | Meaning                                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------------------- |
+| `action`   | `list` (default), `person`, or `device`.                                                                      |
+| `person`   | Required for `person`: `me`, a returned person/profile ID, or an unambiguous display name.                    |
+| `deviceId` | Required for `device`: a device ID returned by presence.                                                      |
+| `include`  | Optional array of `devices`, `network`, and `location`. Network and location detail also include device rows. |
+| `limit`    | Maximum people in a list, from 1 to 100; default 50. Truncated results are identified.                        |
+
+Examples:
+
+```json
+{ "action": "list" }
+```
+
+```json
+{ "action": "person", "person": "me", "include": ["devices"] }
+```
+
+```json
+{ "action": "person", "person": "Alex", "include": ["network", "location"] }
+```
+
+`list` includes the requester and returns one row per connected identity, rather
+than one row per browser tab. `me` uses the authenticated person who requested
+the turn, including on a remote worker. Ambiguous names return candidates;
+unidentified turns receive `identity-unavailable` for `me`.
+
+Device activity retains its source: `openclaw-interaction`, `app-input`, or
+`system-input`. A person's activity summary identifies the device associated
+with their latest observed activity. Devices without an authenticated person
+association remain separate; use `list` with `devices` to inspect shared or
+unidentified machines. A browser client does not necessarily identify a physical
+computer, and matching names or IP addresses never establish that association.
+
+The result includes `observedAt`; missing activity is `null`, not evidence that
+someone is inactive. Online means connected, including idle tabs. This is live
+presence, not retained activity history: disconnected devices and previous
+Gateway processes do not establish a historical last-used machine.
+
+`network` includes the observed connection IP when available. `location` lazily
+uses the existing [geolocation plugin](/plugins/geolocation), returning coarse
+IP geography with source attribution. Missing results and an unavailable
+provider are distinct. Time zones remain client-reported; IP geography may
+describe a VPN or network exit. Presence never requests GPS or changes device
+permissions.
+
+Authenticated callers need the same `operator.read` access as the presence
+roster. Trusted local operator turns, configured channel owners, and
+operator-owned scheduled runs can also query presence while their source
+authority remains active. Other channel callers and requester-owned schedules
+without read access cannot query the roster. The tool does not expose
+watched-session references or grant device control. Compatible
+remote workers forward the read to their admitting Gateway; workers connected
+to a Gateway without the presence capability omit the tool.
+
+To query the same snapshot from the CLI:
+
+```bash
+openclaw gateway call presence.query --params '{"action":"person","person":"me","include":["devices"]}' --json
+```
+
 ## Presence fields (what shows up)
 
 Presence entries are structured objects with fields like:
@@ -37,6 +105,8 @@ Presence entries are structured objects with fields like:
 - `ts`: last presence update timestamp (ms since epoch), including heartbeat updates. This is not a user-activity timestamp
 - `onlineSince`: start of an authenticated person's current continuous online period, shared across overlapping connections
 - `lastActivityAt`: latest observed accepted interaction during that online period. It is absent until activity is observed
+- `connectionLastActivityAt`: latest accepted interaction on this exact client connection, before person-wide aggregation
+- `connectionId`: Gateway-assigned identity of the current connection
 - `watchedSessions`: session keys the client explicitly declares it is viewing, filtered for the recipient
 
 ## Who can see presence

@@ -256,10 +256,16 @@ describe("registered node presence activity events", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
     try {
       await h.send(client, { idleSeconds: 0 }, "node.presence.activity");
-      expect(h.nodeRegistry.getActiveNode()?.lastActiveAtMs).toBe(100_000);
+      expect(h.nodeRegistry.getActiveNode()).toMatchObject({
+        lastActiveAtMs: 100_000,
+        presenceActivitySource: "system",
+      });
       clock.mockReturnValue(105_000);
       await h.send(client, { idleSeconds: 20, source: "app" }, "node.presence.activity");
-      expect(h.nodeRegistry.getActiveNode()?.lastActiveAtMs).toBe(85_000);
+      expect(h.nodeRegistry.getActiveNode()).toMatchObject({
+        lastActiveAtMs: 85_000,
+        presenceActivitySource: "app",
+      });
       clock.mockReturnValue(106_000);
       await h.send(client, { idleSeconds: 30, source: "app" }, "node.presence.activity");
       expect(h.nodeRegistry.getActiveNode()?.lastActiveAtMs).toBe(85_000);
@@ -293,6 +299,7 @@ describe("registered node presence activity events", () => {
         if (accepted) {
           const replacement = h.register("conn-2");
           expect(h.nodeRegistry.getActiveNode()).toBeUndefined();
+          expect(h.nodeRegistry.get("node-1")?.presenceActivitySource).toBeUndefined();
           expect(
             (await h.send(client, { idleSeconds: 0, source }, "node.presence.activity")).mock
               .calls[0]?.[0],
@@ -301,6 +308,7 @@ describe("registered node presence activity events", () => {
           expect(h.nodeRegistry.getActiveNode()?.nodeId).toBe("node-1");
           await h.send(replacement, { action: "clear" }, "node.presence.activity");
           expect(h.nodeRegistry.getActiveNode()).toBeUndefined();
+          expect(h.nodeRegistry.get("node-1")?.presenceActivitySource).toBeUndefined();
           h.nodeRegistry.unregister(replacement.connId);
         }
       } finally {

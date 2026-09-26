@@ -36,6 +36,7 @@ export * from "./schema/human-mentions.js";
 export * from "./schema/logs-chat.js";
 export * from "./schema/migrations.js";
 export * from "./schema/nodes.js";
+export * from "./schema/presence.js";
 export * from "./schema/push.js";
 export * from "./schema/questions.js";
 export * from "./schema/secrets.js";

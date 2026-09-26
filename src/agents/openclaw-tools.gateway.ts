@@ -5,6 +5,7 @@ import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
 import { createPersonalInstructionsTool } from "./tools/personal-instructions-tool.js";
 import { createPluginsTool } from "./tools/plugins-tool.js";
+import { createPresenceTool } from "./tools/presence-tool.js";
 
 /** Gateway-owned operations are not standalone embedded-host capabilities. */
 export function createHostedGatewayTools(
@@ -16,6 +17,7 @@ export function createHostedGatewayTools(
     return [];
   }
   return [
+    createPresenceTool({ runId: options?.runId }),
     createGatewayTool({
       allowConfigReads: options?.gatewayConfigReadAllowed === true,
       senderIsOwner: options?.senderIsOwner,

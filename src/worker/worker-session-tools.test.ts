@@ -11,6 +11,7 @@ describe("worker Gateway tools", () => {
   it("keeps session admission separate from announcement delivery", () => {
     const tools = createWorkerSessionTools({
       requestPortal: vi.fn(),
+      requestPresence: vi.fn(),
       requestSessionsSend: vi.fn(),
       requestSessionsSpawn: vi.fn(),
     });
@@ -34,6 +35,7 @@ describe("worker Gateway tools", () => {
     }));
     const tools = createWorkerSessionTools({
       requestPortal,
+      requestPresence: vi.fn(),
       requestSessionsSend: vi.fn(),
       requestSessionsSpawn: vi.fn(),
     });

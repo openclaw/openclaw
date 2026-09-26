@@ -14,6 +14,7 @@ import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 import { resolveDarwinProductVersion } from "./os-summary.js";
 
 export type SystemPresence = {
+  connectionId?: string;
   host?: string;
   clientId?: string;
   ip?: string;
@@ -34,6 +35,8 @@ export type SystemPresence = {
   /** Server-owned timing for the person's current continuous live interval. */
   onlineSince?: number;
   lastActivityAt?: number;
+  /** Latest accepted OpenClaw interaction on this connection only. */
+  connectionLastActivityAt?: number;
   text: string;
   /** Heartbeat freshness, independent of person activity and online duration. */
   ts: number;

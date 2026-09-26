@@ -7,7 +7,11 @@ import {
   upsertPresence,
 } from "../../infra/system-presence.js";
 import { buildAuthenticatedPresenceUser } from "../authenticated-presence-user.js";
-import { recordClientPresenceActivity, refreshClientPresence } from "./client-presence.js";
+import {
+  recordClientPresenceActivity,
+  refreshClientPresence,
+  snapshotClientPresence,
+} from "./client-presence.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import {
@@ -157,6 +161,11 @@ describe("live person presence timing", () => {
     const second = await connect("second@timing.test");
     expect(second.handler.setClient(second.client)).toBe(true);
     expect(recordClientPresenceActivity(clients, second.client)).toBe(true);
+    expect(row("first@timing.test")?.connectionLastActivityAt).toBeUndefined();
+    expect(row("second@timing.test")).toMatchObject({
+      connectionId: second.client.connId,
+      connectionLastActivityAt: started + 1_000,
+    });
     first.socket.readyState = 3;
     first.socket.emit("close", 1000, Buffer.alloc(0));
 
@@ -167,6 +176,14 @@ describe("live person presence timing", () => {
       onlineSince: started,
       lastActivityAt: started + 1_000,
     });
+    expect(row("third@timing.test")?.connectionLastActivityAt).toBeUndefined();
+    vi.setSystemTime(started + 2_500);
+    expect(recordClientPresenceActivity(clients, third.client)).toBe(false);
+    expect(row("third@timing.test")?.connectionLastActivityAt).toBe(started + 2_500);
+    expect(row("second@timing.test")).toMatchObject({
+      lastActivityAt: started + 2_500,
+      connectionLastActivityAt: started + 1_000,
+    });
     for (const connection of [second, third]) {
       connection.socket.readyState = 3;
       connection.socket.emit("close", 1000, Buffer.alloc(0));
@@ -176,6 +193,7 @@ describe("live person presence timing", () => {
     expect(fresh.handler.setClient(fresh.client)).toBe(true);
     expect(row("fresh@timing.test")).toMatchObject({ onlineSince: started + 3_000 });
     expect(row("fresh@timing.test")?.lastActivityAt).toBeUndefined();
+    expect(row("fresh@timing.test")?.connectionLastActivityAt).toBeUndefined();
   });
 
   it.each(["profile", "raw"] as const)(
@@ -304,6 +322,7 @@ describe("live person presence timing", () => {
       ts: started + 10_000,
       onlineSince: started,
       lastActivityAt: started,
+      connectionLastActivityAt: started,
     });
 
     vi.setSystemTime(started + 20_000);
@@ -311,11 +330,23 @@ describe("live person presence timing", () => {
       upsertPresence(`timing-eviction-${index}`, { text: "cache pressure" });
     }
     expect(row("heartbeat@timing.test")).toBeUndefined();
+    expect(snapshotClientPresence(clients)).toMatchObject([
+      {
+        connectionId: first.client.connId,
+        host: "openclaw-tui",
+        user: { id: "heartbeat-person" },
+        connectionLastActivityAt: started,
+      },
+    ]);
     const overlap = await connect("eviction@timing.test", "heartbeat-person");
     overlap.client.connect.client.id = "openclaw-macos";
     overlap.client.connect.client.mode = "ui";
     overlap.handler.setClient(overlap.client);
-    expect(row("heartbeat@timing.test")).toMatchObject({ clientId: "openclaw-tui", mode: "ui" });
+    expect(row("heartbeat@timing.test")).toMatchObject({
+      clientId: "openclaw-tui",
+      mode: "ui",
+      connectionLastActivityAt: started,
+    });
     expect(row("eviction@timing.test")).toMatchObject({
       clientId: "openclaw-macos",
       mode: "ui",
@@ -332,6 +363,7 @@ describe("live person presence timing", () => {
       mode: "ui",
       onlineSince: started,
       lastActivityAt: started + 400_000,
+      connectionLastActivityAt: started + 400_000,
     });
   });
 
@@ -366,9 +398,11 @@ describe("live person presence timing", () => {
     expect(recordClientPresenceActivity(clients, { ...live.client })).toBe(false);
     live.client.invalidated = true;
     expect(recordClientPresenceActivity(clients, live.client)).toBe(false);
+    expect(snapshotClientPresence(clients)).toEqual([]);
     live.client.invalidated = false;
     live.socket.readyState = 2;
     expect(recordClientPresenceActivity(clients, live.client)).toBe(false);
+    expect(snapshotClientPresence(clients)).toEqual([]);
     expect(row("exact@timing.test")?.lastActivityAt).toBeUndefined();
     const rejected = await connect("rejected@timing.test");
     rejected.socket.emit("close", 1000, Buffer.alloc(0));

@@ -13,6 +13,7 @@ import type {
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
 import type * as PortalSchema from "./schema/portals.js";
+import type { PresenceQueryParams } from "./schema/presence.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
 import type {
   ThemesListParams,
@@ -55,6 +56,7 @@ export type GatewayCoreRequestParams = {
   "portal.close": PortalSchema.PortalCloseParams;
   "portal.list": PortalSchema.PortalListParams;
   "portal.open": PortalSchema.PortalOpenParams;
+  "presence.query": PresenceQueryParams;
   "portal.session.close": Static<typeof PortalSchema.SessionPortalCloseParamsSchema>;
   "portal.session.list": Static<typeof PortalSchema.SessionPortalListParamsSchema>;
   "portal.session.open": Static<typeof PortalSchema.SessionPortalOpenParamsSchema>;
