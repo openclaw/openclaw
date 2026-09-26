@@ -14,6 +14,7 @@ enum CloudflareAccessLogin {
         case invalidGateway
         case helperUnavailable
         case invalidApplication
+        case unsupportedRedirect
         case connectionFailed
         case loginFailed
         case timedOut
@@ -27,6 +28,10 @@ enum CloudflareAccessLogin {
                 "The browser sign-in helper is missing. Install a complete copy of OpenClaw and try again."
             case .invalidApplication:
                 "This gateway did not provide valid browser sign-in details. Contact its administrator."
+            case .unsupportedRedirect:
+                "This Gateway redirects to another website. The Mac app supports browser sign-in only through " +
+                    "Cloudflare Access. Open the Gateway in your browser, or ask its administrator for a direct " +
+                    "Gateway address supported by the app."
             case .connectionFailed:
                 "Could not reach the gateway’s sign-in service. Check your connection and try again."
             case .loginFailed:
@@ -102,7 +107,7 @@ enum CloudflareAccessLogin {
         }
     }
 
-    /// Absence means this issuer does not own the gateway; malformed metadata is never a downgrade.
+    /// Discover supported browser sign-in without following redirects or sharing credentials.
     static func discover(gatewayURL: URL) async throws -> Application? {
         try self.validateGateway(gatewayURL)
         let (_, version) = try self.helper()
@@ -111,8 +116,29 @@ enum CloudflareAccessLogin {
         request.setValue("true", forHTTPHeaderField: "Cf-Access-Metadata-Request")
         request.setValue("cloudflared/\(version)", forHTTPHeaderField: "User-Agent")
         let (_, response) = try await self.request(request)
-        guard let metadata = response.value(forHTTPHeaderField: "Cf-Access-Metadata") else { return nil }
-        return try self.application(gatewayURL: gatewayURL, metadata: metadata)
+        return try self.application(gatewayURL: gatewayURL, response: response)
+    }
+
+    static func application(
+        gatewayURL: URL,
+        response: HTTPURLResponse,
+        now: Date = Date()) throws -> Application?
+    {
+        // Advertised Access metadata must still validate, even on an off-origin redirect.
+        if let metadata = response.value(forHTTPHeaderField: "Cf-Access-Metadata") {
+            return try self.application(gatewayURL: gatewayURL, metadata: metadata, now: now)
+        }
+        if [301, 302, 303, 307, 308].contains(response.statusCode),
+           let location = response.value(forHTTPHeaderField: "Location"),
+           let destination = URL(string: location, relativeTo: gatewayURL)?.absoluteURL,
+           ["http", "https"].contains(destination.scheme?.lowercased() ?? ""),
+           !self.sameAuthority(destination, gatewayURL)
+        {
+            // A redirect alone does not identify an OAuth provider. Stop before a profile
+            // is saved and its WebSocket mistakes the redirected authority for a TLS failure.
+            throw LoginError.unsupportedRedirect
+        }
+        return nil
     }
 
     @MainActor

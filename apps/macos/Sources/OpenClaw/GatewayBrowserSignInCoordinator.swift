@@ -41,7 +41,10 @@ enum GatewayBrowserSignInCoordinator {
         address: String,
         token: String,
         password: String,
-        progress: GatewayBrowserSignInProgress) async throws -> MacGatewayProfile
+        progress: GatewayBrowserSignInProgress,
+        discover: @Sendable (URL) async throws -> CloudflareAccessLogin.Application? = {
+            try await CloudflareAccessLogin.discover(gatewayURL: $0)
+        }) async throws -> MacGatewayProfile
     {
         let url = try self.gatewayURL(from: address)
         let store = MacGatewayProfileStore.shared
@@ -58,7 +61,7 @@ enum GatewayBrowserSignInCoordinator {
                     }
                     browserURL.scheme = "https"
                     guard let discoveryURL = browserURL.url else { throw MacGatewayProfileError.invalidURL }
-                    if let application = try await CloudflareAccessLogin.discover(gatewayURL: discoveryURL) {
+                    if let application = try await discover(discoveryURL) {
                         let session = try await CloudflareAccessLogin.signIn(
                             application: application, attempt: attempt, progress: progress)
                         try Task.checkCancellation()
