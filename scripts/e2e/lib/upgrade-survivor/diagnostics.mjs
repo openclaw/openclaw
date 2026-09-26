@@ -57,6 +57,8 @@ const logNames = [
   "install.log",
   "update.json",
   "update.err",
+  "update-noop.json",
+  "update-noop.err",
   ...siblingRefusalLogs,
   ...restoredIndexLogs,
   ...backupRollbackLogs,
@@ -107,6 +109,15 @@ const logNames = [
   "legacy-operator-run-survivor-default-owner.err",
   "legacy-operator-run-survivor-ops-owner.out",
   "legacy-operator-run-survivor-ops-owner.err",
+  ...["post-update", "candidate"].flatMap((stage) =>
+    [0, 1].flatMap((index) =>
+      ["", "-earlier"].flatMap((page) =>
+        ["out", "err"].map(
+          (extension) => `legacy-operator-${stage}-transcript-${index}${page}.${extension}`,
+        ),
+      ),
+    ),
+  ),
   "gateway.log",
   "gateway.log.doctor",
   "missing-load-path/baseline-gateway.log",
@@ -1695,11 +1706,29 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
       reason: sanitize(companion.reason, "baseline companion"),
     };
   }
+  let missingLoadPath = null;
+  const applicability = snapshot.missingLoadPath;
+  if (applicability !== null && applicability !== undefined) {
+    if (
+      !(applicability.applicability === "supported" && applicability.reason === null) &&
+      !(
+        applicability.applicability === "unsupported-driver" &&
+        applicability.reason === "published-cli-rejects-invalid-config-before-staging"
+      )
+    ) {
+      throw new Error();
+    }
+    missingLoadPath = {
+      applicability: applicability.applicability,
+      reason: applicability.reason,
+    };
+  }
   return {
     status: "passed",
     baseline: textFields(snapshot.baseline, ["spec", "version"], sanitize),
     candidate: textFields(snapshot.candidate, ["kind", "version"], sanitize),
     baselineCompanion,
+    missingLoadPath,
     ...textFields(
       snapshot,
       [

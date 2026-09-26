@@ -1,6 +1,6 @@
 import type { RouteLocation, RouterState } from "@openclaw/uirouter";
 import { isSessionRouteId, sameRouteLocation, type RouteId } from "../app-route-paths.ts";
-import { selectRenderedRouteMatch } from "./router-outlet.ts";
+import { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 export type ShellRouteState = {
   routeId?: RouteId;

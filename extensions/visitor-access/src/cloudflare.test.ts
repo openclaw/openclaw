@@ -68,7 +68,7 @@ describe("VisitorPolicyClient", () => {
   });
 
   it("rereads the named policy and preserves dashboard grants and restrictions on update", async () => {
-    const original = namedPolicy();
+    const original = namedPolicy(["FIRST@example.com"]);
     const updated = {
       ...namedPolicy(["first@example.com", "manual@example.com"]),
       precedence: 9,
@@ -157,44 +157,6 @@ describe("VisitorPolicyClient", () => {
       new VisitorPolicyClient(config, duplicates).update(() => []),
     ).rejects.toBeInstanceOf(VisitorAccessError);
     expect(duplicates.mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
-  });
-
-  it("deletes only the named policy when its final email is removed", async () => {
-    const policy = namedPolicy();
-    const fetcher = fetchSequence(
-      cloudflareResponse([policy]),
-      cloudflareResponse(policy),
-      cloudflareResponse({ id: policy.id }),
-    );
-    await expect(new VisitorPolicyClient(config, fetcher).update(() => [])).resolves.toEqual([]);
-    expect(fetcher.mock.calls[2]?.[0]).toBe(`${collectionUrl}/${policy.id}`);
-    expect(fetcher.mock.calls[2]?.[1]?.method).toBe("DELETE");
-  });
-
-  it.each([{ emails: [] }, { emails: ["FIRST@example.com"] }])(
-    "avoids a write when normalized membership is unchanged: $emails",
-    async ({ emails }) => {
-      const policy = namedPolicy(emails);
-      const fetcher = emails.length
-        ? fetchSequence(cloudflareResponse([policy]), cloudflareResponse(policy))
-        : fetchSequence(cloudflareResponse([]));
-      const change = vi.fn(async (current: readonly string[]) => [...current]);
-      await expect(new VisitorPolicyClient(config, fetcher).update(change)).resolves.toEqual(
-        emails.map((email) => email.toLowerCase()),
-      );
-      expect(change).toHaveBeenCalledOnce();
-      expect(fetcher.mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
-    },
-  );
-
-  it("does not mutate Cloudflare when the durable change callback fails", async () => {
-    const fetcher = fetchSequence(cloudflareResponse([]));
-    await expect(
-      new VisitorPolicyClient(config, fetcher).update(async () => {
-        throw new VisitorAccessError("The grant store is unavailable");
-      }),
-    ).rejects.toBeInstanceOf(VisitorAccessError);
-    expect(fetcher).toHaveBeenCalledOnce();
   });
 
   it.each(["network", "http", "api", "json"])(

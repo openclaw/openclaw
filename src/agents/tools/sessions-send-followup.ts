@@ -11,8 +11,8 @@ import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gatew
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { getRegisteredDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-state.js";
-import { withFollowupRequest } from "../../tasks/task-followup-completion.js";
-import type { FollowupRequest } from "../../tasks/task-followup-completion.types.js";
+import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
+import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,

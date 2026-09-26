@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { listCoreGatewayMethodNames } from "./methods/core-method-policy.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
@@ -11,6 +12,7 @@ describe("core and auxiliary method handler parity", () => {
   it("wires a dispatchable core or auxiliary handler for every core descriptor", async () => {
     const fixture = await createOpenClawTestState({ label: "gateway-aux-methods" });
     const aux = createGatewayAuxHandlers({
+      scheduler: createTestGatewayScheduler(),
       log: {},
       getNativeApprovalRouteCoordinator: () => undefined,
       activateRuntimeSecrets: createTestRuntimeSecretsActivator(),

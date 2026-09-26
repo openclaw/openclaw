@@ -421,6 +421,20 @@ describe("openclaw-tooltip", () => {
     }
     expect(downstream).toHaveBeenCalledTimes(2);
 
+    for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+        ...composition,
+      });
+      trigger.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expectOpenCount(1);
+      expect(downstream).toHaveBeenLastCalledWith(event);
+    }
+    expect(downstream).toHaveBeenCalledTimes(4);
+
     const escape = new KeyboardEvent("keydown", {
       key: "Escape",
       bubbles: true,
@@ -429,7 +443,7 @@ describe("openclaw-tooltip", () => {
     trigger.dispatchEvent(escape);
     expectOpenCount(0);
     expect(escape.defaultPrevented).toBe(true);
-    expect(downstream).toHaveBeenCalledTimes(2);
+    expect(downstream).toHaveBeenCalledTimes(4);
     expect(trigger.getAttribute("aria-describedby")).toBe(descriptionId);
     expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Keyboard hint");
 
@@ -440,7 +454,7 @@ describe("openclaw-tooltip", () => {
     });
     trigger.dispatchEvent(nextEscape);
     expect(nextEscape.defaultPrevented).toBe(false);
-    expect(downstream).toHaveBeenCalledTimes(3);
+    expect(downstream).toHaveBeenCalledTimes(5);
   });
 
   it("honors per-tooltip hover intent while keyboard focus stays immediate", async () => {

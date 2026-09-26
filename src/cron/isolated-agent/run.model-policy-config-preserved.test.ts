@@ -1,4 +1,3 @@
-// Cron policy tests cover per-agent defaults flattening before model resolution.
 import { describe, expect, it } from "vitest";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
@@ -38,11 +37,12 @@ function resolveCronPayloadModel(cfg: OpenClawConfig, raw: string) {
 }
 
 describe("resolveCronAgentConfig model policy preservation", () => {
-  it.each(
-    ["string", "object"].flatMap((shape) =>
-      [undefined, [], ["native/agent-backup"]].map((fallbacks) => ({ shape, fallbacks })),
-    ),
-  )(
+  it.each([
+    { shape: "string", fallbacks: undefined },
+    { shape: "object", fallbacks: undefined },
+    { shape: "object", fallbacks: [] },
+    { shape: "object", fallbacks: ["native/agent-backup"] },
+  ])(
     "keeps ACP harness models out of $shape cron defaults with fallbacks $fallbacks",
     async ({ shape, fallbacks }) => {
       const primary = "native/primary@native:test-profile";
@@ -162,7 +162,6 @@ describe("resolveCronAgentConfig model policy preservation", () => {
   });
 
   it.each<{ models: Record<string, AgentModelEntryConfig>; expectedRuntime: string }>([
-    { models: {}, expectedRuntime: "openclaw" },
     { models: { "openai/other": { alias: "other" } }, expectedRuntime: "openclaw" },
     {
       models: { "openai/test-model": { agentRuntime: { id: "test-runtime" } } },

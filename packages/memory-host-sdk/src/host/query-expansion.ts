@@ -669,20 +669,25 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
         }
       }
     } else if (/[\u4e00-\u9fff]/.test(segment)) {
-      const chars = Array.from(segment).filter((c) => /[\u4e00-\u9fff]/.test(c));
-      if (useTrigram) {
-        // In trigram mode, push the whole contiguous CJK block (mirroring the
-        // Japanese kanji path). SQLite's trigram FTS requires at least 3 characters
-        // per query term — individual characters silently return no results.
-        const block = chars.join("");
-        if (block.length > 0) {
-          tokens.push(block);
-        }
-      } else {
-        // Default mode: unigrams + bigrams for phrase matching
-        tokens.push(...chars);
-        for (let i = 0; i < chars.length - 1; i++) {
-          tokens.push(chars.slice(i, i + 2).join(""));
+      // Chinese text often embeds ASCII terms without spaces ("用react部署").
+      // Split script runs like the Japanese path so ASCII terms survive and Han
+      // characters on either side of them are never joined into one term.
+      const zhParts = segment.match(/[a-z0-9_]+|[\u4e00-\u9fff]+/g) ?? [];
+      for (const part of zhParts) {
+        if (!/^[\u4e00-\u9fff]+$/.test(part)) {
+          tokens.push(part);
+        } else if (useTrigram) {
+          // In trigram mode, push the whole contiguous Han run (mirroring the
+          // Japanese kanji path). SQLite's trigram FTS requires at least 3 characters
+          // per query term — individual characters silently return no results.
+          tokens.push(part);
+        } else {
+          // Default mode: unigrams + bigrams for phrase matching
+          const chars = Array.from(part);
+          tokens.push(...chars);
+          for (let i = 0; i < chars.length - 1; i++) {
+            tokens.push(chars.slice(i, i + 2).join(""));
+          }
         }
       }
     } else if (/[\uac00-\ud7af\u3131-\u3163]/.test(segment)) {

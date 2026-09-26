@@ -1,4 +1,3 @@
-// Cron issue regression helpers share mocks for service regression tests.
 import { vi } from "vitest";
 import {
   createDefaultIsolatedRunner,
@@ -6,6 +5,8 @@ import {
   setupCronRegressionFixtures,
   topOfHourOffsetMs,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
+// Cron issue regression helpers share mocks for service regression tests.
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 
 type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
@@ -31,6 +32,8 @@ export async function startCronForStore(params: {
   const runIsolatedAgentJob = params.runIsolatedAgentJob ?? createDefaultIsolatedRunner();
 
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     cronEnabled: params.cronEnabled ?? true,
     storePath: params.storePath,
     log: noopLogger,

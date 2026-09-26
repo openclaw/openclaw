@@ -1,5 +1,9 @@
 import { html, nothing } from "lit";
 import {
+  createRuntimeToolMatcher,
+  createToolPolicyMatcher,
+} from "../../../../src/agents/tool-policy-match.js";
+import {
   normalizeToolList,
   normalizeToolPolicyName,
   resolveToolProfilePolicy,
@@ -34,7 +38,6 @@ import {
   renderToolPolicyDetails,
   resolveToolAccessView,
 } from "./tool-access-diagnostics.ts";
-import { isAllowedByPolicy, matchesList } from "./tool-policy.ts";
 
 registerSettingsEnglish();
 
@@ -227,16 +230,21 @@ export function renderAgentTools(params: {
     : Array.isArray(agentTools.alsoAllow)
       ? agentTools.alsoAllow
       : [];
-  const deny = hasAgentAllow ? [] : Array.isArray(agentTools.deny) ? agentTools.deny : [];
+  const configuredDeny = Array.isArray(agentTools.deny) ? agentTools.deny : [];
+  const deny = hasAgentAllow ? [] : configuredDeny;
   const basePolicy = hasAgentAllow
-    ? { allow: agentTools.allow ?? [], deny: agentTools.deny ?? [] }
+    ? { allow: agentTools.allow ?? [], deny: configuredDeny }
     : resolveToolProfilePolicy(profile);
   const toolIds = toolSections.flatMap((section) => section.tools.map((tool) => tool.id));
+  const matchesBase = createToolPolicyMatcher(basePolicy);
+  const matchesAllow = createRuntimeToolMatcher(alsoAllow);
+  // Write implies patch access only in allow lists; denials match the named tool.
+  const matchesDeny = createRuntimeToolMatcher(deny, false);
 
   const resolveAllowed = (toolId: string) => {
-    const baseAllowed = isAllowedByPolicy(toolId, basePolicy);
-    const extraAllowed = matchesList(toolId, alsoAllow);
-    const denied = matchesList(toolId, deny);
+    const baseAllowed = matchesBase(toolId);
+    const extraAllowed = matchesAllow(toolId);
+    const denied = matchesDeny(toolId);
     const allowed = (baseAllowed || extraAllowed) && !denied;
     return {
       allowed,

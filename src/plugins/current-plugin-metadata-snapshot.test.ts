@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -17,7 +18,7 @@ import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test
 import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import * as installedPluginIndexPolicy from "./installed-plugin-index-policy.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -794,7 +795,9 @@ describe("current plugin metadata snapshot", () => {
     "clearPluginMetadataLifecycleCaches revokes nested operation scopes across awaits (Gateway active: %s)",
     async (gatewayActive) => {
       const boot = createSnapshot();
-      const owner = gatewayActive ? retainGatewayPluginMetadata() : undefined;
+      const owner = gatewayActive
+        ? retainGatewayPluginMetadata(createTestGatewayScheduler())
+        : undefined;
       if (owner) {
         owner.publish(boot);
         setGatewayPluginMetadataSnapshot(boot);
@@ -923,12 +926,12 @@ describe("current plugin metadata snapshot", () => {
     }
   });
 
-  it("clears the current snapshot when the persisted installed index changes", () => {
+  it("clears the current snapshot when the persisted installed index changes", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-metadata-"));
     try {
       setCurrentPluginMetadataSnapshot(createSnapshot());
 
-      writePersistedInstalledPluginIndexSync(createSnapshot().index, { stateDir: tempDir });
+      await writePersistedInstalledPluginIndex(createSnapshot().index, { stateDir: tempDir });
 
       expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
     } finally {

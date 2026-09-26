@@ -53,6 +53,50 @@ function cleanWorkspace(): string {
 }
 
 describe("node worker workspace origin fallback", () => {
+  it.each(["apply", "store"] as const)(
+    "does not hide source revocation as a recoverable seed %s failure",
+    async (boundary) => {
+      const localPath = cleanWorkspace();
+      let current = true;
+      const closed = new Error("initiating source closed");
+      const exec = vi.fn<WorkspaceExec>(async ({ argv, seed }) => {
+        if (seed?.action === boundary) {
+          current = false;
+          throw closed;
+        }
+        return {
+          ...spawnResult(
+            seed?.action === "apply"
+              ? "absent\n"
+              : argv.includes("rev-parse")
+                ? COMMIT
+                : MANIFEST_REF,
+          ),
+          workspaceDir: REMOTE_WORKSPACE,
+        };
+      });
+      await expect(
+        createNodeWorkerWorkspaceFallback(exec).trySyncWorkspace(
+          {
+            localPath,
+            sessionId: "session-1",
+            generation: 1,
+            authorize: () => {
+              if (!current) {
+                throw closed;
+              }
+            },
+          },
+          MANIFEST_REF,
+        ),
+      ).rejects.toBe(closed);
+      expect(exec.mock.calls.at(-1)?.[0].seed?.action).toBe(boundary);
+      if (boundary === "apply") {
+        expect(exec).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("clones a clean commit without requiring it to be an advertised ref tip", async () => {
     const localPath = cleanWorkspace();
     const exec = vi.fn<WorkspaceExec>(async ({ argv, seed }) => ({

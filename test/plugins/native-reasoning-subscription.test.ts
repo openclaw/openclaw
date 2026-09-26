@@ -183,10 +183,6 @@ describe("native provider reasoning subscription", () => {
             return response;
           },
         );
-        console.log(
-          "bedrock-reasoning-trace",
-          JSON.stringify({ consumption, requestCount, thinking }),
-        );
         expect(requestCount).toBe(1);
         expect(thinking).toEqual([
           ...(consumption === "incremental" ? [{ text: "before", delta: "before" }] : []),

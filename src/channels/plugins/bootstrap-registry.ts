@@ -1,8 +1,3 @@
-/**
- * Bundled channel bootstrap registry.
- *
- * Provides channel plugin metadata before the full runtime registry is installed.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getBundledChannelPlugin,
@@ -13,10 +8,6 @@ import {
 import { mergeChannelPluginSection } from "./merge-plugin-section.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
-
-function resolveBootstrapChannelId(id: ChannelId): string {
-  return normalizeOptionalString(id) ?? "";
-}
 
 function mergeBootstrapPlugin(
   runtimePlugin: ChannelPlugin,
@@ -41,7 +32,7 @@ function mergeBootstrapPlugin(
  * Loads a bundled channel plugin for bootstrap, merging runtime and setup artifacts.
  */
 export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = resolveBootstrapChannelId(id);
+  const resolvedId = normalizeOptionalString(id);
   if (!resolvedId) {
     return undefined;
   }
@@ -55,18 +46,16 @@ export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefi
     // absent so install/doctor flows can continue scanning other channels.
     return undefined;
   }
-  const merged =
-    runtimePlugin && setupPlugin
-      ? mergeBootstrapPlugin(runtimePlugin, setupPlugin)
-      : (setupPlugin ?? runtimePlugin);
-  return merged;
+  return runtimePlugin && setupPlugin
+    ? mergeBootstrapPlugin(runtimePlugin, setupPlugin)
+    : (setupPlugin ?? runtimePlugin);
 }
 
 /**
  * Loads bootstrap secret metadata from bundled runtime and setup artifacts.
  */
 export function getBootstrapChannelSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
-  const resolvedId = resolveBootstrapChannelId(id);
+  const resolvedId = normalizeOptionalString(id);
   if (!resolvedId) {
     return undefined;
   }

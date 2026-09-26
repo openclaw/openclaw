@@ -268,6 +268,7 @@ describe("doctor --fix include write ownership", () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
             gateway: { mode: "local" },
+            plugins: { enabled: false },
           });
           const fragmentDir = path.join(path.dirname(configPath), "config");
           await fs.mkdir(fragmentDir);
@@ -525,6 +526,7 @@ describe("doctor --fix include write ownership", () => {
           agents: { list: [{ id: "ops" }] },
           browser: { $include: "./browser.json" },
           gateway: { mode: "local" },
+          plugins: { enabled: false },
         });
         const includePath = path.join(path.dirname(configPath), "browser.json");
         const includeRaw = JSON.stringify({ enabled: true, actionTimeoutMs: 5000 });

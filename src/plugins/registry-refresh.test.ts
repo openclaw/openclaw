@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializePublishedConfigRuntimeEnv } from "../config/config-env-vars.js";
 import * as configIO from "../config/io.factory.js";
+import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
@@ -26,6 +28,34 @@ afterEach(() => {
 });
 
 describe("plugin registry refresh config ownership", () => {
+  it("invalidates runtime discovery when committed config refresh cannot acquire custody", async () => {
+    await withOpenClawTestState(
+      { label: "registry-refresh-acquisition-failure" },
+      async (state) => {
+        const config = { plugins: { enabled: false } };
+        await state.writeConfig(config);
+        await seedInstalledPluginIndex({}, { config, env: state.env });
+        const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+        const warn = vi.fn();
+        vi.spyOn(leaseAcquisition, "acquireOpenClawStateLease").mockRejectedValueOnce(
+          new Error("plugin lifecycle acquisition timed out"),
+        );
+
+        await refreshPluginRegistryAfterConfigMutation({
+          env: state.env,
+          reason: "source-changed",
+          logger: { warn },
+        });
+
+        expect(warn).toHaveBeenCalledWith(
+          "Plugin registry refresh failed: plugin lifecycle acquisition timed out",
+        );
+        expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
+        expect(runtimeCache.clear).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
   it("refuses registry publication when the plugin lease is lost during the committed config read", async () => {
     await withOpenClawTestState({ label: "registry-refresh-lease-loss" }, async (state) => {
       const config = { plugins: { enabled: false } };
@@ -155,7 +185,7 @@ describe("plugin registry refresh config ownership", () => {
         await state.writeConfig(config);
         await seedInstalledPluginIndex(priorRecords, { config, env: state.env });
         const boot = loadPluginMetadataSnapshot({ config, env: state.env, allowCurrent: false });
-        const owner = retainGatewayPluginMetadata();
+        const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
         const warn = vi.fn();
         const readCommittedIndex = (): unknown => {
           const row = readPersistedInstalledPluginIndexRowSync({ env: state.env });
@@ -413,8 +443,8 @@ describe("plugin registry refresh config ownership", () => {
           },
         };
         await state.writeConfig(config);
+        await seedInstalledPluginIndex(installRecords, { config, env: state.env });
         await refreshPluginRegistryAfterConfigMutation({
-          installRecords,
           reason: "source-changed",
           invalidateRuntimeCache: false,
         });

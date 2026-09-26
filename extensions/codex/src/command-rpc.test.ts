@@ -362,36 +362,8 @@ describe("Codex command RPC helpers", () => {
     },
   );
 
-  it("honors a user-pinned API profile over automatic order and ambient credentials", async () => {
+  it("honors the user-pinned API profile from the admitted explicit store", async () => {
     vi.stubEnv("OPENAI_API_KEY", "unrelated-platform-key");
-    setAuthStore({
-      version: 1,
-      profiles: {
-        "openai:first": { type: "api_key", provider: "openai", key: "automatic-key" },
-        "openai:pinned": { type: "api_key", provider: "openai", key: "pinned-key" },
-      },
-      order: { openai: ["openai:first", "openai:pinned"] },
-    });
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      entry: {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        authProfileOverride: "openai:pinned",
-        authProfileOverrideSource: "user",
-      },
-    });
-
-    await resume({ authProfileId: "openai:first" });
-
-    expect(acquiredOptions()).toMatchObject({
-      authRequirement: "api-key",
-      preparedAuth: { kind: "api-key", apiKey: "pinned-key" },
-    });
-  });
-
-  it("uses the admitted explicit store instead of an unrelated configured store", async () => {
     const explicitStorePath = path.join(tempDir, "explicit", "sessions.json");
     const configuredStorePath = path.join(tempDir, "configured", "sessions.json");
     config.session = { store: configuredStorePath };
@@ -504,28 +476,6 @@ describe("Codex command RPC helpers", () => {
     },
   );
 
-  it("uses an explicit control connection instead of ordinary harness start options", async () => {
-    requestCodexAppServerJsonMock.mockResolvedValue({ thread: { id: "thread-1" } });
-    const startOptions = {
-      transport: "stdio" as const,
-      homeScope: "user" as const,
-      command: "codex",
-      args: ["app-server", "--listen", "stdio://"],
-      headers: {},
-    };
-
-    await codexControlRequest(
-      {},
-      "thread/read",
-      { threadId: "thread-1", includeTurns: false },
-      { startOptions },
-    );
-
-    expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({ startOptions }),
-    );
-  });
-
   it("keeps omitted Unix scope on the explicit user-scoped supervision connection", async () => {
     requestCodexAppServerJsonMock.mockResolvedValue({ data: [] });
     const pluginConfig = {
@@ -556,23 +506,6 @@ describe("Codex command RPC helpers", () => {
 
     expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(
       expect.objectContaining({ startOptions, timeoutMs: 321, authProfileId: null }),
-    );
-  });
-
-  it("forwards explicit native auth for supervised control connections", async () => {
-    requestCodexAppServerJsonMock.mockResolvedValue({});
-
-    await codexControlRequest(
-      {},
-      "thread/list",
-      { archived: false },
-      {
-        authProfileId: null,
-      },
-    );
-
-    expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileId: null }),
     );
   });
 

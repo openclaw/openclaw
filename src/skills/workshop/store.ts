@@ -83,12 +83,8 @@ export function createSkillProposalId(name: string, now = new Date()): string {
   return `${normalized.slice(0, 60)}-${date}-${suffix}`;
 }
 
-function contentSizeBytes(content: string): number {
-  return Buffer.byteLength(content, "utf8");
-}
-
 function assertSkillProposalContentSize(content: string): void {
-  if (contentSizeBytes(content) > MAX_PROPOSAL_BYTES) {
+  if (Buffer.byteLength(content, "utf8") > MAX_PROPOSAL_BYTES) {
     throw new Error("Skill proposal is too large.");
   }
 }
@@ -111,7 +107,7 @@ export function prepareSkillProposalSupportFiles(
       throw new Error(`Duplicate support file path: ${filePath}`);
     }
     seen.add(filePath);
-    const sizeBytes = contentSizeBytes(file.content);
+    const sizeBytes = Buffer.byteLength(file.content, "utf8");
     if (sizeBytes > MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES) {
       throw new Error(`Support file is too large: ${filePath}`);
     }
@@ -461,7 +457,7 @@ async function readProposalSupportFiles(
       symlinks: "reject",
     });
     const content = read.buffer.toString("utf8");
-    const sizeBytes = contentSizeBytes(content);
+    const sizeBytes = Buffer.byteLength(content, "utf8");
     const hash = hashSkillProposalContent(content);
     if (file.sizeBytes !== sizeBytes || file.hash !== hash) {
       throw new Error(`Proposal support file changed without updating metadata: ${filePath}`);
