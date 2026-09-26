@@ -48,6 +48,24 @@ describe("msteamsPlugin.security.collectWarnings", () => {
 describe("msteamsPlugin", () => {
   afterEach(() => vi.unstubAllEnvs());
 
+  it.each([
+    { webhookPath: "/api/messages", info: "compatibility port 3978", warning: undefined },
+    { webhookPath: "/ready", info: undefined, warning: "reserved for Gateway probes" },
+  ])(
+    "classifies Doctor webhook guidance for $webhookPath",
+    async ({ webhookPath, info, warning }) => {
+      const cfg: OpenClawConfig = { channels: { msteams: { webhook: { path: webhookPath } } } };
+      const result = await msteamsPlugin.doctor?.runConfigSequence?.({
+        cfg,
+        env: {},
+        shouldRepair: false,
+      });
+      expect(result?.changeNotes).toEqual([]);
+      expect(result?.infoNotes ?? []).toEqual(info ? [expect.stringContaining(info)] : []);
+      expect(result?.warningNotes).toEqual(warning ? [expect.stringContaining(warning)] : []);
+    },
+  );
+
   it("distinguishes users from channel and group conversations", () => {
     const infer = msteamsPlugin.messaging?.inferTargetChatType;
     const ownerId = "00000000-0000-0000-0000-000000000001";

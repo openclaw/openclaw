@@ -26,7 +26,6 @@ vi.mock("@microsoft/teams.apps", () => ({
       },
     };
   },
-  ExpressAdapter: vi.fn(),
 }));
 
 vi.mock("@microsoft/teams.api", () => ({

@@ -8,8 +8,6 @@ import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type MSTeamsWebhookConfig = {
-  /** Port for the webhook server. Default: 3978. */
-  port?: number;
   /** Path for the messages endpoint. Default: /api/messages. */
   path?: string;
 };
@@ -96,8 +94,10 @@ export type MSTeamsConfig = Omit<
     useManagedIdentity?: boolean;
     /** User-assigned managed-identity client ID. When omitted with `useManagedIdentity: true`, system-assigned identity is used. */
     managedIdentityClientId?: string;
-    /** Webhook server configuration. */
+    /** Gateway webhook route configuration. */
     webhook?: MSTeamsWebhookConfig;
+    /** Compatibility listener; omitted retains wildcard port 3978, false disables it. */
+    legacyWebhook?: false | { port: number; host?: string };
     /** Send native Teams typing indicator before replies. Default: true for groups/channels; DMs use informative stream status. */
     typingIndicator?: boolean;
     /**

@@ -4,6 +4,11 @@ import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createEmptyPluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { acquireTestPortBlock, useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, expect, it, vi } from "vitest";
@@ -22,7 +27,7 @@ import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
 const fixture = vi.hoisted(() => ({ origin: "", botToken: "" }));
 
-// Substitute identity infrastructure, preserving the real loader, Express adapter,
+// Substitute identity infrastructure, preserving the real loader, Express adapter on a Gateway route,
 // signature validation, process dispatch, sender policy, and SQLite token store.
 vi.mock("@microsoft/teams.apps", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@microsoft/teams.apps")>();
@@ -166,6 +171,16 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
   });
   const claim = await acquireTestPortBlock({ offsets: [0, 1] });
   fixture.origin = `http://127.0.0.1:${claim.port}`;
+  const registry = createEmptyPluginRegistry();
+  const gateway = createServer((req, res) => {
+    const path = new URL(req.url ?? "/", "http://localhost").pathname;
+    const route = registry.httpRoutes.find((entry) => entry.path === path);
+    if (!route) {
+      res.writeHead(404).end();
+      return;
+    }
+    Promise.resolve(route.handler(req, res)).catch(() => res.writeHead(500).end());
+  });
   const abort = new AbortController();
   let monitorTask: ReturnType<typeof monitorMSTeamsProvider> | undefined;
   let persisted = createDeferred<void>();
@@ -191,7 +206,7 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
   const policy = vi.spyOn(runtime.channel.inbound.ingress, "resolveStable");
   setMSTeamsRuntime(runtime);
   const store = createMSTeamsSsoTokenStoreFs({ stateDir });
-  const cfg = createConfig(claim.port + 1);
+  const cfg = createConfig();
   updateMSTeamsConfig(cfg, {
     dmPolicy: "allowlist",
     allowFrom: [allowedId],
@@ -203,6 +218,11 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
       infra.once("error", reject);
       infra.listen(claim.port, "127.0.0.1", resolve);
     });
+    await new Promise<void>((resolve, reject) => {
+      gateway.once("error", reject);
+      gateway.listen(claim.port + 1, "127.0.0.1", resolve);
+    });
+    setActivePluginRegistry(registry);
     monitorTask = monitorMSTeamsProvider({
       cfg,
       runtime: createRuntime(),
@@ -301,14 +321,15 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
     abort.abort();
     try {
       await monitorTask;
+      expect(registry.httpRoutes).toHaveLength(0);
     } finally {
       try {
-        if (infra.listening) {
-          await closeServer(infra);
-        }
+        await Promise.all([infra, gateway].filter((server) => server.listening).map(closeServer));
       } finally {
         await claim.release();
         policy.mockRestore();
+        resetPluginRuntimeStateForTest();
+        vi.unstubAllEnvs();
       }
     }
   }
