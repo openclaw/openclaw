@@ -5,11 +5,14 @@ import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
-import type { AgentsApiFunctionDeclaration } from "./agentsapi-client.js";
+import type { AgentsApiFunctionDeclaration, AgentsApiInputFile } from "./agentsapi-client.js";
 
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
   commit: vi.fn(async () => {}),
+  prepareInputs: vi.fn<typeof import("./agentsapi-files.js").prepareInputs>(),
+  uploadInputs: vi.fn<typeof import("./agentsapi-files.js").uploadInputs>(),
+  collectOutputs: vi.fn<typeof import("./agentsapi-files.js").collectOutputs>(),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: mocks.fetch }));
@@ -67,6 +70,11 @@ vi.mock("openclaw/plugin-sdk/llm", () => ({
 vi.mock("./agentsapi-tools.js", () => ({
   buildAgentsApiToolSurface: () => ({ declarations: [], toolMetas: [], delivery: {} }),
 }));
+vi.mock("./agentsapi-files.js", () => ({
+  prepareInputs: mocks.prepareInputs,
+  uploadInputs: mocks.uploadInputs,
+  collectOutputs: mocks.collectOutputs,
+}));
 vi.mock("./agentsapi-transcript.js", () => ({ recordAgentsApiNativeToolTranscript: vi.fn() }));
 vi.mock("./agentsapi-messages.js", () => ({
   createAgentsApiMessageProjection: () => ({
@@ -96,6 +104,12 @@ vi.mock("./agentsapi-session.js", () => ({
 beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
+  mocks.prepareInputs.mockReset().mockResolvedValue({ files: [], mappingText: "" });
+  mocks.uploadInputs.mockReset().mockResolvedValue(undefined);
+  mocks.collectOutputs.mockReset().mockResolvedValue({
+    toolMediaUrls: [],
+    hostOwnedToolMediaUrls: [],
+  });
   mocks.fetch.mockImplementation(async ({ url }) => {
     const pathname = new URL(url).pathname;
     const response = pathname.endsWith("/items")
@@ -134,6 +148,8 @@ describe("Agents API attempt environment selection", () => {
         expect.objectContaining({ id: "turn-fixture" }),
         [],
       );
+      expect(mocks.prepareInputs).toHaveBeenCalledTimes(environment === "self_hosted" ? 0 : 1);
+      expect(mocks.collectOutputs).toHaveBeenCalledTimes(environment === "self_hosted" ? 0 : 1);
     },
   );
 
@@ -228,12 +244,73 @@ describe("Agents API attempt environment selection", () => {
     expect(mocks.fetch).not.toHaveBeenCalled();
     expect(bind).not.toHaveBeenCalled();
   });
+
+  it("carries hosted attachments through session creation, input mapping, and reply delivery", async () => {
+    const media = [{ path: "/fixture/input.txt" }];
+    const file: AgentsApiInputFile = {
+      type: "inline",
+      path: "/workspace/inputs/input.txt",
+      data: Buffer.from("fixture attachment").toString("base64"),
+    };
+    const mappingText = "Input attachment: /workspace/inputs/input.txt";
+    const outputUrl = "/fixture/outbound/report.txt";
+    mocks.prepareInputs.mockResolvedValueOnce({ files: [file], mappingText });
+    mocks.collectOutputs.mockResolvedValueOnce({
+      toolMediaUrls: [outputUrl],
+      hostOwnedToolMediaUrls: [outputUrl],
+      toolTrustedLocalMedia: true,
+    });
+
+    const { result } = await attempt("openai_hosted", undefined, undefined, media);
+
+    expect(result).toMatchObject({
+      terminal: { kind: "ok" },
+      toolMediaUrls: [outputUrl],
+      hostOwnedToolMediaUrls: [outputUrl],
+      toolTrustedLocalMedia: true,
+    });
+    expect(mocks.prepareInputs).toHaveBeenCalledExactlyOnceWith(
+      media,
+      "/fixture/project",
+      expect.any(Function),
+      expect.any(AbortSignal),
+    );
+    expect(await requestBody(0)).toMatchObject({
+      environment: { type: "openai_hosted", files: [file] },
+    });
+    expect(await requestBody(1)).toMatchObject({
+      events: [{
+        type: "agent.session.input.message",
+        input: [{ role: "user", content: [{ type: "input_text", text: `Fixture prompt\n\n${mappingText}` }] }],
+      }],
+    });
+    expect(mocks.collectOutputs).toHaveBeenCalledOnce();
+  });
+
+  it("rejects self-hosted inbound attachments before native writes", async () => {
+    const { result, bind } = await attempt("self_hosted", undefined, undefined, [
+      { path: "/fixture/input.txt" },
+    ]);
+
+    expect(result).toMatchObject({
+      terminal: {
+        kind: "failed",
+        error: expect.objectContaining({
+          message: "Agents API file transfers require an OpenAI-hosted environment",
+        }),
+      },
+    });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(bind).not.toHaveBeenCalled();
+    expect(mocks.prepareInputs).not.toHaveBeenCalled();
+  });
 });
 
 async function attempt(
   environment: string | undefined,
   binding?: AgentsApiBinding,
   workspaceDir = "/fixture/project",
+  media?: AgentHarnessAttemptParamsV2["media"],
 ) {
   // Authentication/tool construction are host-prepared and mocked at their boundaries.
   const authStorage = AuthStorage.inMemory();
@@ -246,6 +323,7 @@ async function attempt(
     runId: "run-fixture",
     timeoutMs: 1_000,
     prompt: "Fixture prompt",
+    media,
     provider: "openai",
     modelId: "fixture-model",
     model: {
