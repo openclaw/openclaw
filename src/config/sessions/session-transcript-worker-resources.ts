@@ -10,6 +10,7 @@ import {
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { joinOwnedWorkerTasks } from "../../infra/worker-task-pool-owned.js";
 import {
   createOwnedWorkerTaskPool,
   WorkerTaskError,
@@ -24,6 +25,7 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   sessionHistoryCleanupError,
   decodeSessionTranscriptWorkerReadError,
@@ -154,6 +156,23 @@ export const costRefreshLane: SessionCostWorkerLane = {
 const databaseWorkerLanes = [historyLane, maintenanceLane, costReadLane, costRefreshLane];
 const memoryPressure = channel("openclaw.memory.critical");
 let pressureSubscribed = false;
+
+registerOpenClawStateDatabaseAsyncResource({
+  phase: "after-resources",
+  async close(identity) {
+    if (identity) {
+      return;
+    }
+    // Per-database closes retain execution; whole-runtime close owns its final retirement.
+    await joinOwnedWorkerTasks(
+      databaseWorkerLanes.map(async (lane) => {
+        historyClearTimeout(lane.idleTimer);
+        lane.idleTimer = undefined;
+        await rotateDatabaseWorkers(lane);
+      }),
+    );
+  },
+});
 
 function retireIdleDatabaseWorkers(): void {
   for (const lane of databaseWorkerLanes) {

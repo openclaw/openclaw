@@ -38,7 +38,10 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
-import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
+import {
+  captureOpenClawStateDatabaseReadAdmission,
+  closeOpenClawStateDatabaseAsync,
+} from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
@@ -189,6 +192,8 @@ it("keeps fresh fixture roots isolated while reusing idle reader execution", asy
       previousWorker = worker;
     });
   }
+  await closeOpenClawStateDatabaseAsync();
+  expect(previousWorker?.threadId).toBe(-1);
 });
 
 it("joins native worker exit when metadata-read custody is revoked during dispatch", async () => {
