@@ -104,6 +104,8 @@ export function resolveGatewayScopedTools(
     nativeCronCreatorToolAllowlist?: readonly string[];
     disablePluginTools?: boolean;
     gatewayRequestedTools?: string[];
+    /** Already materialized, session-owned tools subject to the same Gateway policy. */
+    additionalTools?: readonly AnyAgentTool[];
     /** Add the CLI-only, node-forced exec tool before applying the shared policy pipeline. */
     includeNodeExecTool?: boolean;
     /** Current node inventory predicate; evaluated with the resolved exec binding. */
@@ -280,6 +282,7 @@ export function resolveGatewayScopedTools(
     ...basePolicies,
     gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
   ];
+  const mcpConfigToolDenylist = collectExplicitDenylist(basePolicies);
   const explicitDenylist = collectExplicitDenylist([
     ...basePolicies,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
@@ -587,7 +590,10 @@ export function resolveGatewayScopedTools(
       ]
     : toolsWithMediatedCoding;
 
-  const toolsForMessageProvider = filterToolsByMessageProvider(allTools, params.messageProvider);
+  const toolsForMessageProvider = filterToolsByMessageProvider(
+    [...allTools, ...(params.additionalTools ?? [])],
+    params.messageProvider,
+  );
   let nativeCreatorTools = (params.nativeCronCreatorToolAllowlist ?? []).map((name) => ({ name }));
   const declaredToolAllowlist = buildDeclaredToolAllowlistContext({
     config: params.cfg,
@@ -674,6 +680,7 @@ export function resolveGatewayScopedTools(
     agentId: sessionAgentId,
     tools: applyToolAvailabilityDescriptions(filterRequesterYieldTools(tools, params.sessionKey)),
     workspaceDir,
+    mcpConfigToolDenylist,
     // Only the MCP owner knows which tools survived its grant and schema gates.
     captureFinalCronCreatorTools: cronCreatorToolAllowlistCaptureRef
       ? (callableToolNames: ReadonlySet<string>) =>
