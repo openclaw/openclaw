@@ -121,11 +121,11 @@ internal fun conversationNotificationLaunchIntent(
     .setData(conversationNotificationIntentData(notificationIntentOpenPath, target))
     .putConversationTarget(target)
 
-internal fun parseConversationNotificationTrampolineIntent(intent: Intent?): ConversationNotificationTarget? =
-  intent.readOwnedConversationTarget(
-    expectedAction = actionOpenConversationNotification,
-    identityPath = notificationIntentOpenPath,
-  )
+internal fun parseConversationNotificationTrampolineIntent(intent: Intent?): ConversationNotificationTarget? {
+  if (intent?.action != actionOpenConversationNotification) return null
+  val target = intent.readConversationTarget() ?: return null
+  return target.takeIf { intent.data == conversationNotificationIntentData(notificationIntentOpenPath, target) }
+}
 
 internal fun conversationNotificationMainIntent(
   context: Context,
@@ -207,15 +207,6 @@ private fun Intent.readConversationTarget(): ConversationNotificationTarget? {
     sessionKey = sessionKey,
     runId = runId,
   )
-}
-
-private fun Intent?.readOwnedConversationTarget(
-  expectedAction: String,
-  identityPath: String,
-): ConversationNotificationTarget? {
-  if (this?.action != expectedAction) return null
-  val target = readConversationTarget() ?: return null
-  return target.takeIf { data == conversationNotificationIntentData(identityPath, target) }
 }
 
 private fun conversationNotificationIntentData(
@@ -587,14 +578,11 @@ internal class ConversationReplyNotifier(
 
   private fun userPerson(): Person = Person.Builder().setName(nativeString("You")).build()
 
-  private fun canPostNotifications(): Boolean {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
-
-    return canPostConversationNotifications(Build.VERSION.SDK_INT) {
+  private fun canPostNotifications(): Boolean =
+    canPostConversationNotifications(Build.VERSION.SDK_INT) {
       ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
         PackageManager.PERMISSION_GRANTED
     }
-  }
 
   private fun ensureChannel() {
     val channel =

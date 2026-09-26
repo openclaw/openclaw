@@ -4,7 +4,6 @@ import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.ui.image.RemoteImageResult
 import ai.openclaw.app.ui.image.decodeRemoteImageBitmap
 import ai.openclaw.app.ui.image.safeRemoteImageStore
-import android.graphics.Bitmap
 import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.size
@@ -80,11 +79,7 @@ internal fun ClawAgentAvatar(
 ) {
   when (source) {
     is AgentAvatarSource.Data -> {
-      if (source.mimeType == "image/svg+xml") {
-        SvgAgentAvatar(base64 = source.base64, size = size, shape = shape, fallback = fallback)
-      } else {
-        RasterDataAgentAvatar(source = source, size = size, shape = shape, fallback = fallback)
-      }
+      DataAgentAvatar(source = source, size = size, shape = shape, fallback = fallback)
     }
 
     is AgentAvatarSource.Remote -> {
@@ -98,35 +93,29 @@ internal fun ClawAgentAvatar(
 }
 
 @Composable
-private fun RasterDataAgentAvatar(
+private fun DataAgentAvatar(
   source: AgentAvatarSource.Data,
   size: Dp,
   shape: Shape,
   fallback: @Composable () -> Unit,
 ) {
-  var bitmap by remember(source) { mutableStateOf<Bitmap?>(null) }
+  var result by remember(source) { mutableStateOf<RemoteImageResult?>(null) }
   LaunchedEffect(source) {
-    bitmap =
+    result =
       withContext(Dispatchers.Default) {
         val bytes = decodeAgentAvatarBase64(source.base64) ?: return@withContext null
-        decodeRemoteImageBitmap(
-          bytes = bytes,
-          maxDimension = AGENT_AVATAR_MAX_DIMENSION,
-          expectedContentType = source.mimeType,
-        )
+        if (source.mimeType == "image/svg+xml") {
+          RemoteImageResult.Svg(bytes)
+        } else {
+          decodeRemoteImageBitmap(
+            bytes = bytes,
+            maxDimension = AGENT_AVATAR_MAX_DIMENSION,
+            expectedContentType = source.mimeType,
+          )?.let { RemoteImageResult.Raster(it) }
+        }
       }
   }
-  val resolved = bitmap
-  if (resolved == null) {
-    fallback()
-  } else {
-    Image(
-      bitmap = resolved.asImageBitmap(),
-      contentDescription = null,
-      modifier = Modifier.size(size).clip(shape),
-      contentScale = ContentScale.Crop,
-    )
-  }
+  AgentAvatarImage(result, size, shape, fallback)
 }
 
 @Composable
@@ -140,7 +129,17 @@ private fun RemoteAgentAvatar(
   LaunchedEffect(url) {
     result = safeRemoteImageStore.get(url)
   }
-  when (val image = result) {
+  AgentAvatarImage(result, size, shape, fallback)
+}
+
+@Composable
+private fun AgentAvatarImage(
+  image: RemoteImageResult?,
+  size: Dp,
+  shape: Shape,
+  fallback: @Composable () -> Unit,
+) {
+  when (image) {
     is RemoteImageResult.Raster -> {
       Image(
         bitmap = image.bitmap.asImageBitmap(),
@@ -157,28 +156,6 @@ private fun RemoteAgentAvatar(
     RemoteImageResult.Failed, null -> {
       fallback()
     }
-  }
-}
-
-@Composable
-private fun SvgAgentAvatar(
-  base64: String,
-  size: Dp,
-  shape: Shape,
-  fallback: @Composable () -> Unit,
-) {
-  var bytes by remember(base64) { mutableStateOf<ByteArray?>(null) }
-  LaunchedEffect(base64) {
-    bytes =
-      withContext(Dispatchers.Default) {
-        decodeAgentAvatarBase64(base64)
-      }
-  }
-  val resolved = bytes
-  if (resolved == null) {
-    fallback()
-  } else {
-    SvgAgentAvatar(bytes = resolved, size = size, shape = shape, fallback = fallback)
   }
 }
 

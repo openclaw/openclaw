@@ -84,32 +84,7 @@ internal class TurnRecapResolver(
     sessionKey: String,
     indicatorVisible: Boolean,
     row: ChatSessionEntry?,
-  ): TurnRecap? =
-    resolveInternal(
-      sessionKey = sessionKey,
-      indicatorVisible = indicatorVisible,
-      row = row,
-      transcript = null,
-    )
-
-  fun resolve(
-    sessionKey: String,
-    indicatorVisible: Boolean,
-    row: ChatSessionEntry?,
-    transcript: TurnRecapTranscriptState,
-  ): TurnRecap? =
-    resolveInternal(
-      sessionKey = sessionKey,
-      indicatorVisible = indicatorVisible,
-      row = row,
-      transcript = transcript,
-    )
-
-  private fun resolveInternal(
-    sessionKey: String,
-    indicatorVisible: Boolean,
-    row: ChatSessionEntry?,
-    transcript: TurnRecapTranscriptState?,
+    transcript: TurnRecapTranscriptState? = null,
   ): TurnRecap? {
     val watch = watches[sessionKey]
     val rowEndedAt = row?.endedAt
