@@ -177,10 +177,10 @@ const clientGrantsByToken = resolveGlobalMap<string, StoredMcpLoopbackClientGran
 );
 
 function clampTtlMs(ttlMs: number | undefined): number {
-  if (!Number.isFinite(ttlMs) || (ttlMs as number) <= 0) {
+  if (ttlMs === undefined || !Number.isFinite(ttlMs) || ttlMs <= 0) {
     return DEFAULT_TTL_MS;
   }
-  return Math.min(ttlMs as number, MAX_TTL_MS);
+  return Math.min(ttlMs, MAX_TTL_MS);
 }
 
 export function mintAttachGrant(params: {
@@ -251,20 +251,9 @@ function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
   return removed;
 }
 
-export function mintMcpLoopbackClientGrant(params: {
-  context: McpLoopbackRequestContext;
-  runtimeOwnerToken: string;
-  admittedRunContext?: AdmittedRunContext;
-  messageActionTurnCapability?: string;
-  cronRequesterGrantIssuer?: StoredMcpLoopbackClientGrant["cronRequesterGrantIssuer"];
-  cronAuthorityCheck?: () => boolean;
-  abortSignal?: AbortSignal;
-  assertCurrent?: () => void;
-  bindQuestionAnswerAuthority?: StoredMcpLoopbackClientGrant["bindQuestionAnswerAuthority"];
-  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
-  rootedExecution?: PreparedRootedExecutionCapability;
-  toolAuth?: McpLoopbackToolAuth;
-}): McpLoopbackClientGrant {
+export function mintMcpLoopbackClientGrant(
+  params: Omit<StoredMcpLoopbackClientGrant, "token" | "activeCaptureKey" | "assertCaptureCurrent">,
+): McpLoopbackClientGrant {
   const sessionKey = params.context.sessionKey.trim();
   if (!sessionKey) {
     throw new Error("mintMcpLoopbackClientGrant: context.sessionKey is required");

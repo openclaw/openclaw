@@ -304,4 +304,43 @@ describe("Crabbox PR-derived gate plan", () => {
       workflowSha,
     });
   });
+
+  it.skipIf(process.platform === "win32").each([undefined, "3"])(
+    "preserves native worker sizing (%s) and forwards compact reporting for every target",
+    (workers) => {
+      const plan = createCrabboxGatePlan({
+        baseSha,
+        changedPaths: [{ path: "scripts/pr", status: "M" }],
+        headSha,
+        resolvePathPlan: () => ({
+          mode: "targets",
+          targets: ["test/scripts/pr-merge.test.ts"],
+        }),
+      });
+      const command = buildCrabboxGateCommand(plan, bootstrapSha256);
+      const output = execFileSync(
+        "/bin/bash",
+        [
+          "-c",
+          `pnpm() { :; }; node() { printf 'worker:%s\\n' "\${OPENCLAW_VITEST_MAX_WORKERS-auto}"; printf 'arg:%s\\n' "$@"; }; ${command}`,
+        ],
+        { encoding: "utf8", env: { ...process.env, OPENCLAW_VITEST_MAX_WORKERS: workers } },
+      );
+      expect(output).toContain(`worker:${workers ?? "auto"}\n`);
+      const args = output
+        .split("\n")
+        .filter((line) => line.startsWith("arg:"))
+        .map((line) => line.slice(4));
+      expect(args.slice(0, 3)).toEqual([
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/test-projects.mts",
+      ]);
+      expect(buildVitestRunPlans(args.slice(3))).toMatchObject([
+        { includePatterns: plan.targets, forwardedArgs: ["--reporter=dot"] },
+      ]);
+      expect(command).not.toContain("OPENCLAW_TEST_PROJECTS_PARALLEL");
+      expect(command).not.toContain("--silent");
+    },
+  );
 });

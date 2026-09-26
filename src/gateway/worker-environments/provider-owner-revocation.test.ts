@@ -119,7 +119,7 @@ describe("worker environment owner revocation", () => {
         expectedGeneration: placement.generation,
         patch: { activeOwnerEpoch: attached.ownerEpoch },
       });
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         sessionId: SESSION_ID,
         sessionKey: placement.sessionKey,
         agentId: placement.agentId,

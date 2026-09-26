@@ -197,6 +197,7 @@ vi.mock("../commands/doctor-install.js", () => ({
 
 vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
   noteStalePluginRuntimeSymlinks: async () => undefined,
+  removeStalePluginRuntimeSymlinks: async () => ({ changes: [], warnings: [] }),
 }));
 
 vi.mock("../commands/doctor-platform-notes.js", () => ({

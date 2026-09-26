@@ -126,6 +126,18 @@ function capabilityMatchesContext(
   );
 }
 
+function watchTransferOwnerSignal(context: TransferContext, signal?: AbortSignal): void {
+  if (!signal) {
+    return;
+  }
+  const abort = () => context.abortController.abort(signal.reason);
+  signal.addEventListener("abort", abort, { once: true });
+  context.stopWatchingOwnerSignal = () => signal.removeEventListener("abort", abort);
+  if (signal.aborted) {
+    abort();
+  }
+}
+
 export function createNodeWorkspaceTransferService(options: {
   getOwner: (environmentId: string) => TransferOwner | undefined;
   now?: () => number;
@@ -352,15 +364,7 @@ export function createNodeWorkspaceTransferService(options: {
           downloads: new Map(),
           abortController,
         };
-        if (params.signal) {
-          const abort = () => abortController.abort(params.signal!.reason);
-          params.signal.addEventListener("abort", abort, { once: true });
-          context.stopWatchingOwnerSignal = () =>
-            params.signal?.removeEventListener("abort", abort);
-          if (params.signal.aborted) {
-            abort();
-          }
-        }
+        watchTransferOwnerSignal(context, params.signal);
         contexts.set(params.environmentId, context);
         if (!isCurrentContext(context)) {
           await closeContext(context);
@@ -395,15 +399,7 @@ export function createNodeWorkspaceTransferService(options: {
           downloads: new Map(),
           abortController,
         };
-        if (params.signal) {
-          const abortFromOwner = () => abortController.abort(params.signal!.reason);
-          params.signal.addEventListener("abort", abortFromOwner, { once: true });
-          context.stopWatchingOwnerSignal = () =>
-            params.signal?.removeEventListener("abort", abortFromOwner);
-          if (params.signal.aborted) {
-            abortFromOwner();
-          }
-        }
+        watchTransferOwnerSignal(context, params.signal);
         try {
           const snapshot = await prepareNodeWorkspaceTransferSnapshot({
             localPath: params.localPath,

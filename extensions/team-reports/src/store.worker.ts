@@ -20,7 +20,6 @@ import type {
   PeriodListEntry,
   PersonDay,
   ReportRun,
-  RunPeriod,
   StoredPeriod,
   TeamReportsOperations,
 } from "./store-contract.js";
@@ -31,7 +30,7 @@ import {
   summaryDocumentSchema,
   TEAM_REPORTS_SCHEMA_SQL,
 } from "./store-schema.js";
-import type { Period, ReportDocument, SummaryDocument } from "./types.js";
+import type { Period, ReportDocument } from "./types.js";
 
 // Bound each 12-column person-day insert to 768 parameters.
 const PERSON_DAY_INSERT_BATCH_SIZE = 64;
@@ -106,7 +105,7 @@ class TeamReportsDatabase {
     this.query = getNodeSqliteKysely<ReportsDatabase>(db);
   }
 
-  upsertPeriod(value: Omit<StoredPeriod, "summary"> & { summary?: SummaryDocument | null }): void {
+  upsertPeriod(value: TeamReportsOperations["upsertPeriod"]["input"]): void {
     const { report } = value;
     const dataJson = JSON.stringify(report);
     if (Buffer.byteLength(dataJson, "utf8") > MAX_REPORT_BYTES) {
@@ -198,13 +197,7 @@ class TeamReportsDatabase {
     );
   }
 
-  listPeriods(
-    options: {
-      period?: Period;
-      status?: "partial" | "closed";
-      limit?: number;
-    } = {},
-  ): PeriodListEntry[] {
+  listPeriods(options: TeamReportsOperations["listPeriods"]["input"] = {}): PeriodListEntry[] {
     let query = this.selectPeriods();
     if (options.period) {
       query = query.where("period", "=", options.period);
@@ -315,7 +308,7 @@ class TeamReportsDatabase {
 
   listPersonDays(
     login: string,
-    options: { since?: string; until?: string; limit?: number } = {},
+    options: TeamReportsOperations["listPersonDays"]["input"]["options"] = {},
   ): PersonDay[] {
     let query = this.selectPersonDays()
       .where("login", "=", login.toLowerCase())
@@ -358,12 +351,7 @@ class TeamReportsDatabase {
       ]);
   }
 
-  startRun(run: {
-    id: string;
-    kind: ReportRun["kind"];
-    startedAtMs: number;
-    periods: RunPeriod[];
-  }): void {
+  startRun(run: TeamReportsOperations["startRun"]["input"]): void {
     executeSqliteQuerySync(
       this.db,
       this.query.insertInto("team_reports_runs").values({
@@ -379,15 +367,7 @@ class TeamReportsDatabase {
     );
   }
 
-  finishRun(
-    id: string,
-    result: {
-      finishedAtMs: number;
-      status: "ok" | "error";
-      stats?: Record<string, unknown>;
-      error?: string;
-    },
-  ): void {
+  finishRun(id: string, result: TeamReportsOperations["finishRun"]["input"]["result"]): void {
     const updated = executeSqliteQuerySync(
       this.db,
       this.query
@@ -408,7 +388,7 @@ class TeamReportsDatabase {
 
   listRuns(
     limit = 20,
-    filter: { kind?: ReportRun["kind"]; status?: ReportRun["status"] } = {},
+    filter: TeamReportsOperations["listRuns"]["input"]["filter"] = {},
   ): ReportRun[] {
     let query = this.query.selectFrom("team_reports_runs").selectAll();
     if (filter.kind) {

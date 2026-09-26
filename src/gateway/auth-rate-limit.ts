@@ -14,7 +14,7 @@
  *   local CLI sessions are never locked out. Failed auth still incurs a
  *   bounded, escalating delay.
  * - The module is side-effect-free: callers create an instance via
- *   {@link createAuthRateLimiter} and pass it where needed.
+ *   {@link createGatewayAuthRateLimiter} and pass it where needed.
  */
 
 import {
@@ -46,12 +46,8 @@ export const AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING = "node-pairing";
 // Paired-node approval-surface changes use a dedicated limiter so reconnect
 // storms cannot queue unbounded writes behind the shared pairing-state lock.
 export const AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL = "node-reapproval";
-// Per-IP gate for the pre-auth bootstrap-token verify path.
-// `verifyDeviceBootstrapToken` is `withLock`-serialized in
-// `device-bootstrap.ts` and runs fs read + fs write on every attempt;
-// without a scope-specific limiter, attackers presenting a valid
-// device signature can queue the bootstrap-pairing flow behind their
-// requests, blocking legitimate node onboarding during the attack.
+// Bootstrap verification queues SQLite worker operations behind the shared lock.
+// Limit attempts before they can delay legitimate onboarding.
 export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
 // Public join-code exchange burns SQLite state, so misses are serialized and
 // throttled before they can queue unbounded writes behind the shared DB lock.
@@ -180,7 +176,7 @@ function resolveAuthRateLimitPolicy(config?: GatewayAuthRateLimitConfig) {
   };
 }
 
-export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter & {
+export function createGatewayAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter & {
   updateConfig: (config?: GatewayAuthRateLimitConfig) => void;
 } {
   let policy = resolveAuthRateLimitPolicy(config);

@@ -1,4 +1,3 @@
-// Matrix type declarations define plugin contracts.
 import type {
   ChannelBotLoopProtectionConfig,
   ContextVisibilityMode,
@@ -48,10 +47,8 @@ export type CoreConfig = {
     store?: string;
     dmScope?: NonNullable<OpenClawConfig["session"]>["dmScope"];
   };
-  messages?: {
-    ackReaction?: string;
-    ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "none" | "off";
-  };
+  messages?: OpenClawConfig["messages"];
+  tools?: OpenClawConfig["tools"];
   secrets?: OpenClawConfig["secrets"];
   [key: string]: unknown;
 };

@@ -1,6 +1,5 @@
 import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -55,6 +54,7 @@ import {
   usesCandidateUpdateAdmission,
   type UpdateCommandOptions,
 } from "./shared.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -182,8 +182,11 @@ export async function resolveUpdateCommandTarget(
         const report = {
           root,
           installKind: updateInstallKind,
-          // Invalid config refuses before manager probes; retain the known install kind.
-          mode: reason === "invalid-config" ? packageManager : await resolveMode(),
+          // Config failures refuse before manager probes; retain the known install kind.
+          mode:
+            reason === "invalid-config" || reason === "config-read-failed"
+              ? packageManager
+              : await resolveMode(),
           reason,
           message,
           failureFacts,
@@ -256,11 +259,8 @@ export async function resolveUpdateCommandTarget(
         !legacyConfigPlan &&
         !usesCandidateUpdateAdmission(opts, installKind)
       ) {
-        const issues = formatConfigIssueLines(configSnapshot.issues, "-");
-        await refuseUpdate(
-          "invalid-config",
-          ["Config is invalid; cannot set update channel.", ...issues].join("\n"),
-        );
+        const failure = createUpdateConfigFailure(configSnapshot);
+        await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
         return undefined;
       }
 
@@ -298,13 +298,8 @@ export async function resolveUpdateCommandTarget(
         updateInstallKind !== "package" &&
         usesCandidateUpdateAdmission(opts, installKind)
       ) {
-        await refuseUpdate(
-          "invalid-config",
-          [
-            "Config is invalid; cannot set update channel.",
-            ...formatConfigIssueLines(configSnapshot.issues, "-"),
-          ].join("\n"),
-        );
+        const failure = createUpdateConfigFailure(configSnapshot);
+        await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
         return undefined;
       }
       if (channel === "dev" && requestedChannel !== "dev" && !opts.sourceUpdate) {

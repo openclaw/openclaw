@@ -49,7 +49,11 @@ import { createEventBus } from "../sessions/event-bus.js";
 import { createExtensionRuntime, loadExtensionFromFactory } from "../sessions/extensions/loader.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
-import { useCompactHooksSessionFixture } from "./compact.hooks.fixture.test-support.js";
+import {
+  acquiredPreparedModelRuntime,
+  expectedNativeCompactionOptions,
+  useCompactHooksSessionFixture,
+} from "./compact.hooks.fixture.test-support.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
   attemptServerEndpointCompactionMock,
@@ -105,17 +109,21 @@ import {
   sessionManualCompactionMock,
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
-import { createCompactHooksPreparedModelRuntime } from "./compact.hooks.metadata.test-support.js";
+import {
+  createCompactHooksPreparedModelRuntime,
+  type CompactHooksQueuedCompaction,
+} from "./compact.hooks.metadata.test-support.js";
 import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   setActiveEmbeddedRun,
 } from "./runs.js";
 
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
-let compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
+let compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
 let compactTesting: typeof import("./compact.js").testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
@@ -3553,20 +3561,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 });
 
 describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
-  async function acquiredPreparedModelRuntime() {
-    const pendingLease = acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value;
-    if (!pendingLease) {
-      throw new Error("expected prepared model runtime acquisition");
-    }
-    return (await pendingLease).snapshot;
-  }
-
-  function expectedNativeCompactionOptions(
-    nativeCompactionRequest: "after_context_engine" | "required_preflight",
-  ) {
-    return { nativeCompactionRequest, preparedModelRuntime: expect.any(Object) };
-  }
-
   function mockQueuedRouteAwareModel(
     defaultApi: "openai-responses" | "openai-chatgpt-responses" = "openai-responses",
   ) {
@@ -4766,7 +4760,10 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         model: "gpt-5.5",
         agentHarnessId: "codex",
       }),
-      { nativeCompactionRequest: "after_context_engine", preparedModelRuntime: snapshot },
+      {
+        ...expectedNativeCompactionOptions("after_context_engine"),
+        preparedModelRuntime: snapshot,
+      },
     );
     const compactArg = mockCallArg(contextEngineCompactMock) as {
       runtimeContext?: Record<string, unknown>;
@@ -5371,10 +5368,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
             baseUrl: "https://api.openai.com/v1",
           }),
         }),
-        {
-          nativeCompactionRequest: "after_context_engine",
-          preparedModelRuntime: expect.any(Object),
-        },
+        expectedNativeCompactionOptions("after_context_engine"),
       );
     } finally {
       await compactionFixture.cleanupDirectory(agentDir);
@@ -6569,6 +6563,57 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
     expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
     expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+  });
+
+  it("skips a faulty compacting probe and cancels the live compaction behind it", async () => {
+    const faultyAbort = vi.fn();
+    const faultyHandle = {
+      kind: "embedded" as const,
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => {
+        throw new Error("compaction probe unavailable");
+      },
+      abort: faultyAbort,
+    };
+    setActiveEmbeddedRun("session-faulty-probe", faultyHandle, "agent:main:faulty-probe");
+    const pending = mockPendingContextEngineCompaction();
+    try {
+      const resultPromise = compactEmbeddedAgentSession(
+        wrappedCompactionArgs({ trigger: "manual" }),
+      );
+      await pending.started.promise;
+      expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(true);
+
+      // An unreadable compaction state fails closed: the caller keeps the same
+      // structured rejection a genuinely compacting run returns, and the probe
+      // exception never reaches the steering caller.
+      await expect(
+        queueEmbeddedAgentMessageWithOutcomeAsync("session-faulty-probe", "steer"),
+      ).resolves.toMatchObject({ queued: false, reason: "compacting" });
+      await expect(
+        queueEmbeddedAgentMessageWithOutcomeAsync(TEST_SESSION_ID, "steer"),
+      ).resolves.toMatchObject({ queued: false, reason: "compacting" });
+
+      // A restart sweep walks past the unreadable handle and cancels the
+      // compaction that is really running behind it.
+      expect(abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" })).toBe(
+        true,
+      );
+      expect(faultyAbort).not.toHaveBeenCalled();
+      expect(isEmbeddedAgentRunHandleActive("session-faulty-probe")).toBe(true);
+      expect(pending.signal?.aborted).toBe(true);
+
+      await expect(resultPromise).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        reason: expect.stringContaining("abort"),
+      });
+      expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+    } finally {
+      pending.release.resolve(undefined);
+      clearActiveEmbeddedRun("session-faulty-probe", faultyHandle, "agent:main:faulty-probe");
+    }
   });
 
   it.each([

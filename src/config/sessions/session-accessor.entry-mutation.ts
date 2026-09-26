@@ -421,6 +421,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
   return await withSessionEntryCreationPublication<SessionEntryCreateWithTranscriptResult<TError>>(
     { database: creationDatabase, agentId, sessionKey: normalizedKey, bind: options.bindCreation },
     async (operation) => {
+      options.onPhase?.("entry");
       const created = await createEntry({ ...context, isLabelInUse: (label) => labels.has(label) });
       if (!created.ok) {
         return { ok: false, error: created.error, phase: "entry" };
@@ -461,6 +462,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
           return formatErrorMessage(err);
         }
       };
+      options.onPhase?.("transcript");
       const transcriptError = withCommit
         ? await withCommit(initializeTranscript)
         : await initializeTranscript();
@@ -473,6 +475,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
       }
 
       const entry = created.entry;
+      options.onPhase?.("commit");
       await applySessionEntryLifecycleMutation({
         ...storeScope,
         removals: legacyKeys.map((sessionKey) => ({ sessionKey })),

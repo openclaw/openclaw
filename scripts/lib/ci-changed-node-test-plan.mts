@@ -25,6 +25,7 @@ import {
   hasImportGraphImpactOnTargets,
   isTestFileTarget,
   isWorkflowLintConfigPath,
+  listRunnableVitestConfigTargets,
   resolveControlUiTestConsumers,
   resolveAffectedTestsFromImportGraph,
   resolveDependencyTestConsumers,
@@ -958,7 +959,16 @@ export function createChangedNodeTestShards(
     configInputs.length > 0 &&
     (!configInputs.every(isTestFileTarget) ||
       hasImportGraphConsumers(configInputs, cwd, graphOptions));
-  const configCandidates = inspectConfigConsumers ? [...resolveAutomaticNodeTestConfigs()] : [];
+  const configCandidates =
+    inspectConfigConsumers &&
+    hasImportGraphImpactOnTargets(
+      configInputs,
+      listRunnableVitestConfigTargets(),
+      cwd,
+      graphOptions,
+    )
+      ? [...resolveAutomaticNodeTestConfigs()]
+      : [];
   const affectedConfigs =
     configCandidates.length &&
     hasImportGraphImpactOnTargets(configInputs, configCandidates, cwd, graphOptions)
@@ -1243,13 +1253,13 @@ export function createChangedNodeTestShards(
     .filter(
       ({ plans }) =>
         plans.every((plan) => plan.includePatterns) &&
-        plans.every((plan) => isCanonicalNodeTestConfig(plan.config)) &&
         plans.every(
           (plan) =>
             plan.config !== BOUNDARY_NODE_TEST_CONFIG && plan.config !== "ui/vitest.config.ts",
         ) &&
         (prTargetPlans.length > 96 ||
-          plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config))),
+          plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config))) &&
+        plans.every((plan) => isCanonicalNodeTestConfig(plan.config)),
     )
     .map(({ target }) => target);
   // Canonical shard inventories describe this checkout, never a caller's

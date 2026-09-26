@@ -1,13 +1,10 @@
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
@@ -17,6 +14,7 @@ import {
   acquireStateDatabaseCoordinator,
   acquireStateDatabaseHandleExclusion,
 } from "../infra/state-database-coordinator.js";
+import { holdStateCoordinator } from "./openclaw-state-coordinator.test-support.js";
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseByPathAsync,
@@ -42,66 +40,6 @@ beforeAll(() => {
     true,
   );
 });
-
-async function holdStateCoordinator(databasePath: string, releaseAfterMs = 0) {
-  // Initialize the real coordinator location/permissions through its owner.
-  const coordinator = acquireStateDatabaseCoordinator({ databasePath });
-  const coordinatorPath = coordinator.path;
-  coordinator.release();
-  const child = spawn(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      `
-    import { DatabaseSync } from "node:sqlite";
-    process.title = "openclaw-lock-fixture";
-    const db = new DatabaseSync(${JSON.stringify(coordinatorPath)});
-    db.exec("PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE");
-    process.send({ ready: true });
-    process.on("message", (message) => {
-      if (message.observe) {
-        process.send({ held: db.isTransaction });
-        return;
-      }
-      if (!message.release) return;
-      process.removeAllListeners("message");
-      setTimeout(() => {
-        db.exec("ROLLBACK");
-        db.close();
-        process.disconnect();
-      }, ${releaseAfterMs});
-    });
-  `,
-    ],
-    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-  );
-  try {
-    const [message] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
-    expect(message).toEqual({ ready: true });
-  } catch (error) {
-    await stopChildProcess(child, 5_000);
-    throw error;
-  }
-  const release = async () => {
-    try {
-      const closed = once(child, "close", { signal: AbortSignal.timeout(5_000) });
-      child.send({ release: true });
-      await closed;
-    } finally {
-      await stopChildProcess(child, 5_000);
-    }
-  };
-  return Object.assign(release, {
-    pid: child.pid,
-    async observe() {
-      const observed = once(child, "message", { signal: AbortSignal.timeout(5_000) });
-      child.send({ observe: true });
-      const [message] = await observed;
-      expect(message).toEqual({ held: true });
-    },
-  });
-}
 
 function openStateDatabaseWithPeriodicMaintenance(databasePath: string) {
   let periodic: (() => void) | undefined;

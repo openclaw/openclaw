@@ -130,9 +130,11 @@ compiler assertions in mixed runtime suites; their cases remain enabled.
 The Node Code Mode executor suite also stays on Node: its warm-worker cleanup
 requires diagnostics-channel delivery to preserve sibling subscribers when a
 callback unsubscribes during publication. Bun can skip the next subscriber.
-The complete fake-timer lane also supports Bun. Control UI retains two whole GC-sensitive
-files on Node (`chat-pane-retained-presentation.test.ts` and
-`usage-page-details.test.ts`) and runs the remaining files on Bun.
+The complete fake-timer lane also supports Bun. Control UI retains the GC-sensitive
+`usage-page-details.test.ts` on Node and runs the remaining files on Bun, including
+chat presentation retirement checks.
+The missing-Docker test also runs on Bun, using an empty executable directory
+instead of an empty `PATH`, which Bun resolves through its default search path.
 Other families retain Node until they pass on the pinned fork within their
 existing CI resource budgets. Precise PR targets use the existing
 test-project planner to find their owners. The runtime owner admits only qualified
@@ -170,8 +172,8 @@ files keep their original shard ownership. Compatible PR selections run Bun
 first and record Vitest's original shard inventory. After successful, joined
 completion, a shard with no Node-only files omits that Node process. Missing or
 invalid inventory evidence retains the Node run. Dual validation runs
-the complete UI selection on Node, then excludes only those two files from Bun;
-their assertions remain required on Node, with no added skips.
+the complete UI selection on Node, then excludes only the usage detail file from Bun;
+Its assertions remain required on Node, with no added skips.
 Partitions without browser files retain browser discovery for native sharding
 but omit Chromium version probing and Playwright's speculative browser startup.
 

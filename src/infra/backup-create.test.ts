@@ -2251,7 +2251,7 @@ describe("createBackupArchive", () => {
         const databasePaths = [
           state.statePath("browser", "foreign-browser.sqlite"),
           state.statePath("plugins", "dedicated", "foreign-plugin.sqlite"),
-          state.statePath("agents", "Main", "agent", "openclaw-agent.sqlite"),
+          state.statePath("agents", "Main", "agent", "foreign-agent.sqlite"),
         ];
         const sourcePath = expectDefined(databasePaths[0], "foreign SQLite source");
         await fs.mkdir(path.dirname(sourcePath), { recursive: true });

@@ -552,6 +552,7 @@ export async function enqueueRun(
           },
           {
             onQueued: acceptQueue,
+            taskIdentity: { taskKind: "cron", runId },
             warnAfterMs: 5_000,
             onWait: (waitMs, queuedAhead) => {
               state.deps.log.warn(

@@ -49,6 +49,7 @@ import {
   listActiveDegradedSecretOwners,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { evaluateChannelHealth } from "./channel-health-policy.js";
 import {
@@ -1688,6 +1689,7 @@ describe("server-channels auto restart", () => {
         expect(errors).toEqual([]);
       } else {
         const monitor = startChannelHealthMonitor({
+          scheduler: createTestGatewayScheduler("fake-timers"),
           channelManager: manager,
           timing: { monitorStartupGraceMs: 2, channelConnectGraceMs: 0, staleEventThresholdMs: 1 },
         });
@@ -1744,6 +1746,7 @@ describe("server-channels auto restart", () => {
       const monitor =
         recovery === "health-monitor"
           ? startChannelHealthMonitor({
+              scheduler: createTestGatewayScheduler("fake-timers"),
               channelManager: manager,
               timing: {
                 monitorStartupGraceMs: 2,
@@ -5424,6 +5427,7 @@ describe("server-channels auto restart", () => {
     await manager.startChannel("discord", "healthy");
     const restart = vi.spyOn(manager, "startChannel");
     const monitor = startChannelHealthMonitor({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       channelManager: manager,
       timing: { monitorStartupGraceMs: 2, channelConnectGraceMs: 0, staleEventThresholdMs: 1 },
     });

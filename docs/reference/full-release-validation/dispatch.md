@@ -21,12 +21,13 @@ runs strict `control-ui-i18n` and `native-i18n` jobs; their failures remain visi
 in the run summary and fail validation. PR-side locale checks, release preparation,
 and publication requirements are unchanged.
 
-Selected Linux, Windows, and macOS fresh-install and upgrade lanes gate
-validation in every release profile. Their actual conclusions remain in the
-manifest and summary. Test failures require a fix or an explicit operator waiver;
-release profiles do not automatically downgrade failed tests to advisory results.
-Normal CI, npm qualification, Docker, Package Acceptance, and selected performance
-and soak checks retain their gates.
+Linux (`ubuntu`), Windows, and macOS Gateway cross-OS fresh-install and upgrade
+lanes gate publication in the beta, stable, and full profiles. A failure blocks
+Release Decision, npm publish, and `pnpm release:candidate`. Retain each lane's
+actual conclusion in the manifest and summary; selected lanes need terminal
+evidence.
+Normal CI, npm qualification, Docker, Package Acceptance, and the profile's
+performance and soak requirements keep their existing gates.
 
 Prepare the complete history manifest and substantive version-matched release
 notes before freezing the product-complete commit and its target context as the

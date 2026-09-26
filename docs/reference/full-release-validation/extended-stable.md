@@ -84,7 +84,7 @@ The conceptual phases map to current inputs:
 For an actual beta package on its matching canonical release branch or beta
 tag, `all` with `release_profile=beta` and no soak records
 `coveragePolicy=npm-beta-v1`. It retains Linux, macOS, and Windows Node checks,
-Control UI, plugins, package integrity, install/update acceptance, Linux cross-OS
+Control UI, plugins, package integrity, install/update acceptance, Linux/Windows/macOS cross-OS
 package checks, QA parity, core runtime-pair/restart proof, and runtime tool
 coverage. Native app qualification, product performance, and published-package
 Telegram confidence are deferred. Broad live/E2E and QA-live also remain outside
@@ -149,14 +149,10 @@ Codex `final`, reads randomized workspace inputs, writes their exact artifact,
 and sends explicit completion. This catches the v2026.7.1 regression where an
 ordinary progress send terminated the turn.
 
-Telegram release tests are best effort in every release profile. Selected source
-and package lanes still attempt the real Test Server flow when a Convex credential
-is available. They use the canonical 90-second lease-acquisition retry budget;
-missing broker access, an exhausted pool, or failed tests remain visible as
-failures or skips in the job summaries and evidence, but never block release
-validation. Assertions, credential isolation, lease cleanup, and exact candidate
-identity checks remain unchanged. A successful release decision does not imply
-that Telegram passed; inspect the recorded Telegram outcome separately.
+Selected source Telegram QA and standalone npm Telegram tests must pass before
+normal release validation can pass. Selected Package Acceptance Telegram must also pass in every profile. Missing credentials,
+an exhausted pool, and failed attempts do not count as successful proof. Exact
+candidate identity, credential isolation, and lease cleanup remain required.
 
 Package Acceptance Telegram E2E is automatically deferred for every beta-profile
 `all` run without soak, including beta-profile checks of `main` or alpha targets.
@@ -167,7 +163,7 @@ keep Telegram selected by default. The existing
 deferral; it is rejected for `stable` and `full` and does not disable the focused
 `rerun_group=npm-telegram` workflow.
 
-Best effort is separate from an explicit omission. The reviewed exceptions are
+Selected-test requirements are separate from explicit omissions. The reviewed exceptions are
 `-f telegram_waiver=2026.8.1-owner-approved` and
 `-f telegram_waiver=2026.9.1-owner-approved`. Any future exception requires a
 reviewed code change; a matching `<target-version>-owner-approved` string alone

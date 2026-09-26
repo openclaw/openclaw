@@ -1,5 +1,6 @@
 import type { Message } from "grammy/types";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -15,7 +16,6 @@ import {
   normalizeMessageNodes,
   parsePersistedCacheValue,
   parseRetainedCacheNode,
-  parseSafeMessageId,
   persistedCacheNode,
   resolveReplyMessage,
   retainedMessageId,
@@ -524,7 +524,7 @@ export function createTelegramMessageCache(params?: {
     }
     const selected = Array.from(messages)
       .filter(([key, node]) => {
-        const id = parseSafeMessageId(node.messageId);
+        const id = parseStrictPositiveInteger(node.messageId);
         return key.startsWith(prefix) && id !== undefined && id >= minId && id <= maxId;
       })
       .map(([, node]) => node)
@@ -653,7 +653,7 @@ export function createTelegramMessageCache(params?: {
     },
     get,
     recentBefore: async ({ accountId, chatId, messageId, threadId, limit }) => {
-      const targetId = parseSafeMessageId(messageId);
+      const targetId = parseStrictPositiveInteger(messageId);
       return targetId === undefined
         ? []
         : (
@@ -668,7 +668,7 @@ export function createTelegramMessageCache(params?: {
           ).toReversed();
     },
     around: async ({ accountId, chatId, messageId, threadId, before, after }) => {
-      const targetId = parseSafeMessageId(messageId);
+      const targetId = parseStrictPositiveInteger(messageId);
       if (targetId === undefined) {
         return [];
       }
@@ -704,7 +704,7 @@ export function createTelegramMessageCache(params?: {
       if (!Number.isSafeInteger(limit) || limit <= 0) {
         return [];
       }
-      const beforeId = parseSafeMessageId(before);
+      const beforeId = parseStrictPositiveInteger(before);
       if (before !== undefined && (beforeId === undefined || !retainedMessageId(before))) {
         throw new Error("Telegram history cursors must be native message IDs");
       }
@@ -725,8 +725,8 @@ export function createTelegramMessageCache(params?: {
       if (!Number.isSafeInteger(limit) || limit <= 0 || limit === Number.MAX_SAFE_INTEGER) {
         return { messages: [], hasMore: false };
       }
-      const beforeId = parseSafeMessageId(before);
-      const afterId = parseSafeMessageId(after);
+      const beforeId = parseStrictPositiveInteger(before);
+      const afterId = parseStrictPositiveInteger(after);
       if (
         (before !== undefined && (beforeId === undefined || !retainedMessageId(before))) ||
         (after !== undefined && (afterId === undefined || !retainedMessageId(after)))

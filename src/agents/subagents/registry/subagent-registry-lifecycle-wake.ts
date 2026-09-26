@@ -33,6 +33,7 @@ import {
   commitRequesterWake,
   getPendingWakeCommit,
   retryPendingWakeCommit,
+  shouldReportRequesterSettleWakeFailure,
 } from "./subagent-registry-requester-wake-commit.js";
 import { persistSubagentRunsToDiskAsyncOrThrow } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -488,11 +489,13 @@ export function scheduleRequesterSettleWake(
           return;
         }
         const safeError = buildSafeLifecycleErrorMeta(error);
-        params.warn("requester settle wake failed", {
-          error: safeError,
-          runId: maskLifecycleIdentifier(runId, "run"),
-          requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
-        });
+        if (shouldReportRequesterSettleWakeFailure(context, entry, safeError)) {
+          params.warn("requester settle wake failed", {
+            error: safeError,
+            runId: maskLifecycleIdentifier(runId, "run"),
+            requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
+          });
+        }
         const current = params.runs.get(runId);
         if (
           getPendingWakeCommit(context, entry) ||

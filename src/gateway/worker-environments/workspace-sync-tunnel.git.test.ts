@@ -231,13 +231,17 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
         fs.writeFile(path.join(manifestPath, `${index}.txt`), ""),
       ),
     );
+    // Non-recursive rsync skips the directory, so no manifest arrives.
     await expect(
       handle.reconcileWorkspace({
         source: { kind: "local", path: localPath, journal: memoryWorkspaceJournal() },
         remoteWorkspaceDir: result.remoteWorkspaceDir,
         baseManifestRef: result.manifestRef,
       }),
-    ).rejects.toThrow("manifest transfer is not a bounded regular file");
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+      message: expect.stringContaining(path.basename(manifestPath)),
+    });
   } finally {
     await handle.stop();
     await fs.rm(root, { recursive: true });

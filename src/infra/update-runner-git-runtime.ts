@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
@@ -10,6 +9,7 @@ import {
   relocateRuntimeTree,
   type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
+import { gitRuntimeStagingPath } from "./update-runtime-staging.js";
 
 async function collectRuntimeDirectories(
   root: string,
@@ -247,7 +247,7 @@ export async function prepareGitRuntimePromotion(
     for (const { sourceRoot, destinationRoot: destination } of roots) {
       // .artifacts may point at another volume. A sibling of each destination
       // guarantees rename-only activation, including nested workspace outputs.
-      const temporary = `${destination}.openclaw-update-${randomUUID()}.tmp`;
+      const temporary = gitRuntimeStagingPath(destination);
       const entry = { destination, temporary, previous: false };
       staged.push(entry);
       await fs.mkdir(temporary, { recursive: true });

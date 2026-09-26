@@ -36,6 +36,13 @@ export type CommandQueueTaskDeadline =
   | { kind: "unlimited" };
 
 export type CommandQueueEnqueueOptions = {
+  /** Enqueue-time provenance for diagnostics only; never used for admission. */
+  taskIdentity?: Readonly<{
+    taskKind: string;
+    sessionKey?: string;
+    runId?: string;
+    requesterSessionKey?: string;
+  }>;
   /** Cancels queued admission; the task owns cancellation after it starts. */
   abortSignal?: AbortSignal;
   /** Called only when this entry remains queued after immediate lane admission. */

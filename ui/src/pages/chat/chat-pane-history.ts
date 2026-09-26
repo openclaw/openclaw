@@ -691,6 +691,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         agentId: parseAgentSessionKey(result.sessionKey)?.agentId,
         draft: editorText,
         mentions: [],
+        replyTarget: null,
       });
       preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
         attachments: replaceChatAttachmentsFromEditor([], result.editorAttachments),

@@ -53,6 +53,16 @@ behavior.
 
 ## Carry facts, publish after commit
 
+Placement turn claims and releases execute through the shared-state writer,
+including their coordinator acquisition. Local turns retain durable claims:
+cloud dispatch closes admission and joins their settlement before preparing the
+workspace. Claim admission rechecks the live caller before mutation and commit;
+conditional release compares the exact claim inside the transaction. Commit
+receipts publish claim authority and release observers before callers continue,
+including when ordinary reply delivery fails. Local forced completion and final
+cleanup join the same pending release. Restart recovery, schemas, persisted
+fields, and update behavior are unchanged.
+
 Memory session preparation retains only export text, provenance, timestamps, and
 classification/reset facts from each decoded SQLite event. Full-message observers
 retain their original snapshot, and callbacks run after its read transaction closes.
@@ -115,8 +125,10 @@ the main thread and workers, naming the database and operation when supplied.
 Watched human-turn signals and upstream observations use the shared-state writer,
 including their watcher probe and pruning. Producers await settlement and recheck
 current session authority; upstream observations compare the captured source in
-the committing transaction. Goal events share that recording command. Synchronous
-creation, compaction, terminal-event, watch, reset, and deletion callbacks remain
+the committing transaction. Goal events and normalized child-run terminal outcomes
+share that recording command. Child completion joins recording and rechecks its
+current lifecycle or ACP actor authority at transaction and commit admission.
+Synchronous creation, compaction, watch, reset, and deletion callbacks remain
 separate migration work.
 
 Durable session entry replacement reads its detached snapshot in the history

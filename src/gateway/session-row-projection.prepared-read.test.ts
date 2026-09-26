@@ -18,6 +18,7 @@ import * as databaseFactsRead from "./session-row-projection-read.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { projectWorkerSessionPlacement } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
+import { reportPlacementTransition } from "./worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -407,10 +408,13 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
         );
       }
       holdBulk = true;
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: bulkRow.key },
-        { sessionId: bulkRow.sessionId, updatedAt: 2 },
-      );
+      bulkRow.placement = placements.transition({
+        sessionId: bulkRow.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: bulkRow.placement.generation,
+      });
+      reportPlacementTransition(undefined, bulkRow.placement);
       const bulk = projection.ensureMaterialized();
       pending.push(Promise.allSettled([bulk]));
       await withTestTimeout(bulkEntered.promise, 2_000, "Bulk placement refresh did not enter");
@@ -418,6 +422,13 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
         { agentId: "main", sessionKey: exactRow.key },
         { sessionId: exactRow.sessionId, updatedAt: 2, label: "Fresh exact description" },
       );
+      exactRow.placement = placements.transition({
+        sessionId: exactRow.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: exactRow.placement.generation,
+      });
+      reportPlacementTransition(undefined, exactRow.placement);
       const respond = vi.fn();
       const description = Promise.resolve(
         sessionByKeyReadHandlers["sessions.describe"]!({
@@ -445,6 +456,9 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
       });
       releaseBulk.resolve();
       await bulk;
+      expect(projection.snapshot({ agentId: "main", key: bulkRow.key }).row?.placement).toEqual(
+        projectWorkerSessionPlacement(bulkRow.placement),
+      );
     } finally {
       releaseBulk.resolve();
       await Promise.all(pending);

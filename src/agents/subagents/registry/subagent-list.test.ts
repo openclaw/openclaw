@@ -147,7 +147,7 @@ describe("buildSubagentList", () => {
     ).toEqual([]);
   });
 
-  it("builds the subagent list without decoding unrelated saved prompts", async () => {
+  it("builds the subagent list without decoding unrelated session metadata or saved prompts", async () => {
     const stateDir = await fs.mkdtemp(path.join(testWorkspaceDir, "metadata-"));
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       try {
@@ -159,6 +159,7 @@ describe("buildSubagentList", () => {
             {
               sessionId: `other-${i}`,
               updatedAt: 1,
+              label: `UNRELATED_PAYLOAD_${i}`,
               skillsSnapshot: { prompt: `UNRELATED_PAYLOAD_${"x".repeat(4096)}`, skills: [] },
             },
           );

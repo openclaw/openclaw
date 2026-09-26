@@ -670,7 +670,7 @@ describe("chat transcript rendering", () => {
     touchPointerUp(streamBubble);
     expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
     expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
-    expect(streamGroup.querySelector(".chat-group-footer")).toBeNull();
+    expect(streamGroup.querySelector(".chat-group-footer")?.childElementCount).toBe(0);
 
     touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
     expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
@@ -765,6 +765,62 @@ describe("chat transcript rendering", () => {
           text,
           senderLabel: "Molty",
         });
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "keeps completed commentary a turn block only outside search results (search %s)",
+    async (search) => {
+      const paneId = `pane-commentary-search-${search}`;
+      const text = "Checked the workspace layout.";
+      const props = threadProps(paneId, "agent:main:main", [
+        { role: "user", content: "Inspect the workspace", timestamp: 1_000 },
+        {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          timestamp: 2_000,
+          openclawStreamFallback: { replacementText: text, source: "segment", itemId: "layout" },
+        },
+        { role: "assistant", content: "Workspace looks fine.", timestamp: 3_000 },
+      ]);
+      const transcript = createTestTranscript();
+      const searchContainer = document.body.appendChild(document.createElement("div"));
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderTranscriptSearch(paneId, rerender), searchContainer);
+        render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
+        transcript.hostUpdated();
+      };
+      try {
+        if (search) {
+          toggleTranscriptSearch(paneId, rerender);
+        }
+        transcript.hostConnected();
+        rerender();
+        if (search) {
+          const input = requireElement(searchContainer, "input") as HTMLInputElement;
+          input.value = "workspace layout";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        await flushDeferredRowPrune();
+
+        const group = expectDefined(
+          [...container.querySelectorAll<HTMLElement>(".chat-group.assistant")].find((element) =>
+            element.textContent?.includes(text),
+          ),
+          "commentary group",
+        );
+        expect(group.classList.contains("chat-group--turn-block")).toBe(!search);
+        expect(group.querySelector(".chat-group-footer .chat-sender-name") !== null).toBe(search);
+        expect(group.querySelector(".chat-group-footer .chat-group-timestamp") !== null).toBe(
+          search,
+        );
+        expect(group.querySelector(".chat-group-footer-actions .chat-copy-btn") !== null).toBe(
+          search,
+        );
       } finally {
         transcript.hostDisconnected();
       }

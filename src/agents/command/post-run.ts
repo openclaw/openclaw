@@ -23,6 +23,8 @@ import {
   classifyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
+import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { AcceptedCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
@@ -173,6 +175,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
     evidence: RestartRecoveryTerminalDeliveryEvidenceResult,
   ) => void;
 }) {
+  const operatorAuthority = params.opts.operatorAuthority;
+  const assertSourceCurrent = params.opts.assertSourceCurrent;
   const {
     cfg,
     body,
@@ -211,7 +215,20 @@ export async function finalizeEmbeddedAgentCommand(params: {
   const effectiveCwd = cwd ?? workspaceDir;
   const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.opts.bootstrapContextRunKind);
   let sessionEntry = params.sessionEntry;
-  let result = params.attempt.result;
+  // Return the same producer-owned facts published to agent.wait. Payloads and
+  // display history cannot reconstruct a yielded or intentionally empty result.
+  const terminalReply = normalizeAgentRunTerminalReplySnapshot(terminal.metadata.terminalReply);
+  const terminalReceipt = normalizeAgentRunTerminalReceipt(terminal.metadata.terminalReceipt);
+  let result = {
+    ...params.attempt.result,
+    meta: {
+      ...params.attempt.result.meta,
+      ...(terminalReply ? { terminalReply } : {}),
+      ...(terminalReceipt && params.attempt.result.meta.agentMeta
+        ? { agentMeta: { ...params.attempt.result.meta.agentMeta, terminalReceipt } }
+        : {}),
+    },
+  };
   let deliveryResult: AgentCommandDeliveryResult;
   let hasResultError: boolean;
   let terminalError: string | undefined;
@@ -452,6 +469,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
       let maintenanceLifecycleRevision = sessionEntry?.lifecycleRevision;
       const authorize = () => {
         throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
+        assertSourceCurrent?.();
+        operatorAuthority?.assertCurrent();
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         return (
           maintenance.remainingMs() > 0 && !maintenance.signal.aborted && !sessionReboundDuringRun
@@ -464,6 +483,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
         publishSessionOwnership(
           accepted.previousSessionId === undefined ? undefined : accepted.sessionId,
         );
+      };
+      const assertActive = () => {
+        if (!authorize()) {
+          throw new Error("Command compaction is no longer active");
+        }
       };
       try {
         if (maintenance.remainingMs() > 0) {
@@ -492,11 +516,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
               abortSignal: maintenance.signal,
             },
             {
-              assertActive: () => {
-                if (!authorize()) {
-                  throw new Error("Command compaction is no longer active");
-                }
-              },
+              assertActive,
+              sourceAuthority: { assertActive, operatorAuthority },
               onCommitted,
             },
           );

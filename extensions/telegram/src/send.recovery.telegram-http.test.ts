@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Bot } from "grammy";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import * as mediaRuntime from "openclaw/plugin-sdk/media-runtime";
 import {
   addTestHook,
   createEmptyPluginRegistry,
@@ -13,7 +14,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { deliverReplies } from "./bot/delivery.js";
 import { createTelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
 import { editMessageTelegram, sendLocationTelegram, sendMessageTelegram } from "./send.js";
-import * as sendRuntime from "./send.runtime.js";
 import {
   resolveTelegramTestUpload,
   useTelegramHttpFixture,
@@ -242,7 +242,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
   );
 
   it("reaches the same MIME filename owner from the durable sender", async () => {
-    const loader = vi.spyOn(sendRuntime, "loadWebMedia").mockResolvedValue({
+    const loader = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       buffer: await fs.readFile(photoPath),
       contentType: "image/png",
       kind: "image",
@@ -771,7 +771,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
   it.each(["unknown", "too-wide", "too-large"] as const)(
     "uses a document when photo dimensions are %s",
     async (shape) => {
-      vi.spyOn(sendRuntime, "getImageMetadata").mockResolvedValue(
+      vi.spyOn(mediaRuntime, "getImageMetadata").mockResolvedValue(
         shape === "unknown"
           ? null
           : shape === "too-wide"
@@ -898,7 +898,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
   ])(
     "sends requested voice media as $method for $contentType",
     async ({ contentType, fileName, method }) => {
-      vi.spyOn(sendRuntime, "loadWebMedia").mockResolvedValue({
+      vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
         buffer: Buffer.from("audio-bytes"),
         kind: "audio",
         contentType,

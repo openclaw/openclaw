@@ -24,10 +24,7 @@ import {
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
 } from "../providers/anthropic-model-contract.js";
-import {
-  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  ANTHROPIC_SERVER_SIDE_FALLBACKS,
-} from "../providers/anthropic-server-fallback.js";
+import { ANTHROPIC_SERVER_SIDE_FALLBACKS } from "../providers/anthropic-server-fallback.js";
 import { applyAnthropicThinkingBindingControls } from "../providers/anthropic-thinking-replay.js";
 import {
   normalizeAnthropicToolCallId,
@@ -50,7 +47,7 @@ import {
   buildAnthropicSystemBlocks,
   applyAnthropicContextManagementToRequest,
   isDirectAnthropicModel,
-  resolveAnthropicContextManagementBetaHeader,
+  resolveAnthropicRequestBetaHeader,
   resolveAnthropicCacheOptions,
 } from "./anthropic-payload-policy.js";
 import { consumeAnthropicStream, type AnthropicStreamBlock } from "./anthropic-stream-reducer.js";
@@ -257,43 +254,36 @@ async function* parseAnthropicSseBody(
   const decoder = new TextDecoder();
   let buffer = "";
   let completed = false;
+  // CRLF must remain one line ending even when the delimiter expression backtracks.
+  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
+  let scanOffset = 0;
   try {
-    while (true) {
+    while (!completed) {
       const { done, value } = await readAnthropicSseChunk(reader, signal);
-      if (done) {
-        completed = true;
-        break;
-      }
-      buffer = `${buffer}${decoder.decode(value, { stream: true })}`.replaceAll("\r\n", "\n");
-      let frameEnd = buffer.indexOf("\n\n");
-      while (frameEnd >= 0) {
+      completed = done;
+      buffer += decoder.decode(value, { stream: !done });
+      delimiter.lastIndex = scanOffset;
+      for (;;) {
+        const boundary = delimiter.exec(buffer);
+        if (!boundary && (!completed || !buffer)) {
+          break;
+        }
+        const frameEnd = boundary?.index ?? buffer.length;
         assertAnthropicSsePendingBufferWithinLimit(frameEnd);
-        const frame = buffer.slice(0, frameEnd);
-        buffer = buffer.slice(frameEnd + 2);
+        const frame = boundary ? buffer.slice(0, frameEnd) : buffer.trim();
+        buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
+        delimiter.lastIndex = 0;
         const data = frame
-          .split("\n")
+          .split(/\r\n|\n|\r/)
           .filter((line) => line.startsWith("data:"))
           .map((line) => line.slice(5).trimStart())
           .join("\n");
         if (data && data !== "[DONE]") {
           yield parseAnthropicSseEventData(data);
         }
-        frameEnd = buffer.indexOf("\n\n");
       }
       assertAnthropicSsePendingBufferWithinLimit(buffer.length);
-    }
-    const tailBuffer = `${buffer}${decoder.decode()}`.replaceAll("\r\n", "\n");
-    assertAnthropicSsePendingBufferWithinLimit(tailBuffer.length);
-    const tail = tailBuffer.trim();
-    if (tail) {
-      const data = tail
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .join("\n");
-      if (data && data !== "[DONE]") {
-        yield parseAnthropicSseEventData(data);
-      }
+      scanOffset = Math.max(0, buffer.length - 3);
     }
   } finally {
     if (!completed) {
@@ -461,9 +451,6 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: true,
       claudeCodeVersion: identity.version,
     };
-  }
-  if (useAnthropicServerSideFallback(model)) {
-    betaFeatures.push(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
   }
   const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: false });
   const defaultHeaders = mergeTransportHeaders(
@@ -633,10 +620,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           params = nextParams as Record<string, unknown>;
         }
         applyClaudeRequestContract(params, model);
-        const betaHeader = resolveAnthropicContextManagementBetaHeader(
-          params,
-          directApiKeyBetaHeader,
-        );
+        const betaHeader = resolveAnthropicRequestBetaHeader(params, directApiKeyBetaHeader);
         const bindingHeaders =
           applyAnthropicThinkingBindingControls(params, betaHeader) ??
           (betaHeader ? { "anthropic-beta": betaHeader } : undefined);

@@ -1,4 +1,3 @@
-// File Transfer plugin module implements file write behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -154,7 +153,6 @@ export async function handleFileWrite(
   const preflightOnly = params?.preflightOnly === true;
   const rejectHardlinks = params?.rejectHardlinks === true;
 
-  // 1. Validate path: must be absolute, non-empty, no NUL byte
   if (!rawPath) {
     return err("INVALID_PATH", "path is required");
   }
@@ -168,7 +166,7 @@ export async function handleFileWrite(
     return err("INVALID_BASE64", "contentBase64 is required");
   }
 
-  // 2. Validate the payload and cap its decoded size before allocating a Buffer.
+  // Cap the decoded size before allocating a Buffer.
   const decodedBytes = inspectStrictBase64(contentBase64);
   if (decodedBytes === undefined) {
     return err("INVALID_BASE64", "contentBase64 is not valid base64");
@@ -180,17 +178,9 @@ export async function handleFileWrite(
     );
   }
 
-  // Decode base64 → Buffer.
-  //    Buffer.from(s, "base64") in Node never throws — it silently drops
-  //    non-base64 characters and returns whatever it could decode. That
-  //    means a typo or truncated input would land garbage on disk if we
-  //    accepted whatever decoded. Defense: round-trip the decoded buffer
-  //    back to base64 and compare against the input modulo padding/url
-  //    variants. A mismatch means characters were silently dropped.
+  // Buffer decoding is permissive; verify the round trip, including padding bits.
   const buf = Buffer.from(contentBase64, "base64");
   const reEncoded = buf.toString("base64");
-  // Normalize: drop padding and convert base64url chars to standard so the
-  // comparison tolerates both "=" / no-"=" inputs and "-_" base64url.
   const normalize = (s: string): string =>
     s.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
   if (normalize(reEncoded) !== normalize(contentBase64)) {
@@ -318,11 +308,7 @@ export async function handleFileWrite(
     }
   }
 
-  // 5. Hash the decoded buffer BEFORE touching disk. If the caller
-  //    supplied expectedSha256 and it doesn't match, refuse outright so
-  //    a bad caller hash with overwrite=true can't replace + delete the
-  //    original. Computing from the buffer (not a re-read) is the right
-  //    source of truth — the caller asked us to write THESE bytes.
+  // Reject an incorrect caller hash before overwriting the original bytes.
   const computedSha256 = sha256Hex(buf);
   if (expectedSha256 && expectedSha256.toLowerCase() !== computedSha256) {
     return err(

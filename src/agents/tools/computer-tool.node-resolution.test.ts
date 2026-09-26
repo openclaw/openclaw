@@ -5,6 +5,7 @@
  * node selectors, and the id-before-display-name precedence that keeps input
  * off the wrong machine.
  */
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createWorkerComputerService } from "../../gateway/worker-environments/computer-service.js";
@@ -538,6 +539,43 @@ describe("createComputerTool node resolution", () => {
       expect.objectContaining({ nodeId: "mac-ready", command: "screen.snapshot" }),
       { signal: undefined },
     );
+  });
+
+  it("prepares blank selectors before validation and reaches the same node as omitted selectors", async () => {
+    listNodesMock.mockResolvedValue([macComputerNode()]);
+    callGatewayToolMock.mockResolvedValue(screenshotPayload());
+    for (const selectors of [
+      {},
+      { target: "", node: "", environmentId: "" },
+      { target: " \t", node: "\n", environmentId: "  " },
+    ]) {
+      const tool = createComputerTool({ modelHasVision: true });
+      const args = { action: "screenshot", ...selectors };
+      const prepared = tool.prepareArguments?.(args) ?? args;
+      expect(Value.Check(tool.parameters, prepared)).toBe(true);
+      const result = await tool.execute("call", prepared);
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "image" })]),
+      );
+      expect(callGatewayToolMock).toHaveBeenLastCalledWith(
+        "node.invoke",
+        expect.anything(),
+        expect.objectContaining({ nodeId: "mac-1", command: "screen.snapshot" }),
+        { signal: undefined },
+      );
+    }
+  });
+
+  it("leaves nonblank invalid targets for validation and unknown nodes for resolution", async () => {
+    listNodesMock.mockResolvedValue([macComputerNode()]);
+    const tool = createComputerTool({ modelHasVision: true });
+    const invalidTarget = { action: "screenshot", target: "foo" };
+    expect(Value.Check(tool.parameters, tool.prepareArguments?.(invalidTarget))).toBe(false);
+    const unknownNode = { action: "screenshot", node: "unknown-node" };
+    await expect(tool.execute("call", tool.prepareArguments?.(unknownNode))).rejects.toThrow(
+      /unknown node/,
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
   it("requires an explicit node when several computer-capable nodes are connected", async () => {
