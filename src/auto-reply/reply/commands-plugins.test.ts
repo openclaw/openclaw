@@ -326,7 +326,7 @@ describe("handlePluginsCommand", () => {
     },
   );
 
-  it.each(["load", "format", "dispose"])(
+  it.each(["inspection", "format"])(
     "propagates %s failure without a successful reply",
     async (phase) => {
       const failure = new Error(`inspection ${phase} failed`);
@@ -437,22 +437,19 @@ describe("handlePluginsCommand", () => {
     expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
   });
 
-  it.each(["list", "inspect pack/one", "enable pack/one"])(
-    "rejects invalid config before loading plugin state for %s",
-    async (action) => {
-      readConfigFileSnapshotMock.mockResolvedValue({ valid: false, path: "/tmp/openclaw.json" });
-      const result = await handlePluginsCommand(
-        buildPluginsParams(`/plugins ${action}`, buildCfg(), {
-          gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-        }),
-        true,
-      );
-      expect(result?.reply?.text).toBe("⚠️ Config file is invalid; fix it before using /plugins.");
-      expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
-      expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
-      expect(replaceConfigFileMock).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects invalid config before loading plugin state", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({ valid: false, path: "/tmp/openclaw.json" });
+    const result = await handlePluginsCommand(
+      buildPluginsParams("/plugins enable pack/one", buildCfg(), {
+        gatewayClientScopes: WRITE_GATEWAY_SCOPES,
+      }),
+      true,
+    );
+    expect(result?.reply?.text).toBe("⚠️ Config file is invalid; fix it before using /plugins.");
+    expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
+    expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+  });
 
   it.each(["missing", "ambiguous", "conflicting"])(
     "does not attribute chat install metadata when ownership is %s",

@@ -7,6 +7,7 @@ import {
   resetUpdateStatusState,
   setUpdateScheduleCache,
 } from "../../infra/update-status-state.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { updateStatusHandlers } from "./update-status.js";
 
 const history = vi.hoisted(() => vi.fn(async () => ({ activeRun: undefined, lastRun: undefined })));
@@ -26,7 +27,7 @@ vi.mock("../server-restart-sentinel.js", () => ({
 
 beforeEach(() => {
   vi.useFakeTimers();
-  resetUpdateAvailableStateForTest();
+  resetUpdateAvailableStateForTest(createTestGatewayScheduler());
   history.mockClear();
   install.mockReset().mockRejectedValue(new Error("discovery unavailable"));
 });

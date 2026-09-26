@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -794,7 +795,9 @@ describe("current plugin metadata snapshot", () => {
     "clearPluginMetadataLifecycleCaches revokes nested operation scopes across awaits (Gateway active: %s)",
     async (gatewayActive) => {
       const boot = createSnapshot();
-      const owner = gatewayActive ? retainGatewayPluginMetadata() : undefined;
+      const owner = gatewayActive
+        ? retainGatewayPluginMetadata(createTestGatewayScheduler())
+        : undefined;
       if (owner) {
         owner.publish(boot);
         setGatewayPluginMetadataSnapshot(boot);

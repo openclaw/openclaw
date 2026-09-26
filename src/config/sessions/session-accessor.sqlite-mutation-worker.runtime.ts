@@ -33,6 +33,7 @@ import type { CanonicalSessionValidationResult } from "./session-accessor.sqlite
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   markSqliteReclamationSettled,
+  SqliteReclamationRequestRefusedError,
   waitForSqliteReclamationCommit,
 } from "./session-accessor.sqlite-reclamation-commit.js";
 import type {
@@ -397,6 +398,22 @@ export async function runReclamationWorkerPort(
               validation,
             } satisfies SqliteMutationWorkerMessage<typeof result>;
           } catch (error) {
+            // Canonical validation retains its scoped native-failure/drain contract.
+            if (
+              request.type === "reclaim" &&
+              !pooledTask &&
+              error instanceof SqliteReclamationRequestRefusedError &&
+              claim?.isCurrent() &&
+              retainedDatabase?.isOpen &&
+              !retainedDatabase.isTransaction
+            ) {
+              markSqliteReclamationSettled(commitGate);
+              return {
+                type: "refused",
+                operationId,
+                settled: true,
+              } satisfies SqliteReclamationWorkerMessage;
+            }
             failureCleanup = await closeDatabase();
             if (failureCleanup.settled) {
               markSqliteReclamationSettled(commitGate);

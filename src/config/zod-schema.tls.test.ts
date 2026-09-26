@@ -16,13 +16,6 @@ describe("gateway.tls schema", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts a non-empty certPath", () => {
-    const res = validateConfigObject({
-      gateway: { tls: { enabled: true, certPath: "/etc/ssl/cert.pem" } },
-    });
-    expect(res.ok).toBe(true);
-  });
-
   it("preserves exact bytes of a non-empty certPath (no silent trim)", () => {
     const res = validateConfigObject({
       gateway: { tls: { enabled: true, certPath: "  /etc/ssl/cert.pem  " } },

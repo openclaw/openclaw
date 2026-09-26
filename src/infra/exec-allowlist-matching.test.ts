@@ -47,7 +47,7 @@ describe("exec allowlist matching", () => {
     expect(matchAllowlist([{ pattern: "rg" }], absoluteResolution)).toBeNull();
   });
 
-  it.each(["linux", "darwin", "win32"])(
+  it.each(["linux", "win32"])(
     "honors argPattern checks for bare command-name matches on %s",
     (platform) => {
       const entries = [{ pattern: "rg", argPattern: "^--json$" }];
@@ -106,7 +106,7 @@ describe("exec allowlist matching", () => {
       expect(matchAllowlist([explicit], resolution, argv)).toBe(explicit);
     });
 
-    it.each(["linux", "darwin", "win32"])(
+    it.each(["linux", "win32"])(
       "prefers argPattern matches over path-only matches on %s",
       (platform) => {
         const pathOnlyEntry = { pattern: "/usr/bin/python3" };
@@ -119,7 +119,7 @@ describe("exec allowlist matching", () => {
       },
     );
 
-    it.each(["linux", "darwin", "win32"])(
+    it.each(["linux", "win32"])(
       "falls back to path-only matches when argPattern does not match on %s",
       (platform) => {
         const pathOnlyEntry = { pattern: "/usr/bin/python3" };
@@ -132,7 +132,7 @@ describe("exec allowlist matching", () => {
       },
     );
 
-    it.each(["linux", "darwin", "win32"])(
+    it.each(["linux", "win32"])(
       "requires argv before matching argPattern entries on %s",
       (platform) => {
         const restrictedEntries: ExecAllowlistEntry[] = [

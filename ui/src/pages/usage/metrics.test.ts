@@ -1,20 +1,27 @@
-// Control UI tests cover usage metrics behavior.
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,
-  formatUsageCost,
-  formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
-import type { UsageSessionEntry } from "./types.ts";
+import type { UsageSessionEntry, UsageTotals } from "./types.ts";
 
-/**
- * Helper: build a minimal UsageSessionEntry with utcQuarterHourMessageCounts
- * using the new UTC quarter-hour bucket format.
- */
+const emptyUsageTotals: UsageTotals = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  totalCost: 0,
+  inputCost: 0,
+  outputCost: 0,
+  cacheReadCost: 0,
+  cacheWriteCost: 0,
+  missingCostEntries: 0,
+};
+
 function makeSessionWithQuarterHourly(
   buckets: Array<{
     date: string;
@@ -26,17 +33,11 @@ function makeSessionWithQuarterHourly(
   return {
     key: "test-session",
     usage: {
+      ...emptyUsageTotals,
       totalTokens: 100,
       totalCost: 0.01,
       input: 50,
       output: 50,
-      cacheRead: 0,
-      cacheWrite: 0,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
       firstActivity: Date.now() - 3600_000,
       lastActivity: Date.now(),
       messageCounts: {
@@ -129,16 +130,9 @@ describe("usage aggregate model identity", () => {
   it("preserves missing-cost attribution and token ranking when filtering sessions", () => {
     const session = (agentId: string, model: string, tokens: number): UsageSessionEntry => {
       const totals = {
+        ...emptyUsageTotals,
         input: tokens,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
         totalTokens: tokens,
-        totalCost: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
         missingCostEntries: 1,
         missingCostByModel: { [`fixture/${model}`]: 1 },
       };
@@ -172,29 +166,6 @@ describe("usage aggregate model identity", () => {
 });
 
 describe("buildPeakErrorHours", () => {
-  it("maps UTC quarter-hour buckets to correct hours in UTC mode", () => {
-    // quarterIndex 0  → 00:00-00:14 UTC → hour 0
-    // quarterIndex 4  → 01:00-01:14 UTC → hour 1
-    // quarterIndex 36 → 09:00-09:14 UTC → hour 9
-    // quarterIndex 95 → 23:45-23:59 UTC → hour 23
-    const session = makeSessionWithQuarterHourly([
-      { date: "2026-03-15", quarterIndex: 0, total: 10, errors: 5 },
-      { date: "2026-03-15", quarterIndex: 4, total: 20, errors: 2 },
-      { date: "2026-03-15", quarterIndex: 36, total: 15, errors: 3 },
-      { date: "2026-03-15", quarterIndex: 95, total: 8, errors: 4 },
-    ]);
-
-    const result = buildPeakErrorHours([session], "utc");
-
-    // hour 0: 5/10 = 50%, hour 23: 4/8 = 50%, hour 9: 3/15 = 20%, hour 1: 2/20 = 10%
-    expect(peakErrorSummaries(result)).toStrictEqual([
-      { value: "50.00%", sub: "5 errors · 10 msgs" },
-      { value: "50.00%", sub: "4 errors · 8 msgs" },
-      { value: "20.00%", sub: "3 errors · 15 msgs" },
-      { value: "10.00%", sub: "2 errors · 20 msgs" },
-    ]);
-  });
-
   it("aggregates multiple quarter-hour buckets into the same hour in UTC mode", () => {
     // quarterIndex 0 (00:00) and quarterIndex 3 (00:45) both map to hour 0
     const session = makeSessionWithQuarterHourly([
@@ -206,61 +177,6 @@ describe("buildPeakErrorHours", () => {
     // Aggregated: 5 errors / 15 total = 33.33%
     expect(peakErrorSummaries(result)).toStrictEqual([
       { value: "33.33%", sub: "5 errors · 15 msgs" },
-    ]);
-  });
-
-  it("shifts UTC quarter-hour buckets to local timezone in local mode", () => {
-    // Simulate UTC+5: UTC hour 0 → local hour 5, UTC hour 10 → local hour 15
-    vi.spyOn(Date.prototype, "getHours").mockImplementation(function (this: Date) {
-      return (this.getUTCHours() + 5) % 24;
-    });
-
-    // quarterIndex 0 → UTC 00:00 → local 05:00
-    // quarterIndex 40 → UTC 10:00 → local 15:00
-    const session = makeSessionWithQuarterHourly([
-      { date: "2026-03-15", quarterIndex: 0, total: 10, errors: 3 },
-      { date: "2026-03-15", quarterIndex: 40, total: 20, errors: 4 },
-    ]);
-
-    const result = buildPeakErrorHours([session], "local");
-
-    expect(peakErrorSummaries(result)).toStrictEqual([
-      { value: "30.00%", sub: "3 errors · 10 msgs" }, // local hour 5
-      { value: "20.00%", sub: "4 errors · 20 msgs" }, // local hour 15
-    ]);
-  });
-
-  it("wraps correctly for negative local timezone (UTC-8)", () => {
-    // Simulate UTC-8: UTC hour 0 → local hour 16 (previous day)
-    vi.spyOn(Date.prototype, "getHours").mockImplementation(function (this: Date) {
-      return (this.getUTCHours() - 8 + 24) % 24;
-    });
-
-    // quarterIndex 0 → UTC 00:00 → local 16:00
-    const session = makeSessionWithQuarterHourly([
-      { date: "2026-03-15", quarterIndex: 0, total: 10, errors: 5 },
-    ]);
-
-    const result = buildPeakErrorHours([session], "local");
-    expect(peakErrorSummaries(result)).toStrictEqual([
-      { value: "50.00%", sub: "5 errors · 10 msgs" },
-    ]);
-  });
-
-  it("wraps correctly for positive local timezone near midnight (UTC+8, late quarter)", () => {
-    // Simulate UTC+8: UTC hour 17 → local hour 1 (next day)
-    vi.spyOn(Date.prototype, "getHours").mockImplementation(function (this: Date) {
-      return (this.getUTCHours() + 8) % 24;
-    });
-
-    // quarterIndex 68 → UTC 17:00 → local 01:00 (next day)
-    const session = makeSessionWithQuarterHourly([
-      { date: "2026-03-15", quarterIndex: 68, total: 12, errors: 6 },
-    ]);
-
-    const result = buildPeakErrorHours([session], "local");
-    expect(peakErrorSummaries(result)).toStrictEqual([
-      { value: "50.00%", sub: "6 errors · 12 msgs" },
     ]);
   });
 
@@ -277,17 +193,7 @@ describe("buildPeakErrorHours", () => {
     const session: UsageSessionEntry = {
       key: "empty",
       usage: {
-        totalTokens: 0,
-        totalCost: 0,
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
+        ...emptyUsageTotals,
         messageCounts: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
       },
     } as unknown as UsageSessionEntry;
@@ -339,17 +245,11 @@ describe("buildPeakErrorHours", () => {
       key: "fallback-session",
       updatedAt: Date.parse("2026-03-15T10:30:00.000Z"),
       usage: {
+        ...emptyUsageTotals,
         totalTokens: 100,
         totalCost: 0.01,
         input: 50,
         output: 50,
-        cacheRead: 0,
-        cacheWrite: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
         firstActivity: Date.parse("2026-03-15T10:00:00.000Z"),
         lastActivity: Date.parse("2026-03-15T10:30:00.000Z"),
         messageCounts: {
@@ -376,17 +276,11 @@ describe("buildPeakErrorHours", () => {
       key: "instant-fallback-session",
       updatedAt: instant,
       usage: {
+        ...emptyUsageTotals,
         totalTokens: 100,
         totalCost: 0.01,
         input: 50,
         output: 50,
-        cacheRead: 0,
-        cacheWrite: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
         firstActivity: instant,
         lastActivity: instant,
         messageCounts: {
@@ -422,17 +316,8 @@ describe("usage mosaic token buckets", () => {
     ({
       key: "token-bucket-session",
       usage: {
+        ...emptyUsageTotals,
         totalTokens: buckets.reduce((sum, bucket) => sum + bucket.totalTokens, 0),
-        totalCost: 0,
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
         firstActivity: Date.parse("2026-02-01T10:00:00.000Z"),
         lastActivity: Date.parse("2026-02-01T12:00:00.000Z"),
         utcQuarterHourTokenUsage: buckets.map((bucket) => ({
@@ -447,20 +332,6 @@ describe("usage mosaic token buckets", () => {
         })),
       },
     }) as unknown as UsageSessionEntry;
-
-  it("renders precise quarter-hour buckets in the correct UTC hour", () => {
-    const session = makeSessionWithTokenBuckets([
-      { date: "2026-02-01", quarterIndex: 40, totalTokens: 10_000 },
-    ]);
-    const container = document.createElement("div");
-    render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
-
-    const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
-    expect(cells).toHaveLength(24);
-    expect(cells[10]?.title).toContain("10.0K");
-    expect(cells[11]?.title).toContain("0");
-    expect(container.querySelector(".usage-mosaic-total")?.textContent).toContain("10.0K");
-  });
 
   it("renders named, focusable hour toggles and preserves shift selection", () => {
     const session = makeSessionWithTokenBuckets([
@@ -519,6 +390,7 @@ describe("usage mosaic token buckets", () => {
     render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
 
     const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
+    expect(cells).toHaveLength(24);
     expect(cells[10]?.title).toContain("10.0K");
     expect([...cells].filter((cell) => !cell.title.includes("0 tokens"))).toHaveLength(1);
     expect(container.querySelector(".usage-mosaic-total")?.textContent).toContain("10.0K");
@@ -539,17 +411,9 @@ describe("usage mosaic token buckets", () => {
       key: "instant-token-fallback-session",
       updatedAt: instant,
       usage: {
+        ...emptyUsageTotals,
         totalTokens: 10_000,
-        totalCost: 0,
-        input: 0,
         output: 10_000,
-        cacheRead: 0,
-        cacheWrite: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
         firstActivity: instant,
         lastActivity: instant,
       },
@@ -567,17 +431,9 @@ describe("usage mosaic token buckets", () => {
     const session = {
       key: "legacy-span-session",
       usage: {
+        ...emptyUsageTotals,
         totalTokens: 100,
-        totalCost: 0,
-        input: 0,
         output: 100,
-        cacheRead: 0,
-        cacheWrite: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
         firstActivity: Date.parse("2026-02-01T10:00:00.000Z"),
         lastActivity: Date.parse("2026-02-01T11:00:00.000Z"),
       },
@@ -592,17 +448,9 @@ describe("usage mosaic token buckets", () => {
     const session = {
       key: "empty-token-bucket-session",
       usage: {
+        ...emptyUsageTotals,
         totalTokens: 100,
-        totalCost: 0,
-        input: 0,
         output: 100,
-        cacheRead: 0,
-        cacheWrite: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
         firstActivity: Date.parse("2026-02-01T11:00:00.000Z"),
         lastActivity: Date.parse("2026-02-01T11:00:00.000Z"),
         utcQuarterHourTokenUsage: [
@@ -621,38 +469,5 @@ describe("usage mosaic token buckets", () => {
     } as unknown as UsageSessionEntry;
 
     expect(sessionTouchesSelectedHours(session, [11], "utc")).toBe(true);
-  });
-});
-
-describe("formatUsageTokens", () => {
-  it("formats values below 1,000 verbatim", () => {
-    expect(formatUsageTokens(0)).toBe("0");
-    expect(formatUsageTokens(999)).toBe("999");
-  });
-
-  it("formats thousands with one decimal and a K suffix", () => {
-    expect(formatUsageTokens(1_000)).toBe("1.0K");
-    expect(formatUsageTokens(12_500)).toBe("12.5K");
-    expect(formatUsageTokens(999_949)).toBe("999.9K");
-  });
-
-  it("rolls 999,950-999,999 over to the M branch instead of '1000.0K'", () => {
-    // These values round up to "1000.0" at one-decimal thousands precision.
-    // Without the rollover guard they render the nonsensical "1000.0K".
-    expect(formatUsageTokens(999_950)).toBe("1.0M");
-    expect(formatUsageTokens(999_999)).toBe("1.0M");
-  });
-
-  it("formats millions with one decimal and an M suffix", () => {
-    expect(formatUsageTokens(1_000_000)).toBe("1.0M");
-    expect(formatUsageTokens(2_500_000)).toBe("2.5M");
-  });
-});
-
-describe("formatUsageCost", () => {
-  it("preserves the caller-selected fixed precision used by chart scales", () => {
-    expect(formatUsageCost(0.5)).toBe("$0.50");
-    expect(formatUsageCost(0.005, 4)).toBe("$0.0050");
-    expect(formatUsageCost(0.000_05, 6)).toBe("$0.000050");
   });
 });

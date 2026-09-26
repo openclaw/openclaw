@@ -1,5 +1,6 @@
 import pLimit from "p-limit";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type {
@@ -51,8 +52,7 @@ type SubscriptionDeps = {
   ) => Promise<ControlUiSessionPrRead | undefined>;
   isConnectionActive?: (connId: string) => boolean;
   load?: LoadSessionPullRequests;
-  setTimer?: typeof globalThis.setTimeout;
-  clearTimer?: typeof globalThis.clearTimeout;
+  scheduler: GatewayScheduler;
 };
 
 type ControlUiSessionPullRequestSubscriptions = {
@@ -160,8 +160,7 @@ export function createControlUiSessionPullRequestSubscriptions(
       demands: Set<() => boolean>;
     }
   >();
-  const setTimer = deps.setTimer ?? globalThis.setTimeout;
-  const clearTimer = deps.clearTimer ?? globalThis.clearTimeout;
+  const scheduler = deps.scheduler;
   const limit = pLimit(CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY);
   const customLoad = deps.load;
   const load = customLoad ?? loadSessionPullRequests;
@@ -172,7 +171,7 @@ export function createControlUiSessionPullRequestSubscriptions(
     customLoad
       ? operation(() => {}, target.identity)
       : withControlUiSessionPrSource(target.readSource, operation);
-  let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let pollJob: GatewayScheduledJob | undefined;
   const scope = new AsyncWorkScope();
   let stopPromise: Promise<void> | undefined;
 
@@ -254,9 +253,9 @@ export function createControlUiSessionPullRequestSubscriptions(
       if (subscription?.size === 0) {
         // Pruning an old watch does not retire a newer replacement still preparing its keys.
         subscriptions.delete(connId);
-        if (subscriptions.size === 0 && timer !== null) {
-          clearTimer(timer);
-          timer = null;
+        if (subscriptions.size === 0) {
+          pollJob?.cancel();
+          pollJob = undefined;
         }
       }
       return undefined;
@@ -314,15 +313,18 @@ export function createControlUiSessionPullRequestSubscriptions(
           const delay = refresh
             ? (state.refreshedAt ?? -Infinity) +
               CONTROL_UI_SESSION_PR_REFRESH_INTERVAL_MS -
-              Date.now()
+              scheduler.now()
             : 0;
           if (delay > 0) {
             // Retain the source before this wait, without occupying a loader slot.
             await new Promise<void>((resolve) => {
-              const refreshTimer = setTimer(resolve, delay);
-              refreshTimer.unref?.();
+              const refreshJob = scheduler.schedule({
+                id: `control-ui-session-pr-refresh:${sessionKey}`,
+                delayMs: delay,
+                run: resolve,
+              });
               state.cancelRefresh = () => {
-                clearTimer(refreshTimer);
+                refreshJob.cancel();
                 resolve();
               };
             });
@@ -338,7 +340,7 @@ export function createControlUiSessionPullRequestSubscriptions(
               return UNAVAILABLE_SNAPSHOT;
             }
             if (refresh) {
-              state.refreshedAt = Date.now();
+              state.refreshedAt = scheduler.now();
             }
             const snapshot = await load(
               { ...state.target.params, ...(refresh ? { refresh: true } : {}) },
@@ -499,14 +501,15 @@ export function createControlUiSessionPullRequestSubscriptions(
   };
 
   const schedulePoll = () => {
-    if (scope.isClosing || timer !== null || subscriptions.size === 0) {
+    if (scope.isClosing || pollJob || subscriptions.size === 0) {
       return;
     }
-    timer = setTimer(() => {
-      timer = null;
-      void pollNow().finally(schedulePoll);
-    }, CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS);
-    timer.unref?.();
+    pollJob = scheduler.schedule({
+      id: "control-ui-session-pr-poll",
+      atMs: scheduler.now() + CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS,
+      everyMs: CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS,
+      run: pollNow,
+    });
   };
 
   const pollNow = (): Promise<void> => {
@@ -719,9 +722,9 @@ export function createControlUiSessionPullRequestSubscriptions(
     for (const key of generation?.retainedKeys ?? []) {
       retireKeyStateIfUnused(key, keyStates.get(key));
     }
-    if (subscriptions.size === 0 && timer !== null) {
-      clearTimer(timer);
-      timer = null;
+    if (subscriptions.size === 0) {
+      pollJob?.cancel();
+      pollJob = undefined;
     }
   };
 
@@ -730,10 +733,8 @@ export function createControlUiSessionPullRequestSubscriptions(
       return stopPromise;
     }
     scope.beginClose();
-    if (timer !== null) {
-      clearTimer(timer);
-      timer = null;
-    }
+    pollJob?.cancel();
+    pollJob = undefined;
     subscriptions.clear();
     replacementGenerations.clear();
     replacements.clear();

@@ -16,33 +16,22 @@ describe("matrix resolver adapter", () => {
   });
 
   it("forwards accountId into Matrix target resolution", async () => {
+    const runtime = createNonExitingRuntimeEnv();
     await matrixResolverAdapter.resolveTargets({
       cfg: { channels: { matrix: {} } },
       accountId: "ops",
       inputs: ["Alice"],
       kind: "user",
-      runtime: createNonExitingRuntimeEnv(),
+      runtime,
     });
 
     expect(resolveMatrixTargetsMock).toHaveBeenCalledTimes(1);
-    const [forwarded] = resolveMatrixTargetsMock.mock.calls.at(0) as unknown as [
-      {
-        accountId: string;
-        cfg: { channels: { matrix: Record<string, never> } };
-        inputs: string[];
-        kind: string;
-        runtime: { error: unknown; exit: unknown; log: unknown };
-      },
-    ];
-    expect(forwarded).toEqual({
+    expect(resolveMatrixTargetsMock).toHaveBeenCalledWith({
       cfg: { channels: { matrix: {} } },
       accountId: "ops",
       inputs: ["Alice"],
       kind: "user",
-      runtime: forwarded?.runtime,
+      runtime,
     });
-    expect(forwarded?.runtime.log).toBeTypeOf("function");
-    expect(forwarded?.runtime.error).toBeTypeOf("function");
-    expect(forwarded?.runtime.exit).toBeTypeOf("function");
   });
 });

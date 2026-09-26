@@ -1,5 +1,6 @@
 // PTY command supervisor tests cover supervised terminal command lifecycles.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStubChildAdapter } from "./supervisor.test-support.js";
 
 const { createPtyAdapterMock } = vi.hoisted(() => ({
   createPtyAdapterMock: vi.fn(),
@@ -8,26 +9,6 @@ const { createPtyAdapterMock } = vi.hoisted(() => ({
 vi.mock("./adapters/pty.js", () => ({
   createPtyAdapter: (...args: unknown[]) => createPtyAdapterMock(...args),
 }));
-
-function createStubPtyAdapter() {
-  return {
-    pid: 1234,
-    stdin: undefined,
-    onStdout: (_listener: (chunk: string) => void) => {
-      // no-op
-    },
-    onStderr: (_listener: (chunk: string) => void) => {
-      // no-op
-    },
-    wait: async () => ({ code: 0, signal: null }),
-    kill: (_signal?: NodeJS.Signals) => {
-      // no-op
-    },
-    dispose: () => {
-      // no-op
-    },
-  };
-}
 
 describe("process supervisor PTY command contract", () => {
   let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
@@ -41,7 +22,9 @@ describe("process supervisor PTY command contract", () => {
   });
 
   it("launches the supplied executable and argv verbatim without rediscovering a shell", async () => {
-    createPtyAdapterMock.mockResolvedValue(createStubPtyAdapter());
+    const adapter = Object.assign(createStubChildAdapter(), { supportsRawOutput: false });
+    adapter.settle(0);
+    createPtyAdapterMock.mockResolvedValue(adapter);
     const supervisor = createProcessSupervisor();
     const command = `printf '%s\\n' "a b" && printf '%s\\n' '$HOME'`;
 
@@ -59,7 +42,6 @@ describe("process supervisor PTY command contract", () => {
   });
 
   it("rejects empty PTY argv", async () => {
-    createPtyAdapterMock.mockResolvedValue(createStubPtyAdapter());
     const supervisor = createProcessSupervisor();
 
     await expect(

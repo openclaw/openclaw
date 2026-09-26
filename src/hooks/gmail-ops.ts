@@ -9,6 +9,7 @@ import {
   resolveGatewayPort,
   validateConfigObjectWithPlugins,
 } from "../config/config.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -289,6 +290,7 @@ export async function runGmailService(opts: GmailRunOptions) {
   }
 
   const runtimeConfig = resolved.value;
+  const scheduler = new GatewayScheduler();
   const controller = new AbortController();
   let shutdownTask: Promise<void> | undefined;
   const detachSignals = () => {
@@ -301,7 +303,14 @@ export async function runGmailService(opts: GmailRunOptions) {
       return;
     }
     controller.abort();
-    shutdownTask = stopGmailWatcher()
+    scheduler.beginClose();
+    shutdownTask = (async () => {
+      try {
+        await stopGmailWatcher();
+      } finally {
+        await scheduler.stop();
+      }
+    })()
       .catch((err: unknown) => {
         defaultRuntime.error(`gmail watcher shutdown failed: ${String(err)}`);
       })
@@ -317,7 +326,10 @@ export async function runGmailService(opts: GmailRunOptions) {
     if (runtimeConfig.tailscale.mode !== "off") {
       await ensureDependency("tailscale", ["tailscale"]);
     }
-    const result = await startGmailWatcherService(runtimeConfig, { signal: controller.signal });
+    const result = await startGmailWatcherService(runtimeConfig, {
+      scheduler,
+      signal: controller.signal,
+    });
     if (!result.started && !controller.signal.aborted) {
       throw new Error(result.reason ?? "gmail watcher failed to start");
     }

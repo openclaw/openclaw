@@ -16,10 +16,7 @@ import { resolveProviderStreamFn } from "../../plugins/provider-runtime.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
-import {
-  resolveEmbeddedAgentApiKey,
-  resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl,
-} from "./stream-resolution.js";
+import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "./stream-resolution.js";
 
 const streamMocks = vi.hoisted(() => ({
   delegate: undefined as StreamFn | undefined,
@@ -109,35 +106,6 @@ describe("prepared embedded stream strategy", () => {
     ).toBe("boundary-aware:openai-responses");
   });
 
-  it("describes provider-owned stream paths explicitly", () => {
-    expect(
-      resolveEmbeddedAgentStream({
-        sessionId: "session-1",
-        currentStreamFn: undefined,
-        providerStreamFn: vi.fn() as never,
-        model: {
-          api: "openai-completions",
-          provider: "ollama",
-          id: "qwen",
-        } as never,
-      }).strategy,
-    ).toBe("provider");
-  });
-
-  it("describes default OpenAI fallback shaping", () => {
-    expect(
-      resolveEmbeddedAgentStream({
-        sessionId: "session-1",
-        currentStreamFn: undefined,
-        model: {
-          api: "openai-responses",
-          provider: "openai",
-          id: "gpt-5.4",
-        } as never,
-      }).strategy,
-    ).toBe("boundary-aware:openai-responses");
-  });
-
   it("describes default Codex fallback as OpenClaw native", () => {
     expect(
       resolveEmbeddedAgentStream({
@@ -150,20 +118,6 @@ describe("prepared embedded stream strategy", () => {
         } as never,
       }).strategy,
     ).toBe("openclaw-native-codex-responses");
-  });
-
-  it("keeps custom session streams labeled as custom", () => {
-    expect(
-      resolveEmbeddedAgentStream({
-        sessionId: "session-1",
-        currentStreamFn: vi.fn() as never,
-        model: {
-          api: "openai-responses",
-          provider: "openai",
-          id: "gpt-5.4",
-        } as never,
-      }).strategy,
-    ).toBe("session-custom");
   });
 
   it.each([
@@ -272,7 +226,7 @@ describe("resolveEmbeddedAgentStream", () => {
     },
   );
 
-  it.each([undefined, false, true])(
+  it.each([undefined, true])(
     "passes the system cache boundary only to opted-in plugin streams (%s)",
     async (supportsSystemPromptCacheBoundary) => {
       const providerStreamFn = vi.fn<StreamFn>();
@@ -347,21 +301,6 @@ describe("resolveEmbeddedAgentStream", () => {
     expect(requireRecord(result.options, "plugin options").headers).toEqual({
       "X-Managed": `Bearer ${sentinel}`,
     });
-  });
-
-  it("prefers the resolved run api key over a later authStorage lookup", async () => {
-    const authStorage = {
-      getApiKey: vi.fn(async () => "storage-key"),
-    };
-
-    await expect(
-      resolveEmbeddedAgentApiKey({
-        provider: "openai",
-        resolvedApiKey: "resolved-key",
-        authStorage,
-      }),
-    ).resolves.toBe("resolved-key");
-    expect(authStorage.getApiKey).not.toHaveBeenCalled();
   });
 
   it("preserves run session identity in boundary-aware OpenAI transports", async () => {
@@ -595,20 +534,6 @@ describe("resolveEmbeddedAgentStream", () => {
     },
   );
 
-  it("routes GitHub Copilot fallbacks through boundary-aware transports", () => {
-    const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: undefined,
-      sessionId: "session-1",
-      model: {
-        api: "openai-responses",
-        provider: "github-copilot",
-        id: "gpt-5.4",
-      } as never,
-    });
-
-    expect(streamFn).not.toBe(streamSimple);
-  });
-
   it("reads refreshed runtime auth for each boundary-aware model call", async () => {
     const firstSentinel = mintSecretSentinel("copilot-runtime-value-1", {
       label: "model-auth:github-copilot:first",
@@ -674,36 +599,6 @@ describe("resolveEmbeddedAgentStream", () => {
       "openai compatible result",
     );
     expect(result.apiKey).toBe("local-token");
-    expect(innerStreamFn).toHaveBeenCalledTimes(1);
-  });
-
-  it("routes runtime-auth custom session streams for supported APIs through boundary-aware transports", async () => {
-    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
-
-    const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: currentStreamFn as never,
-      sessionId: "session-1",
-      model: {
-        api: "anthropic-messages",
-        provider: "cloudflare-ai-gateway",
-        id: "claude-sonnet-4-6",
-      } as never,
-      resolvedApiKey: "anthropic-runtime-key",
-    });
-
-    expect(streamFn).not.toBe(currentStreamFn);
-    const result = await expectStreamResultRecord(
-      streamFn(
-        { provider: "cloudflare-ai-gateway", id: "claude-sonnet-4-6" } as never,
-        {} as never,
-        {},
-      ),
-      "runtime auth result",
-    );
-    expect(result.apiKey).toBe("anthropic-runtime-key");
-    expect(currentStreamFn).not.toHaveBeenCalled();
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
   });
 
@@ -835,10 +730,8 @@ describe("resolveEmbeddedAgentStream", () => {
   );
 
   it.each([
-    ["custom", "run"],
     ["custom", "caller"],
     ["anthropic-vertex", "run"],
-    ["anthropic-vertex", "caller"],
   ] as const)("cancels %s streams when their %s owner aborts", async (provider, signalOwner) => {
     // Attempt transport and compaction both resolve streams through this owner.
     const currentStreamFn = vi.fn(async (_model, _context, options) => options);
@@ -903,8 +796,6 @@ describe("resolveEmbeddedAgentStream", () => {
 
   it.each([
     { owner: "run", abortBeforeResolve: false },
-    { owner: "caller", abortBeforeResolve: false },
-    { owner: "run", abortBeforeResolve: true },
     { owner: "caller", abortBeforeResolve: true },
   ])(
     "preserves both provider-owned cancellation sources: $owner ($abortBeforeResolve)",

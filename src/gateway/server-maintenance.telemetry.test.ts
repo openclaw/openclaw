@@ -111,12 +111,12 @@ describe("gateway telemetry maintenance", () => {
   });
 
   it.each([
-    ["health", "initial"],
-    ["health", "interval"],
-    ["worktree", "initial"],
-    ["worktree", "interval"],
-    ["device-pair", "initial"],
-    ["device-pair", "interval"],
+    ["health", "first"],
+    ["health", "next"],
+    ["worktree", "first"],
+    ["worktree", "next"],
+    ["device-pair", "first"],
+    ["device-pair", "next"],
   ] as const)("joins admitted %s %s work and its cleanup before stopping", async (owner, phase) => {
     vi.useFakeTimers();
     generateSecureIntMock.mockReturnValue(0);
@@ -128,7 +128,7 @@ describe("gateway telemetry maintenance", () => {
     let cleanupWork: Promise<void> | undefined;
     const run = async () => {
       calls += 1;
-      if (calls !== (phase === "initial" ? 1 : 2)) {
+      if (calls !== (phase === "first" ? 1 : 2)) {
         return;
       }
       await operation.promise;
@@ -161,9 +161,13 @@ describe("gateway telemetry maintenance", () => {
     });
     try {
       await vi.advanceTimersByTimeAsync(
-        phase === "initial" ? 0 : owner === "worktree" ? 60 * 60_000 : 60_000,
+        owner === "worktree"
+          ? (phase === "first" ? 1 : 2) * 60 * 60_000
+          : phase === "first"
+            ? 0
+            : 60_000,
       );
-      expect(calls).toBe(phase === "initial" ? 1 : 2);
+      expect(calls).toBe(phase === "first" ? 1 : 2);
       markGatewayRestartDraining();
       let stopped = false;
       const stopping = timers.stopPeriodicTasks().then(() => {
@@ -183,9 +187,8 @@ describe("gateway telemetry maintenance", () => {
     } finally {
       operation.resolve();
       cleanup.resolve();
-      await cleanupStarted.promise;
-      await cleanupWork;
       await stopMaintenanceTimers(timers);
+      await cleanupWork;
     }
   });
 
@@ -242,7 +245,7 @@ describe("gateway telemetry maintenance", () => {
         expect(logHealth.error).not.toHaveBeenCalled();
         expect(refreshGatewayHealthSnapshot).toHaveBeenCalledOnce();
         expect(broadcast).not.toHaveBeenCalled();
-        expect(runWorktreeGc).toHaveBeenCalledOnce();
+        expect(runWorktreeGc).not.toHaveBeenCalled();
         expect(runDeliveryQueueMediaGc).toHaveBeenCalledOnce();
         expect(checkTelemetryUpdateMock).toHaveBeenCalledOnce();
         expect(state.dedupe.has("retained-during-drain")).toBe(true);
@@ -279,17 +282,19 @@ describe("gateway telemetry maintenance", () => {
     const cleanup = createDeferredCore();
     const cleanupStarted = createDeferredCore();
     let cleanupWork: Promise<void> | undefined;
+    const runWorktreeGc = vi.fn(async () => {
+      await operation.promise;
+      cleanupWork = trackAsyncWork(() => cleanup.promise);
+      cleanupStarted.resolve();
+    });
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers({
       ...createGatewayMaintenanceStateForTest(),
-      runWorktreeGc: async () => {
-        await operation.promise;
-        cleanupWork = trackAsyncWork(() => cleanup.promise);
-        cleanupStarted.resolve();
-      },
+      runWorktreeGc,
       runDeliveryQueueMediaGc: async () => undefined,
       runManagedOutgoingMediaGc: async () => undefined,
     });
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
     let settled = false;
     const stopping = timers.stopPeriodicTasks().then(
       () => {
@@ -301,6 +306,7 @@ describe("gateway telemetry maintenance", () => {
       },
     );
     try {
+      expect(runWorktreeGc).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(0);
       expect(settled).toBe(false);
       operation.resolve();
@@ -315,9 +321,8 @@ describe("gateway telemetry maintenance", () => {
     } finally {
       operation.resolve();
       cleanup.resolve();
-      await cleanupStarted.promise;
-      await cleanupWork;
       await stopping;
+      await cleanupWork;
       await timers.skillUsageCleanup();
     }
   });

@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentCommandDeliveryResult } from "../../agents/command/delivery-result.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
+import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import type { CreatedDetachedTaskRun } from "../../tasks/detached-task-runtime-contract.js";
-import { TaskFollowupCompletion } from "../../tasks/task-followup-completion.js";
+import { bindFollowupTaskProjection } from "../../tasks/task-followup-projection.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import type { TaskRunOwner } from "../../tasks/task-run-owner.types.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
@@ -70,12 +71,14 @@ vi.mock("../server-methods/agent-task-tracking.js", () => ({
 }));
 vi.mock("../../infra/agent-run-registry.js", () => ({
   clearAgentRunContext: mocks.clearAgentRunContext,
+  getAgentRunLifecycleGeneration: () => "fixture-generation",
   validateAgentRunDelegatedAuthority: () => true,
 }));
 vi.mock("../../infra/agent-events.js", () => ({
   onAgentEvent: vi.fn(),
-  onAgentRunLifecycleGenerationRotation: vi.fn(),
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
   isAgentEventLifecycleGenerationCurrent: () => true,
+  assertAgentRunLifecycleGenerationCurrent: () => {},
 }));
 vi.mock("../../agents/cron-creator-authority-context.js", () => ({
   createCronCreatorAuthorityCapability: vi.fn(),
@@ -144,23 +147,21 @@ describe("Gateway dispatch task creation ownership", () => {
       f.task,
       vi.fn(async () => true),
     );
-    const owner = await TaskFollowupCompletion.bind(
-      {
-        runId: f.runId,
-        requesterSessionKey: "agent:main:parent",
-        requesterSessionId: "requester-session",
-        requesterAgentId: "main",
-        targetAgentId: "main",
-        targetSessionKey: f.sessionKey,
-        custody: {
-          run: (work) => work(),
-          assertCurrent: vi.fn(),
-          signal: new AbortController().signal,
-          release: vi.fn(),
-        },
+    const owner = SessionFollowupCompletion.bind({
+      runId: f.runId,
+      requesterSessionKey: "agent:main:parent",
+      requesterSessionId: "requester-session",
+      requesterAgentId: "main",
+      targetAgentId: "main",
+      targetSessionKey: f.sessionKey,
+      custody: {
+        run: (work) => work(),
+        assertCurrent: vi.fn(),
+        signal: new AbortController().signal,
+        release: vi.fn(),
       },
-      receipt,
-    );
+    });
+    await bindFollowupTaskProjection(owner, receipt, () => {});
     const dispatch = (runId = f.runId, entry = f.entry, assertCurrent?: () => void) => {
       owner.markAccepted(runId);
       return dispatchAgentRunFromGateway({

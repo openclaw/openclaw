@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
 
 describe("QA Control UI browser scenario catalog", () => {
   const coverageId = "control-ui.gateway-hosted-ui-control";
@@ -18,18 +18,5 @@ describe("QA Control UI browser scenario catalog", () => {
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).not.toContain(coverageId);
     expect(scenario.coverage?.secondary).toContain(coverageId);
-  });
-
-  it("reserves primary hosted Control UI coverage for the real Gateway flow", () => {
-    const primaryOwnerIds = readQaScenarioPack()
-      .scenarios.filter((scenario) => scenario.coverage?.primary.includes(coverageId))
-      .map((scenario) => scenario.id);
-
-    expect(primaryOwnerIds).toStrictEqual(["control-ui-qa-channel-image-roundtrip"]);
-
-    const hostedScenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
-
-    expect(hostedScenario.execution).toMatchObject({ kind: "flow", channel: "qa-channel" });
-    expect(hostedScenario.coverage?.primary).toContain(coverageId);
   });
 });

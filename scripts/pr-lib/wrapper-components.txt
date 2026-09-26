@@ -1240,6 +1240,7 @@ src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
 src/skills/lifecycle/upload-store-error.ts
+src/state/agent-deletion-journal-history.ts
 src/state/config-machine-state-write.ts
 src/state/config-machine-state.ts
 src/state/openclaw-agent-board-schema.ts

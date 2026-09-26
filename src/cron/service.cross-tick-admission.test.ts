@@ -9,10 +9,13 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   resetGatewayWorkAdmission,
   tryBeginGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import * as notificationMutation from "../tasks/task-notification-mutation.async.js";
+import { captureTaskDeliveryWork } from "../tasks/task-registry-delivery.test-support.js";
 import { stop } from "./service/ops-lifecycle.js";
 import { observeCronTimerAdmissions } from "./service/run-recovery.test-support.js";
 import { onTimer } from "./service/timer.test-support.js";
@@ -469,7 +472,8 @@ describe("cron service cross-tick bounded admission", () => {
   });
 
   it("runs the next future wake under its own Gateway root while an earlier batch runs", async () => {
-    vi.useRealTimers();
+    using deliveries = captureTaskDeliveryWork();
+    const releaseNotification = createDeferred();
     const store = fixtures.makeStorePath();
     const t0 = Date.now();
     const jobA = createDueIsolatedJob({
@@ -515,6 +519,7 @@ describe("cron service cross-tick bounded admission", () => {
     const tickA = onTimer(state);
     try {
       await aStarted.promise;
+      await vi.advanceTimersToNextTimerAsync();
       await bStarted.promise;
 
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
@@ -527,17 +532,46 @@ describe("cron service cross-tick bounded admission", () => {
       ).toBeDefined();
       expect(getActiveGatewayRootWorkCount()).toBe(2);
 
+      const capture = notificationMutation.captureTaskNotificationMutationOwner;
+      vi.spyOn(notificationMutation, "captureTaskNotificationMutationOwner").mockImplementation(
+        (assertCurrent) => {
+          const owner = capture(assertCurrent);
+          return {
+            ...owner,
+            async prepare<T>(
+              consume: Parameters<typeof owner.prepare<T>>[0],
+              subagentChildSessionKey?: string,
+            ): Promise<T> {
+              await releaseNotification.promise;
+              return owner.prepare(consume, subagentChildSessionKey);
+            },
+          };
+        },
+      );
       releaseA.resolve({ status: "ok", summary: "a done" });
       await tickA;
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      // Task notifications outlive the timer result under independent admissions.
+      releaseNotification.resolve();
+      await deliveries.settle();
+      expect(
+        getActiveGatewayRootWorkCount(),
+        JSON.stringify(getActiveGatewayRootWorkHolders()),
+      ).toBe(1);
       releaseB.resolve({ status: "ok", summary: "b done" });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await vi.waitFor(() => expect(state.activeTimerTicks).toBe(0));
+      await deliveries.settle();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(state.activeTimerTicks).toBe(0);
     } finally {
+      releaseNotification.resolve();
       releaseA.resolve({ status: "ok", summary: "a cleanup" });
       releaseB.resolve({ status: "ok", summary: "b cleanup" });
       await tickA;
-      stop(state);
+      try {
+        await deliveries.settle();
+      } finally {
+        stop(state);
+      }
     }
   });
 });

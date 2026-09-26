@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   evaluateSupplementalContextVisibility,
   filterSupplementalContextItems,
-  shouldIncludeSupplementalContext,
 } from "./context-visibility.js";
 
 describe("evaluateSupplementalContextVisibility", () => {
@@ -32,47 +31,15 @@ describe("evaluateSupplementalContextVisibility", () => {
       reason: "quote_override",
     });
   });
-});
-
-describe("shouldIncludeSupplementalContext", () => {
-  it("keeps all context in all mode", () => {
-    expect(
-      shouldIncludeSupplementalContext({
-        mode: "all",
-        kind: "history",
-        senderAllowed: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("enforces allowlist mode for non-allowlisted senders", () => {
-    expect(
-      shouldIncludeSupplementalContext({
-        mode: "allowlist",
-        kind: "thread",
-        senderAllowed: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps explicit quotes in allowlist_quote mode", () => {
-    expect(
-      shouldIncludeSupplementalContext({
-        mode: "allowlist_quote",
-        kind: "quote",
-        senderAllowed: false,
-      }),
-    ).toBe(true);
-  });
 
   it("still drops non-quote context in allowlist_quote mode", () => {
     expect(
-      shouldIncludeSupplementalContext({
+      evaluateSupplementalContextVisibility({
         mode: "allowlist_quote",
         kind: "history",
         senderAllowed: false,
       }),
-    ).toBe(false);
+    ).toEqual({ include: false, reason: "blocked" });
   });
 });
 

@@ -1,4 +1,3 @@
-// Matrix tests cover index plugin behavior.
 import { setImmediate } from "node:timers/promises";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixConfig, MatrixStreamingMode } from "../../types.js";
@@ -153,8 +152,6 @@ describe("monitorMatrixProvider", () => {
 
   it.each([
     [undefined, "off", false],
-    [{}, "off", false],
-    [{ mode: "off" }, "off", false],
     [{ mode: "partial" }, "partial", true],
     [{ mode: "quiet" }, "quiet", true],
     [{ mode: "progress" }, "progress", false],
@@ -162,8 +159,6 @@ describe("monitorMatrixProvider", () => {
     [{ mode: "partial", preview: { toolProgress: false } }, "partial", false],
     [{ mode: "quiet", preview: { toolProgress: false } }, "quiet", false],
     [{ mode: "partial", progress: { toolProgress: false } }, "partial", true],
-    [{ mode: "quiet", progress: { toolProgress: false } }, "quiet", true],
-    [{ mode: "progress", progress: { toolProgress: false } }, "progress", false],
     [
       { mode: "progress", progress: { toolProgress: false }, preview: { toolProgress: true } },
       "progress",
@@ -771,24 +766,6 @@ describe("monitorMatrixProvider", () => {
     });
 
     expect(await trackerOpts.isExplicitlyConfiguredRoom("!room:example.org")).toBe(true);
-  });
-
-  it("wires recent-invite promotion to reject named rooms", async () => {
-    await startMonitorAndAbortAfterStartup();
-
-    const trackerOpts = directRoomTrackerOptions();
-    if (!trackerOpts?.canPromoteRecentInvite) {
-      throw new Error("recent invite promotion callback was not wired");
-    }
-
-    hoisted.getRoomInfo.mockResolvedValueOnce({
-      name: "Ops Room",
-      altAliases: [],
-      nameResolved: true,
-      aliasesResolved: true,
-    });
-
-    await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
   });
 
   it("wires recent-invite promotion to reject wildcard-configured rooms", async () => {

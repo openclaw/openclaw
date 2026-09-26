@@ -1,5 +1,4 @@
 import { normalizeAgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-import { err, ok } from "@openclaw/normalization-core/result";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { withAgentCommandExecutionIdentitySpawnFacts } from "../../agents/agent-command-execution-identity-spawn.js";
 import {
@@ -15,38 +14,38 @@ import {
 import { isTimeoutError } from "../../agents/failover-error.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
+import type {
+  FollowupExecution,
+  FollowupReply,
+} from "../../agents/subagents/completion/session-followup-completion.types.js";
 import {
   readAgentRunTerminalError,
   readAgentRunTerminalOutcome,
 } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
-import {
-  clearAgentRunContext,
-  validateAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
-import { withTimeout } from "../../infra/fs-safe.js";
 import type { CreatedDetachedTaskRun } from "../../tasks/detached-task-runtime-contract.js";
 import {
   prepareRunningTaskRun,
   type PreparedDetachedTaskRun,
 } from "../../tasks/detached-task-runtime.js";
-import { getTaskById } from "../../tasks/runtime-internal.js";
-import { captureTaskCancellationControl } from "../../tasks/task-cancellation-context.js";
-import type { FollowupReply } from "../../tasks/task-followup-completion.types.js";
+import {
+  projectFollowupTaskTerminal,
+  resumeFollowupTaskProjection,
+} from "../../tasks/task-followup-projection.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { bindTaskRunOwner, getTaskRunOwner } from "../../tasks/task-run-owner.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { createChatAbortOps } from "../chat-abort-ops.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { tryFinalizeTrackedAgentTask } from "../server-methods/agent-task-tracking.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { captureAgentJobSession } from "./agent-job.js";
+import { createGatewayAgentRunCancellation } from "./agent-run-cancellation.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import { readFollowupTerminalReply } from "./agent-run-dispatch-followup.js";
@@ -57,7 +56,10 @@ import {
   resolveGatewayAgentAbortStopReason,
   resolveResolvedAgentTimeoutStopReason,
 } from "./agent-run-dispatch-outcome.js";
-import { createGatewayTaskExecutionBinding } from "./agent-run-task-binding.js";
+import {
+  createGatewayTaskCancellation,
+  createGatewayTaskExecutionBinding,
+} from "./agent-run-task-binding.js";
 import type { GatewayAgentDispatchTaskTracking } from "./agent-run-task-tracking.js";
 import { bindGatewayAgentTerminalProducer } from "./agent-run-terminal-producer.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
@@ -109,6 +111,13 @@ export function dispatchAgentRunFromGateway(
   const assertSettlementCurrent = params.assertSettlementCurrent;
   const registeredRunEntry = params.admittedRunEntry;
   const jobSessionBinding = registeredRunEntry ?? params.ingressOpts;
+  const registeredIdentity = registeredRunEntry
+    ? {
+        operationalRunInstance: registeredRunEntry.operationalRunInstance,
+        lifecycleGeneration: registeredRunEntry.lifecycleGeneration,
+        sessionKey: registeredRunEntry.sessionKey,
+      }
+    : undefined;
   const registeredRunInstance = registeredRunEntry?.operationalRunInstance;
   const registeredLifecycleGeneration = registeredRunEntry?.lifecycleGeneration;
   const registeredSessionKey = registeredRunEntry?.sessionKey;
@@ -168,12 +177,24 @@ export function dispatchAgentRunFromGateway(
       }
       return (async () => {
         try {
-          await followupCompletion.settle(params.runId, reply, () => {
+          const assertExecutionCurrent = () => {
             assertSettlementCurrent?.();
-            if (!canSettleTrackedTask(task)) {
+            if (!ownsRunRegistration()) {
               throw new Error("Follow-up physical execution lost its Gateway registration.");
             }
-          });
+          };
+          const decision = await followupCompletion.settle(
+            params.runId,
+            reply,
+            assertExecutionCurrent,
+          );
+          if (decision.kind === "terminal") {
+            await projectFollowupTaskTerminal(
+              followupCompletion,
+              decision.reply,
+              assertExecutionCurrent,
+            );
+          }
         } catch (error) {
           followupCompletion.close(error);
           throw error;
@@ -351,7 +372,9 @@ export function dispatchAgentRunFromGateway(
           params.commandRuntimeContext,
         ),
       );
-    const cancel = task && createTrackedTaskCancellation(task);
+    const cancel =
+      task &&
+      createGatewayTaskCancellation(task, createNativeRunCancellation(task.childSessionKey));
     const assertTaskOwnerCurrent = () => {
       assertCurrent();
       if (
@@ -365,9 +388,17 @@ export function dispatchAgentRunFromGateway(
       followupCompletion.assertCurrent();
       originalTaskRunOwner = getTaskRunOwner(task);
       return followupCompletion
-        .activate(params.runId, cancel, assertTaskOwnerCurrent)
-        .then((release) => {
+        .activate(params.runId, {
+          assertCurrent: assertTaskOwnerCurrent,
+          cancel: createNativeRunCancellation(followupCompletion.request.targetSessionKey),
+        })
+        .then(async (release) => {
           releaseTaskOwner = release;
+          await resumeFollowupTaskProjection(
+            followupCompletion,
+            params.runId,
+            assertTaskOwnerCurrent,
+          );
           assertTaskOwnerCurrent();
           followupCompletion.assertCurrent();
           return invoke();
@@ -657,67 +688,31 @@ export function dispatchAgentRunFromGateway(
     });
 
   if (finalizeLegacyRun && trackedTask) {
-    const cancel = createTrackedTaskCancellation(trackedTask);
+    const cancel = createGatewayTaskCancellation(
+      trackedTask,
+      createNativeRunCancellation(trackedTask.childSessionKey),
+    );
     if (cancel) {
       releaseTaskOwner = bindTaskRunOwner(trackedTask, cancel);
       originalTaskRunOwner = getTaskRunOwner(trackedTask);
     }
   }
 
-  function createTrackedTaskCancellation(
-    task: TaskRecord,
-  ): Parameters<typeof bindTaskRunOwner>[1] | undefined {
-    const entry = registeredRunEntry;
-    if (entry?.controller === params.abortController) {
-      const taskId = task.taskId;
-      const operationalRunInstance = registeredRunInstance;
-      const lifecycleGeneration = registeredLifecycleGeneration;
-      const sessionKey = registeredSessionKey;
-      return async (reason) => {
-        const authority = entry.agentRunDelegatedAuthority;
-        if (
-          !operationalRunInstance ||
-          !lifecycleGeneration ||
-          !sessionKey ||
-          !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-          params.context.chatAbortControllers.get(params.runId) !== entry ||
-          entry.controller !== params.abortController ||
-          entry.lifecycleGeneration !== lifecycleGeneration ||
-          entry.operationalRunInstance !== operationalRunInstance ||
-          entry.sessionKey !== sessionKey ||
-          task.childSessionKey !== sessionKey ||
-          entry.registrationCleanupRequested ||
-          (entry.executionStarted && !authority) ||
-          (authority &&
-            (authority.operationalRunInstance !== operationalRunInstance ||
-              !validateAgentRunDelegatedAuthority(authority)))
-        ) {
-          return err("Task no longer owns an active Gateway run.");
-        }
-        captureTaskCancellationControl()?.assertCurrent();
-        const result = abortChatRunById(createChatAbortOps(params.context), {
-          runId: params.runId,
-          sessionKey,
-          stopReason: "rpc",
-        });
-        if (!result.aborted) {
-          return err("Task run did not accept cancellation.");
-        }
+  function createNativeRunCancellation(
+    expectedSessionKey: string | null | undefined,
+  ): FollowupExecution["cancel"] {
+    return createGatewayAgentRunCancellation({
+      runId: params.runId,
+      entry: registeredRunEntry,
+      identity: registeredIdentity,
+      controller: params.abortController,
+      expectedSessionKey,
+      context: params.context,
+      onAborted: (reason) => {
         cancellationReason = reason;
-        // Lifecycle projection can finish before tools unwind. Wait on this exact producer.
-        const outcome = await withTimeout(runCompletion, 10_000, "Task cancellation settlement");
-        const current = getTaskById(taskId);
-        if (
-          !outcome.settled ||
-          classifyAgentRunTerminalOutcome(outcome.terminalOutcome) !== "cancellation" ||
-          current?.status !== "cancelled"
-        ) {
-          return err("Task cancellation was not confirmed. Inspect its final result.");
-        }
-        return ok(current);
-      };
-    }
-    return undefined;
+      },
+      completion: () => runCompletion,
+    });
   }
   // Gateway shutdown must join this execution, not just its admission.
   return runCompletion;

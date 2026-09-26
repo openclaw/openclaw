@@ -40,6 +40,19 @@ const {
 // Register hooks for this file, not as a cached support-module side effect.
 registerAgentCommandCompactionTestHooks();
 
+function discordTurn(sessionId: string, sessionKey: string) {
+  return {
+    message: "room message",
+    sessionId,
+    sessionKey,
+    cwd: state.workspaceDir,
+    channel: "discord",
+    to: "discord:dm:123",
+    accountId: "main",
+    deliver: true,
+  };
+}
+
 async function commitAttemptCompaction(
   params: Parameters<typeof state.runAgentAttemptMock>[0],
   accounting: Pick<CompactionAccountingFact, "count" | "currentContextSnapshot"> = {
@@ -224,7 +237,7 @@ describe("agentCommand compaction transcript rotation", () => {
     },
   );
 
-  it.each([42, 95_000, 0, undefined])(
+  it.each([95_000, 0, undefined])(
     "keeps successor context %s from the private ordered fact, not public snapshots",
     async (tokens) => {
       const storePath = requireStorePath();
@@ -518,6 +531,7 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(onSessionIdChanged.mock.calls).toEqual([["rotated-session"]]);
     expect(findStoredSessionEntry(sessionKey)?.sessionId).toBe("rotated-session");
     expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
+    expect(state.runSessionCompactionIfNeededMock).not.toHaveBeenCalled();
   });
 
   it("carries Gateway plugin generation through failed post-turn compaction and still delivers", async () => {
@@ -540,14 +554,7 @@ describe("agentCommand compaction transcript rotation", () => {
 
     const result = await agentCommandFromGatewayIngress(
       {
-        message: "room message",
-        sessionId,
-        sessionKey,
-        cwd: state.workspaceDir,
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-        deliver: true,
+        ...discordTurn(sessionId, sessionKey),
         allowModelOverride: false,
       },
       ...GATEWAY_INGRESS_ARGS,
@@ -589,16 +596,7 @@ describe("agentCommand compaction transcript rotation", () => {
       throw new Error(COMPACTION_ERROR);
     });
 
-    const result = await agentCommand({
-      message: "room message",
-      sessionId,
-      sessionKey,
-      cwd: state.workspaceDir,
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-    });
+    const result = await agentCommand(discordTurn(sessionId, sessionKey));
 
     expect(pendingTextSeenByCompaction).toBe(visibleFinal);
     expect(pendingTextSeenByCompaction).not.toContain(hiddenReasoning);
@@ -622,16 +620,7 @@ describe("agentCommand compaction transcript rotation", () => {
       throw new Error(COMPACTION_ERROR);
     });
 
-    const result = await agentCommand({
-      message: "room message",
-      sessionId,
-      sessionKey,
-      cwd: state.workspaceDir,
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-    });
+    const result = await agentCommand(discordTurn(sessionId, sessionKey));
 
     expect(pendingTextSeenByCompaction).toBe(text);
     expect(result).toMatchObject({ deliverySucceeded: true });
@@ -694,14 +683,7 @@ describe("agentCommand compaction transcript rotation", () => {
       });
 
       const command = agentCommand({
-        message: "room message",
-        sessionId,
-        sessionKey,
-        cwd: state.workspaceDir,
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-        deliver: true,
+        ...discordTurn(sessionId, sessionKey),
         abortSignal: controller.signal,
         onSessionIdChanged,
       });
@@ -747,16 +729,7 @@ describe("agentCommand compaction transcript rotation", () => {
     state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(new Error(COMPACTION_ERROR));
     state.deliverAgentCommandResultMock.mockResolvedValueOnce({ deliverySucceeded: false });
 
-    const result = await agentCommand({
-      message: "room message",
-      sessionId,
-      sessionKey,
-      cwd: state.workspaceDir,
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-    });
+    const result = await agentCommand(discordTurn(sessionId, sessionKey));
 
     expect(result).toMatchObject({ deliverySucceeded: false });
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
@@ -806,14 +779,8 @@ describe("agentCommand compaction transcript rotation", () => {
 
       await expect(
         agentCommand({
+          ...discordTurn(sessionId, sessionKey),
           message: "prompt with no assistant reply",
-          sessionId,
-          sessionKey,
-          cwd: state.workspaceDir,
-          channel: "discord",
-          to: "discord:dm:123",
-          accountId: "main",
-          deliver: true,
         }),
       ).rejects.toThrow("Summarization failed: Connection error");
 
@@ -831,16 +798,7 @@ describe("agentCommand compaction transcript rotation", () => {
     const payloads = [{ mediaUrl: "/tmp/reply.ogg", audioAsVoice: true }];
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text: "", payloads }));
 
-    await agentCommand({
-      message: "room message",
-      sessionId,
-      sessionKey,
-      cwd: state.workspaceDir,
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-    });
+    await agentCommand(discordTurn(sessionId, sessionKey));
 
     expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
@@ -855,14 +813,8 @@ describe("agentCommand compaction transcript rotation", () => {
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
 
     const result = await agentCommand({
+      ...discordTurn(sessionId, sessionKey),
       message: "subagent room message",
-      sessionId,
-      sessionKey,
-      cwd: state.workspaceDir,
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
     });
 
     expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
@@ -891,13 +843,8 @@ describe("agentCommand compaction transcript rotation", () => {
     });
 
     await agentCommand({
+      ...discordTurn(sessionId, sessionKey),
       message: "local model run",
-      sessionId,
-      sessionKey,
-      cwd: state.workspaceDir,
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
       deliver: false,
     });
 

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
 import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
 import {
@@ -100,6 +100,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   clearRuntimeConfigSnapshot();
   clearPluginLoaderCache();
   clearPluginMetadataLifecycleCaches();
@@ -137,6 +138,8 @@ describe("cron preparation plugin ownership", () => {
   it.each(["gateway", "standalone"] as const)(
     "preserves %s artifact selection through both real preparation loads",
     async (owner) => {
+      // Artifact selection must not depend on how long cold module loading takes.
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       const metadataSnapshot = loadPluginMetadataSnapshot({
         config,
         workspaceDir: state.workspaceDir,

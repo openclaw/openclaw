@@ -282,15 +282,15 @@ async function stopManagedServiceBeforeMutableUpdate(
       }
     }
   };
-  // Detached helpers can retain Gateway ancestry or inherited service metadata.
-  // Reprove their current handoff lease at every boundary that can stop the Gateway.
+  // Only a verified live handoff lease admits a helper that retains Gateway ancestry.
+  // Inspection uses the inherited run ID; a missing run ID is refused.
   const resolveAncestryBlock = async (state: GatewayServiceState) => {
     const block = gatewayMaintenanceBlock(state, params.root);
     if (
       !block ||
       (await isCurrentManagedServiceUpdateHandoffProcess({
         root: params.handoffRoot ?? params.root,
-        runId: params.updateRun?.runId,
+        runId: params.updateRun?.runId ?? process.env[UPDATE_RUN_ID_ENV],
       }))
     ) {
       return undefined;

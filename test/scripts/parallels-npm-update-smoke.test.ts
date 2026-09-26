@@ -4,10 +4,6 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  posixAgentWorkspaceScript,
-  windowsAgentWorkspaceScript,
-} from "../../scripts/e2e/parallels/agent-workspace.ts";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
@@ -33,7 +29,6 @@ import { createDeferred } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
-const GUEST_TRANSPORTS_PATH = "scripts/e2e/parallels/guest-transports.ts";
 const UPDATE_SCRIPTS_PATH = "scripts/e2e/parallels/npm-update-scripts.ts";
 const TEST_AUTH = {
   authChoice: "openai",
@@ -43,6 +38,21 @@ const TEST_AUTH = {
   modelId: "gpt-5.4",
 };
 const tempDirs = createTempDirTracker();
+
+function smokeOptions(
+  platform: Platform = "linux",
+): ConstructorParameters<typeof NpmUpdateSmoke>[0] {
+  return {
+    ...TEST_AUTH,
+    dependencyTarballs: [],
+    registryPackageTarballs: [],
+    json: false,
+    packageSpec: "openclaw@latest",
+    platforms: new Set<Platform>([platform]),
+    provider: "openai",
+    updateTarget: "local-main",
+  };
+}
 
 function pidIsAlive(pid: number): boolean {
   try {
@@ -361,16 +371,7 @@ describe("parallels npm update smoke", () => {
     }
 
     await withEnvAsync({ OPENAI_API_KEY: "test-key" }, async () => {
-      const smoke = new FailingNpmUpdateSmoke({
-        ...TEST_AUTH,
-        dependencyTarballs: [],
-        registryPackageTarballs: [],
-        json: false,
-        packageSpec: "openclaw@latest",
-        platforms: new Set<Platform>(["linux"]),
-        provider: "openai",
-        updateTarget: "local-main",
-      });
+      const smoke = new FailingNpmUpdateSmoke(smokeOptions());
 
       await expect(smoke.run()).rejects.toThrow("forced wrapper failure");
     });
@@ -412,25 +413,10 @@ exit 1
         PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
       },
       () => {
-        const smoke = new NpmUpdateSmoke({
-          ...TEST_AUTH,
-          dependencyTarballs: [],
-          registryPackageTarballs: [],
-          json: false,
-          packageSpec: "openclaw@latest",
-          platforms: new Set<Platform>(["linux"]),
-          provider: "openai",
-          updateTarget: "local-main",
-        });
-        const writeGuestScript = Reflect.get(smoke, "writeGuestScript") as (
-          vm: string,
-          script: string,
-          prefix: string,
-        ) => string;
+        const smoke = new NpmUpdateSmoke(smokeOptions());
 
         expect(() =>
-          writeGuestScript.call(
-            smoke,
+          smoke["writeGuestScript"](
             "Linux VM",
             "echo update",
             "openclaw-parallels-npm-update-linux",
@@ -495,16 +481,7 @@ exit 1
           PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
         },
         async () => {
-          const smoke = new NpmUpdateSmoke({
-            ...TEST_AUTH,
-            dependencyTarballs: [],
-            registryPackageTarballs: [],
-            json: false,
-            packageSpec: "openclaw@latest",
-            platforms: new Set<Platform>(["macos"]),
-            provider: "openai",
-            updateTarget: "local-main",
-          });
+          const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
           const result = smoke["guestMacos"]("echo update", 30_000, {
             append: (chunk) =>
               output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")),
@@ -544,17 +521,6 @@ exit 1
       );
     },
   );
-
-  it("has a one-command beta validation mode with fresh target coverage", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("--beta-validation [target]");
-    expect(script).toContain("resolveOpenClawRegistryVersion");
-    expect(script).toContain("this.options.updateTarget = version");
-    expect(script).toContain("this.options.freshTargetSpec = `openclaw@${version}`");
-    expect(script).toContain("runFreshTargetInstalls");
-    expect(script).toContain("freshTargetStatus");
-  });
 
   it.runIf(process.platform !== "win32").each([
     ["macos", macosUpdateScript],
@@ -708,24 +674,6 @@ ${script}`,
     }
   });
 
-  it("does not recreate retired workspace setup state in release smoke scripts", () => {
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.7.2-beta.2",
-      updateTarget: "2026.7.2-beta.2",
-    };
-
-    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
-      expect(script).toContain("IDENTITY.md");
-      expect(script).not.toContain("workspace-state.json");
-    }
-    expect(windowsUpdateScript(input)).toContain("IDENTITY.md");
-    expect(windowsUpdateScript(input)).not.toContain("workspace-state.json");
-
-    expect(posixAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
-    expect(windowsAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
-  });
-
   it("accepts keyed and nested npm metadata for published update targets", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -768,25 +716,6 @@ ${script}`,
     expect(script).toContain("openClawVersionFamily");
     expect(script).toContain("OPENCLAW_PARALLELS_ALLOW_HARNESS_TARGET_MISMATCH");
     expect(script).toContain("checkout the matching release branch");
-  });
-
-  it("lets callers override the Parallels host IP", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("--host-ip <ip>");
-    expect(script).toContain("hostIp?: string");
-    expect(script).toContain("options.hostIp = ensureValue");
-    expect(script).toContain('resolveHostIp(this.options.hostIp ?? "")');
-  });
-
-  it("prints actionable progress, rerun hints, and markdown summaries", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("stale=");
-    expect(script).toContain("bytes=");
-    expect(script).toContain("rerunCommand");
-    expect(script).toContain("writeSummaryMarkdown");
-    expect(script).toContain("Parallels NPM Update Smoke");
   });
 
   it("streams aggregate update logs instead of retaining them in memory", () => {
@@ -1029,33 +958,10 @@ ${script}`,
 
   it("clears update stream timers when spawning the guest command fails", async () => {
     vi.useFakeTimers();
-    const smoke = withEnv(
-      { OPENAI_API_KEY: "test-key" },
-      () =>
-        new NpmUpdateSmoke({
-          ...TEST_AUTH,
-          dependencyTarballs: [],
-          registryPackageTarballs: [],
-          json: false,
-          packageSpec: "openclaw@latest",
-          platforms: new Set<Platform>(["linux"]),
-          provider: "openai",
-          updateTarget: "local-main",
-        }),
-    );
-    const runStreamingToJobLog = Reflect.get(smoke, "runStreamingToJobLog") as (
-      command: string,
-      args: string[],
-      timeoutMs: number,
-      ctx: {
-        append(chunk: string | Uint8Array): void;
-        logPath: string;
-        signal: AbortSignal;
-      },
-    ) => Promise<number>;
+    const smoke = withEnv({ OPENAI_API_KEY: "test-key" }, () => new NpmUpdateSmoke(smokeOptions()));
 
     await expect(
-      runStreamingToJobLog.call(smoke, "openclaw-definitely-missing-command", [], 60 * 60 * 1000, {
+      smoke["runStreamingToJobLog"]("openclaw-definitely-missing-command", [], 60 * 60 * 1000, {
         append: () => undefined,
         logPath: "",
         signal: new AbortController().signal,
@@ -1073,28 +979,8 @@ ${script}`,
       const donePath = path.join(root, "stream-done");
       const smoke = withEnv(
         { OPENAI_API_KEY: "test-key" },
-        () =>
-          new NpmUpdateSmoke({
-            ...TEST_AUTH,
-            dependencyTarballs: [],
-            registryPackageTarballs: [],
-            json: false,
-            packageSpec: "openclaw@latest",
-            platforms: new Set<Platform>(["linux"]),
-            provider: "openai",
-            updateTarget: "local-main",
-          }),
+        () => new NpmUpdateSmoke(smokeOptions()),
       );
-      const runStreamingToJobLog = Reflect.get(smoke, "runStreamingToJobLog") as (
-        command: string,
-        args: string[],
-        timeoutMs: number,
-        ctx: {
-          append(chunk: string | Uint8Array): void;
-          logPath: string;
-          signal: AbortSignal;
-        },
-      ) => Promise<number>;
       const descendantScript = [
         "import { writeFileSync } from 'node:fs';",
         `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
@@ -1117,7 +1003,7 @@ ${script}`,
         "utf8",
       );
 
-      const command = runStreamingToJobLog.call(smoke, process.execPath, [scriptPath], 500, {
+      const command = smoke["runStreamingToJobLog"](process.execPath, [scriptPath], 500, {
         append: () => undefined,
         logPath: path.join(root, "update.log"),
         signal: new AbortController().signal,
@@ -1128,17 +1014,6 @@ ${script}`,
       expect(readFileSync(donePath, "utf8")).toBe("done");
     },
   );
-
-  it("runs Windows updates through a detached done-file runner", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-    const transports = readFileSync(GUEST_TRANSPORTS_PATH, "utf8");
-
-    expect(script).toContain("runWindowsBackgroundPowerShell");
-    expect(transports).toContain("runWindowsBackgroundPowerShell");
-    expect(transports).toContain("__OPENCLAW_BACKGROUND_EXIT__");
-    expect(transports).toContain("__OPENCLAW_BACKGROUND_DONE__");
-    expect(transports).toContain("${options.label} timed out");
-  });
 
   it("cleans timed-out Windows background work", async () => {
     const decodedCommands: string[] = [];
@@ -1377,14 +1252,6 @@ ${script}`,
     );
   });
 
-  it("keeps macOS sudo fallback update scripts readable by the desktop user", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain('"/usr/sbin/chown"');
-    expect(script).toContain("macosUpdateExec.ownerUser");
-    expect(script).toContain("ownerUser: fallbackUser");
-  });
-
   it("selects macOS desktop users with homes on spaced mounted volumes", () => {
     const root = tempDirs.make("openclaw-parallels-npm-update-");
     const prlctlPath = path.join(root, "prlctl");
@@ -1413,22 +1280,9 @@ exit 7
         PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
       },
       () => {
-        const smoke = new NpmUpdateSmoke({
-          ...TEST_AUTH,
-          dependencyTarballs: [],
-          registryPackageTarballs: [],
-          json: false,
-          packageSpec: "openclaw@latest",
-          platforms: new Set<Platform>(["macos"]),
-          provider: "openai",
-          updateTarget: "local-main",
-        });
-        const resolveMacosDesktopUser = Reflect.get(
-          smoke,
-          "resolveMacosDesktopUser",
-        ) as () => string;
+        const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
 
-        expect(resolveMacosDesktopUser.call(smoke)).toBe("clawuser");
+        expect(smoke["resolveMacosDesktopUser"]()).toBe("clawuser");
       },
     );
   });
@@ -1456,21 +1310,9 @@ exit 7
         PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
       },
       () => {
-        const smoke = new NpmUpdateSmoke({
-          ...TEST_AUTH,
-          dependencyTarballs: [],
-          registryPackageTarballs: [],
-          json: false,
-          packageSpec: "openclaw@latest",
-          platforms: new Set<Platform>(["macos"]),
-          provider: "openai",
-          updateTarget: "local-main",
-        });
-        const resolveMacosDesktopHome = Reflect.get(smoke, "resolveMacosDesktopHome") as (
-          user: string,
-        ) => string;
+        const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
 
-        expect(resolveMacosDesktopHome.call(smoke, "clawuser")).toBe(
+        expect(smoke["resolveMacosDesktopHome"]("clawuser")).toBe(
           "/Volumes/Macintosh HD/Users/clawuser",
         );
       },

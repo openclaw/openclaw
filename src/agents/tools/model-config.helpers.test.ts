@@ -111,23 +111,15 @@ afterEach(() => {
 });
 
 describe("hasProviderAuthForTool", () => {
-  it("threads cfg/workspaceDir into config-aware env-key resolution", () => {
-    // Regression: hasProviderAuthForTool used to call the env resolver without
-    // cfg/workspaceDir, so config-scoped (non-bundled) provider plugins whose
-    // env candidates are only visible with config were reported as unauthed.
-    const cfg = { models: { providers: {} } } as OpenClawConfig;
-    hasProviderAuthForTool({ provider: "acme", cfg, workspaceDir: "/ws" });
-    expect(authMocks.resolveEnvApiKey).toHaveBeenCalledWith("acme", undefined, {
-      config: cfg,
-      workspaceDir: "/ws",
-    });
-  });
-
   it("accepts env-key plugin provider auth only when config reaches env resolution", () => {
     // "acme" is not in models.json, so custom-provider auth is false; the only
     // path to true is the config-aware env lookup.
     const cfg = { models: { providers: {} } } as OpenClawConfig;
-    expect(hasProviderAuthForTool({ provider: "acme", cfg })).toBe(true);
+    expect(hasProviderAuthForTool({ provider: "acme", cfg, workspaceDir: "/ws" })).toBe(true);
+    expect(authMocks.resolveEnvApiKey).toHaveBeenCalledWith("acme", undefined, {
+      config: cfg,
+      workspaceDir: "/ws",
+    });
     expect(hasProviderAuthForTool({ provider: "acme" })).toBe(false);
   });
 

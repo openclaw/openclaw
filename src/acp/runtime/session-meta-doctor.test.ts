@@ -10,7 +10,6 @@ import {
   coercePluginDoctorContractModule,
   type PluginDoctorContractModule,
 } from "../../plugins/doctor-contract-module.js";
-import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-cache.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readAcpSessionMeta, upsertAcpSessionMeta } from "./session-meta.js";
@@ -155,7 +154,13 @@ it.each(["global", "shared-project"])(
           acpxSessionId: handle.backendSessionId,
         },
       };
-      await upsertAcpSessionMeta({ cfg, agentId: "work", sessionKey, mutate: () => meta });
+      await upsertAcpSessionMeta({
+        cfg,
+        env: state.env,
+        agentId: "work",
+        sessionKey,
+        mutate: () => meta,
+      });
       const freeHandle = await runtime.ensureSession({
         sessionKey: "agent:free-harness:acp:unrelated",
         agent: "fixture",
@@ -164,6 +169,7 @@ it.each(["global", "shared-project"])(
       await runtime.close({ handle: freeHandle, reason: "offline-doctor" });
       const freeTarget = {
         cfg,
+        env: state.env,
         agentId: "free-harness",
         sessionKey: "agent:free-harness:acp:unrelated",
       };
@@ -190,12 +196,9 @@ it.each(["global", "shared-project"])(
         origin: "bundled",
         sourcePreferred: true,
       })!.modulePath;
-      const load = getCachedPluginModuleLoader({
-        modulePath,
-        importerUrl: import.meta.url,
-      });
+      // Reuse Vitest's module graph; a second Jiti graph blocks test timers during cold loading.
       const { stateMigrations } = coercePluginDoctorContractModule(
-        load(modulePath) as PluginDoctorContractModule,
+        (await import(modulePath)) as PluginDoctorContractModule,
       );
       const migration = stateMigrations.find((item) => item.id === "acpx-session-owner-resources")!;
       const context = createPluginDoctorStateMigrationContext({
@@ -212,7 +215,7 @@ it.each(["global", "shared-project"])(
       });
       expect(result.warnings).toEqual([]);
       expect(result.changes.length).toBeGreaterThan(0);
-      const migrated = readAcpSessionMeta({ cfg, agentId: "work", sessionKey });
+      const migrated = readAcpSessionMeta({ cfg, env: state.env, agentId: "work", sessionKey });
       expect(migrated?.identity?.acpxRecordId).toMatch(/^openclaw-owner-v1-/);
       expect(
         (await readOnly.inspectAcpSessionClaims!()).claims.find(

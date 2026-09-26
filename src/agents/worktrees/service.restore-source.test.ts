@@ -158,7 +158,7 @@ vi.mock("./empty-source.js", () => ({
 }));
 vi.mock("./git-lock.js", () => ({
   lockState: async () => ({ kind: "none" }),
-  createWorktreeLockPrefilter: fixture.forbidden,
+  createWorktreeGcPrefilter: fixture.forbidden,
   lockWorktreeForProcess: fixture.forbidden,
   unlockWorktree: fixture.forbidden,
 }));

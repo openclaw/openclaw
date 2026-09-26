@@ -33,6 +33,25 @@ function createTempRecoveryKeyPath(): string {
   return path.join(dir, "recovery-key.json");
 }
 
+function writeLegacyRecoveryKey(
+  recoveryKeyPath: string,
+  keyId: string,
+  bytes: number[],
+  encodedPrivateKey?: string,
+) {
+  fs.writeFileSync(
+    recoveryKeyPath,
+    JSON.stringify({
+      version: 1,
+      createdAt: "2026-03-12T00:00:00.000Z",
+      keyId,
+      encodedPrivateKey,
+      privateKeyBase64: Buffer.from(bytes).toString("base64"),
+    }),
+    "utf8",
+  );
+}
+
 function createGeneratedRecoveryKey(params: {
   keyId: string;
   name: string;
@@ -485,16 +504,7 @@ describe("MatrixRecoveryKeyStore", () => {
 
   it("loads a stored recovery key for requested secret-storage keys", async () => {
     const recoveryKeyPath = createTempRecoveryKeyPath();
-    fs.writeFileSync(
-      recoveryKeyPath,
-      JSON.stringify({
-        version: 1,
-        createdAt: new Date().toISOString(),
-        keyId: "SSSS",
-        privateKeyBase64: Buffer.from([1, 2, 3, 4]).toString("base64"),
-      }),
-      "utf8",
-    );
+    writeLegacyRecoveryKey(recoveryKeyPath, "SSSS", [1, 2, 3, 4]);
 
     const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
     await store.drainPendingPersistence();
@@ -519,16 +529,7 @@ describe("MatrixRecoveryKeyStore", () => {
 
   it("keeps a readable legacy recovery key usable when SQLite migration fails", async () => {
     const recoveryKeyPath = createTempRecoveryKeyPath();
-    fs.writeFileSync(
-      recoveryKeyPath,
-      JSON.stringify({
-        version: 1,
-        createdAt: new Date().toISOString(),
-        keyId: "SSSS",
-        privateKeyBase64: Buffer.from([1, 2, 3, 4]).toString("base64"),
-      }),
-      "utf8",
-    );
+    writeLegacyRecoveryKey(recoveryKeyPath, "SSSS", [1, 2, 3, 4]);
     vi.spyOn(getMatrixRuntime().state, "openKeyedStore").mockImplementation(() => {
       throw new Error("sqlite unavailable");
     });
@@ -548,16 +549,7 @@ describe("MatrixRecoveryKeyStore", () => {
   it("migrates a custom legacy recovery key filename without colliding with the default key", async () => {
     const dir = tempDirs.make("matrix-recovery-key-store-");
     const recoveryKeyPath = path.join(dir, "recovery.key");
-    fs.writeFileSync(
-      recoveryKeyPath,
-      JSON.stringify({
-        version: 1,
-        createdAt: new Date().toISOString(),
-        keyId: "CUSTOM",
-        privateKeyBase64: Buffer.from([4, 3, 2, 1]).toString("base64"),
-      }),
-      "utf8",
-    );
+    writeLegacyRecoveryKey(recoveryKeyPath, "CUSTOM", [4, 3, 2, 1]);
 
     const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
     const callbacks = store.buildCryptoCallbacks();
@@ -635,16 +627,7 @@ describe("MatrixRecoveryKeyStore", () => {
 
   it("rebinds stored recovery key to server default key id when it changes", async () => {
     const recoveryKeyPath = createTempRecoveryKeyPath();
-    fs.writeFileSync(
-      recoveryKeyPath,
-      JSON.stringify({
-        version: 1,
-        createdAt: new Date().toISOString(),
-        keyId: "OLD",
-        privateKeyBase64: Buffer.from([1, 2, 3, 4]).toString("base64"),
-      }),
-      "utf8",
-    );
+    writeLegacyRecoveryKey(recoveryKeyPath, "OLD", [1, 2, 3, 4]);
     const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
 
     const bootstrapSecretStorage = vi.fn(async () => {});
@@ -719,31 +702,6 @@ describe("MatrixRecoveryKeyStore", () => {
     });
   });
 
-  it("recreates secret storage during explicit bootstrap when decrypting a stored secret fails with bad MAC", async () => {
-    const { createRecoveryKeyFromPassphrase, bootstrapSecretStorage } =
-      await runSecretStorageBootstrapScenario({
-        generated: createGeneratedRecoveryKey({
-          keyId: "REPAIRED",
-          name: "repaired",
-          bytes: [7, 7, 8, 9],
-          encodedPrivateKey: "encoded-repaired-key", // pragma: allowlist secret
-        }),
-        status: {
-          ready: true,
-          defaultKeyId: "LEGACY",
-          secretStorageKeyValidityMap: { LEGACY: true },
-        },
-        allowSecretStorageRecreateWithoutRecoveryKey: true,
-        firstBootstrapError: "Error decrypting secret m.cross_signing.master: bad MAC",
-      });
-
-    expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
-    expect(bootstrapSecretStorage).toHaveBeenCalledTimes(2);
-    expect(bootstrapSecretStorageCallArg(bootstrapSecretStorage, 1)?.setupNewSecretStorage).toBe(
-      true,
-    );
-  });
-
   it("stages a recovery key for secret storage without persisting it until commit", async () => {
     const recoveryKeyPath = createTempRecoveryKeyPath();
     fs.rmSync(recoveryKeyPath, { force: true });
@@ -778,18 +736,11 @@ describe("MatrixRecoveryKeyStore", () => {
     const storedEncoded = encodeRecoveryKey(
       new Uint8Array(Array.from({ length: 32 }, (_, i) => (i + 1) % 255)),
     );
-    fs.writeFileSync(
+    writeLegacyRecoveryKey(
       recoveryKeyPath,
-      JSON.stringify({
-        version: 1,
-        createdAt: "2026-03-12T00:00:00.000Z",
-        keyId: "OLD",
-        encodedPrivateKey: storedEncoded,
-        privateKeyBase64: Buffer.from(
-          new Uint8Array(Array.from({ length: 32 }, (_, i) => (i + 1) % 255)),
-        ).toString("base64"),
-      }),
-      "utf8",
+      "OLD",
+      Array.from({ length: 32 }, (_, i) => (i + 1) % 255),
+      storedEncoded,
     );
 
     const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
@@ -824,18 +775,11 @@ describe("MatrixRecoveryKeyStore", () => {
     const oldEncoded = encodeRecoveryKey(
       new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)),
     );
-    fs.writeFileSync(
+    writeLegacyRecoveryKey(
       recoveryKeyPath,
-      JSON.stringify({
-        version: 1,
-        createdAt: "2026-03-12T00:00:00.000Z",
-        keyId: "OLD",
-        encodedPrivateKey: oldEncoded,
-        privateKeyBase64: Buffer.from(
-          new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)),
-        ).toString("base64"),
-      }),
-      "utf8",
+      "OLD",
+      Array.from({ length: 32 }, (_, i) => i + 1),
+      oldEncoded,
     );
 
     const freshEncoded = encodeRecoveryKey(

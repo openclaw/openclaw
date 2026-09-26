@@ -48,6 +48,15 @@ describe("retired Phone Control doctor migration", () => {
   let stateDir = "";
   let env: NodeJS.ProcessEnv;
 
+  function createLeaseJournal() {
+    return createPluginStateKeyedStoreForTests<Record<string, unknown>>("phone-control", {
+      namespace: "armed",
+      maxEntries: 1,
+      overflowPolicy: "reject-new",
+      env,
+    });
+  }
+
   beforeEach(async () => {
     resetPluginStateStoreForTests();
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-phone-control-retire-"));
@@ -60,12 +69,7 @@ describe("retired Phone Control doctor migration", () => {
   });
 
   it("removes journal-owned allows and the exact setup deny seed", async () => {
-    const store = createPluginStateKeyedStoreForTests<Record<string, unknown>>("phone-control", {
-      namespace: "armed",
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-      env,
-    });
+    const store = createLeaseJournal();
     await store.register(
       "generation-1",
       createV3State({
@@ -95,12 +99,7 @@ describe("retired Phone Control doctor migration", () => {
   });
 
   it("does not expose an allow that was effective only because a lease removed the seed deny", async () => {
-    const store = createPluginStateKeyedStoreForTests<Record<string, unknown>>("phone-control", {
-      namespace: "armed",
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-      env,
-    });
+    const store = createLeaseJournal();
     await store.register(
       "generation-1",
       createV3State({
@@ -132,12 +131,7 @@ describe("retired Phone Control doctor migration", () => {
   });
 
   it("prefers the authoritative SQLite journal over a stale legacy source", async () => {
-    const store = createPluginStateKeyedStoreForTests<Record<string, unknown>>("phone-control", {
-      namespace: "armed",
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-      env,
-    });
+    const store = createLeaseJournal();
     await store.register(
       "generation-1",
       createV3State({
@@ -221,12 +215,7 @@ describe("retired Phone Control doctor migration", () => {
   });
 
   it("rejects a malformed canonical lease journal record", async () => {
-    const store = createPluginStateKeyedStoreForTests<Record<string, unknown>>("phone-control", {
-      namespace: "armed",
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-      env,
-    });
+    const store = createLeaseJournal();
     await store.register("generation-1", { version: 3 });
     const cfg = {
       gateway: {
@@ -278,12 +267,7 @@ describe("retired Phone Control doctor migration", () => {
   });
 
   it("restores journal-owned deny entries without removing customized operator policy", async () => {
-    const store = createPluginStateKeyedStoreForTests<Record<string, unknown>>("phone-control", {
-      namespace: "armed",
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-      env,
-    });
+    const store = createLeaseJournal();
     await store.register(
       "generation-1",
       createV3State({
@@ -308,12 +292,7 @@ describe("retired Phone Control doctor migration", () => {
   });
 
   it("drops the SQLite journal and archives the legacy lease source", async () => {
-    const store = createPluginStateKeyedStoreForTests<Record<string, unknown>>("phone-control", {
-      namespace: "armed",
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-      env,
-    });
+    const store = createLeaseJournal();
     await store.register("generation-1", createV3State({ addedToAllow: ["sms.send"] }));
     const legacyPath = path.join(stateDir, "plugins", "phone-control", "armed.json");
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
@@ -329,12 +308,7 @@ describe("retired Phone Control doctor migration", () => {
   });
 
   it("keeps the canonical journal when the stale legacy source cannot be archived", async () => {
-    const store = createPluginStateKeyedStoreForTests<Record<string, unknown>>("phone-control", {
-      namespace: "armed",
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-      env,
-    });
+    const store = createLeaseJournal();
     await store.register("generation-1", createV3State({ addedToAllow: ["sms.send"] }));
     const legacyPath = path.join(stateDir, "plugins", "phone-control", "armed.json");
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });

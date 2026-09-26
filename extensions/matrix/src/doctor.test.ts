@@ -78,26 +78,15 @@ describe("matrix doctor", () => {
       } as never,
     });
 
-    const matrixConfig = result.config.channels?.matrix as
-      | {
-          groups?: Record<string, unknown>;
-          accounts?: Record<string, unknown>;
-          network?: { dangerouslyAllowPrivateNetwork?: boolean };
-        }
-      | undefined;
-    const workAccount = matrixConfig?.accounts?.work as
-      | {
-          rooms?: Record<string, unknown>;
-          network?: { dangerouslyAllowPrivateNetwork?: boolean };
-        }
-      | undefined;
-
-    expect(matrixConfig?.groups?.["!ops:example.org"]).toEqual({
+    expect(result.config.channels?.matrix).toHaveProperty(["groups", "!ops:example.org"], {
       enabled: true,
     });
-    expect(workAccount?.rooms?.["!legacy:example.org"]).toEqual({
-      enabled: false,
-    });
+    expect(result.config.channels?.matrix).toHaveProperty(
+      ["accounts", "work", "rooms", "!legacy:example.org"],
+      {
+        enabled: false,
+      },
+    );
     expect(result.changes).toContain(
       "Moved channels.matrix.groups.!ops:example.org.allow → channels.matrix.groups.!ops:example.org.enabled (true).",
     );
@@ -122,22 +111,10 @@ describe("matrix doctor", () => {
       } as never,
     });
 
-    const matrixConfig = result.config.channels?.matrix as
-      | {
-          accounts?: Record<string, unknown>;
-          network?: { dangerouslyAllowPrivateNetwork?: boolean };
-        }
-      | undefined;
-    const workAccount = matrixConfig?.accounts?.work as
-      | {
-          network?: { dangerouslyAllowPrivateNetwork?: boolean };
-        }
-      | undefined;
-
-    expect(matrixConfig?.network).toEqual({
+    expect(result.config.channels?.matrix).toHaveProperty("network", {
       dangerouslyAllowPrivateNetwork: true,
     });
-    expect(workAccount?.network).toEqual({
+    expect(result.config.channels?.matrix).toHaveProperty(["accounts", "work", "network"], {
       dangerouslyAllowPrivateNetwork: false,
     });
     expect(result.changes).toContain(
@@ -149,18 +126,10 @@ describe("matrix doctor", () => {
   });
 
   it("migrates legacy channels.matrix.dm.policy 'trusted' with allowFrom to 'allowlist'", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: {
-        channels: {
-          matrix: {
-            dm: {
-              enabled: true,
-              policy: "trusted",
-              allowFrom: ["@alice:example.org", "@bob:example.org"],
-            },
-          },
-        },
-      } as never,
+    const result = normalizeMatrixDmConfig({
+      enabled: true,
+      policy: "trusted",
+      allowFrom: ["@alice:example.org", "@bob:example.org"],
     });
 
     const matrixDm = (
