@@ -10,16 +10,15 @@ import {
   type TranscriptScrollObservation,
 } from "./chat-transcript-scroll-events.ts";
 import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-session.ts";
+import type { TranscriptTouchState } from "./chat-transcript-touch-state.ts";
 
-type TranscriptOffsetState = {
+type TranscriptOffsetState = TranscriptTouchState & {
   pendingScrollOffset: ChatTranscriptPendingScrollOffset | null;
   scrollCommand:
     | { behavior: ScrollBehavior; target: "end"; source: "auto" | "manual" }
     | { behavior: ScrollBehavior; target: "index" }
     | { behavior: ScrollBehavior; target: "message"; messageId: string }
     | null;
-  touching: boolean;
-  touchScrolling: boolean;
   maintenanceScrollOffset: number | null;
   pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null;
   syncNativeOffset: (() => void) | null;

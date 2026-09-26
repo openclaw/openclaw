@@ -1,6 +1,6 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
-import type { createTranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import { extractTranscriptRange } from "./chat-transcript-range.ts";
+import type { TranscriptTouchState } from "./chat-transcript-touch-state.ts";
 
 type ChatTranscriptPrependAnchor = { messageKey: string; rowKey: string | null; top: number };
 type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
@@ -22,9 +22,7 @@ export class TranscriptPrependAnchor {
     return this.pending?.rowKey ?? null;
   }
 
-  canRestore(
-    state: Pick<ReturnType<typeof createTranscriptOffsetState>, "touching" | "touchScrolling">,
-  ): boolean {
+  canRestore(state: TranscriptTouchState): boolean {
     return this.pending !== null && !state.touching && !state.touchScrolling;
   }
 
