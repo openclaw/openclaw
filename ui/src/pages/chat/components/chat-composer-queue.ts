@@ -18,6 +18,7 @@ import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/h
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { queueEditFocus } from "./chat-queue-edit-focus.ts";
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
@@ -334,6 +335,7 @@ function renderChatQueueItem(
     <div
       class=${itemClass}
       data-chat-queue-item=${item.id}
+      ${editing ? queueEditFocus() : nothing}
       @click=${(event: MouseEvent) => {
         const row = event.currentTarget;
         const target = event.target;
