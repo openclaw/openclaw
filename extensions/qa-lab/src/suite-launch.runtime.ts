@@ -480,6 +480,7 @@ function summarizeQaEvidenceChannel(
 type QaFlowChannelGroup = {
   channel: string | undefined;
   channelId: string | undefined;
+  exclusiveKey?: string;
   isolatesAdapterInstances?: boolean;
   scenarios: QaSeedScenarioWithSource[];
 };
@@ -700,6 +701,19 @@ async function resolveSuiteExecutionPlan(
   const channelGroups = (await resolveQaFlowChannelGroups(params, flowScenarios)).filter(
     (group) => group.scenarios.length > 0,
   );
+  for (const group of channelGroups) {
+    const channelId = group.channelId;
+    const usesContributedChannelDriver =
+      params?.channelDriver === "live" &&
+      channelId !== undefined &&
+      params.adapterFactories?.some((factory) => factory.matches({ channelId, driver: "live" }));
+    if (
+      (params?.channelDriver === "crabline" || usesContributedChannelDriver) &&
+      !group.isolatesAdapterInstances
+    ) {
+      group.exclusiveKey = `channel:${group.channel ?? group.channelId ?? "default"}`;
+    }
+  }
   const expectedCells = [
     ...channelGroups.flatMap((group) =>
       expandQaScenarioExecutionCells({
@@ -717,6 +731,7 @@ async function resolveSuiteExecutionPlan(
   ];
   const requiresFlowPartitions =
     channelGroups.length > 1 ||
+    channelGroups.some((group) => group.exclusiveKey !== undefined && group.scenarios.length > 1) ||
     channelGroups.some(
       (group) => group.channelId !== undefined && group.channelId !== params?.channelId,
     ) ||
@@ -1150,34 +1165,24 @@ async function runUnifiedQaSuite(params: {
       const ordinaryIsolatedFlowScenarios = isolatedFlowScenarios.filter(
         (scenario) => !runtimeScenarioSet.has(scenario),
       );
-      const channelId = channelGroup.channelId;
-      const usesContributedChannelDriver = Boolean(
-        channelId &&
-        params.runParams?.channelDriver === "live" &&
-        adapterFactories?.find((factory) => factory.matches({ channelId, driver: "live" })),
-      );
+      const flowExclusiveKey = channelGroup.exclusiveKey;
       // Isolated adapters may use the caller's full suite budget; every partition
       // still has weight one in the global scheduler below.
       // A rejected worker cannot return its completed prefix or active scenario.
       // Single-scenario fail-fast tasks keep retries and failure evidence attributable.
       const sharedFlowPartitions = failFast
         ? sharedFlowScenarios.map((scenario) => [scenario])
-        : partitionSharedFlowScenarios(
-            sharedFlowScenarios,
-            usesContributedChannelDriver && !channelGroup.isolatesAdapterInstances
-              ? 1
-              : concurrency,
-            channelGroup.isolatesAdapterInstances ? concurrency : MAX_SHARED_FLOW_PARTITIONS,
-          );
+        : flowExclusiveKey
+          ? [sharedFlowScenarios]
+          : partitionSharedFlowScenarios(
+              sharedFlowScenarios,
+              concurrency,
+              channelGroup.isolatesAdapterInstances ? concurrency : MAX_SHARED_FLOW_PARTITIONS,
+            );
       // Channel-driver flow workers each launch a gateway plus transport harness.
       // Serializing their isolated workers keeps state-mutating smoke checks from
       // flaking under concurrent child gateways while preserving non-driver speed.
-      const channelDriverFlowRequiresExclusiveWorkers =
-        (params.runParams?.channelDriver === "crabline" || usesContributedChannelDriver) &&
-        !channelGroup.isolatesAdapterInstances;
-      const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
-        ? 1
-        : MAX_ISOLATED_FLOW_CONCURRENCY;
+      const isolatedFlowConcurrencyLimit = flowExclusiveKey ? 1 : MAX_ISOLATED_FLOW_CONCURRENCY;
       const isolatedFlowConcurrency = Math.min(
         concurrency,
         isolatedFlowConcurrencyLimit,
@@ -1248,9 +1253,7 @@ async function runUnifiedQaSuite(params: {
           channelId: taskChannelId,
           // One channel's credential and Gateway state stay serial unless each adapter create()
           // owns an isolated runtime. Distinct channels may always run together.
-          exclusiveKey: channelDriverFlowRequiresExclusiveWorkers
-            ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
-            : undefined,
+          exclusiveKey: flowExclusiveKey,
           scenarios: partition.scenarios,
           evidenceOwners: [owner],
           weight: partition.concurrency,
@@ -1301,7 +1304,7 @@ async function runUnifiedQaSuite(params: {
               // Preserve other channels' evidence, but keep the suite failed: maturity
               // docs must not publish until every required channel can run.
               const details = `channel credential unavailable: ${formatErrorMessage(error)}`;
-              if (channelDriverFlowRequiresExclusiveWorkers && channelGroup.channelId) {
+              if (flowExclusiveKey && channelGroup.channelId) {
                 unavailableChannelCredentialDetails.set(channelGroup.channelId, details);
               }
               return buildCredentialUnavailableResult(details);

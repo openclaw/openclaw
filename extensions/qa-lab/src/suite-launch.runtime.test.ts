@@ -2248,82 +2248,110 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
   });
 
-  it("serializes channel-driver isolated flow workers under explicit concurrency", async () => {
-    const repoRoot = await makeTempRepo("qa-suite-crabline-isolated-");
-    const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
-    const isolatedScenarioIds = new Set([
-      "runtime-tool-image-generate",
-      "runtime-inventory-drift-check",
-      "session-memory-ranking",
-    ]);
-    let activeIsolatedWorkers = 0;
-    let maxActiveIsolatedWorkers = 0;
-    runQaFlowSuite.mockImplementation(
-      async (
-        params:
-          | { outputDir?: string; scenarioIds?: string[]; writeEvidenceFile?: boolean }
-          | undefined,
-      ) => {
-        const scenarioIds = params?.scenarioIds ?? [];
-        const isolatedWorker = scenarioIds.some((scenarioId) =>
-          isolatedScenarioIds.has(scenarioId),
-        );
-        if (!isolatedWorker) {
-          return await defaultFlowImplementation(params);
+  it.each([
+    ["crabline", "ordinary"],
+    ["live", "ordinary"],
+    ["crabline", "mixed"],
+    ["live", "mixed"],
+    ["crabline", "fail-fast"],
+    ["live", "fail-fast"],
+    ["crabline", "retry"],
+    ["live", "retry"],
+  ] as const)("shares exclusive channel workers (%s, %s)", async (channelDriver, mode) => {
+    const repoRoot = await makeTempRepo("qa-suite-exclusive-");
+    const sharedIds = ["shared-a", "shared-b", "shared-c"];
+    const isolatedIds = ["isolated-a", "isolated-b"];
+    const native = makeTestFileScenario("vitest", "test/native.test.ts");
+    const scenarios = [
+      ...sharedIds.map((id) => makeQaSuiteTestScenario(id, { channel: "telegram" })),
+      ...isolatedIds.map((id) =>
+        makeQaSuiteTestScenario(id, { channel: "telegram", suiteIsolation: "isolated" }),
+      ),
+      native,
+    ];
+    const mixed = mode === "mixed" || mode === "retry";
+    const scenarioIds = mixed
+      ? ["shared-a", "isolated-a", "shared-b", native.id, "shared-c", "isolated-b"]
+      : sharedIds;
+    const runFlow = requireDefaultQaFlowSuiteImplementation();
+    let active = 0;
+    let maxActive = 0;
+    let attempts = 0;
+    runQaFlowSuite.mockImplementation(async (params: QaSuiteRunParams) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      attempts += 1;
+      try {
+        if (attempts === 1 && mode === "retry") {
+          throw new QaSuiteInfraError("transport_ready_timeout", "first partition failed");
         }
-        activeIsolatedWorkers += 1;
-        maxActiveIsolatedWorkers = Math.max(maxActiveIsolatedWorkers, activeIsolatedWorkers);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 1);
-        });
-        try {
-          return await defaultFlowImplementation(params);
-        } finally {
-          activeIsolatedWorkers -= 1;
+        if (mode === "fail-fast") {
+          throw new Error("first scenario failed");
         }
-      },
-    );
-
-    await runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/crabline-isolated",
-      channelDriver: "crabline",
-      concurrency: 8,
-      scenarioIds: [
-        "dm-chat-baseline",
-        "runtime-tool-image-generate",
-        "runtime-inventory-drift-check",
-        "session-memory-ranking",
-        "control-ui-chat-flow-playwright",
-      ],
+        return await runFlow(params);
+      } finally {
+        active -= 1;
+      }
     });
 
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "crabline-isolated");
-    expect(runQaFlowSuite).toHaveBeenCalledTimes(4);
-    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        outputDir: path.join(outputDir, "flow", "shared"),
-        concurrency: 1,
-        scenarioIds: ["dm-chat-baseline"],
-      }),
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: "out",
+      scenarioDefinitions: scenarios,
+      scenarioIds,
+      channelDriver,
+      channelId: "telegram",
+      adapterFactories:
+        channelDriver === "live"
+          ? [
+              {
+                id: "shared-channel",
+                matches: ({ channelId, driver }) => driver === "live" && channelId === "telegram",
+                create: vi.fn(),
+              },
+            ]
+          : undefined,
+      concurrency: 8,
+      failFast: mode === "fail-fast",
+    });
+
+    const expectedPartitions =
+      mode === "fail-fast"
+        ? [["shared-a"]]
+        : [
+            ...(mode === "retry" ? [sharedIds] : []),
+            sharedIds,
+            ...(mixed ? isolatedIds.map((id) => [id]) : []),
+          ];
+    expect(
+      runQaFlowSuite.mock.calls.map(([params]) => ({
+        scenarios: params.scenarioIds,
+        concurrency: params.concurrency,
+      })),
+    ).toEqual(expectedPartitions.map((scenarios) => ({ scenarios, concurrency: 1 })));
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(mixed ? 1 : 0);
+    expect(maxActive).toBe(1);
+    expect(active).toBe(0);
+    expect(result.result.scenarios.map(({ name, status }) => ({ name, status }))).toEqual(
+      mode === "fail-fast"
+        ? [{ name: "shared-a", status: "fail" }]
+        : scenarioIds.map((id) => ({
+            name: id === native.id ? native.title : id,
+            status: "pass",
+          })),
     );
-    for (const [index, scenarioId] of [
-      "runtime-tool-image-generate",
-      "runtime-inventory-drift-check",
-      "session-memory-ranking",
-    ].entries()) {
-      expect(runQaFlowSuite).toHaveBeenNthCalledWith(
-        index + 2,
-        expect.objectContaining({
-          outputDir: path.join(outputDir, "flow", `isolated-${index + 1}`),
-          concurrency: 1,
-          scenarioIds: [scenarioId],
-        }),
-      );
-    }
-    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
-    expect(maxActiveIsolatedWorkers).toBe(1);
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")),
+    );
+    const outcomes = projectQaEvidenceScenarioOutcomes(evidence);
+    expect(outcomes.map((outcome) => outcome.scenarioId)).toEqual(scenarioIds);
+    expect(new Set(outcomes.map((outcome) => outcome.scenarioInstanceId)).size).toBe(
+      scenarioIds.length,
+    );
+    // Empty legacy evidence cannot establish terminal outcomes from passing results alone.
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(
+      mode === "fail-fast" ? ["fail", null, null] : scenarioIds.map(() => null),
+    );
   });
 
   it("respects serial concurrency across unified suite partitions", async () => {
