@@ -451,6 +451,20 @@ openclaw automations edit <job-id> --no-best-effort-deliver
 openclaw automations edit <job-id> --no-deliver
 ```
 
+### History across automations
+
+Use `openclaw automations runs --all` to query the existing Gateway history across
+visible automations without looking up each job ID. Filters and pagination apply
+to the combined history:
+
+```bash
+openclaw automations runs --all --status error --limit 20
+openclaw automations runs --all --sort asc --offset 20 --limit 20
+```
+
+Do not combine `--all` with a positional job ID or `--id`. Omitting `--all` keeps
+the existing per-job query. Gateway permissions and visibility rules are unchanged.
+
 ## Related
 
 - [CLI reference](/cli)
