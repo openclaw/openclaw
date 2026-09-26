@@ -19,6 +19,10 @@ import {
   SECRET_SENTINEL_PATTERN,
 } from "../sentinel.js";
 import {
+  getSecretStoreMutationsVersion,
+  validateSecretStoreBindings,
+} from "../store/secret-store.js";
+import {
   createSecretEgressCertificates,
   SecretEgressCertificateError,
   type SecretEgressCertificateStatus,
@@ -52,6 +56,10 @@ export type SecretEgressSentinelBinding = Readonly<{
   name: string;
   sentinel: string;
   allowedHosts: readonly string[];
+  /** Store mutations version when the snapshot row was read. Optional: callers
+   * outside the exec store path (tests, future hosts) may omit it, in which case
+   * the binding is treated as launch-fresh. */
+  capturedStoreVersion?: number;
 }>;
 
 export type SecretEgressProcessGrant = {
@@ -625,9 +633,46 @@ export async function startSecretEgressProxyServer(params: {
       if (stopped) {
         throw new Error("Secret egress proxy has stopped");
       }
+      // Validate snapshot-carrying bindings against the live store once, here on
+      // the launch path, before any grant exists: rows deleted or rolled back
+      // while approval was pending never register, and narrowed hosts shrink the
+      // grant. Already-running grants stay fixed for the process lifetime (the
+      // documented contract); the substitution path performs no store I/O.
+      const staleNames = bindings
+        .filter(
+          (binding) =>
+            binding.capturedStoreVersion !== undefined &&
+            binding.capturedStoreVersion !== getSecretStoreMutationsVersion(),
+        )
+        .map((binding) => binding.name);
+      let liveBindings = bindings;
+      if (staleNames.length > 0) {
+        let current: Map<string, { allowedHosts: Set<string> }> | undefined;
+        try {
+          current = validateSecretStoreBindings({ names: staleNames });
+        } catch {
+          // Fail closed for the stale subset only: a store read failure must not
+          // hand authority to rows we could not confirm, while confirmed-fresh
+          // bindings in the same launch keep working.
+          current = new Map();
+        }
+        liveBindings = bindings
+          .filter((binding) => !staleNames.includes(binding.name) || current?.has(binding.name))
+          .map((binding) => {
+            const live = current?.get(binding.name);
+            if (!live) {
+              return binding;
+            }
+            // Never widen beyond the snapshot or the live row after a mutation.
+            const hosts = binding.allowedHosts.filter((host) =>
+              live.allowedHosts.has(normalizeHostname(host)),
+            );
+            return { ...binding, allowedHosts: hosts };
+          });
+      }
       const registered: RegisteredProcess = {
         sentinelBindings: new Map(
-          bindings.map((binding) => [
+          liveBindings.map((binding) => [
             binding.sentinel,
             {
               allowedHosts: new Set(binding.allowedHosts.map(normalizeHostname)),

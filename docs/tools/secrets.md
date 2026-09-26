@@ -159,12 +159,15 @@ A stored entry is a regular shared-store entry (see
   not disable protected-store sealing.
 
 Gateway-host exec captures one store snapshot on its first execution in a run.
-A credential stored before that point can be included. Afterward, additions,
-replacements, deletions, and host edits do not refresh that run's snapshot. Start
-a new run to observe them. A successful credential request does not promise that
-an already-running exec tool can use the new value.
+Protected credential entries are re-read automatically on later executions in the
+same run, so a credential stored, replaced, or removed mid-run (including through
+a masked credential request) is observed by the next command. Ordinary `env`
+entries keep the run-stable snapshot: start a new run to observe changes to them.
 
-Each managed command receives its own proxy grant from that snapshot. Background
+Each managed command receives its own proxy grant from the latest snapshot at its
+launch. Commands launched from an older snapshot are validated against the live
+store when they register: entries deleted or rolled back meanwhile grant nothing.
+After registration a grant stays fixed for the command's lifetime. Background
 commands retain access after the originating turn ends. Process exit, cancellation,
 timeout, or Gateway shutdown revokes the grant and closes its connections; other
 commands keep their own grants. Bytes already handed to the upstream transport

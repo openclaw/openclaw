@@ -87,6 +87,11 @@ type SecretStoreEgressBinding = {
   name: string;
   sentinel: string;
   allowedHosts: string[];
+  /** Store mutations version captured with this row. Launch-time registration
+   * re-validates bindings whose capture predates a store mutation, so a staged
+   * write that was rolled back while approval was pending cannot register a
+   * credential grant for a row that no longer exists. */
+  capturedStoreVersion: number;
 };
 
 export type SecretStoreExecEnvironment = {
@@ -304,6 +309,10 @@ export function readSecretStoreExecEnvironment(params: {
   database?: OpenClawStateDatabaseOptions;
 }): SecretStoreExecEnvironment {
   try {
+    // Capture before the select: a mutation racing the read leaves the snapshot
+    // stamped older than current, which forces launch-time re-validation instead
+    // of trusting partially stale rows.
+    const capturedStoreVersion = secretStoreMutationsVersion;
     return (
       withExistingOpenClawStateDatabaseReadOnly(({ db: sqlite }) => {
         const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
@@ -350,6 +359,7 @@ export function readSecretStoreExecEnvironment(params: {
               name: row.name,
               sentinel,
               allowedHosts: parseSecretAllowedHosts(row.allowed_hosts),
+              capturedStoreVersion,
             });
           }
         }
@@ -504,8 +514,16 @@ function writeSecretStoreEntryInternal(
   );
 }
 
+/** Monotonic counter bumped on every team-store mutation. Consumers snapshotting the
+ * exec store environment (exec tool) key their cache on it so mid-session store
+ * changes are observed instead of retained stale (#152409). */
+let secretStoreMutationsVersion = 0;
+
+export const getSecretStoreMutationsVersion = (): number => secretStoreMutationsVersion;
+
 export function writeSecretStoreEntry(params: SecretStoreWriteParams): void {
   writeSecretStoreEntryInternal(params, false);
+  secretStoreMutationsVersion += 1;
 }
 
 function rollbackSecretStoreEntryWrite(params: {
@@ -561,12 +579,54 @@ function rollbackSecretStoreEntryWrite(params: {
   }
 }
 
+/** Live-store check for stale egress bindings at process registration (launch path
+ * only; the substitution hot path never touches the database). Returns the current
+ * allowed hosts per name; names absent from the map are deleted or rolled back. */
+export function validateSecretStoreBindings(params: {
+  names: readonly string[];
+  database?: OpenClawStateDatabaseOptions;
+}): Map<string, { allowedHosts: Set<string> }> {
+  const current = new Map<string, { allowedHosts: Set<string> }>();
+  if (params.names.length === 0) {
+    return current;
+  }
+  try {
+    return (
+      withExistingOpenClawStateDatabaseReadOnly(({ db: sqlite }) => {
+        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+        const rows = executeSqliteQuerySync(
+          sqlite,
+          db
+            .selectFrom("secret_store_entries")
+            .select(["name", "allowed_hosts"])
+            .where("scope_kind", "=", "team")
+            .where("scope_id", "=", "")
+            .where("name", "in", params.names)
+            .where("deleted_at_ms", "is", null),
+        ).rows;
+        for (const row of rows) {
+          current.set(row.name, {
+            allowedHosts: new Set(parseSecretAllowedHosts(row.allowed_hosts)),
+          });
+        }
+        return current;
+      }, params.database ?? {}) ?? current
+    );
+  } catch (error) {
+    if (isMissingSecretStoreTableError(error)) {
+      return current;
+    }
+    throw error;
+  }
+}
+
 /** Writes one entry and returns owner-checked compensation for that exact write. */
 export function writeSecretStoreEntryWithRollback(params: SecretStoreWriteParams): {
   rollback: () => boolean;
 } {
   const writer = `${params.updatedBy ?? "secret-store"}:${randomUUID()}`;
   const previous = writeSecretStoreEntryInternal({ ...params, updatedBy: writer }, true);
+  secretStoreMutationsVersion += 1;
   let rollbackResult: boolean | undefined;
   return {
     rollback: () => {
@@ -580,6 +640,12 @@ export function writeSecretStoreEntryWithRollback(params: SecretStoreWriteParams
         previous,
         ...(params.database !== undefined ? { database: params.database } : {}),
       });
+      // A successful rollback changed the store (restored or removed the row):
+      // advance the mutations version so cached exec snapshots invalidate and
+      // later commands fall back to the pre-write state (#152409 review, P2).
+      if (rollbackResult) {
+        secretStoreMutationsVersion += 1;
+      }
       return rollbackResult;
     },
   };
@@ -625,6 +691,7 @@ export function updateSecretStoreAllowedHosts(params: {
     params.database,
     { operationLabel: "secrets.store.allowed-hosts" },
   );
+  secretStoreMutationsVersion += 1;
 }
 
 export function deleteSecretStoreEntry(params: {
@@ -664,6 +731,7 @@ export function deleteSecretStoreEntry(params: {
       throw error;
     }
   }
+  secretStoreMutationsVersion += 1;
 }
 
 export async function purgeExpiredSecretStoreEntries(
