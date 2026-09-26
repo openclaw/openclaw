@@ -27,7 +27,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function poll(overrides: Partial<MSTeamsPoll>): MSTeamsPoll {
+type Poll = Parameters<MSTeamsPollStore["createPoll"]>[0];
+
+function poll(overrides: Partial<Poll>): Poll {
   return {
     id: "poll-1",
     question: "Pick one",
