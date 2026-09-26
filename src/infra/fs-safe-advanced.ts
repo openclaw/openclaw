@@ -7,6 +7,7 @@ export {
   assertNoSymlinkParents,
   assertNoSymlinkParentsSync,
   buildRandomTempFilePath,
+  copyFileDescriptorSync,
   probePathCaseInsensitiveSync,
   probePathSuffixAliasesSync,
   readFileHandleBounded,
@@ -17,4 +18,5 @@ export {
   sanitizeUntrustedFileName,
   tempFile,
 } from "@openclaw/fs-safe/advanced";
+export { FsSafeError } from "@openclaw/fs-safe/errors";
 export { readSecretFile } from "@openclaw/fs-safe/secret";
