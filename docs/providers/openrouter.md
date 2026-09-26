@@ -9,9 +9,10 @@ read_when:
 title: "OpenRouter"
 ---
 
-OpenRouter routes requests to many models behind one API and one key. It is
-OpenAI-compatible, so OpenClaw talks to it over the same
-`openai-completions`-style transport used for other proxy providers.
+OpenRouter routes requests to many models behind one API and one key. Its chat routes are
+OpenAI-compatible, so OpenClaw uses the same `openai-completions`-style transport
+as other proxy providers. Typed decision models use the separate native System
+One API, not chat completions.
 
 ## Getting started
 
@@ -122,6 +123,62 @@ Discovered models use OpenRouter's advertised tool support. When a model's
 `supported_parameters` list omits `tools`, OpenClaw sends requests without tool
 definitions or tool choice. Models without that metadata keep the default tool
 behavior.
+
+## Typed decisions with Jev
+
+Select Jev as the [decision model](/concepts/decision-models), using your existing
+OpenRouter connection and auth profiles. No separate TypeSafe login is needed:
+
+```json5
+{
+  agents: {
+    defaults: { decisionModel: "openrouter/typesafe/jev-1.13" },
+  },
+}
+```
+
+The canonical catalog includes `openrouter/typesafe/jev-1.13` and
+`openrouter/~typesafe/jev-latest` as **decision-only** routes. They do not appear as chat
+choices, and selecting a decision model does not change your primary or utility
+model. The latest alias follows future releases; it is not a version pin.
+
+Jev accepts text or structured JSON objects/arrays and Boolean, Choice, and Score
+questions. Supply instructions for every question. Choice supports 2–255 options;
+Score supports 2–10 non-null levels. Boolean criteria are optional, but when
+provided must describe both true and false. Images, sorting, tags and explicit
+reasoning controls are rejected before inference. Omit reasoning or use `auto`.
+Jev returns no free-form prose or reasoning trace.
+
+OpenClaw sends one request to `/systemone` appended to the effective OpenRouter
+API base URL, including a declared custom proxy path prefix. A `baseUrl` override
+alone does not declare native decision support: the owning plugin must publish
+that route and protocol in its [manifest model catalog](/plugins/manifest/models#modelcatalog-reference).
+Foreign endpoints without that declaration are refused. It preserves normal prepared
+auth and provider routing preferences (including privacy restrictions). Unsupported
+chat-only parameters are rejected rather than silently dropped. No session IDs,
+user identity or trace fields are added to the request body.
+
+The OpenRouter route advertises 32,000 tokens for state plus questions, distinct
+from the direct TypeSafe route. Jev 1.13's published input price is $0.042 per
+million tokens; output tokens are free. The adapter preserves reported token
+counts and actual `usage.cost`, including explicit zero. Missing actual cost stays
+missing; the adapter never invents a bill or finalizes usage a second time.
+
+Use `contractVersion: 2` with the `decision_evaluate` core tool and tagged state
+(for example, `{ type: "text", text: "Ticket contents" }`). Plugin consumers
+should use `api.runtime.decisions.evaluateV2`. Existing V1-only consumers,
+including the current Auto decision integration, cannot automatically consume
+OpenRouter results carrying native USD billing or provider metadata. Native model identity, upstream provider,
+selected labels, fractional scores and rounded distributions remain unchanged.
+The legacy V1 adapter succeeds only when the response is representable without
+losing billing or metadata; otherwise it returns `unsupported-input` rather than
+silently discarding those facts.
+
+The known Jev routes are bounded canonical manifest declarations. The ordinary
+live text catalog does not turn `decisions` output rows into synthetic chat
+models. See [Jev on OpenRouter](https://openrouter.ai/docs/guides/community/jev)
+and the [System One API](https://openrouter.ai/docs/api/api-reference/systemone/submit-a-system-one-request)
+for the upstream contract.
 
 ## Image generation
 
@@ -507,7 +564,7 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     }
     ```
 
-    This only applies on OpenRouter chat-completions routes. Direct Anthropic,
+    This applies on OpenRouter chat-completions and native decision routes. Direct Anthropic,
     Google, OpenAI, or custom provider routes ignore OpenRouter routing params.
 
   </Accordion>

@@ -10,6 +10,102 @@
   "modelCatalog": {
     "discovery": {
       "openrouter": "runtime"
+    },
+    "providers": {
+      "openrouter": {
+        "models": [
+          {
+            "id": "typesafe/jev-1.13",
+            "name": "TypeSafe: Jev 1.13",
+            "baseUrl": "https://openrouter.ai/api/v1",
+            "input": ["text"],
+            "contextWindow": 32000,
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "openrouter-systemone",
+                "input": ["text"],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": ["auto"]
+                },
+                "limits": {
+                  "maxStateAndQuestionTokens": 32000
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs",
+                  "usdPerMillion": {
+                    "input": 0.042,
+                    "output": 0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "~typesafe/jev-latest",
+            "name": "TypeSafe: Jev (latest)",
+            "baseUrl": "https://openrouter.ai/api/v1",
+            "input": ["text"],
+            "contextWindow": 32000,
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "openrouter-systemone",
+                "input": ["text"],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": ["auto"]
+                },
+                "limits": {
+                  "maxStateAndQuestionTokens": 32000
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs"
+                }
+              }
+            }
+          }
+        ]
+      }
     }
   },
   "modelIdNormalization": {
@@ -88,7 +184,8 @@
     "musicGenerationProviders": ["openrouter"],
     "videoGenerationProviders": ["openrouter"],
     "speechProviders": ["openrouter"],
-    "usageProviders": ["openrouter"]
+    "usageProviders": ["openrouter"],
+    "decisionProviders": ["openrouter"]
   },
   "mediaUnderstandingProviderMetadata": {
     "openrouter": {

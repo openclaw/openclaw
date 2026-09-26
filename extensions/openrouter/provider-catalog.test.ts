@@ -61,6 +61,11 @@ describe("OpenRouter provider catalog", () => {
             context_length: 65_536,
           },
           {
+            id: "typesafe/jev-1.13",
+            architecture: { modality: "text->decisions" },
+            context_length: 32000,
+          },
+          {
             id: "acme/no-tools",
             architecture: { modality: "text->text" },
             supported_parameters: [],
@@ -90,6 +95,7 @@ describe("OpenRouter provider catalog", () => {
       ]),
     );
     expect(provider.models.map((model) => model.id)).not.toContain("google/gemini-3.1-flash-image");
+    expect(provider.models.map((model) => model.id)).not.toContain("typesafe/jev-1.13");
     expect(provider.models.find((model) => model.id === "acme/partial-pricing")).toMatchObject({
       name: "Partial Pricing Fixture",
       reasoning: true,
