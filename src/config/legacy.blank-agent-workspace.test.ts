@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { migrateBlankAgentWorkspace } from "./legacy.blank-agent-workspace.js";
+import {
+  migrateBlankAgentWorkspace,
+  migrateBlankAgentWorkspaceForWrite,
+} from "./legacy.blank-agent-workspace.js";
 
 describe("runtime blank agent workspace migration", () => {
   it.each(["", "   ", "\t\n "])("removes a blank per-agent workspace %j", (workspace) => {
@@ -41,8 +44,8 @@ describe("runtime blank agent workspace migration", () => {
     expect(result.config).toEqual({ agents: { list: [{ id: "alpha" }, { id: "beta" }] } });
     expect(result.changes).toEqual([
       {
-        path: "list[1]",
-        message: "Removed blank agents.list[1].workspace; the default workspace directory applies.",
+        path: "list.1",
+        message: "Removed blank agents.list.1.workspace; the default workspace directory applies.",
       },
     ]);
   });
@@ -73,5 +76,38 @@ describe("runtime blank agent workspace migration", () => {
 
     // The migration clones before mutating so callers keep an untouched authored copy.
     expect(raw).toEqual({ agents: { entries: { main: { workspace: " " } } } });
+  });
+
+  it("preserves a blank workspace that the current write explicitly sets", () => {
+    const raw = {
+      agents: { defaults: { model: "openai/gpt-5.6" }, entries: { main: { workspace: "  " } } },
+    };
+    const result = migrateBlankAgentWorkspaceForWrite(
+      raw,
+      new Set(["agents.entries.main.workspace"]),
+    );
+
+    expect(result.changed).toBe(false);
+    expect(result.config).toEqual(raw);
+  });
+
+  it("preserves a blank agents.list workspace the current write explicitly sets (dot path)", () => {
+    // The write owner records explicit paths by joining segments with dots
+    // (`agents.list.0.workspace`); the migration must match that representation.
+    const raw = { agents: { list: [{ id: "main", workspace: " " }] } };
+    const result = migrateBlankAgentWorkspaceForWrite(raw, new Set(["agents.list.0.workspace"]));
+
+    expect(result.changed).toBe(false);
+    expect(result.config).toEqual(raw);
+  });
+
+  it("reports list entry removals with the writer's dot-notation path", () => {
+    const result = migrateBlankAgentWorkspaceForWrite({
+      agents: { list: [{ id: "main", workspace: " " }] },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.changes.some((c) => c.path === "list.0")).toBe(true);
+    expect(result.changes.some((c) => c.message.includes("agents.list.0.workspace"))).toBe(true);
   });
 });

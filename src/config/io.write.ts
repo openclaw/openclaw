@@ -97,6 +97,7 @@ import {
 import { prepareConfigWriteTopology } from "./io.write-topology.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
+import { migrateBlankAgentWorkspaceForWrite } from "./legacy.blank-agent-workspace.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
@@ -252,14 +253,22 @@ export async function writeConfigFileFromContext(
   }
 
   const envForRestore = options.envSnapshotForRestore ?? deps.env;
+  const resolveExplicitSet = () =>
+    new Set((options.explicitSetPaths ?? []).map((p) => p.filter((s) => s.length > 0).join(".")));
   const resolveValidationCandidate = (candidate: unknown) => {
     // Validate removals now; apply them once to the final authored output after materialization.
     const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
-    return containsConfigIncludeDirective(config)
+    const preflight = containsConfigIncludeDirective(config)
       ? context.resolveRuntimePreflightSourceConfig(
           restoreEnvVarRefs(config, snapshot.parsed, envForRestore) as OpenClawConfig,
         )
       : config;
+    // A saved blank workspace (authored or included, restored by
+    // restoreAuthoredAgentRoster / include expansion) must not block an
+    // unrelated settings change: migrate it unless the current write itself
+    // sets that path (new blank authoring keeps the strict field error).
+    return migrateBlankAgentWorkspaceForWrite(preflight as OpenClawConfig, resolveExplicitSet())
+      .config;
   };
   const validationCandidate = resolveValidationCandidate(persistCandidate);
   const validateCandidate = (candidate: unknown) => {
@@ -301,6 +310,14 @@ export async function writeConfigFileFromContext(
     env: deps.env,
     homedir: deps.homedir,
   });
+
+  // The restored authored roster can carry a saved blank workspace; remove it
+  // from the persisted bytes too (unless this write explicitly sets that path),
+  // so the saved file no longer round-trips an invalid value.
+  persistCandidate = migrateBlankAgentWorkspaceForWrite(
+    persistCandidate as OpenClawConfig,
+    resolveExplicitSet(),
+  ).config;
 
   let cfgToWrite = persistCandidate as OpenClawConfig;
   try {

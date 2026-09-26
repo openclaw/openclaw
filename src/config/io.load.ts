@@ -25,7 +25,11 @@ import {
   warnIfConfigFromFuture,
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
-import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
+import {
+  migrateBlankAgentWorkspace,
+  migrateLegacyContextBudgetConfig,
+  migratePersistedImplicitMainRoster,
+} from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
 import {
@@ -167,7 +171,11 @@ function* loadConfigWithEffects(
       env: deps.env,
       homedir: deps.homedir,
     });
-    const effectiveConfigRaw = rosterMigration.config;
+    // Direct runtime loading must keep a saved blank workspace (including one
+    // contributed by a resolved include) loading with its unchanged defaulted
+    // workspace directory, mirroring the snapshot path.
+    const blankWorkspaceMigration = migrateBlankAgentWorkspace(rosterMigration.config);
+    const effectiveConfigRaw = blankWorkspaceMigration.config;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;
     const snapshotParsed = parsed;
@@ -181,6 +189,8 @@ function* loadConfigWithEffects(
       ...contextBudgetMigration.changes.map(({ message }) => message),
       ...contextBudgetMigration.warnings.map(({ message }) => message),
       ...rosterMigration.diagnostics,
+      ...blankWorkspaceMigration.changes.map(({ message }) => message),
+      ...blankWorkspaceMigration.warnings.map(({ message }) => message),
     ]) {
       deps.logger.warn(`Config (${configPath}): ${diagnostic}`);
     }

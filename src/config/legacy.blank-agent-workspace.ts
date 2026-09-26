@@ -6,6 +6,10 @@
 // blanks during load so existing installations keep loading and keep their
 // effective (defaulted) workspace directory.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  getRetainedLegacyDefaultAgentId,
+  setRetainedLegacyDefaultAgentId,
+} from "./legacy.default-agent-owner-state.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.openclaw.js";
 
 type BlankWorkspaceMigration<T = unknown> = {
@@ -33,31 +37,71 @@ function removeBlankWorkspaceFromAgent(
   }
 }
 
-function migrateBlankAgentWorkspaceRaw(raw: unknown): BlankWorkspaceMigration {
+// Write-path helper: preserve blank workspace values that the current write
+// explicitly sets (or a parent of them), so new authoring still receives the
+// field-level error. Explicit-set paths may be parents (e.g. `agents.entries.alpha`)
+// or the exact leaf, so containment is a prefix match on the dotted path.
+function isPreservedWorkspacePath(
+  preservedWorkspacePaths: ReadonlySet<string> | undefined,
+  workspacePath: string,
+): boolean {
+  if (!preservedWorkspacePaths) {
+    return false;
+  }
+  for (const p of preservedWorkspacePaths) {
+    if (workspacePath === p || workspacePath.startsWith(`${p}.`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function migrateBlankAgentWorkspaceRaw(
+  raw: unknown,
+  preservedWorkspacePaths?: ReadonlySet<string>,
+): BlankWorkspaceMigration {
   if (!isRecord(raw) || !isRecord(raw.agents)) {
     return { config: raw, changed: false, changes: [], warnings: [] };
   }
   const next = structuredClone(raw) as Record<string, unknown>;
+  // structuredClone drops the retained-legacy-owner WeakMap association that
+  // the preceding roster migration attached to the config root. Preserve it on
+  // the cloned root so multi-agent configs with a legacy default marker keep
+  // loading (validation relies on the retained owner).
+  if (isRecord(raw)) {
+    setRetainedLegacyDefaultAgentId(next, getRetainedLegacyDefaultAgentId(raw));
+  }
   const agents = isRecord(next.agents) ? (next.agents as Record<string, unknown>) : {};
   const changes: ConfigValidationIssue[] = [];
 
   if (isRecord(agents.defaults) && isBlankString(agents.defaults.workspace)) {
-    delete agents.defaults.workspace;
-    changes.push({
-      path: "agents.defaults.workspace",
-      message: "Removed blank agents.defaults.workspace.",
-    });
+    if (!isPreservedWorkspacePath(preservedWorkspacePaths, "agents.defaults.workspace")) {
+      delete agents.defaults.workspace;
+      changes.push({
+        path: "agents.defaults.workspace",
+        message: "Removed blank agents.defaults.workspace.",
+      });
+    }
   }
 
   if (isRecord(agents.entries)) {
     for (const [key, entry] of Object.entries(agents.entries)) {
-      removeBlankWorkspaceFromAgent(entry as Record<string, unknown>, `entries.${key}`, changes);
+      const workspacePath = `agents.entries.${key}.workspace`;
+      if (!isPreservedWorkspacePath(preservedWorkspacePaths, workspacePath)) {
+        removeBlankWorkspaceFromAgent(entry as Record<string, unknown>, `entries.${key}`, changes);
+      }
     }
   }
 
   if (Array.isArray(agents.list)) {
     for (const [index, entry] of agents.list.entries()) {
-      removeBlankWorkspaceFromAgent(entry as Record<string, unknown>, `list[${index}]`, changes);
+      // The write owner records explicit paths by joining segments with dots
+      // (`agents.list.0.workspace`); match that representation so an explicitly
+      // written blank in a retained legacy list is preserved for validation.
+      const workspacePath = `agents.list.${index}.workspace`;
+      if (!isPreservedWorkspacePath(preservedWorkspacePaths, workspacePath)) {
+        removeBlankWorkspaceFromAgent(entry as Record<string, unknown>, `list.${index}`, changes);
+      }
     }
   }
 
@@ -72,4 +116,22 @@ export function migrateBlankAgentWorkspace(
 export function migrateBlankAgentWorkspace(raw: unknown): BlankWorkspaceMigration;
 export function migrateBlankAgentWorkspace(raw: unknown): BlankWorkspaceMigration {
   return migrateBlankAgentWorkspaceRaw(raw);
+}
+
+/** Write-path variant: migrate saved blank workspace values but preserve the
+ * ones the current write explicitly sets (so new authoring still gets the
+ * field error). */
+export function migrateBlankAgentWorkspaceForWrite(
+  raw: OpenClawConfig,
+  explicitSetPaths?: ReadonlySet<string>,
+): BlankWorkspaceMigration<OpenClawConfig>;
+export function migrateBlankAgentWorkspaceForWrite(
+  raw: unknown,
+  explicitSetPaths?: ReadonlySet<string>,
+): BlankWorkspaceMigration;
+export function migrateBlankAgentWorkspaceForWrite(
+  raw: unknown,
+  explicitSetPaths?: ReadonlySet<string>,
+): BlankWorkspaceMigration {
+  return migrateBlankAgentWorkspaceRaw(raw, explicitSetPaths);
 }
