@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { expect, it } from "vitest";
+import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 import plugin from "./index.js";
 
@@ -36,7 +37,7 @@ it("transcribes audio beyond twenty minutes while another transcription complete
   header.writeUInt32LE(pcm.length, 40);
 
   const firstFrame = createDeferred<void>();
-  const releaseTranscript = createDeferred<void>();
+  const flushed = createDeferred<WebSocket>();
   const server = createServer((request, response) => {
     request.resume();
     request.on("end", () => {
@@ -63,18 +64,7 @@ it("transcribes audio beyond twenty minutes while another transcription complete
         return;
       }
       if (JSON.parse(bytes.toString("utf8")).type === "CloseStream") {
-        void releaseTranscript.promise.then(() => {
-          const received = Buffer.concat(frames);
-          const includesMarker = received.subarray(1260 * 32_000, 1261 * 32_000).equals(marker);
-          socket.send(
-            JSON.stringify({
-              type: "TurnInfo",
-              event: "EndOfTurn",
-              transcript: includesMarker ? "late marker" : "prefix only",
-            }),
-          );
-          socket.close(1000);
-        });
+        flushed.resolve(socket);
       }
     });
   });
@@ -90,26 +80,44 @@ it("transcribes audio beyond twenty minutes while another transcription complete
     request: { allowPrivateNetwork: true },
     timeoutMs: 20_000,
   };
+  const long = transcribeAudio({ ...request, model: "flux-general-en" });
   try {
-    const long = transcribeAudio({ ...request, model: "flux-general-en" });
-    await Promise.race([firstFrame.promise, long]);
+    const premature = long.then(() => {
+      throw new Error("Flux transcription completed before the fixture response");
+    });
+    await Promise.race([firstFrame.promise, premature]);
     const short = await transcribeAudio({
       ...request,
       buffer: Buffer.from("short audio"),
       model: "nova-3",
     });
     expect(short.text).toBe("short note");
-    releaseTranscript.resolve();
+    const socket = await Promise.race([flushed.promise, premature]);
+    const includesMarker = Buffer.concat(frames)
+      .subarray(1260 * 32_000, 1261 * 32_000)
+      .equals(marker);
+    socket.send(
+      JSON.stringify({
+        type: "TurnInfo",
+        event: "EndOfTurn",
+        transcript: includesMarker ? "late marker" : "prefix only",
+      }),
+    );
+    socket.close(1000);
     expect((await long).text).toBe("late marker");
     const received = Buffer.concat(frames);
     expect(received.equals(pcm)).toBe(true);
   } finally {
-    releaseTranscript.resolve();
-    for (const socket of sockets.clients) {
-      socket.terminate();
+    try {
+      for (const socket of sockets.clients) {
+        socket.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        sockets.close(() => server.close(() => resolve()));
+      });
+    } finally {
+      // Join the public attempt after closing the local endpoint.
+      await long.catch(() => undefined);
     }
-    await new Promise<void>((resolve) => {
-      sockets.close(() => server.close(() => resolve()));
-    });
   }
 }, 30_000);

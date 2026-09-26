@@ -48,7 +48,7 @@ describe("transcribeDeepgramAudio", () => {
     });
 
     const result = await transcribeDeepgramAudio({
-      buffer: Buffer.from("audio-bytes"),
+      buffer: Buffer.from([0xaa, 0x00, 0x7f, 0x80, 0xff, 0xbb]).subarray(1, 5),
       fileName: "voice.wav",
       apiKey: "test-key",
       timeoutMs: 1234,
@@ -81,6 +81,7 @@ describe("transcribeDeepgramAudio", () => {
     expect(headers.get("x-custom")).toBe("1");
     expect(headers.get("content-type")).toBe("audio/wav");
     expect(seenInit.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(seenInit.body as Uint8Array)).toEqual([0x00, 0x7f, 0x80, 0xff]);
   });
 
   it.each([

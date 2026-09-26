@@ -49,7 +49,7 @@ describe("transcribeSenseAudioAudio", () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
 
     const result = await transcribeSenseAudioAudio({
-      buffer: Buffer.from("audio-bytes"),
+      buffer: Buffer.from([0xaa, 0x00, 0x7f, 0x80, 0xff, 0xbb]).subarray(1, 5),
       fileName: "voice.wav",
       apiKey: "test-key",
       timeoutMs: 1234,
@@ -78,14 +78,15 @@ describe("transcribeSenseAudioAudio", () => {
     expect(form.get("model")).toBe("senseaudio-asr-pro-1.5-260319");
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt")).toBe("hello");
-    const file = form.get("file") as Blob | { type?: string; name?: string } | null;
-    if (!file) {
+    const file = form.get("file");
+    if (!file || typeof file === "string") {
       throw new Error("expected SenseAudio audio file");
     }
     expect(file.type).toBe("audio/wav");
-    if (file && "name" in file && typeof file.name === "string") {
-      expect(file.name).toBe("voice.wav");
-    }
+    expect(file.name).toBe("voice.wav");
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(
+      new Uint8Array([0x00, 0x7f, 0x80, 0xff]),
+    );
   });
 
   it("throws when the provider response omits text", async () => {

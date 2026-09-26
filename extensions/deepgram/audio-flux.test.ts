@@ -163,19 +163,30 @@ describe("Deepgram Flux audio", () => {
       },
     );
 
-    await decodeStarted.promise;
-    await vi.advanceTimersByTimeAsync(200);
-    releaseDecode.resolve();
-    await preparationStarted.promise;
-    await vi.advanceTimersByTimeAsync(300);
-    releasePreparation.resolve();
-    await flushed.promise;
-    await vi.advanceTimersByTimeAsync(499);
-    expect(failure).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(1);
-    await transcription;
-    expect(failure).toBeInstanceOf(Error);
-    expect(failure).toMatchObject({ message: expect.stringContaining("timed out") });
+    try {
+      await decodeStarted.promise;
+      await vi.advanceTimersByTimeAsync(200);
+      releaseDecode.resolve();
+      await preparationStarted.promise;
+      await vi.advanceTimersByTimeAsync(300);
+      releasePreparation.resolve();
+      await flushed.promise;
+      await vi.advanceTimersByTimeAsync(499);
+      expect(failure).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      await transcription;
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({ message: expect.stringContaining("timed out") });
+    } finally {
+      releaseDecode.resolve();
+      releasePreparation.resolve();
+      try {
+        // Expire this attempt's original deadline before restoring the fake clock.
+        await vi.advanceTimersByTimeAsync(1000);
+      } finally {
+        await transcription;
+      }
+    }
   });
 
   it("routes documented Flux models only", () => {
