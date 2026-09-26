@@ -17,10 +17,10 @@ export async function readSessionHistoryRequest(
     resolveCronJobName: () => undefined,
   };
   if (request.kind === "artifacts") {
-    const { readSessionArtifacts } = await import("./session-artifact-read.js");
+    const { selectSessionArtifacts } = await import("./session-artifact-read.js");
     return {
       kind: "artifacts",
-      result: await readSessionArtifacts(
+      result: await selectSessionArtifacts(
         request.params.target,
         request.params.query,
         options.readers,

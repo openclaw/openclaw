@@ -4,6 +4,7 @@ import type {
 } from "../../gateway/session-artifact-read.js";
 import type {
   ReadRecentSessionMessagesResult,
+  ReadSessionMessageByIdResult,
   ReadSessionMessagesAroundIdResult,
   ReadSessionMessagesResult,
   SessionTranscriptReader,
@@ -106,14 +107,6 @@ export type SessionHistorySubagentFacts = {
 export type SessionHistoryDelta = {
   delta: SessionTranscriptDisplayDeltaResult;
   subagentCoordination: SessionHistorySubagentFacts;
-};
-
-export type ReadSessionMessageByIdResult = {
-  message?: unknown;
-  seq?: number;
-  oversized: boolean;
-  found: boolean;
-  serializedBytes?: number;
 };
 
 export type SessionHistoryTranscriptBinding = { sessionKey: string; sessionId: string };

@@ -308,7 +308,7 @@ async function readArtifactList(
 }
 
 /** Select transcript artifacts inside the caller's admitted read owner. */
-export async function readSessionArtifacts(
+export async function selectSessionArtifacts(
   scope: SessionTranscriptReadScope,
   query: SessionArtifactReadQuery,
   readers: ArtifactReaders,

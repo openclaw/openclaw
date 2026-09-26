@@ -157,8 +157,8 @@ export async function readSessionArtifacts(
   const target = captureHistoryReadScope(scope);
   const query = structuredClone(inputQuery);
   if (usesProcessHeldTranscript(target)) {
-    const { readSessionArtifacts: readLocal } = await import("./session-artifact-read.js");
-    return readLocal(target, query, sessionTranscriptReader);
+    const { selectSessionArtifacts } = await import("./session-artifact-read.js");
+    return selectSessionArtifacts(target, query, sessionTranscriptReader);
   }
   const { readSessionHistoryPageInWorker } =
     await import("../config/sessions/session-history-worker-runtime.js");
