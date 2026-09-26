@@ -92,11 +92,11 @@ const inputSchema = installedPackageSchema.extend({
 });
 type Input = z.infer<typeof inputSchema>;
 export const keys = ["fresh", "2026.9.3", "2026.9.4"] as const;
-// Aggregate serial fixture phases; command, readiness, and native inspection limits stay intact.
+// Aggregate serial fixture phases, including the complete published updater's stage sequence.
 const installedCellBodyTimeoutMs = {
   fresh: 360_000,
-  "2026.9.3": 900_000,
-  "2026.9.4": 1_260_000,
+  "2026.9.3": 1_080_000,
+  "2026.9.4": 1_440_000,
 } satisfies Record<(typeof keys)[number], number>;
 export function createInstalledProgressRecorder(params: {
   input: Input;
@@ -143,6 +143,8 @@ export function createInstalledProgressRecorder(params: {
     let outputPhase = "fixture";
     if (phase.startsWith("command:")) {
       outputPhase = "command-result";
+    } else if (phase === "published-update:completed-step") {
+      outputPhase = "update-step-completed";
     } else if (phase.startsWith("disabled-discovery:")) {
       outputPhase = "disabled-discovery";
     } else if (phase.endsWith(":waiting")) {

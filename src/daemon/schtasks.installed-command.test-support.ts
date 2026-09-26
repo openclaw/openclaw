@@ -111,7 +111,11 @@ export async function run(
   records: CommandRecord[],
   expectedExit = 0,
   signal?: AbortSignal,
-  options: { expectedStderr?: readonly string[]; observeService?: ServiceObservation } = {},
+  options: {
+    expectedStderr?: readonly string[];
+    observeService?: ServiceObservation;
+    commandBudget?: "published-update";
+  } = {},
 ) {
   const { expectedStderr = [], observeService } = options;
   const started = performance.now();
@@ -132,7 +136,7 @@ export async function run(
       cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
-      timeoutMs: 180_000,
+      timeoutMs: options.commandBudget === "published-update" ? 360_000 : 180_000,
       signal,
       onReady(launched) {
         child = launched;

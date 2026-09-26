@@ -21,6 +21,7 @@ import {
   doctorReportSchema,
   inspectDisabledDiscoveryTasks,
   inspectInstalledUpdateFailure,
+  runInstalledPublishedUpdate,
   type InstalledTask as Task,
 } from "./schtasks.installed-diagnostics.test-support.js";
 import {
@@ -38,7 +39,6 @@ import {
   readInstalledBuildIdentity,
   readPreparedCell,
   recordCapacityBoundary,
-  requiredCellSpace,
   samePath,
   verifyPreparedInstall,
 } from "./schtasks.installed-package.test-support.js";
@@ -365,29 +365,16 @@ export async function runInstalledLifecycle(
         installed: await hashInstall(installRoot),
       };
       await recordProgress("published-driver:hash-verified");
-      // This is the unchanged installed old CLI. No imported old controller or injected update marker.
-      const beforeUpdate = await recordCapacityBoundary(
-        inputPath,
+      observations.update = await runInstalledPublishedUpdate({
+        task: selected,
         input,
+        inputPath,
         key,
-        "before-published-update",
-      );
-      const { forecast } = requiredCellSpace(key);
-      const updateNeed =
-        forecast.upgradeStaging +
-        forecast.runtimeNpmCache +
-        forecast.retainedStateAndProof +
-        forecast.freeFloor;
-      assert.ok(
-        beforeUpdate.availableBytes >= updateNeed,
-        `Published updater needs ${updateNeed} additional available bytes under the provisional forecast; observed ${beforeUpdate.availableBytes}; update not started`,
-      );
-      const update = JSON.parse(
-        await cli(selected, ["update", "--yes", "--tag", input.tarball, "--json"]),
-      );
-      await recordCapacityBoundary(inputPath, input, key, "after-published-update");
-      const outcome = z.object({ status: z.literal("ok"), mode: z.literal("npm") }).parse(update);
-      observations.update = outcome;
+        commands,
+        signal,
+        observations,
+        recordProgress,
+      });
       await prepareInstalledPackage({ ...input, installRoot });
       await recordProgress("updated-candidate:hash-verified");
       const candidateIdentity = await readInstalledBuildIdentity(

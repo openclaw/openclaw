@@ -12,6 +12,7 @@ const reviewedFixturePaths = new Set([
   "src/daemon/schtasks.integration.e2e.test.ts",
   "src/daemon/schtasks.integration-xml.test.ts",
   "src/daemon/schtasks.installed-diagnostics.test-support.ts",
+  "src/daemon/schtasks.installed-command.test-support.ts",
   "src/daemon/schtasks.installed-authority.test-support.ts",
   "src/daemon/schtasks.installed.integration.test-support.ts",
   "src/daemon/schtasks.installed-startup.test-support.ts",

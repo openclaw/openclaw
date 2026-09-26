@@ -1321,7 +1321,7 @@ jobs:
         id: native_schtasks_9_3
         if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_prepare_9_3.outcome == 'success' }}
         # 15-minute installed body, three-minute teardown hook, one-minute runner margin.
-        timeout-minutes: 19
+        timeout-minutes: 22
         shell: bash
         env:
           OPENCLAW_VITEST_WORKER_CACHE: "1"
@@ -1390,7 +1390,7 @@ jobs:
         id: native_schtasks_9_4
         if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_prepare_9_4.outcome == 'success' }}
         # 21-minute installed body, three-minute teardown hook, one-minute runner margin.
-        timeout-minutes: 25
+        timeout-minutes: 28
         shell: bash
         env:
           OPENCLAW_VITEST_WORKER_CACHE: "1"
