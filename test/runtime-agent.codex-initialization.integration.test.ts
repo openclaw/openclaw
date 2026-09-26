@@ -7,7 +7,9 @@ import {
   loadTranscriptEvents,
   rollbackAgentHarnessSessionEntryLifecycle,
 } from "../src/config/sessions/session-accessor.js";
+import * as entryPatchWorker from "../src/config/sessions/session-accessor.sqlite-entry-patch-worker.js";
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
+import * as sessionIdentity from "../src/config/sessions/session-accessor.sqlite-identity.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import {
@@ -31,7 +33,6 @@ import {
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
-  deferOpenClawAgentPostCommitPublication,
 } from "../src/state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
@@ -267,20 +268,38 @@ describe("Codex initialization through the registered session deletion owner", (
             throw new Error("injected post-write failure");
           }
           if (failure === "final readiness") {
-            openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-              "CREATE TEMP TRIGGER reject_readiness BEFORE UPDATE OF entry_json ON session_nodes WHEN json_extract(OLD.entry_json, '$.initializationPending') = 1 AND json_extract(NEW.entry_json, '$.initializationPending') IS NULL BEGIN SELECT RAISE(ABORT, 'injected readiness failure'); END",
+            const runPatch = entryPatchWorker.runSessionEntryPatch;
+            vi.spyOn(entryPatchWorker, "runSessionEntryPatch").mockImplementation((input) =>
+              runPatch({
+                ...input,
+                assertCommitAllowed: () => {
+                  input.assertCommitAllowed?.();
+                  if (
+                    "sessionKey" in input.selection &&
+                    input.selection.sessionKey === params.targetKey
+                  ) {
+                    throw new Error("injected readiness failure");
+                  }
+                },
+              }),
             );
           }
           if (failure === "readiness publication") {
-            const database = openOpenClawAgentDatabase({ agentId: "main" });
-            database.db.function("inject_publication_failure", () => {
-              deferOpenClawAgentPostCommitPublication(database, () => {
-                throw new Error("injected readiness publication failure");
-              });
-              return 0;
-            });
-            database.db.exec(
-              "CREATE TEMP TRIGGER reject_publication AFTER UPDATE OF entry_json ON session_nodes WHEN json_extract(OLD.entry_json, '$.initializationPending') = 1 AND json_extract(NEW.entry_json, '$.initializationPending') IS NULL BEGIN SELECT inject_publication_failure(); END",
+            const publish = sessionIdentity.publishCommittedSessionIdentity;
+            vi.spyOn(sessionIdentity, "publishCommittedSessionIdentity").mockImplementation(
+              (...args) => {
+                publish(...args);
+                if (args[3].has(params.targetKey)) {
+                  const committed = loadSessionEntry({
+                    agentId: "main",
+                    sessionKey: params.targetKey,
+                    readConsistency: "latest",
+                  });
+                  expect(committed?.sessionId).toBe(childSessionId);
+                  expect(committed?.initializationPending).toBeUndefined();
+                  throw new Error("injected readiness publication failure");
+                }
+              },
             );
           }
           return attached;
@@ -292,6 +311,15 @@ describe("Codex initialization through the registered session deletion owner", (
         );
 
         expect(result).toMatchObject({ status: "failed" });
+        if (failure === "final readiness" || failure === "readiness publication") {
+          expect(result).toMatchObject({
+            message: expect.stringContaining(
+              failure === "final readiness"
+                ? "injected readiness failure"
+                : "injected readiness publication failure",
+            ),
+          });
+        }
         const identity = {
           kind: "session" as const,
           agentId: "main",
