@@ -55,6 +55,22 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function createManager(
+  record: ReturnType<typeof environment>,
+  overrides: Partial<Parameters<typeof createNodeWorkerTunnelManager>[0]> = {},
+) {
+  return createNodeWorkerTunnelManager({
+    gatewayDeviceId: "gateway-device-1",
+    getEnvironment: () => record,
+    listEnvironments: () => [record],
+    getTransport: transport,
+    launchNodeWorker: vi.fn(),
+    validateWorkerTurn: () => true,
+    workspaceTransfer: workspaceTransfer(),
+    ...overrides,
+  });
+}
+
 describe("node worker tunnel manager", () => {
   it.each([
     ["gateway-push", true],
@@ -206,15 +222,7 @@ describe("node worker tunnel manager", () => {
     const record = environment();
     const workspaceBinding = createDeferred<undefined>();
     const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
-      getTransport: transport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
-      workspaceTransfer: workspaceTransfer(),
-    });
+    const manager = createManager(record);
     manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
 
     const first = manager.start(startRequest());
@@ -239,13 +247,7 @@ describe("node worker tunnel manager", () => {
         closeAll: vi.fn(async () => {}),
       } as unknown as NodeWorkspaceTransferService;
       const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
-      const manager = createNodeWorkerTunnelManager({
-        gatewayDeviceId: "gateway-device-1",
-        getEnvironment: () => record,
-        listEnvironments: () => [record],
-        getTransport: transport,
-        launchNodeWorker: vi.fn(),
-        validateWorkerTurn: () => true,
+      const manager = createManager(record, {
         workspaceTransfer: transfer,
       });
       manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
@@ -325,13 +327,7 @@ describe("node worker tunnel manager", () => {
     transfer.close = vi.fn(async () => {
       throw new Error("workspace cleanup failed");
     });
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
-      getTransport: transport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
+    const manager = createManager(record, {
       workspaceTransfer: transfer,
     });
     manager.bindWorkspaceBindingResolver(async () => {
@@ -385,13 +381,8 @@ describe("node worker tunnel manager", () => {
       });
       const transfer = workspaceTransfer();
       transfer.prepareSync = prepareSync;
-      const manager = createNodeWorkerTunnelManager({
-        gatewayDeviceId: "gateway-device-1",
-        getEnvironment: () => record,
-        listEnvironments: () => [record],
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
-        launchNodeWorker: vi.fn(),
-        validateWorkerTurn: () => true,
         workspaceTransfer: transfer,
       });
       manager.bindWorkspaceBindingResolver(async () => ({
@@ -459,10 +450,7 @@ describe("node worker tunnel manager", () => {
       close: vi.fn(async () => {}),
       revoke: vi.fn(),
     } as unknown as NodeWorkspaceTransferService;
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
+    const manager = createManager(record, {
       getTransport: () => {
         const nodeTransport = transport();
         return {
@@ -485,8 +473,6 @@ describe("node worker tunnel manager", () => {
           invoke: withWorkspaceDrain(invoke),
         };
       },
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
       workspaceTransfer: transfer,
     });
     const resolveWorkspaceBinding = vi.fn(async () => ({
@@ -579,13 +565,8 @@ describe("node worker tunnel manager", () => {
       },
       token: "restore-token",
     }));
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
       workspaceTransfer: transfer,
     });
     manager.bindWorkspaceBindingResolver(async () => ({
@@ -661,13 +642,8 @@ describe("node worker tunnel manager", () => {
       close: vi.fn(async () => {}),
       revoke: vi.fn(),
     } as unknown as NodeWorkspaceTransferService;
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
       workspaceTransfer: transfer,
     });
     const handle = await manager.start(startRequest());
@@ -758,13 +734,8 @@ describe("node worker tunnel manager", () => {
       close: vi.fn(async () => {}),
       revoke: vi.fn(),
     } as unknown as NodeWorkspaceTransferService;
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
       workspaceTransfer: transfer,
     });
     const handle = await manager.start(startRequest());
@@ -872,13 +843,8 @@ describe("node worker tunnel manager", () => {
         close: vi.fn(async () => {}),
         revoke: vi.fn(),
       } as unknown as NodeWorkspaceTransferService;
-      const manager = createNodeWorkerTunnelManager({
-        gatewayDeviceId: "gateway-device-1",
-        getEnvironment: () => record,
-        listEnvironments: () => [record],
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
-        launchNodeWorker: vi.fn(),
-        validateWorkerTurn: () => true,
         workspaceTransfer: transfer,
       });
       const handle = await manager.start(startRequest());
@@ -997,13 +963,8 @@ describe("node worker tunnel manager", () => {
       close: vi.fn(async () => {}),
       revoke: vi.fn(),
     } as unknown as NodeWorkspaceTransferService;
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
       workspaceTransfer: transfer,
     });
     const handle = await manager.start(startRequest());

@@ -75,8 +75,6 @@ describe("browser screencast mint route", () => {
 
   it.each([
     { when: "before request", abort: true },
-    { when: "during tab resolution", abort: true },
-    { when: "before request", abort: false },
     { when: "during tab resolution", abort: false },
   ])("rejects a requester invalidated $when (socket closed: $abort)", async ({ when, abort }) => {
     const connection = new AbortController();

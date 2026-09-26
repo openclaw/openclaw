@@ -91,60 +91,15 @@ type FileMeta = {
 
 type WorkspaceRoot = Awaited<ReturnType<typeof root>>;
 
-function isRegularWorkspaceFileStat(stat: {
-  isFile: boolean | (() => boolean);
-  isSymbolicLink: boolean | (() => boolean);
-  nlink: number;
-}): boolean {
-  const isFile = typeof stat.isFile === "function" ? stat.isFile() : stat.isFile;
-  const isSymbolicLink =
-    typeof stat.isSymbolicLink === "function" ? stat.isSymbolicLink() : stat.isSymbolicLink;
-  // Reject links even after path-root containment so workspace reads cannot follow shared files.
-  return isFile && !isSymbolicLink && stat.nlink <= 1;
-}
-
-function toWorkspaceFileMeta(
-  stat: {
-    size: number;
-    mtimeMs: number;
-  } & Parameters<typeof isRegularWorkspaceFileStat>[0],
-): FileMeta | null {
-  if (!isRegularWorkspaceFileStat(stat)) {
-    return null;
-  }
-  return {
-    size: stat.size,
-    updatedAtMs: Math.floor(stat.mtimeMs),
-  };
-}
-
 async function statWorkspaceFileSafely(
   workspaceRoot: WorkspaceRoot | null,
-  workspaceDir: string,
   name: string,
 ): Promise<FileMeta | null> {
   try {
-    const stat = workspaceRoot
-      ? await workspaceRoot.stat(name)
-      : await fs.lstat(path.join(workspaceDir, name));
-    return toWorkspaceFileMeta(stat);
-  } catch {
-    if (!workspaceRoot) {
-      return null;
-    }
-    try {
-      // fs-safe roots can reject fixtures that are still valid regular files for listing metadata.
-      const stat = await fs.lstat(path.join(workspaceDir, name));
-      return toWorkspaceFileMeta(stat);
-    } catch {
-      return null;
-    }
-  }
-}
-
-async function openWorkspaceRootSafely(workspaceDir: string): Promise<WorkspaceRoot | null> {
-  try {
-    return await root(workspaceDir);
+    const stat = await workspaceRoot?.stat(name);
+    return stat?.isFile && !stat.isSymbolicLink && stat.nlink <= 1
+      ? { size: stat.size, updatedAtMs: Math.floor(stat.mtimeMs) }
+      : null;
   } catch {
     return null;
   }
@@ -152,70 +107,31 @@ async function openWorkspaceRootSafely(workspaceDir: string): Promise<WorkspaceR
 
 async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: boolean }) {
   const access = getAgentWorkspaceAccess(workspaceDir);
-  if (access) {
-    const names = options?.hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
-    return await Promise.all(
-      names.map(async (name) => {
+  const workspaceRoot = access ? null : await root(workspaceDir).catch(() => null);
+  const names = options?.hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
+  return await Promise.all(
+    names.map(async (name) => {
+      let meta: FileMeta | null;
+      if (access) {
         const stat = await access.bridge.stat({ filePath: name });
         if (getAgentWorkspaceAccess(workspaceDir) !== access) {
           throw new Error("Workspace access changed while listing Agent documents");
         }
-        const file = stat?.type === "file" ? stat : undefined;
-        return {
+        meta =
+          stat?.type === "file" ? { size: stat.size, updatedAtMs: Math.floor(stat.mtimeMs) } : null;
+      } else {
+        meta = await statWorkspaceFileSafely(workspaceRoot, name);
+      }
+      return Object.assign(
+        {
           name,
           path: path.join(workspaceDir, name),
-          missing: file === undefined,
-          expectedAbsent: file === undefined ? isExpectedAbsentBootstrapFile(name) : undefined,
-          size: file?.size,
-          updatedAtMs: file === undefined ? undefined : Math.floor(file.mtimeMs),
-        };
-      }),
-    );
-  }
-  const files: Array<{
-    name: string;
-    path: string;
-    missing: boolean;
-    expectedAbsent?: boolean;
-    size?: number;
-    updatedAtMs?: number;
-  }> = [];
-
-  const workspaceRoot = await openWorkspaceRootSafely(workspaceDir);
-  if (!workspaceRoot) {
-    // Keep the UI shape stable when the workspace path is missing or unsafe.
-    const missingNames = options?.hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
-    return missingNames.map((name) => ({
-      name,
-      path: path.join(workspaceDir, name),
-      missing: true,
-      expectedAbsent: isExpectedAbsentBootstrapFile(name),
-    }));
-  }
-
-  const coreFileNames = options?.hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
-  for (const name of coreFileNames) {
-    const filePath = path.join(workspaceDir, name);
-    const meta = await statWorkspaceFileSafely(workspaceRoot, workspaceDir, name);
-    if (meta) {
-      files.push({
-        name,
-        path: filePath,
-        missing: false,
-        size: meta.size,
-        updatedAtMs: meta.updatedAtMs,
-      });
-    } else {
-      files.push({
-        name,
-        path: filePath,
-        missing: true,
-        expectedAbsent: isExpectedAbsentBootstrapFile(name),
-      });
-    }
-  }
-
-  return files;
+          missing: meta === null,
+        },
+        meta ?? { expectedAbsent: isExpectedAbsentBootstrapFile(name) },
+      );
+    }),
+  );
 }
 
 function hashWorkspaceFileContent(content: Buffer | string): string {
@@ -514,7 +430,7 @@ export const agentFileHandlers: Pick<
     }
     const meta: Partial<FileMeta> | null = access
       ? { size: Buffer.byteLength(content) }
-      : await statWorkspaceFileSafely(workspaceRoot, workspaceDir, name);
+      : await statWorkspaceFileSafely(workspaceRoot, name);
     respond(
       true,
       {

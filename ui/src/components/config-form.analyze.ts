@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   arrayItemSchema,
   arrayItemSchemaIndexes,
@@ -159,12 +160,7 @@ function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
   if (schema.not === undefined) {
     return true;
   }
-  if (
-    inferredSchemaType(schema) !== "object" ||
-    !schema.not ||
-    typeof schema.not !== "object" ||
-    Array.isArray(schema.not)
-  ) {
+  if (inferredSchemaType(schema) !== "object" || !isRecord(schema.not)) {
     return false;
   }
   const required = schema.not.required;
@@ -183,9 +179,7 @@ function hasOnlySupportedKeywords(schema: JsonSchema, supported: ReadonlySet<str
       // Key edits use the same value validator as fields. Admit its supported
       // string constraints without hiding the whole map behind Raw mode.
       (key === "propertyNames" &&
-        typeof schema.propertyNames === "object" &&
-        schema.propertyNames !== null &&
-        !Array.isArray(schema.propertyNames) &&
+        isRecord(schema.propertyNames) &&
         schemaMayAcceptString(schema.propertyNames) &&
         normalizeSchemaNode({ type: "string", ...schema.propertyNames }, []).unsupportedPaths
           .length === 0),

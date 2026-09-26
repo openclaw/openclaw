@@ -18,6 +18,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration, isCronJobActive } from "../active-jobs.js";
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { CronService } from "../service.js";
@@ -40,6 +41,7 @@ import type { CronServiceState } from "./state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 
 const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
+const schedulerClockUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.schedulerClock);
 
 const children = new Set<ChildProcess>();
 let scriptRoot = "";
@@ -69,6 +71,7 @@ beforeEach(async () => {
     `
       import fs from "node:fs";
       import { CronService } from ${JSON.stringify(serviceUrl.href)};
+      import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
       import { deserialize } from "node:v8";
       import { MessagePort } from "node:worker_threads";
       const [storePath, jobId, mode, releasePath, outputPath] = process.argv.slice(2);
@@ -76,6 +79,8 @@ beforeEach(async () => {
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
       let activationClock = Date.now();
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         ...(mode === "crash-activation" ? { nowMs: () => ++activationClock } : {}),
         storePath,
         cronEnabled: true,
@@ -274,6 +279,8 @@ async function waitForImmediate(
 
 function makeParentService(storePath: string, runCommandJob = vi.fn()) {
   return new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: true,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },

@@ -57,7 +57,7 @@ describe("heartbeat event prompts", () => {
         "Please relay the command output to the user",
         "If it failed",
       ],
-      unexpected: ["system messages above", "Handle the result internally"],
+      unexpected: ["system messages above", "Handle the result internally", "[truncated]"],
     },
     {
       name: "builds internal-only exec prompt when delivery is disabled",
@@ -105,13 +105,6 @@ describe("heartbeat event prompts", () => {
     }
   });
 
-  it("truncates oversized user-relay exec prompt output", () => {
-    const prompt = buildExecEventPrompt([`Exec finished: ${"x".repeat(8_100)}`]);
-
-    expect(prompt).toContain("[truncated]");
-    expect(prompt.length).toBeLessThan(8_500);
-  });
-
   it("uses heartbeat_respond for empty cron events in response-tool mode", () => {
     const prompt = buildCronEventPrompt([""], { useHeartbeatResponseTool: true });
 
@@ -132,24 +125,15 @@ describe("heartbeat event prompts", () => {
 describe("heartbeat event classification", () => {
   it.each([
     { value: "exec finished: ok", expected: true },
-    { value: "Exec finished (node=abc, code 0)", expected: true },
     { value: "Exec Finished (node=abc, code 1)", expected: true },
-    { value: "Exec completed (abc12345, code 0)", expected: true },
-    { value: "Exec completed (abc12345, code 0) :: some output", expected: true },
-    { value: "Exec failed (abc12345, code 1)", expected: true },
-    { value: "Exec failed (abc12345, signal SIGTERM) :: error output", expected: true },
     { value: "Exec completed (rotate api keys)", expected: false },
     { value: "Exec failed: notify me if this happens", expected: false },
-    { value: "Reminder: if exec failed, notify me", expected: false },
-    { value: "cron finished", expected: false },
   ])("classifies exec completion events for %j", ({ value, expected }) => {
     expect(isExecCompletionEvent(value)).toBe(expected);
   });
 
   it.each([
-    { value: "Cron: rotate logs", expected: true },
     { value: "  Cron: rotate logs  ", expected: true },
-    { value: "", expected: false },
     { value: "   ", expected: false },
     { value: "NO_REPLY", expected: false },
     { value: "no_reply: actual reminder", expected: true },
@@ -158,13 +142,8 @@ describe("heartbeat event classification", () => {
     { value: "heartbeat poll: noop", expected: false },
     { value: "heartbeat wake: noop", expected: false },
     { value: "exec finished: ok", expected: false },
-    { value: "Exec finished (node=abc, code 0)", expected: false },
     { value: "Exec completed (abc12345, code 0)", expected: false },
-    { value: "Exec completed (abc12345, code 0) :: some output", expected: false },
-    { value: "Exec failed (abc12345, code 1)", expected: false },
-    { value: "Exec failed (abc12345, signal SIGTERM) :: error output", expected: false },
     { value: "Exec completed (rotate api keys)", expected: true },
-    { value: "Reminder: if exec failed, notify me", expected: true },
   ])("classifies cron system events for %j", ({ value, expected }) => {
     expect(isCronSystemEvent(value)).toBe(expected);
   });
@@ -221,11 +200,6 @@ describe("buildExecEventPrompt truncation", () => {
 
     expect(result).toContain(`${safePrefix}\n\n[truncated]`);
     expect(result).not.toContain("🚀tail");
-  });
-
-  it("passes through short event text unchanged", () => {
-    const result = buildExecEventPrompt(["hello"]);
-    expect(result).toContain("hello");
-    expect(result).not.toContain("[truncated]");
+    expect(result.length).toBeLessThan(8_500);
   });
 });

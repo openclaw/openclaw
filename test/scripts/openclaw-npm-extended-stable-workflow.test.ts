@@ -467,7 +467,6 @@ describe("minimal npm extended-stable workflow", () => {
     );
     expect(trustedRef.env?.BYPASS_EXTENDED_STABLE_GUARD).toBeUndefined();
     expect(trustedRef.run).not.toContain("BYPASS_EXTENDED_STABLE_GUARD");
-    expect(trustedRef.run).toContain('"${WORKFLOW_REF}" == refs/heads/extended-stable/*');
 
     const summary = step(
       parsed.jobs?.publish_openclaw_npm,
@@ -511,7 +510,7 @@ describe("minimal npm extended-stable workflow", () => {
   });
 
   it.each([
-    { label: "trusted-main recovery", workflowRef: "refs/heads/main", status: 0 },
+    { label: "main recovery", workflowRef: "refs/heads/main", status: 1 },
     {
       label: "protected publisher",
       workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
@@ -523,23 +522,53 @@ describe("minimal npm extended-stable workflow", () => {
       workflowRef: "refs/heads/release/2026.8.1",
       status: 1,
     },
+    {
+      label: "Tideclaw branch",
+      workflowRef: "refs/heads/tideclaw/alpha/2026-09-25-1200Z",
+      status: 1,
+    },
+    {
+      label: "extended-stable branch",
+      workflowRef: "refs/heads/extended-stable/2026.8.33",
+      status: 1,
+    },
     { label: "ordinary tag", workflowRef: "refs/tags/v2026.8.34", status: 1 },
     {
       label: "wrong candidate month",
-      workflowRef: "refs/heads/main",
+      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
       candidate: "extended-stable/2026.7.33",
       status: 1,
     },
     {
       label: "noncanonical candidate branch",
-      workflowRef: "refs/heads/main",
+      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
       candidate: "extended-stable/2026.8.34",
       status: 1,
     },
-    { label: "latest selector", workflowRef: "refs/heads/main", npmDistTag: "latest", status: 1 },
-    { label: "beta selector", workflowRef: "refs/heads/main", npmDistTag: "beta", status: 1 },
-    { label: "correction suffix", workflowRef: "refs/heads/main", tag: "v2026.8.34-1", status: 1 },
-    { label: "non-tag candidate", workflowRef: "refs/heads/main", tag: "a".repeat(40), status: 1 },
+    {
+      label: "latest selector",
+      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
+      npmDistTag: "latest",
+      status: 1,
+    },
+    {
+      label: "beta selector",
+      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
+      npmDistTag: "beta",
+      status: 1,
+    },
+    {
+      label: "correction suffix",
+      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
+      tag: "v2026.8.34-1",
+      status: 1,
+    },
+    {
+      label: "non-tag candidate",
+      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
+      tag: "a".repeat(40),
+      status: 1,
+    },
     {
       label: "wrong protected SHA prefix",
       workflowRef: "refs/tags/release-publish/aaaaaaaaaaaa-123",
@@ -776,7 +805,7 @@ describe("minimal npm extended-stable workflow", () => {
     );
     expect(summary.env?.RELEASE_SHA).toBeUndefined();
     expect(summary.run).toContain('release_sha="$(git rev-parse HEAD)"');
-    expect(publish?.environment).toBe("npm-release");
+    expect(publish?.environment).toBe("npm-publish");
   });
 
   it("publishes only the tarball path verified from the preflight manifest", () => {

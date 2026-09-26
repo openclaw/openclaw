@@ -16,6 +16,7 @@ import {
   WebSocketServer,
   type WebSocket,
 } from "openclaw/plugin-sdk/websocket-runtime";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
 import { authenticateExtensionWebSocket } from "./auth-v2-websocket.js";
 import {
@@ -42,7 +43,6 @@ import {
   requestExtensionProtocolToken,
   requestProtocols,
 } from "./relay-request.js";
-import { parseStrictJsonObject } from "./strict-json.js";
 
 export { authenticateExtensionWebSocket } from "./auth-v2-websocket.js";
 

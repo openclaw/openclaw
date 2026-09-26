@@ -32,23 +32,19 @@ const STATUS_LABEL_KEYS = {
   timed_out: "tasksPage.status.timedOut",
 } as const satisfies Record<TaskStatus, string>;
 
+const RUNTIME_LABEL_KEYS = new Map([
+  ["subagent", "tasksPage.runtime.subagent"],
+  ["cron", "tasksPage.runtime.cron"],
+  ["acp", "tasksPage.runtime.acp"],
+  ["cli", "tasksPage.runtime.cli"],
+]);
+
 export function taskStatusLabel(status: TaskStatus): string {
   return t(STATUS_LABEL_KEYS[status]);
 }
 
 export function taskRuntimeLabel(task: TaskSummary): string {
-  switch (task.runtime) {
-    case "subagent":
-      return t("tasksPage.runtime.subagent");
-    case "cron":
-      return t("tasksPage.runtime.cron");
-    case "acp":
-      return t("tasksPage.runtime.acp");
-    case "cli":
-      return t("tasksPage.runtime.cli");
-    default:
-      return t("tasksPage.runtime.unknown");
-  }
+  return t(RUNTIME_LABEL_KEYS.get(task.runtime ?? "") ?? "tasksPage.runtime.unknown");
 }
 
 export function taskTitle(task: TaskSummary): string {
@@ -79,7 +75,7 @@ export function taskFinishedDuration(task: TaskSummary): string | undefined {
 }
 
 export function taskDetail(task: TaskSummary): string | null {
-  if (task.status === "queued" || task.status === "running") {
+  if (isActiveTask(task)) {
     return task.progressSummary ?? null;
   }
   if (task.status === "failed" || task.status === "timed_out") {
@@ -140,11 +136,8 @@ export function newestTaskSnapshot(
   if (!currentActive) {
     return provenance === "event" ? preserveTaskPrompt(lookup, current, lookup) : current;
   }
-  if (current.status === "running" && lookup.status === "queued") {
-    return preserveTaskPrompt(current, current, lookup);
-  }
-  if (current.status === "queued" && lookup.status === "running") {
-    return preserveTaskPrompt(lookup, current, lookup);
+  if (current.status !== lookup.status) {
+    return preserveTaskPrompt(current.status === "running" ? current : lookup, current, lookup);
   }
   // Execution observations can advance while the durable lifecycle clock stays fixed.
   const currentActivityAt = taskTimestampMs(current.execution?.lastActivityAt);
@@ -195,13 +188,13 @@ export function partitionTasks(tasks: readonly TaskSummary[]): {
   return {
     // Creation is immutable, so progress and queued-to-running transitions cannot move active rows.
     active: tasks
-      .filter((task) => task.status === "queued" || task.status === "running")
+      .filter(isActiveTask)
       .toSorted(
         (left, right) =>
           taskTimestampMs(left.createdAt) - taskTimestampMs(right.createdAt) || byId(left, right),
       ),
     recent: tasks
-      .filter((task) => task.status !== "queued" && task.status !== "running")
+      .filter((task) => !isActiveTask(task))
       .toSorted(
         (left, right) =>
           taskTimestampMs(right.endedAt ?? right.updatedAt ?? right.createdAt) -

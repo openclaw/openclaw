@@ -1,8 +1,10 @@
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
-import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
+import {
+  admittedSessionSettingsRestrictRuntime,
+  createReplyDispatchEvent,
+} from "./dispatch-from-config.events.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
-import { runtimeTakeoverHooksAllowed } from "./dispatch-from-config.restricted-runtime.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
 export function runReplyDispatchHook(
@@ -12,7 +14,7 @@ export function runReplyDispatchHook(
   const { hookRunner, params } = state;
   if (
     !state.allowInboundHandlers ||
-    !runtimeTakeoverHooksAllowed(params.replyOptions?.admittedSessionSettings) ||
+    admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings) ||
     !hookRunner?.hasHooks("reply_dispatch", { dispatchKind: state.dispatchKind })
   ) {
     return undefined;

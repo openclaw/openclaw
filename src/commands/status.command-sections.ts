@@ -1,6 +1,3 @@
-// Section-level value and row builders for the standard status report.
-// These helpers own compact operator text for agents, tasks, memory, health, sessions, and footers.
-
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   buildPairingConnectRecoveryTitle,
@@ -63,7 +60,6 @@ export const statusHealthColumns: TableColumn[] = [
   { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
 ];
 
-/** Formats the agents overview row value, including default-agent recent activity. */
 export function buildStatusAgentsValue(params: {
   agentStatus: AgentStatusLike;
   formatTimeAgo: (ageMs: number) => string;
@@ -79,7 +75,6 @@ export function buildStatusAgentsValue(params: {
   return `${params.agentStatus.agents.length} · ${pending} · sessions ${params.agentStatus.totalSessions}${defSuffix}`;
 }
 
-/** Formats task counters and audit state for the overview table. */
 export function buildStatusTasksValue(params: {
   summary: Pick<SummaryLike, "tasks" | "taskAudit">;
   warn: (value: string) => string;
@@ -108,23 +103,19 @@ export function buildStatusTasksValue(params: {
   ].join(" · ");
 }
 
-/** Formats configured heartbeat intervals by agent. */
 export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "heartbeat"> }) {
-  const parts = params.summary.heartbeat.agents
-    .map((agent) => {
-      if (!agent.enabled || !agent.everyMs) {
-        return `disabled (${agent.agentId})`;
-      }
-      if (agent.waitingForRoute) {
-        return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom=["telegram:123456789"] or channel allowFrom; explicit delivery: heartbeat.target="telegram" with heartbeat.to="123456789")`;
-      }
-      return `${agent.every} (${agent.agentId})`;
-    })
-    .filter(Boolean);
+  const parts = params.summary.heartbeat.agents.map((agent) => {
+    if (!agent.enabled || !agent.everyMs) {
+      return `disabled (${agent.agentId})`;
+    }
+    if (agent.waitingForRoute) {
+      return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom=["telegram:123456789"] or channel allowFrom; explicit delivery: heartbeat.target="telegram" with heartbeat.to="123456789")`;
+    }
+    return `${agent.every} (${agent.agentId})`;
+  });
   return parts.length > 0 ? parts.join(", ") : "disabled";
 }
 
-/** Formats the last observed heartbeat when deep status queried the gateway. */
 export function buildStatusLastHeartbeatValue(params: {
   deep?: boolean;
   gatewayReachable: boolean;
@@ -158,7 +149,6 @@ export function buildStatusLastHeartbeatValue(params: {
     .join(" · ");
 }
 
-/** Formats memory plugin/index/cache state for the overview table. */
 export function buildStatusMemoryValue(
   params: {
     memory: MemoryLike;
@@ -211,7 +201,6 @@ export function buildStatusMemoryValue(
   return parts.join(" · ");
 }
 
-/** Builds the security audit text section for status output. */
 export function buildStatusSecurityAuditLines(params: {
   securityAudit: {
     summary: { critical: number; warn: number; info: number };
@@ -252,7 +241,7 @@ export function buildStatusSecurityAuditLines(params: {
           : params.theme.muted("INFO");
     const sevRank = (sev: "critical" | "warn" | "info") =>
       sev === "critical" ? 0 : sev === "warn" ? 1 : 2;
-    const shown = [...importantFindings]
+    const shown = importantFindings
       // Always show critical findings before warnings, regardless of audit insertion order.
       .toSorted((a, b) => sevRank(a.severity) - sevRank(b.severity))
       .slice(0, 6);
@@ -276,7 +265,6 @@ export function buildStatusSecurityAuditLines(params: {
   return lines;
 }
 
-/** Builds gateway, channel, and delivery queue health table rows. */
 export function buildStatusHealthRows(params: {
   health: HealthSummary;
   sqliteWal?: StatusSummary["sqliteWal"];
@@ -332,7 +320,6 @@ export function buildStatusHealthRows(params: {
   return rows;
 }
 
-/** Formats event-loop latency/utilization health into one table detail string. */
 function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
   const parts = [
     eventLoop.degraded && eventLoop.degradedSinceMs != null
@@ -347,7 +334,6 @@ function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
   return parts.filter((part): part is string => part !== null).join(" · ");
 }
 
-/** Builds recent session table rows, optionally including prompt-cache data. */
 export function buildStatusSessionsRows(params: {
   recent: SessionsRecentLike[];
   verbose?: boolean;
@@ -357,9 +343,6 @@ export function buildStatusSessionsRows(params: {
   formatPromptCacheCompact: (value: SessionsRecentLike) => string | null;
   muted: (value: string) => string;
 }) {
-  if (params.recent.length === 0) {
-    return [];
-  }
   return params.recent.map((sess) => ({
     Key: params.shortenText(sess.key, 32),
     Kind: sess.kind,
@@ -424,7 +407,6 @@ export function buildStatusModelSelectionLines(params: {
   return lines;
 }
 
-/** Builds footer links and next-step commands for the current gateway state. */
 export function buildStatusFooterLines(params: {
   updateHint: string | null;
   warn: (value: string) => string;
@@ -450,7 +432,6 @@ export function buildStatusFooterLines(params: {
   ];
 }
 
-/** Builds plugin compatibility lines, capped to keep status output readable. */
 export function buildStatusPluginCompatibilityLines<
   TNotice extends PluginCompatibilityNoticeLike,
 >(params: {
@@ -475,7 +456,6 @@ export function buildStatusPluginCompatibilityLines<
   ];
 }
 
-/** Builds recovery guidance when the gateway reports device pairing is required. */
 export function buildStatusPairingRecoveryLines(params: {
   pairingRecovery: PairingRecoveryLike | null;
   warn: (value: string) => string;
@@ -509,7 +489,6 @@ export function buildStatusPairingRecoveryLines(params: {
   ];
 }
 
-/** Builds the queued system-events table rows. */
 export function buildStatusSystemEventsRows(params: {
   queuedSystemEvents: string[];
   limit?: number;
@@ -521,7 +500,6 @@ export function buildStatusSystemEventsRows(params: {
   return params.queuedSystemEvents.slice(0, limit).map((event) => ({ Event: event }));
 }
 
-/** Builds the overflow trailer for queued system events. */
 export function buildStatusSystemEventsTrailer(params: {
   queuedSystemEvents: string[];
   limit?: number;

@@ -16,8 +16,8 @@ import {
   readSessionBackingFactsInWorker,
 } from "../config/sessions/session-accessor.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
-import { resolveCronTaskRecordTimestamp } from "../cron/task-run-detail.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sweepExpiredPluginStateEntries } from "../plugin-state/plugin-state-store.js";
@@ -41,18 +41,21 @@ import {
 } from "./detached-task-runtime.js";
 import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
 import {
-  deleteTaskRecordById,
   ensureTaskRegistryReady,
   getTaskById,
   hasActiveTaskForChildSessionKey,
   listTaskRecords,
   markTaskLostById,
-  markTaskTerminalById,
   maybeDeliverTaskTerminalUpdate,
   resolveTaskForLookupToken,
-  setTaskCleanupAfterById,
 } from "./runtime-internal.js";
 import { readTaskBackingInstance } from "./task-backing-authority.js";
+import {
+  canRecoverCronTask,
+  resolveCronTerminalRecovery,
+  selectCronRecoveryRow,
+  type CronTerminalRecovery,
+} from "./task-cron-maintenance-policy.js";
 import { runTaskFlowRegistryMaintenance } from "./task-flow-registry.maintenance.js";
 import {
   cleanupOrphanedParentOwnedAcpSessions,
@@ -61,10 +64,8 @@ import {
   type CloseAcpSession,
   type TaskRegistryAcpMaintenanceRuntime,
 } from "./task-registry-acp-cleanup.js";
-import {
-  applyTaskRegistryMaintenanceRetention,
-  shouldStampCleanupAfter,
-} from "./task-registry-maintenance-retention.js";
+import { reconcileCronTaskForMaintenance } from "./task-registry-maintenance-cron.js";
+import { applyTaskRegistryMaintenanceRetention } from "./task-registry-maintenance-retention.js";
 import { createTaskMaintenanceScheduler } from "./task-registry-maintenance-scheduler.js";
 import {
   createBackingSessionLookupContext,
@@ -100,9 +101,13 @@ import {
   summarizeTaskRecords,
   type TaskStatusSummary,
 } from "./task-registry.summary.js";
-import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
+import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
 import type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
-import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./task-retention.js";
+import {
+  resolveEffectiveTaskCleanupAfter,
+  resolveTaskCleanupAfter,
+  shouldStampCleanupAfter,
+} from "./task-retention.js";
 export { CRON_HISTORY_KEEP_PER_JOB } from "./cron-history-retention.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
@@ -113,7 +118,7 @@ const maintenanceScheduler = createTaskMaintenanceScheduler(
   async () => {
     // Flow retention reads linked task activity, so reconcile the task owner first.
     // Reversing this order can preserve phantom active work for another sweep.
-    await sweepTaskRegistry();
+    await runTaskRegistryMaintenance();
     await runTaskFlowRegistryMaintenance();
   },
   (error) => log.warn("Task registry maintenance failed", { error }),
@@ -161,15 +166,6 @@ export type TaskRegistryMaintenanceDiagnostics = {
   staleRunningTasks: TaskRegistryMaintenanceTaskDiagnostic[];
 };
 
-type CronTerminalRecovery = {
-  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
-  endedAt: number;
-  lastEventAt: number;
-  error?: string;
-  terminalSummary?: string;
-  detail?: TaskRecord["detail"];
-};
-
 type CronRecoveryContext = {
   taskRowsByJobId: Map<string, TaskRecord[]>;
   taskRowsByTaskId?: ReadonlyMap<string, TaskRecord>;
@@ -205,23 +201,6 @@ function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   return now - referenceAt >= graceMs;
 }
 
-function isRecoverableLostCronTask(task: TaskRecord): boolean {
-  if (task.status !== "lost") {
-    return false;
-  }
-  const error = task.error?.trim().toLowerCase();
-  return Boolean(error?.includes("backing session missing"));
-}
-
-function isCronTerminalTaskStatus(status: TaskStatus): status is CronTerminalRecovery["status"] {
-  return (
-    status === "succeeded" ||
-    status === "failed" ||
-    status === "timed_out" ||
-    status === "cancelled"
-  );
-}
-
 function getCronTaskRows(context: CronRecoveryContext, jobId: string): TaskRecord[] {
   const cached = context.taskRowsByJobId.get(jobId);
   if (cached) {
@@ -244,7 +223,7 @@ function resolveDurableCronTaskRecovery(
   task: TaskRecord,
   context: CronRecoveryContext,
 ): CronTerminalRecovery | undefined {
-  if (task.runtime !== "cron" || (!isActiveTask(task) && !isRecoverableLostCronTask(task))) {
+  if (!canRecoverCronTask(task)) {
     return undefined;
   }
   const jobId = task.sourceId?.trim();
@@ -256,23 +235,8 @@ function resolveDurableCronTaskRecovery(
   }
   const row = context.taskRowsByTaskId
     ? context.taskRowsByTaskId.get(task.taskId)
-    : getCronTaskRows(context, jobId).find(
-        (candidate) =>
-          candidate.taskId === task.taskId ||
-          (Boolean(task.runId?.trim()) && candidate.runId === task.runId),
-      );
-  if (!row || !isCronTerminalTaskStatus(row.status)) {
-    return undefined;
-  }
-  const endedAt = resolveCronTaskRecordTimestamp(row);
-  return {
-    status: row.status,
-    endedAt,
-    lastEventAt: row.lastEventAt ?? endedAt,
-    ...(row.error !== undefined ? { error: row.error } : {}),
-    ...(row.terminalSummary !== undefined ? { terminalSummary: row.terminalSummary } : {}),
-    ...(row.detail !== undefined ? { detail: row.detail } : {}),
-  };
+    : selectCronRecoveryRow(task, getCronTaskRows(context, jobId));
+  return resolveCronTerminalRecovery(task, row);
 }
 
 function hasBackingSession(task: TaskRecord, context: BackingSessionLookupContext): boolean {
@@ -436,23 +400,6 @@ function markTaskLost(
       error: task.error ?? resolveTaskLostError(task, context),
       cleanupAfter,
     }) ?? task;
-  void maybeDeliverTaskTerminalUpdate(updated.taskId);
-  return updated;
-}
-
-function markTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery): TaskRecord {
-  const updated =
-    markTaskTerminalById({
-      taskId: task.taskId,
-      status: recovery.status,
-      endedAt: recovery.endedAt,
-      lastEventAt: recovery.lastEventAt,
-      error: recovery.error,
-      ...(recovery.terminalSummary !== undefined
-        ? { terminalSummary: recovery.terminalSummary, preserveTerminalSummary: true }
-        : {}),
-      ...(recovery.detail !== undefined ? { detail: recovery.detail } : {}),
-    }) ?? projectTaskRecovered(task, recovery);
   void maybeDeliverTaskTerminalUpdate(updated.taskId);
   return updated;
 }
@@ -820,7 +767,6 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   let recovered = 0;
   let cleanupStamped = 0;
   let pruned = 0;
-  const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext(backingSessionRuntime, true);
   const recoveryHookRegistered = Boolean(
     getDetachedTaskLifecycleRuntime().tryRecoverTaskBeforeMarkLost,
@@ -833,23 +779,24 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
         getTaskRegistryMaintenanceSnapshot,
         getTaskRegistryMaintenanceTask,
       },
-      async (current, now, cronHistoryOverflowTaskIds, assertOwnerCurrent) => {
-        if (resolveDurableCronTaskRecovery(current, cronRecoveryContext)) {
-          const next = withTaskRegistryMutation(
-            () => {
-              const fresh = getTaskById(current.taskId);
-              if (!fresh) {
-                return undefined;
-              }
-              const recovery = resolveDurableCronTaskRecovery(fresh, createCronRecoveryContext());
-              return recovery ? markTaskRecovered(fresh, recovery) : undefined;
-            },
-            () => undefined,
-          );
-          if (next && next.status !== current.status) {
+      async (selected, now, cronHistoryOverflowSelections, assertOwnerCurrent) => {
+        let current = selected;
+        const cronOptions = (markLost: boolean) => ({
+          markLost,
+          runtimeAuthoritative: () => configuredRuntimeAuthoritative,
+          assertOwnerCurrent,
+        });
+        if (canRecoverCronTask(current)) {
+          const result = await reconcileCronTaskForMaintenance(current, now, cronOptions(false));
+          assertOwnerCurrent();
+          if (result.outcome === "recovered") {
             recovered += 1;
+            return;
           }
-          return;
+          if (!result.task) {
+            return;
+          }
+          current = result.task;
         }
         if (shouldMarkLost(current, now, backingSessionContext)) {
           const recovery = await tryRecoverTaskBeforeMarkLost({
@@ -859,6 +806,26 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
             now,
           });
           assertOwnerCurrent();
+          if (current.runtime === "cron") {
+            const result = await reconcileCronTaskForMaintenance(
+              current,
+              now,
+              cronOptions(!recovery.recovered),
+            );
+            assertOwnerCurrent();
+            if (
+              result.outcome === "recovered" ||
+              (!result.outcome &&
+                recovery.recovered &&
+                result.task &&
+                shouldMarkLost(result.task, now, backingSessionContext))
+            ) {
+              recovered += 1;
+            } else if (result.outcome === "lost") {
+              reconciled += 1;
+            }
+            return;
+          }
           const afterRecovery = getTaskById(current.taskId);
           if (!afterRecovery) {
             return;
@@ -878,17 +845,6 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
               () => {
                 const freshAfterHook = getTaskById(current.taskId);
                 if (!freshAfterHook) {
-                  return;
-                }
-                const cronRecovery = resolveDurableCronTaskRecovery(
-                  freshAfterHook,
-                  createCronRecoveryContext(),
-                );
-                if (cronRecovery) {
-                  const next = markTaskRecovered(freshAfterHook, cronRecovery);
-                  if (next.status !== freshAfterHook.status) {
-                    recovered += 1;
-                  }
                   return;
                 }
                 // Recovery yields to runtime owners. Recheck persisted backing while
@@ -920,14 +876,14 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
           assertOwnerCurrent();
         }
         if (
-          shouldPruneTerminalTask(current, now, cronHistoryOverflowTaskIds) ||
+          shouldPruneTerminalTask(current, now, cronHistoryOverflowSelections) ||
           shouldStampCleanupAfter(current)
         ) {
-          const result = applyTaskRegistryMaintenanceRetention(
-            current.taskId,
+          const result = await applyTaskRegistryMaintenanceRetention(
+            current,
             now,
-            cronHistoryOverflowTaskIds,
-            { getTaskById, deleteTaskRecordById, setTaskCleanupAfterById },
+            cronHistoryOverflowSelections,
+            assertOwnerCurrent,
           );
           if (result === "pruned") {
             pruned += 1;
@@ -961,13 +917,9 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   }
 }
 
-export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummary> {
-  return runTaskRegistryMaintenance();
-}
-
-export function startTaskRegistryMaintenance() {
+export function startTaskRegistryMaintenance(scheduler: GatewayScheduler) {
   ensureTaskRegistryReady();
-  maintenanceScheduler.start();
+  maintenanceScheduler.start(scheduler);
 }
 
 export async function stopTaskRegistryMaintenance(): Promise<void> {

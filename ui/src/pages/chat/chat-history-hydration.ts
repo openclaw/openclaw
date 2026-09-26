@@ -129,21 +129,21 @@ export async function hydrateChatHistory(
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
   setChatError(state, null);
-  try {
-    const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
-    const requestKey = `${requestKeyPrefix}${requestModeKey}`;
-    let response = await requestSharedHistory(
+  const request = (cursor?: string) =>
+    requestSharedHistory(
       sessions,
       client,
-      requestKey,
+      `${requestKeyPrefix}${cursor === undefined ? "page" : `cursor:${cursor}`}`,
       method,
       sessionKey,
       requestAgentId,
       state,
       { isCurrent, captureRun },
-      deltaCursor,
+      cursor,
       inputRunIds,
     );
+  try {
+    let response = await request(deltaCursor);
     if (!isCurrent()) {
       recordTiming("stale", {
         reason: "apply-version",
@@ -152,19 +152,7 @@ export async function hydrateChatHistory(
     }
     if (isHistoryCursor(response) && response.kind === "reset") {
       clearHistoryCursor(state, sessionKey, requestAgentId);
-      const pageRequestKey = `${requestKeyPrefix}page`;
-      response = await requestSharedHistory(
-        sessions,
-        client,
-        pageRequestKey,
-        method,
-        sessionKey,
-        requestAgentId,
-        state,
-        { isCurrent, captureRun },
-        undefined,
-        inputRunIds,
-      );
+      response = await request();
       if (!isCurrent()) {
         recordTiming("stale", {
           reason: "reset-fallback-version",

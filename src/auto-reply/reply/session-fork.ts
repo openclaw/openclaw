@@ -6,8 +6,8 @@ import {
   type ForkSessionEntryFromParentTargetParams,
   type ForkSessionEntryFromParentTargetResult,
   type SessionParentForkDecision,
-  type ForkSessionFromParentTranscriptResult,
 } from "../../config/sessions/session-accessor.js";
+import { prepareSessionForkTranscript } from "../../config/sessions/session-accessor.sqlite-parent-session.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -88,11 +88,9 @@ export async function forkSessionFromParent(
   return fork.status === "created" ? fork.transcript : null;
 }
 
-export async function forkSessionFromParentWithDecision(
-  params: ForkSessionFromParentParams,
-): Promise<ForkSessionFromParentTranscriptResult> {
+export async function prepareSessionForkFromParent(params: ForkSessionFromParentParams) {
   assertModelSelectionUnlocked(params.parentEntry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
-  return await forkSessionFromParentTranscript({
+  return await prepareSessionForkTranscript({
     agentId: params.agentId,
     ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
     enforceTokenLimit: true,

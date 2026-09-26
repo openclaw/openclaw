@@ -6,6 +6,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import {
   isPluginJsonValue,
+  normalizePluginHostHookId,
   type PluginAgentEventSubscriptionRegistration,
   type PluginHostCleanupReason,
   type PluginJsonValue,
@@ -30,8 +31,6 @@ type PluginAgentEventSubscriptionContext = Parameters<
 >[1];
 
 type SchedulerJobRecord = {
-  pluginId: string;
-  pluginName?: string;
   job: PluginSessionSchedulerJobRegistration;
   generation: number;
   ownerRegistry?: PluginRegistry;
@@ -69,10 +68,6 @@ const runContextCleanup = resolveGlobalSingleton(
 
 function getPluginRunContexts(): PluginRunContexts {
   return runContextCleanup.getStore()?.contexts ?? getPluginHostRuntimeState().runContextByRunId;
-}
-
-function normalizeNamespace(value: string | undefined): string {
-  return (value ?? "").trim();
 }
 
 function rememberBoundedRunId(runIds: Set<string>, runId: string): void {
@@ -171,7 +166,7 @@ export function setPluginRunContext(params: {
   allowClosedRun?: boolean;
 }): boolean {
   const runId = normalizeOptionalString(params.patch.runId);
-  const namespace = normalizeNamespace(params.patch.namespace);
+  const namespace = normalizePluginHostHookId(params.patch.namespace);
   if (!runId || !namespace) {
     return false;
   }
@@ -203,7 +198,7 @@ export function getPluginRunContext(params: {
   get: PluginRunContextGetParams;
 }): PluginJsonValue | undefined {
   const runId = normalizeOptionalString(params.get.runId);
-  const namespace = normalizeNamespace(params.get.namespace);
+  const namespace = normalizePluginHostHookId(params.get.namespace);
   if (!runId || !namespace) {
     return undefined;
   }
@@ -258,16 +253,8 @@ function clearPluginRunContextState(
   owners?: ReadonlySet<PluginRunContextNamespaces>,
   contexts = getPluginRunContexts(),
 ): void {
-  // Normalize namespace through the same trim() used by set/get so callers that
-  // pass whitespace or differently-formatted strings hit the same Map keys and
-  // don't leave orphan entries behind.
-  const normalizedNamespace =
-    params.namespace !== undefined ? normalizeNamespace(params.namespace) : undefined;
-  // An empty-after-trim namespace is treated as "no namespace filter" rather
-  // than as a literal-empty-string deletion: that matches the set/get rule that
-  // empty namespaces are not addressable, and it avoids silently no-op-ing the
-  // delete (which would otherwise look like a successful clear).
-  const namespaceFilter = normalizedNamespace || undefined;
+  // Empty namespaces select all entries; set/get cannot address an empty key.
+  const namespaceFilter = normalizePluginHostHookId(params.namespace) || undefined;
   const state = getPluginHostRuntimeState();
   const runIds = params.runId ? [params.runId] : [...contexts.keys()];
   for (const runId of runIds) {
@@ -402,8 +389,6 @@ export function registerPluginSessionSchedulerJob(params: {
   const jobs = state.schedulerJobsByPlugin.get(params.pluginId) ?? new Map();
   const generation = state.nextSchedulerJobGeneration++;
   jobs.set(id, {
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
     job: { ...params.job, id, sessionKey, kind },
     generation,
     ...(params.ownerRegistry ? { ownerRegistry: params.ownerRegistry } : {}),

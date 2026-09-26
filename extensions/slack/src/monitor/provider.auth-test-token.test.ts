@@ -1,13 +1,16 @@
 // Slack tests cover auth.test token handling during provider boot.
-import { WebClient } from "@slack/web-api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  openOpenClawStateDatabase,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "../channel.js";
 import { assertSlackDetachedTargetAllowed } from "../detached-target-admission.js";
@@ -19,11 +22,16 @@ import {
   getSlackHandlerOrThrow,
   getSlackHandlers,
   getSlackTestState,
+  PROXY_ENV_KEYS,
   resetSlackTestState,
   runSlackHandlerWithDispatch,
+  SLACK_TEST_STARTUP_AUTH_TIMEOUT_MS,
   startSlackMonitor as startSlackMonitorUntracked,
   stopSlackMonitor,
+  stopSlackTestDispatches,
+  useShortSlackStartupAuthClientOnce,
   useSlackStartupAuthClientOnce,
+  waitForSlackTestApp,
 } from "../monitor.test-helpers.js";
 import { getSlackRuntime } from "../runtime.js";
 import { startStalledSlackApiServer } from "./provider.stalled-api.test-helpers.js";
@@ -51,41 +59,10 @@ async function runTrackedSlackMessageOnce(
   const monitor = startSlackMonitor(provider, opts);
   try {
     const handler = await getSlackHandlerOrThrow("message");
-    await handler(args);
+    await runSlackHandlerWithDispatch(handler, args);
   } finally {
     await stopSlackMonitor(monitor);
   }
-}
-
-const PROXY_ENV_KEYS = [
-  "ALL_PROXY",
-  "HTTPS_PROXY",
-  "HTTP_PROXY",
-  "all_proxy",
-  "https_proxy",
-  "http_proxy",
-  "NO_PROXY",
-  "no_proxy",
-] as const;
-const SLACK_TEST_STARTUP_AUTH_TIMEOUT_MS = 100;
-
-function useShortSlackStartupAuthClientOnce(): void {
-  useSlackStartupAuthClientOnce(
-    (token, options) =>
-      new WebClient(token, {
-        ...options,
-        // Production timeout and retry policy are pinned in client owner tests. This provider
-        // regression keeps the real SDK/transport while shortening only its test-owned clock.
-        retryConfig: {
-          retries: 2,
-          factor: 1,
-          minTimeout: 1,
-          maxTimeout: 1,
-          randomize: false,
-        },
-        timeout: SLACK_TEST_STARTUP_AUTH_TIMEOUT_MS,
-      }),
-  );
 }
 
 beforeEach(async () => {
@@ -100,7 +77,7 @@ afterEach(async () => {
   for (const monitor of monitors) {
     monitor.controller.abort();
   }
-  await Promise.allSettled(monitors.map((monitor) => monitor.run));
+  await Promise.allSettled([stopSlackTestDispatches(), ...monitors.map((monitor) => monitor.run)]);
   try {
     getSlackClient().auth.test.mockReset();
     await resetSlackTestState();
@@ -110,9 +87,7 @@ afterEach(async () => {
   }
 });
 
-afterAll(() => {
-  disposeSlackTestRuntime();
-});
+afterAll(disposeSlackTestRuntime);
 
 describe("auth.test boot call", () => {
   it("does not pass the bot token in the call arguments", async () => {
@@ -287,45 +262,87 @@ describe("auth.test boot call", () => {
     expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("timeout of 10000ms exceeded"));
   });
 
-  it("settles and closes a real stalled startup auth request before degraded startup", async () => {
-    const events: string[] = [];
-    for (const key of PROXY_ENV_KEYS) {
-      vi.stubEnv(key, "");
-    }
-    const server = await startStalledSlackApiServer(events);
-    vi.stubEnv("SLACK_API_URL", server.apiUrl);
-    useShortSlackStartupAuthClientOnce();
+  describe("stalled startup auth", () => {
+    // Schema setup belongs to the fixture, outside the transport's deadline proof.
+    beforeEach(() => void openOpenClawStateDatabase());
 
-    const runtimeLog = vi.fn((...args: unknown[]) => {
-      const message = args[0];
-      if (typeof message === "string" && message.includes("slack auth.test failed at boot")) {
-        events.push("auth-settled");
-      }
-    });
-    const { appStartMock } = getSlackTestState();
-    appStartMock.mockImplementationOnce(async () => {
-      events.push("app-start");
-    });
-    const monitor = startSlackMonitor(monitorSlackProvider, {
-      runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
-    });
-    try {
-      await vi.waitFor(() => expect(appStartMock).toHaveBeenCalledTimes(1), { timeout: 2_000 });
-      await vi.waitFor(() => expect(events).toContain("socket-closed"), { timeout: 1_000 });
+    it("settles and closes a real stalled startup auth request before degraded startup", async (context) => {
+      const run = (async () => {
+        const events: string[] = [];
+        for (const key of PROXY_ENV_KEYS) {
+          vi.stubEnv(key, "");
+        }
+        const server = await startStalledSlackApiServer(events);
+        vi.stubEnv("SLACK_API_URL", server.apiUrl);
+        useShortSlackStartupAuthClientOnce();
+        const finished = new AbortController();
+        const signal = AbortSignal.any([context.signal, finished.signal]);
+        const aborted = waitForAbortSignal(signal).then(() => signal.throwIfAborted());
+        // Cancellation can precede the first request wait during setup.
+        void aborted.catch(() => {});
+        const deadlines: AbortController[] = [];
+        const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+        // The SDK uses AbortSignal.timeout, which Vitest's timer clock cannot advance.
+        const timeoutClock = vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+          if (delay !== SLACK_TEST_STARTUP_AUTH_TIMEOUT_MS) {
+            return nativeTimeout(delay);
+          }
+          const deadline = new AbortController();
+          deadlines.push(deadline);
+          return AbortSignal.any([deadline.signal, signal]);
+        });
 
-      expect(server.requestCount).toBe(3);
-      expect(server.requestUrl).toBe("/api/auth.test");
-      expect(events).toContain("auth-settled");
-      expect(events.indexOf("auth-settled")).toBeLessThan(events.indexOf("app-start"));
-      expect(runtimeLog).toHaveBeenCalledWith(
-        expect.stringMatching(/slack auth\.test failed at boot .*(?:timeout|timed out)/i),
-      );
-    } finally {
-      monitor.controller.abort();
-      await monitor.run;
-      await server.close();
-    }
-  }, 5_000);
+        const runtimeLog = vi.fn((...args: unknown[]) => {
+          const message = args[0];
+          if (typeof message === "string" && message.includes("slack auth.test failed at boot")) {
+            events.push("auth-settled");
+          }
+        });
+        const { appStartMock } = getSlackTestState();
+        appStartMock.mockImplementationOnce(async () => {
+          events.push("app-start");
+        });
+        const monitor = startSlackMonitor(monitorSlackProvider, {
+          runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
+        });
+        try {
+          for (let attempt = 1; attempt <= 3; attempt += 1) {
+            await Promise.race([server.waitForRequest(attempt), aborted]);
+            expect(deadlines).toHaveLength(attempt);
+            deadlines[attempt - 1]!.abort(
+              new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+            );
+          }
+          await Promise.race([waitForSlackTestApp(monitor, "started"), aborted]);
+          expect(appStartMock).toHaveBeenCalledTimes(1);
+          await Promise.race([
+            Promise.all([1, 2, 3].map((attempt) => server.waitForRequestClose(attempt))),
+            aborted,
+          ]);
+          expect(events.filter((event) => event === "socket-closed")).toHaveLength(3);
+
+          expect(server.requestCount).toBe(3);
+          expect(server.requestUrl).toBe("/api/auth.test");
+          expect(events).toContain("auth-settled");
+          expect(events.indexOf("auth-settled")).toBeLessThan(events.indexOf("app-start"));
+          expect(runtimeLog).toHaveBeenCalledWith(
+            expect.stringMatching(/slack auth\.test failed at boot .*(?:timeout|timed out)/i),
+          );
+        } finally {
+          finished.abort();
+          timeoutClock.mockRestore();
+          for (const deadline of deadlines) {
+            deadline.abort();
+          }
+          monitor.controller.abort();
+          await server.close();
+          await monitor.run;
+        }
+      })();
+      context.onTestFinished(() => run);
+      await run;
+    }, 5_000);
+  });
 
   it("preserves workspace startup when auth.test omits app_id", async () => {
     getSlackClient().auth.test.mockResolvedValueOnce({
@@ -336,7 +353,8 @@ describe("auth.test boot call", () => {
     });
 
     const monitor = startSlackMonitor(monitorSlackProvider);
-    await vi.waitFor(() => expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1));
+    await waitForSlackTestApp(monitor, "started");
+    expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1);
     expect(getSlackInstallationKind("default")).toBe("workspace");
     await expect(stopSlackMonitor(monitor)).resolves.toBeUndefined();
     expect(getSlackInstallationKind("default")).toBeUndefined();
@@ -367,14 +385,11 @@ describe("auth.test boot call", () => {
     });
     const { replyMock, sendMock, appStartMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "identity preserved" });
-    const started = new Promise<void>((resolve) => {
-      appStartMock.mockImplementationOnce(async () => resolve());
-    });
 
     const monitor = startSlackMonitor(monitorSlackProvider, {
       appToken: "xapp-1-A1-opaque",
     });
-    await started;
+    await waitForSlackTestApp(monitor, "started");
     expect(appStartMock).toHaveBeenCalledTimes(1);
     expect([...getSlackTestState().interactionRegistrations].toSorted()).toEqual([
       "action",
@@ -434,7 +449,8 @@ describe("auth.test boot call", () => {
     });
 
     const monitor = startSlackMonitor(monitorSlackProvider);
-    await vi.waitFor(() => expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1));
+    await waitForSlackTestApp(monitor, "started");
+    expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1);
     expect(getSlackInstallationKind("default")).toBe("enterprise");
     await expect(stopSlackMonitor(monitor)).resolves.toBeUndefined();
   });
@@ -466,7 +482,8 @@ describe("presence polling transport", () => {
     const monitor = startSlackMonitor(monitorSlackProvider, {
       runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
     });
-    await vi.waitFor(() => expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1));
+    await waitForSlackTestApp(monitor, "started");
+    expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1);
 
     expect(runtimeLog).toHaveBeenCalledWith("slack presence polling enabled for account default");
     expect(runtimeLog).not.toHaveBeenCalledWith(
@@ -587,7 +604,8 @@ describe("user identity provider transport", () => {
       abortSignal: controller.signal,
     });
     const monitor = trackSlackMonitor({ controller, run });
-    await vi.waitFor(() => expect(getSlackTestState().appConstructorArgs).toBeDefined());
+    await waitForSlackTestApp(monitor, "constructed");
+    expect(getSlackTestState().appConstructorArgs).toBeDefined();
     return monitor;
   }
 
@@ -609,7 +627,8 @@ describe("user identity provider transport", () => {
       runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
     });
     const monitor = trackSlackMonitor({ controller, run });
-    await vi.waitFor(() => expect(getSlackTestState().appConstructorArgs).toBeDefined());
+    await waitForSlackTestApp(monitor, "constructed");
+    expect(getSlackTestState().appConstructorArgs).toBeDefined();
 
     expect(getSlackTestState().appConstructorArgs).toMatchObject({
       token: "test-user-token",

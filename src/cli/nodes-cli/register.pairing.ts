@@ -5,9 +5,10 @@ import { getTerminalTableWidth } from "../../../packages/terminal-core/src/table
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import { defaultRuntime } from "../../runtime.js";
+import { parsePairingList } from "../../shared/node-list-parse.js";
+import type { PendingRequest } from "../../shared/node-list-types.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
   callNodesGatewayCli,
@@ -15,7 +16,7 @@ import {
   nodesCallOpts,
   resolveCliNodeId,
 } from "./rpc.js";
-import type { NodesRpcOpts, PendingRequest } from "./types.js";
+import type { NodesRpcOpts } from "./types.js";
 
 const DEFAULT_NODE_PAIR_APPROVE_SCOPES: OperatorScope[] = ["operator.pairing"];
 const NODE_PAIR_APPROVE_SCOPE_SET = new Set<OperatorScope>([

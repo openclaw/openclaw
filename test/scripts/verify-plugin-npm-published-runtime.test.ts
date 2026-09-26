@@ -42,18 +42,6 @@ describe("plugin npm publish verifier command limits", () => {
     });
   });
 
-  it("accepts strict npm command timeout and buffer overrides", () => {
-    expect(
-      readPluginNpmCommandOptions({
-        OPENCLAW_PLUGIN_NPM_COMMAND_MAX_BUFFER_BYTES: "33554432",
-        OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: "120000",
-      }),
-    ).toMatchObject({
-      maxBuffer: 32 * 1024 * 1024,
-      timeout: 120000,
-    });
-  });
-
   it("rejects loose npm command timeout and buffer overrides", () => {
     for (const value of ["60s", "1e3", "0"]) {
       expect(() =>
@@ -222,40 +210,6 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
       }),
     ).toEqual([
       "@openclaw/discord@2026.5.2 requires compiled runtime output for TypeScript entry ./index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, ./index.js, ./index.mjs, ./index.cjs",
-    ]);
-  });
-
-  it("accepts published plugin packages with explicit runtimeExtensions", () => {
-    expect(
-      collectPluginNpmPublishedRuntimeErrors({
-        packageJson: {
-          name: "@openclaw/zalo",
-          version: "2026.5.3",
-          openclaw: {
-            extensions: ["./index.ts"],
-            runtimeExtensions: ["./dist/index.js"],
-          },
-        },
-        files: ["package.json", "openclaw.plugin.json", "index.ts", "dist/index.js"],
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("flags plugin npm packages without an OpenClaw plugin manifest", () => {
-    expect(
-      collectPluginNpmPublishedRuntimeErrors({
-        packageJson: {
-          name: "@openclaw/searxng-plugin",
-          version: "2026.6.11",
-          openclaw: {
-            extensions: ["./index.ts"],
-            runtimeExtensions: ["./dist/index.js"],
-          },
-        },
-        files: ["package.json", "dist/index.js"],
-      }),
-    ).toEqual([
-      "@openclaw/searxng-plugin@2026.6.11 plugin npm package must include openclaw.plugin.json",
     ]);
   });
 

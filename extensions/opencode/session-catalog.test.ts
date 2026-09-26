@@ -695,14 +695,6 @@ describe("OpenCode session catalog", () => {
     );
   });
 
-  itWithCli("keeps oversized transcript items below the node payload budget", async () => {
-    await installFakeOpenCode("x".repeat(600 * 1024));
-    const transcript = await readTestTranscript({ limit: 20 });
-    const answer = transcript.items.find((item) => item.type === "agentMessage");
-    expect(answer?.text?.endsWith("…")).toBe(true);
-    expect(Buffer.byteLength(JSON.stringify(transcript), "utf8")).toBeLessThan(20 * 1024 * 1024);
-  });
-
   itWithCli("adopts local OpenCode sessions once with the native ACP resume binding", async () => {
     await installFakeOpenCode();
     const { createSessionEntry, provider } = captureOpenCodeContinuationCatalog();
@@ -1026,30 +1018,27 @@ describe("OpenCode session catalog", () => {
     );
   });
 
-  it.each(["stdout", "stderr"] as const)(
-    "maps a shared-runtime %s pipe failure to the OpenCode-owned error",
-    async (streamName) => {
-      processRuntimeMocks.runCommandBuffered.mockResolvedValueOnce({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: null,
-        signal: null,
-        killed: true,
-        termination: "error",
-        errorStream: streamName,
-        error: new Error(`${streamName} EPIPE`),
-      });
+  it("maps a shared-runtime pipe failure to the OpenCode-owned error", async () => {
+    processRuntimeMocks.runCommandBuffered.mockResolvedValueOnce({
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      code: null,
+      signal: null,
+      killed: true,
+      termination: "error",
+      errorStream: "stderr",
+      error: new Error("stderr EPIPE"),
+    });
 
-      await expectRejects(
-        listLocalOpenCodeSessionPage({ limit: 20 }),
-        `OpenCode ${streamName} stream failed: ${streamName} EPIPE`,
-      );
-      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledWith(
-        expect.any(Array),
-        expect.objectContaining({ terminateOnOutputError: true }),
-      );
-    },
-  );
+    await expectRejects(
+      listLocalOpenCodeSessionPage({ limit: 20 }),
+      "OpenCode stderr stream failed: stderr EPIPE",
+    );
+    expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ terminateOnOutputError: true }),
+    );
+  });
 
   it("fans out paired-node listing instead of blocking later hosts", async () => {
     let releaseSlow: ((value: unknown) => void) | undefined;

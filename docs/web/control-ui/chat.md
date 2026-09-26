@@ -11,9 +11,15 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+Saved split panes keep their conversation and arrangement. If an older saved pane
+does not identify its agent, it shows **Choose a conversation** instead of opening
+another agent's history. Select that pane, then choose **Home** or a conversation
+in the sidebar. Home works even when you are already on its route; the other
+panes stay unchanged.
+
 ## Collaborator drafts
 
-In a shared session, another person’s in-progress message stays visible when they pause typing. After a short pause, its label changes to **Paused · not sent** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. A preview also expires after two minutes without typing so an abandoned tab cannot leave it visible indefinitely. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
+In a shared session, another person’s in-progress message stays visible when they pause typing. Draft previews update up to four times per second, keeping the latest text when input arrives faster. After a short pause, its label changes to **Paused · not sent** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. A preview also expires after two minutes without typing so an abandoned tab cannot leave it visible indefinitely. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
 
 ## Session rail and side chat
 
@@ -448,6 +454,8 @@ Code blocks keep your expansion and wrapping choices when their closing fence
 arrives and later paragraphs stream into the same assistant reply. Replacing the
 message, correcting earlier content, or changing rendering options starts a fresh
 view. References that change earlier Markdown can also reset the view.
+Completed lists also stay cached as later blocks arrive; loose or nested list
+continuations remain together until the list ends.
 
 **Copy URL** in browser tab cards also works on plain HTTP connections where the
 browser does not provide its Clipboard API.

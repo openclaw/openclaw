@@ -8,6 +8,7 @@ import {
   type ProviderCatalogSnapshot,
   type ProjectedUpstreamProviderCatalogModel as OpencodeZenModelDefinition,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { normalizeBaseUrl } from "openclaw/plugin-sdk/provider-http";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -114,10 +115,6 @@ export function resolveOpencodeZenModel(modelId: string): ProviderRuntimeModel |
   return opencodeZenCatalog.getSnapshot().get(modelId.trim().toLowerCase())?.model;
 }
 
-function normalizeBaseUrl(baseUrl: string | undefined): string {
-  return (baseUrl ?? "").trim().replace(/\/+$/, "");
-}
-
 export function normalizeOpencodeZenBaseUrl(params: {
   api?: string | null;
   baseUrl?: string;
@@ -127,10 +124,10 @@ export function normalizeOpencodeZenBaseUrl(params: {
     return undefined;
   }
   const isAnthropicRoute = params.api === "anthropic-messages";
-  if (normalized === OPENCODE_ZEN_ANTHROPIC_BASE_URL) {
-    return isAnthropicRoute ? OPENCODE_ZEN_ANTHROPIC_BASE_URL : OPENCODE_ZEN_OPENAI_BASE_URL;
-  }
-  if (normalized === OPENCODE_ZEN_OPENAI_BASE_URL) {
+  if (
+    normalized === OPENCODE_ZEN_ANTHROPIC_BASE_URL ||
+    normalized === OPENCODE_ZEN_OPENAI_BASE_URL
+  ) {
     return isAnthropicRoute ? OPENCODE_ZEN_ANTHROPIC_BASE_URL : OPENCODE_ZEN_OPENAI_BASE_URL;
   }
   return undefined;

@@ -21,7 +21,10 @@ import {
   renderUserAvatarSlot,
   resolveChatDefaultAvatarPlacement,
 } from "../chat/components/chat-author-avatar.ts";
-import { renderAssistantAttachments } from "../chat/components/chat-message-attachments.ts";
+import {
+  hasUserFileAttachments,
+  renderAssistantAttachments,
+} from "../chat/components/chat-message-attachments.ts";
 import { renderMessageImages } from "../chat/components/chat-message-images.ts";
 import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
 import { renderMessageJson, renderMessageMarkdown } from "../chat/components/chat-message-text.ts";
@@ -115,6 +118,7 @@ function renderNewSessionSubmission(
   const key = "new-session-submission";
   const senderHue = normalized.sender ? resolveIdentityHue(normalized.sender) : null;
   const { images, attachments } = projectMessageMedia(message, normalized.content);
+  const hasUserFiles = hasUserFileAttachments(attachments);
   const markdown = resolveMessageDisplayMarkdown(message, normalized);
   const json = parseMarkdownJson(markdown);
   const imageOptions = { onOpenImage };
@@ -136,7 +140,7 @@ function renderNewSessionSubmission(
       }
       <div class="chat-group-messages">
         <div
-          class="chat-bubble ${images.length ? "chat-bubble--with-images" : ""}"
+          class="chat-bubble ${images.length || hasUserFiles ? "chat-bubble--with-images" : ""} ${hasUserFiles ? "chat-bubble--with-files" : ""}"
           data-message-id=${key}
           data-message-text=${markdown || nothing}
         >

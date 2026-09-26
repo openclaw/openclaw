@@ -12,6 +12,7 @@ import {
   relayBytesFromBase64Url,
   requireRelayCrypto,
 } from "./relay-auth-v2-crypto.js";
+import { parseStrictJsonObject } from "./strict-json.js";
 
 export const EXTENSION_RELAY_V2_PROTOCOL = "openclaw-extension-relay.v2";
 
@@ -48,86 +49,16 @@ function hasExactKeys(value, expected) {
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
 }
 
-function hasDuplicateJsonObjectKeys(text) {
-  const stack = [];
-  let expectingKey = false;
-  let index = 0;
-  const skipWhitespace = () => {
-    while (/\s/.test(text[index] ?? "")) {
-      index += 1;
-    }
-  };
-  while (index < text.length) {
-    const char = text[index];
-    if (char === '"') {
-      const start = index;
-      index += 1;
-      let escaped = false;
-      while (index < text.length) {
-        const next = text[index++];
-        if (escaped) {
-          escaped = false;
-        } else if (next === "\\") {
-          escaped = true;
-        } else if (next === '"') {
-          break;
-        }
-      }
-      if (expectingKey && stack.at(-1)) {
-        let key;
-        try {
-          key = JSON.parse(text.slice(start, index));
-        } catch {
-          return false;
-        }
-        skipWhitespace();
-        if (text[index] === ":" && typeof key === "string") {
-          const keys = stack.at(-1);
-          if (keys.has(key)) {
-            return true;
-          }
-          keys.add(key);
-          expectingKey = false;
-        }
-      }
-      continue;
-    }
-    if (char === "{") {
-      stack.push(new Set());
-      expectingKey = true;
-    } else if (char === "[") {
-      stack.push(null);
-      expectingKey = false;
-    } else if (char === "}") {
-      stack.pop();
-      expectingKey = false;
-    } else if (char === "]") {
-      stack.pop();
-      expectingKey = false;
-    } else if (char === ",") {
-      expectingKey = stack.at(-1) instanceof Set;
-    }
-    index += 1;
-  }
-  return false;
-}
-
 /** Parse an authentication frame without allowing JSON duplicate-key shadowing. */
 export function parseRelayAuthJson(raw) {
   if (
     typeof raw !== "string" ||
     raw.length > MAX_AUTH_JSON_BYTES ||
-    authTextEncoder.encode(raw).byteLength > MAX_AUTH_JSON_BYTES ||
-    hasDuplicateJsonObjectKeys(raw)
+    authTextEncoder.encode(raw).byteLength > MAX_AUTH_JSON_BYTES
   ) {
     return null;
   }
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  return parseStrictJsonObject(raw);
 }
 
 function assertSafeTimestamp(value, field) {

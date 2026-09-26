@@ -1,26 +1,17 @@
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { MAX_TERMINAL_UPLOAD_BYTES } from "../../../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import type {
   TerminalUploadPathStyle,
   TerminalUploadResult,
 } from "../../../../packages/gateway-protocol/src/schema/terminal.ts";
 import { t } from "../../i18n/index.ts";
-
-// Keep this client guard aligned with the gateway protocol's 16 MiB limit so
-// oversized files never expand into a WebSocket base64 payload.
-const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
+import { bytesToBase64 } from "../../lib/bytes-base64.ts";
+import type { TerminalGatewayClient } from "./terminal-connection.ts";
 
 type TerminalUploadFile = { name: string; contentBase64: string };
 
-type TerminalUploadClient = {
-  request<T = unknown>(
-    method: string,
-    params?: unknown,
-    options?: { signal?: AbortSignal },
-  ): Promise<T>;
-};
-
 export async function uploadTerminalFile(
-  client: TerminalUploadClient,
+  client: Pick<TerminalGatewayClient, "request">,
   sessionId: string,
   file: TerminalUploadFile,
   signal?: AbortSignal,
@@ -35,13 +26,7 @@ export async function encodeTerminalUpload(file: File): Promise<string> {
   if (file.size > MAX_TERMINAL_UPLOAD_BYTES) {
     throw new Error(t("terminal.uploadTooLarge", { file: file.name }));
   }
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const chunks: string[] = [];
-  const chunkSize = 32 * 1024;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)));
-  }
-  return btoa(chunks.join(""));
+  return bytesToBase64(new Uint8Array(await file.arrayBuffer()));
 }
 
 function quotePosixUploadPath(filePath: string): string {

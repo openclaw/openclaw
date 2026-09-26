@@ -502,11 +502,8 @@ async function handleDiscordModelPickerInteraction(params: {
     const pendingModelIndex = selectedModel
       ? resolveDiscordModelPickerModelIndex({ data: pickerData, provider, model: selectedModel })
       : undefined;
-    // Runtime select customId carries modelBucket only when no pending
-    // model is set; otherwise derive from the pending model. As a final
-    // fallback, derive from the user's current durable model so the
-    // browse-bucket position survives a runtime change without anything
-    // pending.
+    // Pending model IDs omit the bucket; preserve browse position from the pending
+    // or current model when the callback does not carry one.
     const derivedModelBucket =
       parsed.modelBucket ??
       (selectedModel

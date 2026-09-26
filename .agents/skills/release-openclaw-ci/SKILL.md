@@ -560,8 +560,9 @@ for publication ordering and prepared/direct recovery.
 
 - `pnpm release:stable <version>` ([orchestrated stable release](../release-openclaw-maintainer/references/regular-release.md#orchestrated-stable-release))
   dispatches the parent once, approves the parent's `npm-release` gate, prints
-  the child-approval and stale-child sweep commands below instead of running
-  them (it never mutates a child run), and on any refusal prints `Next:` with
+  child-approval commands only for older tooling without `npm-publish` and
+  stale-child sweep commands when needed (it never mutates a child run).
+  On any refusal it prints `Next:` with
   the exact recovery command.
 - The parent's `npm-release` approval mints the attested
   `openclaw-release-approval-v1-<parent run>-<attempt>` receipt; bot-dispatched
@@ -569,16 +570,16 @@ for publication ordering and prepared/direct recovery.
   their gates. The ClawHub OIDC child skips its `clawhub-plugin-release` gate
   on a verified receipt and instead waits for the parent's
   `openclaw-clawhub-parent-authorization-v2-*` receipt before publishing. npm
-  children (`Plugin NPM Release`, `openclaw-npm-release.yml`) keep
-  `npm-release` (npm trusted publishers are bound to it, `npm trust list
-openclaw`) and the workflow token cannot approve it (`canApprove=false`), so
-  an unapproved npm child sits `waiting` silently. Watch every child and
-  approve npm children only (environment id `13010111854`):
-  ```bash
-  gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments
-  gh api -X POST repos/openclaw/openclaw/actions/runs/<child>/pending_deployments \
-    -f state=approved -f comment="<reason>" -F 'environment_ids[]=13010111854'
-  ```
+  children (`Plugin NPM Release`, `openclaw-npm-release.yml`) skip their
+  `npm-release` approval job on the verified-receipt route and publish in
+  `npm-publish`, with trusted publishers bound to that environment. Immediately
+  before publication they wait for the parent attempt's receipt and require
+  that attempt to remain `in_progress`. This is one human approval per release.
+  `npm-publish` has no reviewers and admits only protected
+  `release-publish/<sha12>-<n>` tags. Real manual/recovery npm dispatches must
+  use such a tooling tag and still need their own `npm-release` approval job;
+  the read-only OIDC preflight also uses `npm-publish` and requires that tag.
+  Artifact-only preflights keep their existing refs and have no environment.
 - Never approve ClawHub children (`plugin-clawhub-release.yml`,
   `plugin-clawhub-new.yml`) by hand. `plugin-clawhub-release.yml` needs no
   approval on the bot route (receipt-verified); the `Artifact not found` line

@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -184,6 +185,35 @@ function requestFixtureRegistry(
     request.on("error", reject);
     request.end();
   });
+}
+
+function startFixtureRegistry(
+  portFile: string,
+  tarballPath: string,
+  env: NodeJS.ProcessEnv = {},
+  preload?: string,
+) {
+  return spawn(
+    process.execPath,
+    [
+      ...(preload ? ["--import", pathToFileURL(preload).href] : []),
+      "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+      portFile,
+      "@openclaw/demo-plugin-npm",
+      "1.0.0",
+      tarballPath,
+    ],
+    { cwd: process.cwd(), env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] },
+  );
+}
+
+async function stopFixtureRegistry(child: ReturnType<typeof startFixtureRegistry>) {
+  if (child.exitCode === null) {
+    child.kill();
+    await new Promise((resolve) => {
+      child.once("close", resolve);
+    });
+  }
 }
 
 describe("plugins Docker assertions", () => {
@@ -868,20 +898,7 @@ fs.renameSync = (source, destination) => {
     const tarballPath = path.join(root, "demo-plugin.tgz");
     writeFileSync(tarballPath, "fixture package archive", "utf8");
 
-    const child = spawn(
-      process.execPath,
-      [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
-      {
-        cwd: process.cwd(),
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const child = startFixtureRegistry(portFile, tarballPath);
     const stderr = createBoundedChildOutput();
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
@@ -904,12 +921,7 @@ fs.renameSync = (source, destination) => {
         "dist-tags": { latest: "1.0.0" },
       });
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
     }
   });
 
@@ -1029,12 +1041,7 @@ fs.renameSync = (source, destination) => {
         `http://192.0.2.2:${port}/openclaw/-/openclaw.tgz`,
       );
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
     }
   });
 
@@ -1086,25 +1093,10 @@ fs.renameSync = (source, destination) => {
         throw new Error("expected upstream registry address");
       }
 
-      const child = spawn(
-        process.execPath,
-        [
-          "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-          portFile,
-          "@openclaw/demo-plugin-npm",
-          "1.0.0",
-          tarballPath,
-        ],
-        {
-          cwd: process.cwd(),
-          env: {
-            ...process.env,
-            OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
-            OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: merged ? "1" : "",
-          },
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      const child = startFixtureRegistry(portFile, tarballPath, {
+        OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: merged ? "1" : "",
+      });
 
       try {
         const port = await waitForPortFile(portFile);
@@ -1130,12 +1122,7 @@ fs.renameSync = (source, destination) => {
         }
         expect(upstreamRequests).toBe(merged ? 1 : 2);
       } finally {
-        if (child.exitCode === null) {
-          child.kill();
-          await new Promise((resolve) => {
-            child.once("close", resolve);
-          });
-        }
+        await stopFixtureRegistry(child);
         await new Promise<void>((resolve) => {
           upstream.close(() => resolve());
         });
@@ -1163,24 +1150,9 @@ fs.renameSync = (source, destination) => {
       throw new Error("expected upstream registry address");
     }
 
-    const child = spawn(
-      process.execPath,
-      [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const child = startFixtureRegistry(portFile, tarballPath, {
+      OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+    });
 
     try {
       const port = await waitForPortFile(portFile);
@@ -1193,12 +1165,7 @@ fs.renameSync = (source, destination) => {
       expect(response.contentLength).toBeUndefined();
       expect(response.body).toBe(upstreamBody);
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
       await new Promise<void>((resolve) => {
         upstream.close(() => resolve());
       });
@@ -1226,24 +1193,9 @@ fs.renameSync = (source, destination) => {
       throw new Error("expected upstream registry address");
     }
 
-    const child = spawn(
-      process.execPath,
-      [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const child = startFixtureRegistry(portFile, tarballPath, {
+      OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+    });
     const stderr = createBoundedChildOutput();
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
@@ -1264,12 +1216,7 @@ fs.renameSync = (source, destination) => {
       expect(local.statusCode, stderr.text()).toBe(200);
       expect(child.exitCode, stderr.text()).toBeNull();
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
       upstream.closeAllConnections();
       await new Promise<void>((resolve) => {
         upstream.close(() => resolve());
@@ -1334,25 +1281,13 @@ fs.renameSync = (source, destination) => {
       throw new Error("expected upstream registry address");
     }
 
-    const child = spawn(
-      process.execPath,
-      [
-        "--import",
-        pathToFileURL(preloadPath).href,
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
+    const child = startFixtureRegistry(
+      portFile,
+      tarballPath,
       {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
+        OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
       },
+      preloadPath,
     );
     const stderr = createBoundedChildOutput();
     child.stderr.setEncoding("utf8");
@@ -1373,12 +1308,7 @@ fs.renameSync = (source, destination) => {
       expect(local.statusCode, stderr.text()).toBe(200);
       expect(child.exitCode, stderr.text()).toBeNull();
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
       upstream.closeAllConnections();
       await new Promise<void>((resolve) => {
         upstream.close(() => resolve());
@@ -1425,24 +1355,9 @@ fs.renameSync = (source, destination) => {
       throw new Error("expected upstream registry addresses");
     }
 
-    const child = spawn(
-      process.execPath,
-      [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${configuredAddress.port}`,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const child = startFixtureRegistry(portFile, tarballPath, {
+      OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${configuredAddress.port}`,
+    });
 
     try {
       const port = await waitForPortFile(portFile);
@@ -1464,12 +1379,7 @@ fs.renameSync = (source, destination) => {
       expect(configuredUpstreamTarget).toBe("/pkg?x=1");
       expect(escapeServerHits).toBe(0);
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
       await Promise.all([
         new Promise<void>((resolve) => {
           configuredUpstream.close(() => resolve());
@@ -2005,6 +1915,45 @@ fs.renameSync = (source, destination) => {
       pathError: false,
     },
     {
+      name: "rejects an npm peer linked to a different host",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: 0,
+        npmIntegrity: "integrity",
+        npmShasum: "shasum",
+        npmTarballName: "package.tgz",
+      },
+      wrongPeerTarget: true,
+    },
+    {
+      name: "accepts an optional dependency inside the ClawHub installation",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: 0,
+        npmIntegrity: "integrity",
+        npmShasum: "shasum",
+        npmTarballName: "package.tgz",
+      },
+      optionalDependency: "inside",
+    },
+    {
+      name: "rejects an optional dependency linked outside the ClawHub installation",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: 0,
+        npmIntegrity: "integrity",
+        npmShasum: "shasum",
+        npmTarballName: "package.tgz",
+      },
+      optionalDependency: "escaped",
+    },
+    {
       name: "rejects an empty install path before invalid metadata",
       recordOverrides: { artifactFormat: "tgz", installPath: "" },
       errorPrefix: null,
@@ -2016,77 +1965,103 @@ fs.renameSync = (source, destination) => {
       errorPrefix: null,
       pathError: true,
     },
-  ])("$name", ({ escaped, recordOverrides, errorPrefix, pathError }) => {
-    const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
-    const home = path.join(root, "home");
-    const scratchRoot = path.join(root, "scratch");
-    const extensionsRoot = path.join(home, ".openclaw", "extensions");
-    const installPath = escaped
-      ? `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`
-      : path.join(extensionsRoot, "openclaw-kitchen-sink-fixture");
-    mkdirSync(extensionsRoot, { recursive: true });
-    mkdirSync(installPath, { recursive: true });
-    const record = {
-      artifactFormat: "zip",
-      artifactKind: "legacy-zip",
-      clawhubFamily: "code-plugin",
-      clawhubPackage: "@openclaw/kitchen-sink",
-      installPath,
-      source: "clawhub",
-      spec: "clawhub:@openclaw/kitchen-sink",
-      ...recordOverrides,
-    };
-    if (record.artifactKind === "npm-pack") {
-      mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
-      symlinkSync(
-        process.cwd(),
-        path.join(installPath, "node_modules", "openclaw"),
-        process.platform === "win32" ? "junction" : "dir",
-      );
-    }
+  ])(
+    "$name",
+    ({ escaped, recordOverrides, errorPrefix, pathError, wrongPeerTarget, optionalDependency }) => {
+      const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
+      const home = path.join(root, "home");
+      const scratchRoot = path.join(root, "scratch");
+      const extensionsRoot = path.join(home, ".openclaw", "extensions");
+      const installPath = escaped
+        ? `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`
+        : path.join(extensionsRoot, "openclaw-kitchen-sink-fixture");
+      mkdirSync(extensionsRoot, { recursive: true });
+      mkdirSync(installPath, { recursive: true });
+      const record = {
+        artifactFormat: "zip",
+        artifactKind: "legacy-zip",
+        clawhubFamily: "code-plugin",
+        clawhubPackage: "@openclaw/kitchen-sink",
+        installPath,
+        source: "clawhub",
+        spec: "clawhub:@openclaw/kitchen-sink",
+        ...recordOverrides,
+      };
+      if (record.artifactKind === "npm-pack") {
+        mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
+        const peerTarget = wrongPeerTarget ? path.join(root, "other-host") : process.cwd();
+        if (wrongPeerTarget) {
+          mkdirSync(peerTarget);
+        }
+        symlinkSync(
+          peerTarget,
+          path.join(installPath, "node_modules", "openclaw"),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        if (optionalDependency) {
+          const dependencyPath = path.join(installPath, "node_modules", "is-number");
+          const dependencyTarget =
+            optionalDependency === "escaped" ? path.join(root, "other-dependency") : dependencyPath;
+          writeJson(path.join(dependencyTarget, "package.json"), { name: "is-number" });
+          if (optionalDependency === "escaped") {
+            symlinkSync(
+              dependencyTarget,
+              dependencyPath,
+              process.platform === "win32" ? "junction" : "dir",
+            );
+          }
+        }
+      }
 
-    writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
-      plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
-    });
-    writeJson(path.join(scratchRoot, "plugins-clawhub-inspect.json"), {
-      plugin: { id: "openclaw-kitchen-sink-fixture" },
-    });
-    writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-      installRecords: {
-        "openclaw-kitchen-sink-fixture": record,
-      },
-    });
+      writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
+        plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
+      });
+      writeJson(path.join(scratchRoot, "plugins-clawhub-inspect.json"), {
+        plugin: { id: "openclaw-kitchen-sink-fixture" },
+      });
+      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+        installRecords: {
+          "openclaw-kitchen-sink-fixture": record,
+        },
+      });
 
-    const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-installed"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
-        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
-        HOME: home,
-        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
-        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
-      },
-    });
+      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-installed"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
+          CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+          HOME: home,
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+          OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        },
+      });
 
-    if (escaped) {
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("ClawHub install path resolved outside");
-    } else if (pathError) {
-      expect(result.status).toBe(1);
-      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
-        "missing ClawHub install path for openclaw-kitchen-sink-fixture",
-      );
-    } else if (errorPrefix) {
-      expect(result.status).toBe(1);
-      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
-        `${errorPrefix} for openclaw-kitchen-sink-fixture: ${JSON.stringify(record)}`,
-      );
-    } else {
-      expect(result.status, result.stderr).toBe(0);
-    }
-  });
+      if (escaped) {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("ClawHub install path resolved outside");
+      } else if (pathError) {
+        expect(result.status).toBe(1);
+        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+          "missing ClawHub install path for openclaw-kitchen-sink-fixture",
+        );
+      } else if (wrongPeerTarget || optionalDependency === "escaped") {
+        expect(result.status).toBe(1);
+        const expectedError = wrongPeerTarget
+          ? `expected ClawHub openclaw peer ${realpathSync(path.join(root, "other-host"))} to target ${realpathSync(process.cwd())}`
+          : `ClawHub isolated dependency resolved outside ${installPath}: ${realpathSync(path.join(root, "other-dependency", "package.json"))}`;
+        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(expectedError);
+      } else if (errorPrefix) {
+        expect(result.status).toBe(1);
+        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+          `${errorPrefix} for openclaw-kitchen-sink-fixture: ${JSON.stringify(record)}`,
+        );
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+      }
+    },
+  );
 
   it("times out stalled ClawHub package metadata requests", async () => {
     const server = createServer((_request, _response) => {});

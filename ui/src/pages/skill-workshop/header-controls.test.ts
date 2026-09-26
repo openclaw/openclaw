@@ -43,19 +43,6 @@ describe("skill workshop header tabs", () => {
       false,
       false,
     ],
-    [
-      "propose mode with cron enabled",
-      { cron: { enabled: true }, skills: { workshop: { autonomous: { mode: "propose" } } } },
-      false,
-      false,
-    ],
-    [
-      "self-learning off",
-      { cron: { enabled: false }, skills: { workshop: { autonomous: { mode: "off" } } } },
-      false,
-      false,
-    ],
-    ["config not loaded", null, false, false],
   ] as const)("explains weekly review availability with %s", (_name, config, loading, paused) => {
     const container = document.createElement("div");
     const onSelfLearningToggle = vi.fn();

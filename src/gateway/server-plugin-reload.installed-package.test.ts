@@ -35,6 +35,7 @@ import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js"
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
@@ -258,7 +259,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       },
     });
     const registryOwner = createPluginRegistryOwner(initial.pluginRegistry, workspaceDir);
-    const metadata = retainGatewayPluginMetadata();
+    const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
     metadata.publish(initialMetadata);
     const loaded = [initial];
     let beforeAttachment: ((candidate: (typeof loaded)[number]) => void) | undefined;

@@ -139,7 +139,6 @@ describe("chat queue order", () => {
     { label: "failed send", item: queued("a", 1, { sendState: "failed" }), movable: true },
     { label: "in-flight send", item: queued("a", 1, { sendState: "sending" }), movable: false },
     { label: "pending run row", item: queued("a", 1, { pendingRunId: "run-1" }), movable: false },
-    { label: "joined a run", item: queued("a", 1, { pendingRunId: "run-1" }), movable: false },
     {
       label: "running a local command",
       item: queued("a", 1, { sendState: "executing-command" }),

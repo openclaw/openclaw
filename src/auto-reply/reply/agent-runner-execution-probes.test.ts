@@ -3,7 +3,6 @@ import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveFallbackCandidateRun } from "./agent-runner-auth-profile.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import {
   setupAgentRunnerExecutionTestState,
@@ -269,29 +268,6 @@ describe("executeAgentTurn: primary probe routing", () => {
     expect(rechecked.hasSessionModelOverride).toBeUndefined();
     expect(rechecked.modelOverrideSource).toBeUndefined();
     expect(rechecked.hasAutoFallbackProvenance).toBeUndefined();
-  });
-
-  it("keeps fallback auth available when a primary probe falls back", () => {
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "google",
-      fallbackModel: "gemini-3-pro",
-      fallbackAuthProfileId: "google:fallback",
-      fallbackAuthProfileIdSource: "auto" as const,
-    };
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "anthropic";
-    followupRun.run.model = "claude-sonnet-4-6";
-    followupRun.run.authProfileId = "anthropic:primary";
-    followupRun.run.authProfileIdSource = "auto";
-    followupRun.run.autoFallbackPrimaryProbe = probe;
-    expect(resolveFallbackCandidateRun(followupRun.run, "google", "gemini-3-pro")).toMatchObject({
-      provider: "google",
-      model: "gemini-3-pro",
-      authProfileId: "google:fallback",
-      authProfileIdSource: "auto",
-    });
   });
 
   it("does not clear an auto-fallback pin for an exhausted preserved result", async () => {

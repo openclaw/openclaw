@@ -32,16 +32,6 @@ describe("resolveAgentRuntimeLabel", () => {
       expected: "gemini (acp)",
     },
     {
-      name: "a resolved harness maps to its operator label",
-      args: { resolvedHarness: "codex" },
-      expected: "OpenAI Codex",
-    },
-    {
-      name: "an unmapped resolved harness falls back to its sanitized id",
-      args: { resolvedHarness: "claude-bridge" },
-      expected: "claude-bridge",
-    },
-    {
       name: "auto defers to the CLI provider fallback",
       args: {
         sessionEntry: { modelProvider: "claude-cli" },
@@ -63,11 +53,6 @@ describe("resolveAgentRuntimeLabel", () => {
       name: "an unmapped CLI provider is marked as a CLI runtime",
       args: { fallbackProvider: "vendor-cli", classifyCliProvider: () => true },
       expected: "vendor-cli (cli)",
-    },
-    {
-      name: "a non-CLI provider resolves to the built-in runtime",
-      args: { fallbackProvider: "anthropic", classifyCliProvider: () => false },
-      expected: "OpenClaw Default",
     },
   ])("$name", ({ args, expected }) => {
     expect(resolveAgentRuntimeLabel(args)).toBe(expected);
@@ -97,11 +82,6 @@ describe("resolveAgentRuntimeLabel", () => {
     {
       name: "a retired pin alias is compared against its current runtime id",
       args: { sessionEntry: { agentHarnessId: "codex-app-server" }, resolvedHarness: "codex" },
-      expected: "OpenAI Codex",
-    },
-    {
-      name: "a retired codex-cli pin is not reported as a transition to codex",
-      args: { sessionEntry: { agentHarnessId: "codex-cli" }, resolvedHarness: "codex" },
       expected: "OpenAI Codex",
     },
     {

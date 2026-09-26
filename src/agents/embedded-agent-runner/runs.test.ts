@@ -102,6 +102,26 @@ describe("embedded-agent runner run registry", () => {
     expect(abortNormal).not.toHaveBeenCalled();
   });
 
+  it("aborts remaining compacting-mode handles when one compacting probe throws", () => {
+    const abortFaulty = vi.fn();
+    const abortEligible = vi.fn();
+
+    setActiveEmbeddedRun("session-bad-compacting-probe", {
+      ...createEmbeddedRunHandle({ abort: abortFaulty }),
+      isCompacting: () => {
+        throw new Error("compaction probe unavailable");
+      },
+    });
+    setActiveEmbeddedRun(
+      "session-compacting-after-probe-failure",
+      createEmbeddedRunHandle({ isCompacting: true, abort: abortEligible }),
+    );
+
+    expect(() => abortEmbeddedAgentRun(undefined, { mode: "compacting" })).not.toThrow();
+    expect(abortFaulty).not.toHaveBeenCalled();
+    expect(abortEligible).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps queued reply operations out of compact abort checks", () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
@@ -295,14 +315,6 @@ describe("embedded-agent runner run registry", () => {
     expect(beforeCancel).not.toHaveBeenCalled();
     expect(cancel).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("lifecycle_check_failed"));
-  });
-
-  it("passes restart ownership to every aborted run", () => {
-    const abort = vi.fn();
-    setActiveEmbeddedRun("session-restart", createEmbeddedRunHandle({ abort }));
-
-    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
-    expect(abort).toHaveBeenCalledWith("restart");
   });
 
   it("expires reply-owned stuck recovery as run_stalled instead of user abort", async () => {

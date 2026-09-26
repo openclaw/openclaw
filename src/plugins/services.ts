@@ -137,12 +137,11 @@ type StartPluginServicesParams = {
 function preparePluginServicesOwner(
   registry: PluginRegistry,
   previousHandle: PluginServicesHandle | null | undefined,
-): { ownedServices: OwnedPluginService[]; owner: PluginServicesOwner } {
+): PluginServicesOwner {
   // Failed starts still own their cleanup and remain selectable for a later retry.
-  const ownedServices: OwnedPluginService[] = [];
   const previous = previousHandle && serviceOwners.get(previousHandle);
   const owner: PluginServicesOwner = {
-    services: ownedServices,
+    services: [],
     attempts: previous?.attempts ?? new WeakMap(),
     registrations: new Set(registry.services),
     stopped: new Set(),
@@ -169,55 +168,41 @@ function preparePluginServicesOwner(
         owner.stopped.add(registration);
       }
       entry.owner = owner;
-      ownedServices.push(entry);
+      owner.services.push(entry);
     }
   }
-  return { ownedServices, owner };
+  return owner;
 }
 
 // Long-lived callbacks must not capture the startup-only predecessor and publication callback.
-export function startPluginServices(
-  params: StartPluginServicesParams,
-): Promise<PluginServicesHandle> {
-  const preparedOwner = preparePluginServicesOwner(params.registry, params.previous);
+export function startPluginServices({
+  previous,
+  onHandle,
+  ...params
+}: StartPluginServicesParams): Promise<PluginServicesHandle> {
   return startPreparedPluginServices({
-    registry: params.registry,
-    initialConfig: params.config,
-    workspaceDir: params.workspaceDir,
-    startupTrace: params.startupTrace,
-    broadcastPluginEvent: params.broadcastPluginEvent,
-    getCronService: params.getCronService,
-    oneShotStopTimeouts: params.oneShotStopTimeouts,
-    throwOnStartError: params.throwOnStartError,
-    preparedOwner,
-    publication: { callback: params.onHandle },
+    ...params,
+    owner: preparePluginServicesOwner(params.registry, previous),
+    publication: { callback: onHandle },
   });
 }
 
 async function startPreparedPluginServices({
   registry,
-  initialConfig,
+  config: initialConfig,
   workspaceDir,
   startupTrace,
   broadcastPluginEvent,
   getCronService,
   oneShotStopTimeouts,
   throwOnStartError,
-  preparedOwner,
+  owner,
   publication,
-}: {
-  registry: PluginRegistry;
-  initialConfig: OpenClawConfig;
-  workspaceDir?: string;
-  startupTrace?: NonNullable<OpenClawPluginServiceContext["startupTrace"]>;
-  broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
-  getCronService?: () => PluginServiceCronHost | null | undefined;
-  oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
-  throwOnStartError?: boolean;
-  preparedOwner: { ownedServices: OwnedPluginService[]; owner: PluginServicesOwner };
+}: Omit<StartPluginServicesParams, "previous" | "onHandle"> & {
+  owner: PluginServicesOwner;
   publication: { callback: ((handle: PluginServicesHandle) => void) | undefined };
 }): Promise<PluginServicesHandle> {
-  const { ownedServices, owner } = preparedOwner;
+  const { services: ownedServices } = owner;
   const canStart = (registration: PluginServiceRegistration) =>
     !owner.closed && owner.registrations.has(registration) && !owner.stopped.has(registration);
   const runBeforeDeadline = async (
@@ -523,12 +508,11 @@ async function startPreparedPluginServices({
         })
       : undefined;
     const isDiagnosticsExporter =
-      entry?.pluginId === entry?.id &&
-      (entry?.id === "diagnostics-otel" || entry?.id === "diagnostics-prometheus");
+      entry.pluginId === id && (id === "diagnostics-otel" || id === "diagnostics-prometheus");
     const isOtelExporter = isDiagnosticsExporter && entry.id === "diagnostics-otel";
     const grantsInternalDiagnostics =
       isDiagnosticsExporter &&
-      (entry?.origin === "bundled" || entry?.trustedOfficialInstall === true);
+      (entry.origin === "bundled" || entry.trustedOfficialInstall === true);
     const internalDiagnostics: TrustedExporterInternalDiagnostics | undefined =
       grantsInternalDiagnostics
         ? {

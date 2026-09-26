@@ -68,21 +68,12 @@ type SupportObjectEntry = {
   value: unknown;
 };
 
-type LimitedSupportArray = {
-  count: number;
-  items: unknown[];
-};
-
 function isPrivateSupportField(key: string): boolean {
   return (
     SECRET_SUPPORT_FIELD_RE.test(key) ||
     PAYLOAD_SUPPORT_FIELD_RE.test(key) ||
     IDENTIFIER_SUPPORT_FIELD_RE.test(key)
   );
-}
-
-function isPrivateConfigField(key: string): boolean {
-  return isPrivateSupportField(key) || CONFIG_PRIVATE_FIELD_RE.test(key);
 }
 
 function sanitizeSecretRefForSupport(value: Record<string, unknown>): Record<string, unknown> {
@@ -134,13 +125,6 @@ function limitedSupportObjectEntries(record: Record<string, unknown>): {
   }
   entries.sort((a, b) => a.key.localeCompare(b.key));
   return { count, entries };
-}
-
-function limitedSupportArray(value: unknown[]): LimitedSupportArray {
-  return {
-    count: value.length,
-    items: value.slice(0, MAX_SUPPORT_ARRAY_ITEMS),
-  };
 }
 
 function addTruncationMetadata(sanitized: Record<string, unknown>, count: number): void {
@@ -314,7 +298,7 @@ function replaceKnownPathPrefix(value: string, prefix: PathRedactionPrefix): str
   return next;
 }
 
-function redactKnownPathPrefixesForSupport(
+export function redactKnownPathPrefixesForSupport(
   value: string,
   redaction: SupportRedactionContext,
 ): string {
@@ -600,7 +584,7 @@ function sanitizeSupportValue(
   if (value == null || typeof value === "boolean") {
     return value;
   }
-  const privateField = config ? isPrivateConfigField(key) : isPrivateSupportField(key);
+  const privateField = isPrivateSupportField(key) || (config && CONFIG_PRIVATE_FIELD_RE.test(key));
   if (typeof value === "number") {
     return privateField ? "<redacted>" : value;
   }
@@ -619,7 +603,8 @@ function sanitizeSupportValue(
         count: value.length,
       };
     }
-    const { count, items } = limitedSupportArray(value);
+    const count = value.length;
+    const items = value.slice(0, MAX_SUPPORT_ARRAY_ITEMS);
     return supportArrayResult(
       !config && key === "programArguments"
         ? sanitizeCommandArguments(items, redaction)

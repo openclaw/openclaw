@@ -112,7 +112,7 @@ export function postState(phase: ReleasePhase): ReleaseState {
     probedAt: state.startedAt,
     parentSyncsBetaDistTag: false,
     parentSweepsStaleChildren: false,
-    parentApprovalReceipt: false,
+    childNpmPublishEnvironment: false,
   };
   return state;
 }
@@ -228,12 +228,12 @@ export const publishChild = (
   display_title: name,
 });
 
-export function publishState(receipt = false): ReleaseState {
+export function publishState(npmPublishEnvironment = false): ReleaseState {
   const state = postState("publish");
   delete state.publish.publishRunId;
   delete state.publish.npmVisibleAt;
   if (state.capabilities) {
-    state.capabilities.parentApprovalReceipt = receipt;
+    state.capabilities.childNpmPublishEnvironment = npmPublishEnvironment;
   }
   return state;
 }

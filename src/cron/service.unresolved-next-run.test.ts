@@ -39,7 +39,7 @@ function createIssue66019State(params: {
 
 function clearCronTimer(state: ReturnType<typeof createCronServiceState>) {
   if (state.timer) {
-    clearTimeout(state.timer);
+    state.timer.cancel();
     state.timer = null;
   }
 }

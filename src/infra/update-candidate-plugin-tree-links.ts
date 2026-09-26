@@ -147,6 +147,7 @@ export async function publishUpdateCandidatePluginTreeLinks(params: {
   candidateRoot: string;
   hostLinks: Set<string>;
   aliases: Array<[string, string]>;
+  assertBeforeMutation?: () => void;
 }): Promise<string[]> {
   const { privateRoot, candidateRoot } = params;
   // Projection owns these private links. Installer peer-link policy expects a
@@ -155,6 +156,7 @@ export async function publishUpdateCandidatePluginTreeLinks(params: {
     if (!isPathInside(privateRoot, resolvePathViaExistingAncestorSync(path.dirname(link)))) {
       throw new Error("Plugin host link escapes update state");
     }
+    params.assertBeforeMutation?.();
     await fs.mkdir(path.dirname(link), { recursive: true });
     const existing = await fs.lstat(link).catch((error: unknown) => {
       if (hasNodeErrorCode(error, "ENOENT")) {
@@ -170,6 +172,7 @@ export async function publishUpdateCandidatePluginTreeLinks(params: {
         throw new Error("Plugin host link conflicts with its update owner");
       }
     } else {
+      params.assertBeforeMutation?.();
       await fs.symlink(candidateRoot, link, process.platform === "win32" ? "junction" : "dir");
     }
   }
@@ -189,7 +192,9 @@ export async function publishUpdateCandidatePluginTreeLinks(params: {
         throw new Error("Plugin module alias conflicts with its private owner");
       }
     } else {
+      params.assertBeforeMutation?.();
       await fs.mkdir(path.dirname(alias), { recursive: true });
+      params.assertBeforeMutation?.();
       await fs.symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
     }
     privateAliases.push(alias);

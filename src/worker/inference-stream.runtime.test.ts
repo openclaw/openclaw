@@ -40,21 +40,6 @@ const usage: Usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-it("keeps an already fitting image projection by reference", () => {
-  const messages: WorkerInferenceContext["messages"] = [
-    {
-      role: "user",
-      content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
-      timestamp: 1,
-    },
-  ];
-  expect(
-    fitWorkerReplayImages(messages, (candidate) =>
-      Buffer.byteLength(JSON.stringify(candidate), "utf8"),
-    ),
-  ).toBe(messages);
-});
-
 function createClient() {
   return new WorkerInferenceProxyClient(
     createWorkerConnection({

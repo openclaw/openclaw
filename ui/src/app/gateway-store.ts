@@ -241,7 +241,7 @@ export function createApplicationGateway(
       }
     }
     // Snapshot observers can replace their client before this event reaches the log.
-    if (!isCurrentClient(eventClient)) {
+    if (!isCurrentClient(eventClient) || eventLogListeners.size === 0) {
       return;
     }
     const entries = eventLog.record(event);
@@ -648,7 +648,12 @@ export function createApplicationGateway(
     },
     subscribeEventLog: (listener) => {
       eventLogListeners.add(listener);
-      return () => eventLogListeners.delete(listener);
+      return () => {
+        eventLogListeners.delete(listener);
+        if (eventLogListeners.size === 0) {
+          eventLog.clear();
+        }
+      };
     },
     subscribeEvents: (listener) => {
       eventListeners.add(listener);

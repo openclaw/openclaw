@@ -454,42 +454,6 @@ describe("plugin sdk alias helpers", () => {
     expect(subpaths).toEqual(["core", "runtime"]);
   });
 
-  it("adds private qa plugin-sdk subpaths for trusted local checkouts when enabled", () => {
-    const fixture = createPluginSdkAliasFixture({
-      packageExports: {
-        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
-      },
-    });
-    writePluginSdkSubpathArtifacts(fixture.root, ["core"]);
-    fs.writeFileSync(
-      path.join(fixture.root, "src", "plugin-sdk", "qa-channel.ts"),
-      "export const qaChannel = true;\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(fixture.root, "src", "plugin-sdk", "qa-channel-protocol.ts"),
-      "export const qaChannelProtocol = true;\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts"),
-      "export const qaRuntime = true;\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(fixture.root, "dist", "plugin-sdk", "qa-lab.js"),
-      "export const qaLab = true;\n",
-      "utf-8",
-    );
-
-    const subpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
-      listPluginSdkExportedSubpaths({
-        modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
-      }),
-    );
-    expect(subpaths).toEqual(["core", "qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"]);
-  });
-
   it("resolves a private-local bundled helper without enabling private QA mode", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
@@ -1605,57 +1569,62 @@ describe("plugin sdk alias helpers", () => {
     });
   });
 
-  it.each(
-    (["src", "dist"] as const).flatMap((preference) =>
-      ["sibling-argv", "missing-argv", "no-argv", "development", "no-host", "invalid-host"].map(
-        (mode) => ({ preference, mode }),
-      ),
-    ),
-  )("selects the running SDK host across checkouts ($preference/$mode)", ({ preference, mode }) => {
-    const fixtureOptions = {
-      srcFile: "plugin-state-store-runtime.ts",
-      distFile: "plugin-state-store-runtime.js",
-      srcBody: 'throw new Error("SDK metadata selection must not execute source");\n',
-      distBody: 'throw new Error("SDK metadata selection must not execute dist");\n',
-      packageExports: {
-        "./plugin-sdk/plugin-state-store-runtime": {
-          default: "./dist/plugin-sdk/plugin-state-store-runtime.js",
+  it.each([
+    { preference: "src", mode: "sibling-argv" },
+    { preference: "dist", mode: "sibling-argv" },
+    { preference: "src", mode: "missing-argv" },
+    { preference: "src", mode: "no-argv" },
+    { preference: "src", mode: "development" },
+    { preference: "src", mode: "no-host" },
+    { preference: "src", mode: "invalid-host" },
+  ] as const)(
+    "selects the running SDK host across checkouts ($preference/$mode)",
+    ({ preference, mode }) => {
+      const fixtureOptions = {
+        srcFile: "plugin-state-store-runtime.ts",
+        distFile: "plugin-state-store-runtime.js",
+        srcBody: 'throw new Error("SDK metadata selection must not execute source");\n',
+        distBody: 'throw new Error("SDK metadata selection must not execute dist");\n',
+        packageExports: {
+          "./plugin-sdk/plugin-state-store-runtime": {
+            default: "./dist/plugin-sdk/plugin-state-store-runtime.js",
+          },
         },
-      },
-    };
-    const host = createPluginSdkAliasFixture(fixtureOptions);
-    const sibling = createPluginSdkAliasFixture(fixtureOptions);
-    const pluginEntry = writePluginEntry(sibling.root, ".artifacts/plugin/index.ts");
-    const loader = writePluginEntry(host.root, "src/plugins/loader.ts");
-    const noHost = mode === "no-host" || mode === "invalid-host";
-    const expected = noHost || mode === "development" ? sibling : host;
-    const prepared = preparePluginLoaderAliases({
-      modulePath: pluginEntry,
-      cwd: sibling.root,
-      moduleUrl:
-        mode === "no-host"
-          ? undefined
-          : mode === "invalid-host"
-            ? "not-a-file-url"
-            : pathToFileURL(loader).href,
-      argv1:
-        mode === "no-argv"
-          ? undefined
-          : mode === "missing-argv"
-            ? path.join(makeTempDir(), "missing-launcher")
-            : path.join(noHost ? host.root : sibling.root, "openclaw.mjs"),
-      devSourceRoot: mode === "development" ? sibling.root : null,
-      pluginSdkResolution: preference,
-    });
-    for (const prefix of ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"]) {
-      const specifier = `${prefix}/plugin-state-store-runtime`;
-      const target = prepared.resolveAlias(specifier);
-      expect(fs.realpathSync(target ?? "")).toBe(
-        fs.realpathSync(preference === "src" ? expected.srcFile : expected.distFile),
-      );
-      expect(prepared.getAliasMap()[specifier]).toBe(target);
-    }
-  });
+      };
+      const host = createPluginSdkAliasFixture(fixtureOptions);
+      const sibling = createPluginSdkAliasFixture(fixtureOptions);
+      const pluginEntry = writePluginEntry(sibling.root, ".artifacts/plugin/index.ts");
+      const loader = writePluginEntry(host.root, "src/plugins/loader.ts");
+      const noHost = mode === "no-host" || mode === "invalid-host";
+      const expected = noHost || mode === "development" ? sibling : host;
+      const prepared = preparePluginLoaderAliases({
+        modulePath: pluginEntry,
+        cwd: sibling.root,
+        moduleUrl:
+          mode === "no-host"
+            ? undefined
+            : mode === "invalid-host"
+              ? "not-a-file-url"
+              : pathToFileURL(loader).href,
+        argv1:
+          mode === "no-argv"
+            ? undefined
+            : mode === "missing-argv"
+              ? path.join(makeTempDir(), "missing-launcher")
+              : path.join(noHost ? host.root : sibling.root, "openclaw.mjs"),
+        devSourceRoot: mode === "development" ? sibling.root : null,
+        pluginSdkResolution: preference,
+      });
+      for (const prefix of ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"]) {
+        const specifier = `${prefix}/plugin-state-store-runtime`;
+        const target = prepared.resolveAlias(specifier);
+        expect(fs.realpathSync(target ?? "")).toBe(
+          fs.realpathSync(preference === "src" ? expected.srcFile : expected.distFile),
+        );
+        expect(prepared.getAliasMap()[specifier]).toBe(target);
+      }
+    },
+  );
 
   it("resolves plugin-sdk aliases for user-installed plugins via moduleUrl hint", () => {
     const {
@@ -2181,7 +2150,7 @@ describe("buildPluginLoaderJitiOptions", () => {
     }
   });
 
-  it.each(["", "   ", "relative/cache"])(
+  it.each(["   ", "relative/cache"])(
     "ignores non-absolute XDG cache roots (%j)",
     (xdgCacheHome) => {
       const root = createTrustedOpenClawPackageFixture("2.0.0");

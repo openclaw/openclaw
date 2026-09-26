@@ -34,8 +34,6 @@ import {
 import {
   handleModelPickerKeydown,
   handleModelSearchKeydown,
-  highlightModelRow,
-  pickerMenu,
   resetModelSearch,
   syncChatModelSearch,
   toggleModelProviderGroup,
@@ -84,6 +82,16 @@ type ChatModelPickerParams = {
   onTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
 };
+
+function closeModelPickerAfterSelection(event: MouseEvent) {
+  const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
+  if (details) {
+    details.open = false;
+    if (event.detail === 0) {
+      details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+    }
+  }
+}
 
 export function renderChatModelPicker(params: ChatModelPickerParams) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
@@ -188,13 +196,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       return;
     }
     commitModel(entry);
-    const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
-    if (details) {
-      details.open = false;
-      if (event.detail === 0) {
-        details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
-      }
-    }
+    closeModelPickerAfterSelection(event);
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
     event.stopPropagation();
@@ -203,19 +205,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       return;
     }
     params.onTargetSelect?.(groupId, value);
-    const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
-    if (details) {
-      details.open = false;
-      if (event.detail === 0) {
-        details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
-      }
-    }
-  };
-  const highlightOption = (row: HTMLButtonElement) => {
-    const menu = pickerMenu(row);
-    if (menu) {
-      highlightModelRow(menu, row);
-    }
+    closeModelPickerAfterSelection(event);
   };
   return html`
     <details
@@ -458,7 +448,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                           selectedModelValue: params.selectedModelValue,
                                           selectedAgentRuntime: params.selectedAgentRuntime,
                                           sessionModelPinned: params.sessionModelPinned,
-                                          onHighlight: highlightOption,
                                           onSelect: selectModel,
                                           onModelSetup: params.onModelSetup,
                                         }),
@@ -519,7 +508,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                           groupId: group.id,
                                           groupLabel: group.label,
                                           index: orderedOptions.length + targetIndex,
-                                          onHighlight: highlightOption,
                                           onSelect: selectTarget,
                                         }),
                                     )}

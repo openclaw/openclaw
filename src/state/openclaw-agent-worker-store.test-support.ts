@@ -12,8 +12,15 @@ import {
 } from "../infra/sqlite-worker-contract.js";
 
 export type AgentWorkerFixtureOperations = {
+  inspect: { input: undefined; output: number };
   append: {
-    input: { value: string; transactionMarker?: string; commitMarker?: string; delayMs?: number };
+    input: {
+      value: string;
+      bytes?: Buffer;
+      transactionMarker?: string;
+      commitMarker?: string;
+      delayMs?: number;
+    };
     output: number;
   };
 };
@@ -22,6 +29,8 @@ export function bindSqliteWorkerBackend(
   connectionInput:
     | {
         openMarker?: string;
+        closeFailure?: string;
+        closeWriteValue?: string;
         preparation?: {
           codeMarker: string;
           codeGate: string;
@@ -68,12 +77,26 @@ export function bindSqliteWorkerBackend(
       if (!codeLoaded) {
         throw new Error("Fixture command preparation requires completed code loading");
       }
+      if (command.type !== "append") {
+        throw new Error("Fixture preparation requires an append command");
+      }
       writeFileSync(preparation.commandMarker, "preparing");
       return waitForFile(preparation.commandGate, 5000).then(() => {
         preparedValue = command.input.value;
       });
     },
-    execute({ input }) {
+    execute(command) {
+      if (command.type === "inspect") {
+        const count = db.prepare("SELECT COUNT(*) AS count FROM worker_proof").get()?.count;
+        if (typeof count !== "number") {
+          throw new Error("Fixture count is unavailable");
+        }
+        return count;
+      }
+      const { input } = command;
+      if (input.bytes !== undefined && !Buffer.isBuffer(input.bytes)) {
+        throw new Error("Fixture binary input lost its Buffer type");
+      }
       if (preparation && preparedValue !== input.value) {
         throw new Error("Fixture execution requires its fully prepared nested input");
       }
@@ -82,7 +105,9 @@ export function bindSqliteWorkerBackend(
         () => {
           context.admit("transaction");
           pause(input.transactionMarker, input.delayMs ?? 200);
-          db.prepare("INSERT INTO worker_proof(value) VALUES (?)").run(input.value);
+          db.prepare("INSERT INTO worker_proof(value) VALUES (?)").run(
+            input.bytes?.toString("utf8") ?? input.value,
+          );
           return threadId;
         },
         {
@@ -100,6 +125,18 @@ export function bindSqliteWorkerBackend(
         throw new Error("Fixture left an unsettled borrowed connection");
       }
     },
-    close() {},
+    close() {
+      const closeWriteValue = connectionInput?.closeWriteValue;
+      if (closeWriteValue) {
+        runSqliteImmediateTransactionSync(db, () => {
+          context.admit("transaction");
+          db.prepare("INSERT INTO worker_proof(value) VALUES (?)").run(closeWriteValue);
+          context.admit("commit");
+        });
+      }
+      if (connectionInput?.closeFailure) {
+        throw new Error(connectionInput.closeFailure);
+      }
+    },
   };
 }

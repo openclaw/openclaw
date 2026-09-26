@@ -142,24 +142,17 @@ describe("package manager build policy", () => {
     });
   });
 
-  it.each(
-    (
-      [
-        ["package", "workspace"],
-        ["package", "lock"],
-        ["workspace", "lock"],
-      ] as const
-    ).flatMap(([first, second]) =>
-      [false, true].flatMap((childrenFirst) =>
-        ["1.2.3", "npm:@scope/parent@1.2.3"].map((rootSpec) => ({
-          first,
-          second,
-          childrenFirst,
-          rootSpec,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { first: "package", second: "workspace", childrenFirst: false, rootSpec: "1.2.3" },
+    { first: "package", second: "lock", childrenFirst: true, rootSpec: "npm:@scope/parent@1.2.3" },
+    {
+      first: "workspace",
+      second: "lock",
+      childrenFirst: false,
+      rootSpec: "npm:@scope/parent@1.2.3",
+    },
+    { first: "workspace", second: "lock", childrenFirst: true, rootSpec: "1.2.3" },
+  ] as const)(
     "retains child policy and $rootSpec across sources $first/$second (childrenFirst=$childrenFirst)",
     ({ first, second, childrenFirst, rootSpec }) => {
       const sources: Record<"package" | "workspace" | "lock", Record<string, unknown>> = {

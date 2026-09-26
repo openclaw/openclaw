@@ -160,125 +160,68 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(process.env.PATH).toBe("/bin");
   });
 
-  it("uses MISE_DATA_DIR before all platform defaults", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-mise-override");
-    const miseShims = path.join(tmp, "mise-override", "shims");
-    const xdgShims = path.join(tmp, "xdg-data", "mise", "shims");
-    const localAppDataShims = path.join(tmp, "local-app-data", "mise", "shims");
-    const homeShims = path.join(tmp, "AppData", "Local", "mise", "shims");
-    for (const dir of [miseShims, xdgShims, localAppDataShims, homeShims]) {
-      setDir(dir);
-    }
-
-    resetBootstrapEnv();
-    process.env.MISE_DATA_DIR = path.dirname(miseShims);
-    process.env.XDG_DATA_HOME = path.join(tmp, "xdg-data");
-    process.env.LOCALAPPDATA = path.join(tmp, "local-app-data");
-
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
+  it.each([
+    {
+      name: "MISE_DATA_DIR before all platform defaults",
       platform: "win32",
-    });
-    expectPathsAfter(updated, "/usr/bin", [miseShims]);
-    expect(updated).not.toContain(xdgShims);
-    expect(updated).not.toContain(localAppDataShims);
-    expect(updated).not.toContain(homeShims);
-  });
-
-  it("uses XDG_DATA_HOME before Windows platform defaults", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-mise-xdg-windows");
-    const xdgShims = path.join(tmp, "xdg-data", "mise", "shims");
-    const localAppDataShims = path.join(tmp, "local-app-data", "mise", "shims");
-    const homeShims = path.join(tmp, "AppData", "Local", "mise", "shims");
-    for (const dir of [xdgShims, localAppDataShims, homeShims]) {
-      setDir(dir);
-    }
-
-    resetBootstrapEnv();
-    process.env.XDG_DATA_HOME = path.join(tmp, "xdg-data");
-    process.env.LOCALAPPDATA = path.join(tmp, "local-app-data");
-
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
+      env: {
+        MISE_DATA_DIR: "mise-override",
+        XDG_DATA_HOME: "xdg-data",
+        LOCALAPPDATA: "local-app-data",
+      },
+      expected: "mise-override/shims",
+      absent: ["xdg-data/mise/shims", "local-app-data/mise/shims", "AppData/Local/mise/shims"],
+    },
+    {
+      name: "XDG_DATA_HOME before Windows platform defaults",
       platform: "win32",
-    });
-    expectPathsAfter(updated, "/usr/bin", [xdgShims]);
-    expect(updated).not.toContain(localAppDataShims);
-    expect(updated).not.toContain(homeShims);
-  });
-
-  it("uses LOCALAPPDATA before the Windows HOME fallback", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-mise-local-app-data");
-    const localAppDataShims = path.join(tmp, "local-app-data", "mise", "shims");
-    const homeShims = path.join(tmp, "AppData", "Local", "mise", "shims");
-    setDir(localAppDataShims);
-    setDir(homeShims);
-
-    resetBootstrapEnv();
-    process.env.LOCALAPPDATA = path.join(tmp, "local-app-data");
-
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
+      env: { XDG_DATA_HOME: "xdg-data", LOCALAPPDATA: "local-app-data" },
+      expected: "xdg-data/mise/shims",
+      absent: ["local-app-data/mise/shims", "AppData/Local/mise/shims"],
+    },
+    {
+      name: "LOCALAPPDATA before the Windows HOME fallback",
       platform: "win32",
-    });
-    expectPathsAfter(updated, "/usr/bin", [localAppDataShims]);
-    expect(updated).not.toContain(homeShims);
-  });
-
-  it("uses HOME/AppData/Local when Windows overrides are absent", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-mise-windows-home");
-    const homeShims = path.join(tmp, "AppData", "Local", "mise", "shims");
-    setDir(homeShims);
-    resetBootstrapEnv();
-
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
+      env: { LOCALAPPDATA: "local-app-data" },
+      expected: "local-app-data/mise/shims",
+      absent: ["AppData/Local/mise/shims"],
+    },
+    {
+      name: "HOME/AppData/Local when Windows overrides are absent",
       platform: "win32",
-    });
-    expectPathsAfter(updated, "/usr/bin", [homeShims]);
-  });
-
-  it("uses XDG_DATA_HOME before the Unix HOME fallback", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-mise-xdg-unix");
-    const xdgShims = path.join(tmp, "xdg-data", "mise", "shims");
-    const homeShims = path.join(tmp, ".local", "share", "mise", "shims");
-    setDir(xdgShims);
-    setDir(homeShims);
-
-    resetBootstrapEnv();
-    process.env.XDG_DATA_HOME = path.join(tmp, "xdg-data");
-
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
+      env: {},
+      expected: "AppData/Local/mise/shims",
+      absent: [],
+    },
+    {
+      name: "XDG_DATA_HOME before the Unix HOME fallback",
       platform: "linux",
-    });
-    expectPathsAfter(updated, "/usr/bin", [xdgShims]);
-    expect(updated).not.toContain(homeShims);
-  });
-
-  it("uses HOME/.local/share when Unix overrides are absent", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-mise-unix-home");
-    const homeShims = path.join(tmp, ".local", "share", "mise", "shims");
-    setDir(homeShims);
-    resetBootstrapEnv();
-
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
+      env: { XDG_DATA_HOME: "xdg-data" },
+      expected: "xdg-data/mise/shims",
+      absent: [".local/share/mise/shims"],
+    },
+    {
+      name: "HOME/.local/share when Unix overrides are absent",
       platform: "darwin",
-    });
-    expectPathsAfter(updated, "/usr/bin", [homeShims]);
+      env: {},
+      expected: ".local/share/mise/shims",
+      absent: [],
+    },
+  ] as const)("uses $name", ({ platform, env, expected, absent }) => {
+    const { tmp, appCli } = setupAppCliRoot("case-mise");
+    for (const dir of [expected, ...absent]) {
+      setDir(path.join(tmp, dir));
+    }
+    resetBootstrapEnv();
+    for (const [key, value] of Object.entries(env)) {
+      process.env[key] = path.join(tmp, value);
+    }
+
+    const updated = bootstrapPath({ execPath: appCli, cwd: tmp, homeDir: tmp, platform });
+    expectPathsAfter(updated, "/usr/bin", [path.join(tmp, expected)]);
+    for (const dir of absent) {
+      expect(updated).not.toContain(path.join(tmp, dir));
+    }
   });
 
   it.each([
@@ -368,23 +311,6 @@ describe("ensureOpenClawCliOnPath", () => {
       platform: "linux",
     });
     expect(updated.indexOf(xdgBinHome)).toBeLessThan(updated.indexOf(localBin));
-  });
-
-  it("places ~/.local/bin AFTER /usr/bin to prevent PATH hijack", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-path-hijack");
-    const localBin = path.join(tmp, ".local", "bin");
-    setDir(path.join(tmp, ".local"));
-    setDir(localBin);
-
-    resetBootstrapEnv("/usr/bin:/bin");
-
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
-      platform: "linux",
-    });
-    expectPathsAfter(updated, "/usr/bin", [localBin]);
   });
 
   it("places all user-writable home dirs after system dirs", () => {

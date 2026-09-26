@@ -17,21 +17,26 @@ function materializeCompactionConfig(
 }
 
 describe("config compaction settings", () => {
-  it("preserves memory flush config values", () => {
+  it("preserves explicit compaction mode and settings", () => {
+    const compaction = {
+      mode: "default",
+      memoryFlush: {
+        enabled: false,
+        model: "ollama/qwen3:8b",
+        softThresholdTokens: 1234,
+      },
+      maxActiveTranscriptBytes: "20mb",
+    } as const;
+    expect(materializeCompactionConfig(compaction)).toEqual(compaction);
+  });
+
+  it("preserves safeguard semantic observation settings alongside memory flush", () => {
     const compaction = materializeCompactionConfig({
       mode: "safeguard",
       identifierPolicy: "strict",
-      qualityGuard: {
-        enabled: true,
-        maxRetries: 2,
-      },
-      semanticCuration: {
-        mode: "shadow",
-        timeoutMs: 600,
-      },
-      midTurnPrecheck: {
-        enabled: true,
-      },
+      qualityGuard: { enabled: true, maxRetries: 2 },
+      semanticCuration: { mode: "shadow", timeoutMs: 600 },
+      midTurnPrecheck: { enabled: true },
       memoryFlush: {
         enabled: false,
         model: "ollama/qwen3:8b",
@@ -60,29 +65,13 @@ describe("config compaction settings", () => {
     expect(compaction?.mode).toBe("safeguard");
   });
 
-  it("preserves recent turn safeguard values during materialization", () => {
-    const compaction = materializeCompactionConfig({
-      mode: "safeguard",
-      recentTurnsPreserve: 4,
-    });
-
-    expect(compaction?.recentTurnsPreserve).toBe(4);
-  });
-
-  it("preserves oversized quality guard retry values for runtime clamping", () => {
-    const compaction = materializeCompactionConfig({
+  it("preserves authored settings while supplying the missing mode", () => {
+    const compaction = {
+      thinkingLevel: "inherit",
       qualityGuard: {
         maxRetries: 99,
       },
-    });
-
-    expect(compaction?.qualityGuard?.maxRetries).toBe(99);
+    } as const;
+    expect(materializeCompactionConfig(compaction)).toEqual({ ...compaction, mode: "safeguard" });
   });
-
-  it.each(["off", "low", "adaptive", "max", "ultra", "inherit"] as const)(
-    "preserves compaction thinkingLevel=%s during materialization",
-    (thinkingLevel) => {
-      expect(materializeCompactionConfig({ thinkingLevel })?.thinkingLevel).toBe(thinkingLevel);
-    },
-  );
 });

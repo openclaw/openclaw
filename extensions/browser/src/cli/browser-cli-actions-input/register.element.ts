@@ -1,7 +1,3 @@
-/**
- * Browser CLI element interaction commands such as click, type, hover, drag,
- * select, screenshots, and input files.
- */
 import type { Command } from "commander";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -26,23 +22,14 @@ function parseBrowserMouseButtonOption(value: string): "left" | "right" | "middl
   });
 }
 
-/** Registers element-centric Browser action commands. */
 export function registerBrowserElementCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
-  const parseDecimalNumber = (value: string): number | undefined => {
-    const trimmed = value.trim();
-    if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed)) {
-      return undefined;
-    }
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  };
-
   const parseRequiredNumber = (value: string, label: string): number | undefined => {
-    const parsed = parseDecimalNumber(value);
-    if (parsed === undefined) {
+    const trimmed = value.trim();
+    const parsed = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    if (!Number.isFinite(parsed)) {
       defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
       defaultRuntime.exit(1);
       return undefined;
@@ -128,7 +115,7 @@ export function registerBrowserElementCommands(
           targetId: normalizeOptionalString(opts.targetId),
           doubleClick: Boolean(opts.double),
           button: normalizeOptionalString(opts.button),
-          delayMs: Number.isFinite(opts.delayMs) ? opts.delayMs : undefined,
+          delayMs: opts.delayMs,
         },
         successMessage: (result) => {
           const url = result.url;
@@ -204,14 +191,13 @@ export function registerBrowserElementCommands(
       if (!refValue) {
         return;
       }
-      const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
       await runElementAction({
         cmd,
         body: {
           kind: "scrollIntoView",
           ref: refValue,
           targetId: normalizeOptionalString(opts.targetId),
-          timeoutMs,
+          timeoutMs: opts.timeoutMs,
         },
         successMessage: `scrolled into view: ${refValue}`,
       });

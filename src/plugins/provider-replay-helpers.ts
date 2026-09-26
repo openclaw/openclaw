@@ -53,17 +53,9 @@ export function buildOpenAICompatibleReplayPolicy(
         }
       : {}),
     ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
-    ...(modelApi === "openai-completions"
-      ? {
-          applyAssistantFirstOrderingFix: true,
-          validateGeminiTurns: true,
-          validateAnthropicTurns: true,
-        }
-      : {
-          applyAssistantFirstOrderingFix: false,
-          validateGeminiTurns: false,
-          validateAnthropicTurns: false,
-        }),
+    applyAssistantFirstOrderingFix: modelApi === "openai-completions",
+    validateGeminiTurns: modelApi === "openai-completions",
+    validateAnthropicTurns: modelApi === "openai-completions",
     ...(modelApi === "openai-completions" && dropReasoningFromHistory
       ? { dropReasoningFromHistory: true }
       : {}),

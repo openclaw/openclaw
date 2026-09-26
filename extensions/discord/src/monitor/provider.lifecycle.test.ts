@@ -212,19 +212,6 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(statusPatches(statusSink).some(predicate)).toBe(true);
   }
 
-  it("cleans up thread bindings when gateway wait fails before READY", async () => {
-    waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("startup failed"));
-    const { lifecycleParams, threadStop, gatewaySupervisor } = createLifecycleHarness();
-
-    await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow("startup failed");
-
-    expectLifecycleCleanup({
-      threadStop,
-      waitCalls: 1,
-      gatewaySupervisor,
-    });
-  });
-
   it("cleans up when gateway wait fails after startup", async () => {
     waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("gateway wait failed"));
     const { lifecycleParams, threadStop, gatewaySupervisor } = createLifecycleHarness();

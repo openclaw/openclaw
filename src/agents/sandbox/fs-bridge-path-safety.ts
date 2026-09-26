@@ -1,8 +1,3 @@
-/**
- * Host/container path safety guard for the sandbox filesystem bridge.
- *
- * Proves requested container paths stay inside allowed mounts before host paths are opened or mutated.
- */
 import fs from "node:fs";
 import path from "node:path";
 import type { PathAliasPolicy } from "@openclaw/fs-safe/advanced";
@@ -34,7 +29,6 @@ function sandboxBoundaryError(action: string, containerPath: string, error: unkn
   });
 }
 
-/** Caller-provided path safety requirements for one fs bridge operation. */
 type PathSafetyOptions = {
   action: string;
   aliasPolicy?: PathAliasPolicy;
@@ -42,7 +36,6 @@ type PathSafetyOptions = {
   allowedType?: BoundaryAllowedType;
 };
 
-/** Path plus operation constraints to validate before execution. */
 export type PathSafetyCheck = {
   target: SandboxResolvedFsPath;
   options: PathSafetyOptions;
@@ -77,7 +70,6 @@ type RunCommand = (
   },
 ) => Promise<{ stdout: Buffer }>;
 
-/** Validates sandbox fs bridge paths against mount, symlink, and writability boundaries. */
 export class SandboxFsPathGuard {
   private readonly mountsByContainer: Array<SandboxFsMount & { canonicalHostRoot: string }>;
   private readonly runCommand: RunCommand;
@@ -300,7 +292,7 @@ export class SandboxFsPathGuard {
     },
   ): Promise<RootFileOpenResult> {
     const lexicalMount = this.resolveRequiredMount(target.containerPath, action);
-    const guarded = await openRootFile({
+    return openRootFile({
       absolutePath: target.hostPath,
       rootPath: lexicalMount.hostRoot,
       boundaryLabel: "sandbox mount root",
@@ -311,7 +303,6 @@ export class SandboxFsPathGuard {
       aliasPolicy: options?.aliasPolicy,
       allowedType: options?.allowedType,
     });
-    return guarded;
   }
 
   resolvePinnedEntry(target: SandboxResolvedFsPath, action: string): PinnedSandboxEntry {

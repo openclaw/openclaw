@@ -12,6 +12,7 @@ source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/e2e/lib/upgrade-survivor/plugin-dependency-fixtures.sh
 source scripts/e2e/lib/upgrade-survivor/backup-rollback.sh
+source scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.sh
 source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 source scripts/e2e/lib/upgrade-survivor/paths.sh
 
@@ -342,6 +343,9 @@ const summary = {
   restartInference: process.env.SUMMARY_RESTART_INFERENCE || null,
   backupRollback: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
     ? readJsonOrNull(process.env.SUMMARY_BACKUP_ROLLBACK)
+    : undefined,
+  pluginPolicy: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
+    ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "webhooks-only-policy", "result.json"))
     : undefined,
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
@@ -976,7 +980,7 @@ rm_rf_retry() {
 }
 
 reset_run_state() {
-  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT" "$RUNTIME_ROOT/backup-rollback"
+  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT" "$RUNTIME_ROOT/backup-rollback" "$RUNTIME_ROOT/webhooks-only-policy"
   rm -f "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_DAEMON_LOG"
   mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
 }
@@ -2489,6 +2493,9 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   fi
   phase prepare-schema-expectation prepare_schema_expectation
   phase capture-backup-rollback capture_backup_rollback
+  if [ "$baseline_version" = "2026.9.2" ]; then
+    phase capture-sole-plugin-policy legacy_operator_plugin_policy capture
+  fi
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     phase prepare-baseline-update-manager install_update_restart_systemctl_shim
     phase prepare-baseline-update-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
@@ -2596,7 +2603,20 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase legacy-operator-agent-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     legacy-operator-turn candidate
   phase legacy-operator-plugin assert_prepublish_plugin_install
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    # The restart shim has no native service cgroup. After proving the published
+    # managed restart, exercise candidate no-op convergence with a foreground Gateway.
+    phase legacy-operator-noop-service-stop stop_update_restart_probe_gateway "$COMMAND_TIMEOUT"
+    phase legacy-operator-noop-foreground-start start_gateway
+  fi
   phase legacy-operator-update-noop assert_legacy_operator_update_noop
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    phase legacy-operator-noop-foreground-alive openclaw_e2e_process_alive "$gateway_pid"
+    phase legacy-operator-noop-service-inactive assert_update_restart_probe_inactive
+    phase legacy-operator-noop-foreground-stop stop_gateway
+    phase legacy-operator-noop-service-start run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
+    phase legacy-operator-noop-service-status check_gateway_status
+  fi
   phase legacy-operator-doctor-clean assert_legacy_operator_doctor_clean
   phase formerly-bundled-doctor node scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs \
     "$candidate_version"
@@ -2647,6 +2667,9 @@ if [ "$LIVE_ENABLED" = "1" ]; then
 fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase verify-backup-rollback verify_backup_rollback
+  if [ "$baseline_version" = "2026.9.2" ]; then
+    phase verify-sole-plugin-policy legacy_operator_plugin_policy verify
+  fi
   if [ "$baseline_version" = "2026.9.4" ] && [ "$UPDATE_RESTART_MODE" = "manual" ]; then
     phase assert-restored-index-rollback node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs rollback "$ARTIFACT_ROOT/backup-rollback.json"
   fi

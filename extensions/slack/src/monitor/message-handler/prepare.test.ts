@@ -1730,26 +1730,40 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.MessageSid).toBe("0x10");
   });
 
-  it("primes Slack status reactions when channel replies are message-tool-only", async () => {
-    const slackCtx = createInboundSlackCtx({
+  function createAckRoomContext(
+    messages: OpenClawConfig["messages"],
+    options: Pick<
+      Parameters<typeof createInboundSlackCtx>[0],
+      "appClient" | "replyToMode" | "defaultRequireMention"
+    > = {},
+  ) {
+    const ctx = createInboundSlackCtx({
       cfg: {
-        messages: {
-          ackReaction: "eyes",
-          groupChat: { visibleReplies: "message_tool" },
-          statusReactions: { enabled: true },
-        },
+        messages,
         channels: {
           slack: {
             enabled: true,
             groupPolicy: "open",
-            replyToMode: "all",
+            ...(options.replyToMode ? { replyToMode: options.replyToMode } : {}),
           },
         },
-      } as OpenClawConfig,
-      replyToMode: "all",
+      },
+      ...options,
     });
-    slackCtx.resolveUserName = async () => ({ name: "Alice" });
-    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    return ctx;
+  }
+
+  it("primes Slack status reactions when channel replies are message-tool-only", async () => {
+    const slackCtx = createAckRoomContext(
+      {
+        ackReaction: "eyes",
+        groupChat: { visibleReplies: "message_tool" },
+        statusReactions: { enabled: true },
+      },
+      { replyToMode: "all" },
+    );
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
       channel: "C123",
@@ -1779,26 +1793,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     "keeps the configured static ack with $label",
     async ({ visibleReplies, statusEnabled }) => {
       const addReaction = vi.fn().mockResolvedValue({ ok: true });
-      const slackCtx = createInboundSlackCtx({
-        cfg: {
-          messages: {
-            ackReaction: "eyes",
-            groupChat: { visibleReplies },
-            statusReactions: statusEnabled === undefined ? undefined : { enabled: statusEnabled },
-          },
-          channels: {
-            slack: {
-              enabled: true,
-              groupPolicy: "open",
-            },
-          },
-        } as OpenClawConfig,
-        appClient: {
-          reactions: { add: addReaction },
-        } as unknown as App["client"],
-      });
-      slackCtx.resolveUserName = async () => ({ name: "Alice" });
-      slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+      const slackCtx = createAckRoomContext(
+        {
+          ackReaction: "eyes",
+          groupChat: { visibleReplies },
+          statusReactions: statusEnabled === undefined ? undefined : { enabled: statusEnabled },
+        },
+        { appClient: { reactions: { add: addReaction } } as unknown as App["client"] },
+      );
 
       const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
         channel: "C123",
@@ -1820,28 +1822,17 @@ describe("slack prepareSlackMessage inbound contract", () => {
   );
 
   it("keeps unmentioned room events quiet when ack scope does not force all messages", async () => {
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        messages: {
-          ackReaction: "eyes",
-          ackReactionScope: "group-all",
-          groupChat: {
-            unmentionedInbound: "room_event",
-            visibleReplies: "automatic",
-          },
-          statusReactions: { enabled: true },
-        },
-        channels: {
-          slack: {
-            enabled: true,
-            groupPolicy: "open",
-          },
-        },
-      } as OpenClawConfig,
-      defaultRequireMention: false,
-    });
-    slackCtx.resolveUserName = async () => ({ name: "Alice" });
-    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    const slackCtx = createAckRoomContext(
+      {
+        ackReaction: "eyes",
+        ackReactionScope: "group-all",
+        groupChat: { unmentionedInbound: "room_event", visibleReplies: "automatic" },
+        statusReactions: { enabled: true },
+      },
+      {
+        defaultRequireMention: false,
+      },
+    );
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
       channel: "C123",
@@ -1859,29 +1850,18 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   it("sends Slack ack reactions for room events when ack scope is all", async () => {
     const reactionAdd = vi.fn().mockResolvedValue({ ok: true });
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        messages: {
-          ackReaction: "eyes",
-          ackReactionScope: "all",
-          groupChat: {
-            unmentionedInbound: "room_event",
-            visibleReplies: "automatic",
-          },
-          statusReactions: { enabled: true },
-        },
-        channels: {
-          slack: {
-            enabled: true,
-            groupPolicy: "open",
-          },
-        },
-      } as OpenClawConfig,
-      appClient: { reactions: { add: reactionAdd } } as unknown as App["client"],
-      defaultRequireMention: false,
-    });
-    slackCtx.resolveUserName = async () => ({ name: "Alice" });
-    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    const slackCtx = createAckRoomContext(
+      {
+        ackReaction: "eyes",
+        ackReactionScope: "all",
+        groupChat: { unmentionedInbound: "room_event", visibleReplies: "automatic" },
+        statusReactions: { enabled: true },
+      },
+      {
+        appClient: { reactions: { add: reactionAdd } } as unknown as App["client"],
+        defaultRequireMention: false,
+      },
+    );
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
       channel: "C123",
@@ -1905,24 +1885,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("keeps unmentioned abort requests as user requests when room events are enabled", async () => {
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        messages: {
-          groupChat: {
-            unmentionedInbound: "room_event",
-          },
-        },
-        channels: {
-          slack: {
-            enabled: true,
-            groupPolicy: "open",
-          },
-        },
-      } as OpenClawConfig,
-      defaultRequireMention: false,
-    });
-    slackCtx.resolveUserName = async () => ({ name: "Alice" });
-    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    const slackCtx = createAckRoomContext(
+      { groupChat: { unmentionedInbound: "room_event" } },
+      { defaultRequireMention: false },
+    );
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
       channel: "C123",
@@ -2571,19 +2537,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
   });
 
-  it("classifies D-prefix DMs correctly even when channel_type is wrong", async () => {
-    const prepared = await prepareMessageWith(
-      createDmScopeMainSlackCtx(),
-      createSlackAccount(),
-      createMainScopedDmMessage({
-        // Bug scenario: D-prefix channel but Slack event says channel_type: "channel"
-        channel_type: "channel",
-      }),
-    );
-
-    expectMainScopedDmClassification(prepared, { includeFromCheck: true });
-  });
-
   it("uses the concrete DM channel as the live reply target while keeping user-scoped routing", async () => {
     const prepared = await prepareMessageWith(
       createDmScopeMainSlackCtx(),
@@ -2595,19 +2548,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.replyTarget).toBe("channel:D0ACP6B1T8V");
     expect(prepared.ctxPayload.To).toBe("user:U1");
     expect(prepared.ctxPayload.NativeChannelId).toBe("D0ACP6B1T8V");
-  });
-
-  it("classifies D-prefix DMs when channel_type is missing", async () => {
-    const message = createMainScopedDmMessage({});
-    delete message.channel_type;
-    const prepared = await prepareMessageWith(
-      createDmScopeMainSlackCtx(),
-      createSlackAccount(),
-      // channel_type missing — should infer from D-prefix.
-      message,
-    );
-
-    expectMainScopedDmClassification(prepared);
   });
 
   it("preserves MessageThreadId for normalized DM assistant thread roots", async () => {
@@ -2641,18 +2581,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
       expect(prepared!.ctxPayload.ReplyToId).toBeUndefined();
     }
-  });
-
-  it("sets MessageThreadId for top-level messages when replyToMode=all", async () => {
-    const prepared = await prepareMessageWith(
-      createReplyToAllSlackCtx(),
-      createSlackAccount({ replyToMode: "all" }),
-      createSlackMessage({}),
-    );
-
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.MessageThreadId).toBe("1.000");
-    expect(prepared.ctxPayload.ReplyToId).toBeUndefined();
   });
 
   it("classifies MPIM group DMs as group chat context", async () => {

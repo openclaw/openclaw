@@ -53,7 +53,11 @@ export type SessionPlacementAdmissionProvider = {
     successorSessionId: string;
   }) => void;
   recoverTerminalTurn?: (session: { sessionId: string; sessionKey?: string }) => string | undefined;
-  executeLocalTurn: <T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) => Promise<T>;
+  executeLocalTurn: <T>(
+    claim: LocalTurnPlacementClaim,
+    runLocal: () => Promise<T>,
+    assertCurrent?: () => void,
+  ) => Promise<T>;
   executeTurn: (
     claim: LocalTurnPlacementClaim,
     params: SessionPlacementTurnParams,
@@ -265,7 +269,7 @@ export async function withLocalSessionPlacementTurnSettlement(
         };
         const result = await withPlacementTurnCallerScope(options, () =>
           withoutSessionPlacementForcedTerminalSettlement(() =>
-            provider ? provider.executeLocalTurn(claim, runLocal) : runLocal(),
+            provider ? provider.executeLocalTurn(claim, runLocal, assertCurrent) : runLocal(),
           ),
         );
         if (options.isFinalFallbackAttempt === undefined) {

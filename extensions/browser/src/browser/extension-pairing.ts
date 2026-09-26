@@ -1,4 +1,4 @@
-import type { BrowserConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -16,8 +16,6 @@ type BrowserExtensionPairing = {
   relayPort: number;
   topology: "local" | "browser-node" | "direct-remote";
 };
-
-type PairingConfig = OpenClawConfig & { browser?: BrowserConfig };
 
 /** Resolve a safe Gateway relay URL with the v2-bound route path. */
 function buildGatewayExtensionRelayUrl(raw: string): string {
@@ -50,7 +48,7 @@ function buildGatewayExtensionRelayUrl(raw: string): string {
  * to the remote Gateway rather than the browser host.
  */
 export async function buildBrowserExtensionPairing(params: {
-  cfg: PairingConfig;
+  cfg: OpenClawConfig;
   gatewayUrl?: string;
   localTransport?: "relay" | "gateway";
   profile?: string;

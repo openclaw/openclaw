@@ -26,7 +26,6 @@ import {
   analyzeVoiceReceiveError,
   DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
   DECRYPT_FAILURE_WINDOW_MS,
-  finishVoiceDecryptRecovery,
   noteVoiceDecryptFailure,
   resetVoiceReceiveRecoveryState,
 } from "./receive-recovery.js";
@@ -594,7 +593,7 @@ export class DiscordVoiceReceive {
         logger.warn(`discord voice: decrypt recovery failed: ${formatErrorMessage(recoverErr)}`),
       )
       .finally(() => {
-        finishVoiceDecryptRecovery(entry.receiveRecovery);
+        entry.receiveRecovery.decryptRecoveryInFlight = false;
       });
   }
 

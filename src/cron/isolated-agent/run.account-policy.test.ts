@@ -9,13 +9,13 @@ import "../../agents/test-helpers/fast-coding-tools.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../../tasks/task-registry.store.sqlite.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { stop } from "../service/ops-lifecycle.js";
 import { list } from "../service/ops-read.js";
 import type { CronEvent } from "../service/state.js";
 import { onTimer } from "../service/timer-scheduler.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronStoredJob } from "../types.js";
 import {
   getChannelPluginMock,
@@ -154,7 +154,7 @@ describe("scheduled account policy outcomes", () => {
         await list(state);
         await onTimer(state);
         const persisted = (await loadCronStore(storePath)).jobs[0];
-        const history = readCronTaskRunHistoryPage({
+        const history = readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(storePath),
           jobId: job.id,
         });

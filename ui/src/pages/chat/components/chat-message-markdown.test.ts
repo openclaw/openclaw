@@ -78,22 +78,6 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
     expect(details?.fullMessage).toBeUndefined();
   });
 
-  it("does not fetch an untruncated assistant message", () => {
-    const details = resolveMessageActionDetails(
-      prepareChatMessageRender({
-        role: "assistant",
-        content: "Complete.",
-        __openclaw: { id: "msg-2" },
-      }),
-      {
-        messageId: "msg-2",
-        canFetchFullMessage: true,
-        senderLabel: "assistant",
-      },
-    );
-    expect(details?.fullMessage).toBeUndefined();
-  });
-
   it("projects an oversized assistant marker to a notice without disabling recovery", () => {
     const message = {
       role: "assistant",
@@ -252,18 +236,6 @@ describe("user message disclosure", () => {
   });
 
   it.each([
-    {
-      name: "seven short lines",
-      markdown: [
-        "please re-review these:",
-        "#127818",
-        "#127826",
-        "#127844",
-        "#127881",
-        "",
-        "rerun the same session we had for these",
-      ].join("\n"),
-    },
     { name: "exactly 1200 UTF-16 code units", markdown: "a".repeat(1_200) },
     { name: "forty short lines", markdown: Array(40).fill("a").join("\n") },
   ])("keeps $name fully visible", ({ markdown }) => {

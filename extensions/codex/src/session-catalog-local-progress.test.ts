@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { observe } from "./session-catalog-list-operation.test-support.js";
 import {
   commandRpcMocks,
@@ -11,6 +11,11 @@ import {
   idleThread,
   registerCodexSessionCatalog,
 } from "./session-catalog.test-helpers.js";
+
+beforeAll(async () => {
+  // Keep paired-node module loading outside the local-page fake-timer measurement.
+  await import("./session-catalog-node-continue.js");
+});
 
 afterEach(() => vi.useRealTimers());
 
@@ -57,7 +62,7 @@ it.each([true, false])(
   "bounds cold local progress and reuses resident rows (partial: %s)",
   async (partial) => {
     const f = fixture();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const result = observe(f.list(partial));
     try {
       await f.started.promise;

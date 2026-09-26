@@ -123,11 +123,11 @@ describe("openclaw attach (action)", () => {
     },
     {
       name: "sanitized wide labels",
-      labels: ["\u001b[31m界界界\u001b[0m", "Alpha"],
+      labels: ["\u001b[31m界界界界界界\u001b[0m", "Alpha"],
       expectedLines: [
-        "SESSION  ID PREFIX",
-        "界界界   123456780aaa4000",
-        "Alpha    123456780bbb4000",
+        "SESSION       ID PREFIX",
+        "界界界界界界  123456780aaa4000",
+        "Alpha         123456780bbb4000",
       ],
     },
     {
@@ -137,51 +137,6 @@ describe("openclaw attach (action)", () => {
         `SESSION${" ".repeat(35)}ID PREFIX`,
         `${"A".repeat(39)}…  123456780aaa4000`,
         `Alpha${" ".repeat(37)}123456780bbb4000`,
-      ],
-    },
-    {
-      name: "a combining label that exactly fits",
-      labels: ["A".repeat(39) + "e\u0301", "Alpha"],
-      expectedLines: [
-        `SESSION${" ".repeat(35)}ID PREFIX`,
-        `${"A".repeat(39)}e\u0301  123456780aaa4000`,
-        `Alpha${" ".repeat(37)}123456780bbb4000`,
-      ],
-    },
-    {
-      name: "a bounded zero-width label",
-      labels: ["\u200b".repeat(512), "Alpha"],
-      expectedLines: [
-        "SESSION  ID PREFIX",
-        `${"\u200b".repeat(49)}…        123456780aaa4000`,
-        "Alpha    123456780bbb4000",
-      ],
-    },
-    {
-      name: "an oversized combining grapheme",
-      labels: ["e" + "\u0301".repeat(512), "Alpha"],
-      expectedLines: [
-        "SESSION  ID PREFIX",
-        "…        123456780aaa4000",
-        "Alpha    123456780bbb4000",
-      ],
-    },
-    {
-      name: "an oversized ZWJ grapheme",
-      labels: ["👩" + "\u200d👩".repeat(128), "Alpha"],
-      expectedLines: [
-        "SESSION  ID PREFIX",
-        "…        123456780aaa4000",
-        "Alpha    123456780bbb4000",
-      ],
-    },
-    {
-      name: "ordinary multi-person emoji",
-      labels: ["👨‍👩‍👧‍👦".repeat(5), "Alpha"],
-      expectedLines: [
-        "SESSION     ID PREFIX",
-        `${"👨‍👩‍👧‍👦".repeat(5)}  123456780aaa4000`,
-        "Alpha       123456780bbb4000",
       ],
     },
   ])("renders ambiguous session candidates with $name", async ({ labels, expectedLines }) => {

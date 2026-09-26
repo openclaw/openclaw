@@ -8,7 +8,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { DevicePairingList } from "../../../../src/gateway/device-pairing-list.types.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
-import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
+import { removePathValue, setPathValue } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { clearDeviceAuthToken, loadOrCreateDeviceIdentity, storeDeviceAuthToken } from "./index.ts";
 
@@ -584,7 +584,7 @@ function applyExecApprovalsSnapshot(state: ExecApprovalsState, snapshot: ExecApp
     return;
   }
   if (!state.execApprovalsDirty) {
-    state.execApprovalsForm = cloneConfigObject(snapshot.file);
+    state.execApprovalsForm = structuredClone(snapshot.file);
   }
 }
 
@@ -648,9 +648,7 @@ function mutateExecApprovalsForm(
     state.lastError = "Host-native node approvals are read-only here.";
     return;
   }
-  const base = cloneConfigObject(
-    state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {},
-  );
+  const base = structuredClone(state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {});
   mutate(base);
   state.execApprovalsForm = base;
   state.execApprovalsDirty = true;

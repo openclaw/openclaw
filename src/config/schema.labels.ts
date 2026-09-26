@@ -218,7 +218,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.codeMode.maxSearchLimit": "Code Mode Max Search Results",
   "tools.swarm": "Swarm",
   "tools.swarm.enabled": "Enable Swarm",
-  "tools.swarm.maxConcurrent": "Swarm Concurrent Children",
+  "tools.swarm.maxConcurrent": "Swarm Concurrent Children per Group",
   "tools.swarm.maxChildrenPerGroup": "Swarm Live Children per Group",
   "tools.swarm.maxTotalPerGroup": "Swarm Total Children per Group",
   "tools.swarm.waitTimeoutSecondsMax": "Swarm Maximum Wait Timeout",
