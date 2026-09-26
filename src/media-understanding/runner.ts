@@ -80,6 +80,16 @@ export {
 export { buildMediaUnderstandingRegistry as buildProviderRegistry } from "./provider-registry.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+/**
+ * A provider registry, or a memoized factory that builds one on first use.
+ * `runCapability` receives the factory form so a turn that never needs the
+ * registry (the native-vision fast path) never pays to build it.
+ */
+type LazyProviderRegistry = ProviderRegistry | (() => ProviderRegistry);
+
+function resolveProviderRegistry(registry: LazyProviderRegistry): ProviderRegistry {
+  return typeof registry === "function" ? registry() : registry;
+}
 type ModelCatalogApi = typeof import("../agents/model-catalog.js") &
   typeof import("../agents/prepared-model-catalog.js");
 type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["readPreparedModelCatalog"]>>;
@@ -369,13 +379,13 @@ function resolveImageModelFromAgentDefaults(params: {
 
 function hasExplicitImageUnderstandingConfig(params: {
   cfg: OpenClawConfig;
-  providerRegistry: ProviderRegistry;
+  providerRegistry: LazyProviderRegistry;
 }): boolean {
   return (params.cfg.tools?.media?.models ?? []).some((entry) =>
     matchesMediaEntryCapability({
       entry,
       capability: "image",
-      providerRegistry: params.providerRegistry,
+      providerRegistry: resolveProviderRegistry(params.providerRegistry),
     }),
   );
 }
@@ -721,7 +731,7 @@ export async function runCapability(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  providerRegistry: ProviderRegistry;
+  providerRegistry: LazyProviderRegistry;
   config?: MediaUnderstandingConfig;
   activeModel?: ActiveMediaModel;
   request?: MediaRequestOverrides;
@@ -881,11 +891,15 @@ export async function runCapability(params: {
     };
   }
 
+  // Every path past the native-vision skip branch reads the registry: resolve
+  // it once here (apply.ts's memoized factory builds it at most once per turn)
+  // and reuse the concrete value for every remaining call below.
+  const providerRegistry = resolveProviderRegistry(params.providerRegistry);
   const entries = resolveModelEntries({
     cfg,
     capability,
     config,
-    providerRegistry: params.providerRegistry,
+    providerRegistry,
   });
   const automaticAudio = capability === "audio" && entries.length === 0;
   let resolvedEntries: ResolvedMediaModelEntry[] = entries;
@@ -895,7 +909,7 @@ export async function runCapability(params: {
       agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      providerRegistry: params.providerRegistry,
+      providerRegistry,
       capability,
       activeModel: params.activeModel,
       config,
@@ -928,7 +942,7 @@ export async function runCapability(params: {
       agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      providerRegistry: params.providerRegistry,
+      providerRegistry,
       cache: params.attachments,
       entries: automaticAudio
         ? resolveAutoAudioEntries({
@@ -936,7 +950,7 @@ export async function runCapability(params: {
             agentId: params.agentId,
             agentDir: params.agentDir,
             workspaceDir: params.workspaceDir,
-            providerRegistry: params.providerRegistry,
+            providerRegistry,
             capability,
             activeModel: params.activeModel,
             nativeVisionActive: false,
