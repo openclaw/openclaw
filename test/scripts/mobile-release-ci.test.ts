@@ -2079,6 +2079,7 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
           steps: WorkflowStep[];
         };
         "record-ios-build": {
+          env: Record<string, string>;
           environment: string;
           if: string;
           permissions: Record<string, string>;
@@ -2185,7 +2186,11 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
     expect(writerSteps[record]?.run).toContain("node scripts/ios-release-reconcile.mjs record");
     expect(writerSteps[validateWriter]?.run).toContain("--evidence-artifact-id");
     expect(writerSteps[validateWriter]?.run).toContain("--evidence-artifact-digest");
-    expect(writerSteps[validateWriter]?.env).toMatchObject({
+    expect({
+      ...writer.env,
+      ...(writerSteps[validateWriter]?.env ?? {}),
+    }).toMatchObject({
+      GH_TOKEN: "${{ github.token }}",
       RECONCILE_EVIDENCE_ARTIFACT_DIGEST:
         "${{ needs.reconcile-ios-build.outputs.evidence_artifact_digest }}",
     });
