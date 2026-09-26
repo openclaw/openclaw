@@ -465,6 +465,7 @@ export async function prepareGatewayKernelState(params: {
   log.info("starting HTTP server...");
   const connectionState = await startupTrace.measure("runtime.state", () =>
     createGatewayConnectionState({
+      scheduler,
       bootId,
       cfg: cfgAtStart,
       getRuntimeConfig,
