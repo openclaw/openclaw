@@ -1,6 +1,6 @@
 import * as crypto from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString as pickString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { claimUnprocessedFeishuMessage, type FeishuMessageProcessingClaim } from "./dedup.js";
@@ -46,10 +46,6 @@ type VcMeetingInvitedTurn = {
   inviter: ResolvedVcInviter;
   prompt: string;
 };
-
-function pickString(value: unknown): string | undefined {
-  return typeof value === "string" ? normalizeOptionalString(value) : undefined;
-}
 
 function resolveVcInviter(event: FeishuVcMeetingInvitedEvent): ResolvedVcInviter | null {
   const id = event.inviter?.id;

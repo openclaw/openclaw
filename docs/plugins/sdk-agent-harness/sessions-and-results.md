@@ -73,10 +73,14 @@ invoke this hook and continues to preserve native thread continuity.
 
 Official harnesses use the JavaScript-only private
 `openclaw/plugin-sdk/agent-harness-session-runtime`; it is not a third-party
-Plugin SDK contract and uses the existing synchronous plugin-state store.
+Plugin SDK contract. Binding mutations use action-bound plugin-state observations
+and conditional writes in the shared-state worker. Synchronous reads still serve
+native lease assertions, and synchronous deletion/rollback remains part of the
+host's existing transaction contract.
 `createNativeSessionBindingLifecycle` owns exact-token lease acquisition,
 renewal, mutation fences, and transactional deletion/rollback. The backend
-supplies its record codec, acquisition/retention policy, errors, and timing.
+supplies matching synchronous and asynchronous views of the same plugin-state
+namespace, its record codec, acquisition/retention policy, errors, and timing.
 Pass host authority through `assertCurrent` and validate the expected generation
 in `assertRecordCurrent`. Leases coordinate storage; they grant no execution
 authority. Keep native cleanup after the host transaction commits.

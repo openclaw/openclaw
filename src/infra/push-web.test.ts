@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webPush from "web-push";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
@@ -23,7 +24,7 @@ import {
   withBoundWebPushSubscriptionByEndpoint,
   hashWebPushEndpoint,
   hasBoundWebPushSubscriptions,
-  listBoundWebPushSubscriptions,
+  withBoundWebPushSubscriptions,
   listTerminalWebPushApprovalDeliveryIds,
   listWebPushApprovalDeliveryTargets,
   listWebPushSubscriptions,
@@ -41,6 +42,15 @@ import {
 
 let tmpDir: string;
 const defaultDevicePreferences = { enabled: true, label: "" };
+
+async function readBoundSubscriptions(stateDir: string) {
+  return expectDefined(
+    await withBoundWebPushSubscriptions(stateDir, (subscriptions) => ({
+      start: () => subscriptions,
+    })),
+    "bound subscription snapshot",
+  );
+}
 
 function findBoundWebPushSubscriptionByEndpoint(
   params: Parameters<typeof withBoundWebPushSubscriptionByEndpoint>[0],
@@ -301,7 +311,7 @@ describe("subscription CRUD", () => {
     expect(tableHasColumn(database.db, "web_push_subscriptions", "device_id")).toBe(true);
     expect(tableHasColumn(database.db, "web_push_subscriptions", "user_profile_id")).toBe(true);
     expect(tableHasColumn(database.db, "web_push_subscriptions", "preferences_json")).toBe(true);
-    expect(await listBoundWebPushSubscriptions(tmpDir)).toEqual([
+    expect(await readBoundSubscriptions(tmpDir)).toEqual([
       {
         ...subscription,
         deviceId: "browser-device",
@@ -314,13 +324,13 @@ describe("subscription CRUD", () => {
   it("keeps legacy unbound rows test-only until browser reconciliation", async () => {
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
     await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
-    expect(await listBoundWebPushSubscriptions(tmpDir)).toEqual([]);
+    expect(await readBoundSubscriptions(tmpDir)).toEqual([]);
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
     const { db } = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
     });
     db.exec("UPDATE web_push_subscriptions SET device_id = ''");
-    expect(await listBoundWebPushSubscriptions(tmpDir)).toEqual([]);
+    expect(await readBoundSubscriptions(tmpDir)).toEqual([]);
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
 
     const rebound = await registerWebPushSubscription({
@@ -330,7 +340,7 @@ describe("subscription CRUD", () => {
       baseDir: tmpDir,
     });
     expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
-    expect(await listBoundWebPushSubscriptions(tmpDir)).toEqual([
+    expect(await readBoundSubscriptions(tmpDir)).toEqual([
       {
         ...rebound,
         deviceId: "browser-device",
@@ -357,7 +367,7 @@ describe("subscription CRUD", () => {
       .run("older-auth", subscription.updatedAtMs + 1, hashWebPushEndpoint(endpoint));
     olderWriter.close();
 
-    expect(await listBoundWebPushSubscriptions(tmpDir)).toEqual([
+    expect(await readBoundSubscriptions(tmpDir)).toEqual([
       {
         ...subscription,
         keys: { ...subscription.keys, auth: "older-auth" },
@@ -700,7 +710,7 @@ describe("approval delivery target persistence", () => {
         baseDir: tmpDir,
       });
     }
-    const originalSubscriptions = await listBoundWebPushSubscriptions(tmpDir);
+    const originalSubscriptions = await readBoundSubscriptions(tmpDir);
     const unchanged = originalSubscriptions.filter(
       (subscription) => subscription.deviceId === "unchanged",
     );

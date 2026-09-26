@@ -164,30 +164,39 @@ describe("session typing broadcast throttle", () => {
     expect(emit).toHaveBeenCalledTimes(2);
   });
 
-  it("emits only the latest draft at the trailing edge of a burst", () => {
-    const previews: string[] = [];
-    const broadcast = (preview: string) =>
-      broadcastTypingThrottled({
-        key: "preview-burst",
-        typing: true,
-        signature: `true\0${preview}`,
-        intervalMs: 250,
-        now: Date.now(),
-        emit: () => {
-          previews.push(preview);
-          return true;
-        },
-      });
+  it.each([true, false])(
+    "attempts only the latest draft at the trailing edge after delivery=%s",
+    (delivered) => {
+      const previews: string[] = [];
+      const broadcast = (preview: string) =>
+        broadcastTypingThrottled({
+          key: "preview-burst",
+          typing: true,
+          signature: `true\0${preview}`,
+          intervalMs: 250,
+          now: Date.now(),
+          emit: () => {
+            previews.push(preview);
+            return delivered;
+          },
+        });
 
-    broadcast("first");
-    vi.advanceTimersByTime(50);
-    broadcast("second");
-    vi.advanceTimersByTime(50);
-    broadcast("latest");
-    vi.advanceTimersByTime(150);
+      broadcast("first");
+      vi.advanceTimersByTime(50);
+      broadcast("second");
+      vi.advanceTimersByTime(50);
+      broadcast("latest");
+      vi.advanceTimersByTime(150);
 
-    expect(previews).toEqual(["first", "latest"]);
-  });
+      expect(previews).toEqual(["first", "latest"]);
+
+      vi.advanceTimersByTime(50);
+      broadcast("after trailing edge");
+      expect(previews).toEqual(["first", "latest"]);
+      vi.advanceTimersByTime(200);
+      expect(previews).toEqual(["first", "latest", "after trailing edge"]);
+    },
+  );
 
   it("preserves boolean-only cancellation and trailing stop behavior", () => {
     const updates: boolean[] = [];

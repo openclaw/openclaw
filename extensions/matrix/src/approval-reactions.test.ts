@@ -94,49 +94,52 @@ describe("matrix approval reactions", () => {
     );
   });
 
-  it("resolves a registered approval anchor event back to an approval decision", async () => {
-    await registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    });
+  it.each(["exec", "plugin", "system-agent"] as const)(
+    "resolves a registered %s approval anchor event back to an approval decision",
+    async (approvalKind) => {
+      await registerMatrixApprovalReactionTarget({
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        approvalId: "req-123",
+        approvalKind,
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+      });
 
-    expect(
-      await resolveMatrixApprovalReactionTargetWithPersistence({
-        roomId: "!ops:example.org",
-        eventId: "$approval-msg",
-        reactionKey: "✅",
-      }),
-    ).toEqual({
-      approvalId: "req-123",
-      approvalKind: "exec",
-      decision: "allow-once",
-    });
-    expect(
-      await resolveMatrixApprovalReactionTargetWithPersistence({
-        roomId: "!ops:example.org",
-        eventId: "$approval-msg",
-        reactionKey: "♾️",
-      }),
-    ).toEqual({
-      approvalId: "req-123",
-      approvalKind: "exec",
-      decision: "allow-always",
-    });
-    expect(
-      await resolveMatrixApprovalReactionTargetWithPersistence({
-        roomId: "!ops:example.org",
-        eventId: "$approval-msg",
-        reactionKey: "❌",
-      }),
-    ).toEqual({
-      approvalId: "req-123",
-      approvalKind: "exec",
-      decision: "deny",
-    });
-  });
+      expect(
+        await resolveMatrixApprovalReactionTargetWithPersistence({
+          roomId: "!ops:example.org",
+          eventId: "$approval-msg",
+          reactionKey: "✅",
+        }),
+      ).toEqual({
+        approvalId: "req-123",
+        approvalKind,
+        decision: "allow-once",
+      });
+      expect(
+        await resolveMatrixApprovalReactionTargetWithPersistence({
+          roomId: "!ops:example.org",
+          eventId: "$approval-msg",
+          reactionKey: "♾️",
+        }),
+      ).toEqual({
+        approvalId: "req-123",
+        approvalKind,
+        decision: "allow-always",
+      });
+      expect(
+        await resolveMatrixApprovalReactionTargetWithPersistence({
+          roomId: "!ops:example.org",
+          eventId: "$approval-msg",
+          reactionKey: "❌",
+        }),
+      ).toEqual({
+        approvalId: "req-123",
+        approvalKind,
+        decision: "deny",
+      });
+    },
+  );
 
   it("ignores reactions that are not allowed on the registered approval anchor event", async () => {
     await registerMatrixApprovalReactionTarget({
@@ -228,7 +231,9 @@ describe("matrix approval reactions", () => {
     ).toBeNull();
   });
 
-  it("persists approval reaction targets when runtime state is available", async () => {
+  it("persists system-agent approval reaction targets when runtime state is available", async () => {
+    const approvalKind = "system-agent" as const;
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const warn = vi.fn();
     const register = vi.fn().mockResolvedValue(undefined);
     const lookup = vi.fn().mockResolvedValue({
@@ -236,7 +241,7 @@ describe("matrix approval reactions", () => {
       target: {
         accountId: "default",
         approvalId: "req-123",
-        approvalKind: "exec",
+        approvalKind,
         roomId: "!ops:example.org",
         eventId: "$approval-msg-2",
         allowedDecisions: ["allow-once", "deny"],
@@ -259,12 +264,12 @@ describe("matrix approval reactions", () => {
       roomId: "!ops:example.org",
       eventId: "$approval-msg-2",
       approvalId: "req-123",
-      approvalKind: "exec",
+      approvalKind,
       allowedDecisions: ["allow-once", "deny"],
       ttlMs: 1,
     });
 
-    await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
+    expect(register).toHaveBeenCalledTimes(1);
     expect(register).toHaveBeenCalledWith(
       '["default","!ops:example.org","$approval-msg-2"]',
       {
@@ -272,7 +277,7 @@ describe("matrix approval reactions", () => {
         target: {
           accountId: "default",
           approvalId: "req-123",
-          approvalKind: "exec",
+          approvalKind,
           roomId: "!ops:example.org",
           eventId: "$approval-msg-2",
           allowedDecisions: ["allow-once", "deny"],
@@ -281,16 +286,14 @@ describe("matrix approval reactions", () => {
       { ttlMs: 1 },
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 5);
-    });
+    now.mockReturnValue(1_005);
     await expect(
       resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!ops:example.org",
         eventId: "$approval-msg-2",
         reactionKey: "❌",
       }),
-    ).resolves.toEqual({ approvalId: "req-123", approvalKind: "exec", decision: "deny" });
+    ).resolves.toEqual({ approvalId: "req-123", approvalKind, decision: "deny" });
     expect(openKeyedStore).toHaveBeenCalledOnce();
     expect(lookup).toHaveBeenCalledWith('["default","!ops:example.org","$approval-msg-2"]');
 
@@ -299,10 +302,10 @@ describe("matrix approval reactions", () => {
       roomId: "!ops:example.org",
       eventId: "$approval-msg-3",
       approvalId: "req-fallback",
-      approvalKind: "exec",
+      approvalKind,
       allowedDecisions: ["deny"],
     });
-    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+    expect(warn).toHaveBeenCalled();
 
     expect(
       await resolveMatrixApprovalReactionTargetWithPersistence({
@@ -310,6 +313,6 @@ describe("matrix approval reactions", () => {
         eventId: "$approval-msg-3",
         reactionKey: "❌",
       }),
-    ).toEqual({ approvalId: "req-fallback", approvalKind: "exec", decision: "deny" });
+    ).toEqual({ approvalId: "req-fallback", approvalKind, decision: "deny" });
   });
 });

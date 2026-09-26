@@ -25,7 +25,11 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
-import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from "./markdown.js";
+import {
+  chunkFeishuPostMarkdown,
+  materializeFeishuPostMarkdownSoftBreaks,
+  shouldUseFeishuCard,
+} from "./markdown.js";
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
@@ -59,11 +63,6 @@ import {
 } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
-
-/** Detect if text contains markdown elements that benefit from card rendering */
-function shouldUseCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
-}
 
 function mergeStreamingFinalText(
   previousText: string,
@@ -102,10 +101,9 @@ function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean
   return true;
 }
 
-function rememberStreamingStartFailure(accountId: string, now = Date.now()): number {
+function rememberStreamingStartFailure(accountId: string, now = Date.now()): void {
   const backoffUntil = now + STREAMING_START_FAILURE_BACKOFF_MS;
   streamingStartBackoffUntilByAccount.set(accountId, backoffUntil);
-  return backoffUntil;
 }
 
 function normalizeEpochMs(timestamp: number | undefined): number | undefined {
@@ -1365,7 +1363,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       const cardRenderingRequested =
         renderMode === "card" ||
         (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-        (renderMode === "auto" && shouldUseCard(text));
+        (renderMode === "auto" && shouldUseFeishuCard(text));
       const useStaticCard = hasText && cardRenderingRequested && withinCardTableLimit(text);
       const useStreamingCard =
         hasText &&

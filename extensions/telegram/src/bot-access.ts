@@ -1,8 +1,4 @@
-import {
-  firstDefined,
-  isSenderIdAllowed,
-  mergeDmAllowFromSources,
-} from "openclaw/plugin-sdk/allow-from";
+import { isSenderIdAllowed, mergeDmAllowFromSources } from "openclaw/plugin-sdk/allow-from";
 import type {
   DmPolicy,
   TelegramDirectConfig,
@@ -89,5 +85,3 @@ export const isSenderAllowed = (params: {
   const { allow, senderId } = params;
   return isSenderIdAllowed(allow, senderId, true);
 };
-
-export { firstDefined };

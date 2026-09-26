@@ -107,6 +107,7 @@ export function createLaunchdFileSystem(actual: typeof promises, state: LaunchdF
   };
   return {
     ...actual,
+    resolveFixturePath: resolve,
     access: vi.fn(async (...[file, mode]: Parameters<typeof actual.access>) =>
       actual.access(resolve(file), mode),
     ),

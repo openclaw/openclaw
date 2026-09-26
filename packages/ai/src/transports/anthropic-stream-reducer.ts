@@ -42,6 +42,7 @@ import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.
 import {
   coerceTransportToolCallArguments,
   finalizeTerminalToolCallArguments,
+  iterateModelStream,
   sanitizeTransportPayloadText,
   transportAbortError,
   type WritableTransportStream,
@@ -70,7 +71,6 @@ export async function consumeAnthropicStream(params: {
   let costModel = model;
   let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
   let inputTransformations: unknown[] | undefined;
-  const anthropicStream = params.events;
   try {
     const blocks: AnthropicStreamBlock[] = output.content;
     const blockIndexes = new Map<number, number>();
@@ -214,7 +214,7 @@ export async function consumeAnthropicStream(params: {
         });
       }
     };
-    for await (const rawEvent of anthropicStream) {
+    for await (const rawEvent of iterateModelStream(params.events, options.signal)) {
       const event = asRecord(rawEvent);
       // A serving-model fallback replaces the initial snapshot; report only once at completion.
       inputTransformations = readAnthropicInputTransformations(event) ?? inputTransformations;

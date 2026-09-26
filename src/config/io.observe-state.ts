@@ -1,6 +1,5 @@
 import type fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createConfigObserveAuditRecord } from "./io.audit.js";
 import type {
   ConfigHealthEntry,
   ConfigHealthFingerprint,
@@ -87,21 +86,6 @@ export function readConfigFingerprintForPathSync(
   } catch {
     return null;
   }
-}
-
-export { createConfigObserveAuditRecord };
-
-type ConfigObserveAuditRecordParams = Parameters<typeof createConfigObserveAuditRecord>[0];
-
-export function createConfigObserveAuditAppendParams(
-  deps: Pick<NormalizedConfigIoDeps, "env" | "homedir">,
-  params: ConfigObserveAuditRecordParams,
-) {
-  return {
-    env: deps.env,
-    homedir: deps.homedir,
-    record: createConfigObserveAuditRecord(params),
-  };
 }
 
 export function extractRestoreErrorDetails(error: unknown): {

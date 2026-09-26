@@ -118,14 +118,14 @@ export type UpdateWizardOptions = {
   timeout?: string;
 };
 
-export class UpdatePreMutationError extends Error {
+export class UpdatePreMutationError<Reason extends string = string> extends Error {
   readonly origin?: "candidate-admission";
   readonly nextAction?: string;
   readonly recoverySteps?: readonly UpdateRecoveryStep[];
   readonly failureFacts: UpdateFailureFact[];
 
   constructor(
-    readonly reason: string,
+    readonly reason: Reason,
     message: string,
     options?: ErrorOptions & {
       failureFacts?: readonly UpdateFailureFact[];

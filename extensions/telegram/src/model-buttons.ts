@@ -64,10 +64,6 @@ function hashOpaqueCallback(domain: "model" | "provider", ...values: string[]): 
     .digest("base64url");
 }
 
-/**
- * Parse a model callback_data string into a structured object.
- * Returns null if the data doesn't match a known pattern.
- */
 export function parseModelCallbackData(data: string): ParsedModelCallback | null {
   const trimmed = data.trim();
   const opaqueModelMatch = trimmed.match(/^mdl1~m:([A-Za-z0-9_-]{43})$/);
@@ -187,9 +183,6 @@ function isCurrentModelSelection(params: {
     : currentModel === params.model;
 }
 
-/**
- * Build provider selection keyboard with 2 providers per row.
- */
 export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   const rows: ButtonRow[] = [];
   for (const [index, provider] of providers.entries()) {
@@ -201,9 +194,6 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   return rows;
 }
 
-/**
- * Build model list keyboard with pagination and back button.
- */
 export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const { provider, models, currentModel, currentPage, totalPages, modelNames } = params;
   const pageSize = params.pageSize ?? MODELS_PAGE_SIZE;
@@ -214,7 +204,6 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
 
   const rows: ButtonRow[] = [];
 
-  // Calculate page slice
   const startIndex = (currentPage - 1) * pageSize;
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
@@ -235,7 +224,6 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     ]);
   }
 
-  // Pagination row
   if (totalPages > 1) {
     const paginationRow: ButtonRow = [];
 
@@ -261,22 +249,15 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     rows.push(paginationRow);
   }
 
-  // Back button
   rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.back }]);
 
   return rows;
 }
 
-/**
- * Build "Browse providers" button for /model summary.
- */
 export function buildBrowseProvidersButton(): ButtonRow[] {
   return [[{ text: "Browse providers", callback_data: CALLBACK_PREFIX.providers }]];
 }
 
-/**
- * Truncate a model label for display, preserving its end if too long.
- */
 function truncateModelLabel(modelLabel: string, maxLen: number): string {
   if (modelLabel.length <= maxLen) {
     return modelLabel;
@@ -284,16 +265,10 @@ function truncateModelLabel(modelLabel: string, maxLen: number): string {
   return `…${sliceUtf16Safe(modelLabel, -(maxLen - 1))}`;
 }
 
-/**
- * Get page size for model list pagination.
- */
 export function getModelsPageSize(): number {
   return MODELS_PAGE_SIZE;
 }
 
-/**
- * Calculate total pages for a model list.
- */
 export function calculateTotalPages(totalModels: number, pageSize?: number): number {
   const size = pageSize ?? MODELS_PAGE_SIZE;
   return size > 0 ? Math.ceil(totalModels / size) : 1;

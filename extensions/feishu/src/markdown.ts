@@ -23,6 +23,10 @@ type FeishuPostMessageElement =
 
 const FEISHU_POST_MAX_BYTES = 30 * 1024;
 
+export function shouldUseFeishuCard(text: string): boolean {
+  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+}
+
 /** One parser contract for Feishu message and document Markdown decisions. */
 export function parseFeishuMarkdown(text: string): FeishuMarkdownNode {
   return fromMarkdown(text, {

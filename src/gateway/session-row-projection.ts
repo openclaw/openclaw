@@ -366,7 +366,12 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     // Dirty keys retain failed background work for the next reader.
     void ensureMaterialized().catch(() => {});
   }
-  const { readSourceEntry, readChildLinks } = createSessionRowRelationReads({
+  const { readSourceEntry, readChildLinks, readPreparedSpawnedBy } = createSessionRowRelationReads({
+    env,
+    inOwnerContext,
+    isReady: () => !disposed && !topologyDirty,
+    preparedContext: () => metadata.readPrepared(epoch),
+    lookup,
     config: () => cfg,
     rows,
     byParent,
@@ -615,6 +620,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     observeGeneration: generations.observeGeneration,
     readPreparedRowContext: () =>
       disposed ? undefined : inOwnerContext(() => metadata.readPrepared(epoch)),
+    readPreparedSpawnedBy,
     capture(query: records.Lookup) {
       if (disposed) {
         return undefined;
@@ -629,17 +635,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       return findSessionRowById(query, { disposed, lookup, matching });
     },
     describe,
-    readMembership(query: records.Lookup) {
-      if (disposed) {
-        return undefined;
-      }
-      const row = lookup(query);
-      if (row && isIncognitoSessionKey(row.key)) {
-        return describe(query)?.membership;
-      }
-      const members = row && membership.membership(row.storeTarget.storePath, row.key);
-      return members ? new Set(members) : undefined;
-    },
     ...createSessionRowAncestorReads({
       state: () => ({ cfg, context: metadata.current }),
       referenced,
@@ -682,6 +677,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       return needsMaterialization();
     },
     getPolicyConfig,
+    get sharingRevision() {
+      return disposed || topologyDirty ? undefined : (revisionToken ??= {});
+    },
     get state() {
       if (!disposed && !prepareRead()) {
         throw new Error("Session row topology changed; prepare current facts before reading");

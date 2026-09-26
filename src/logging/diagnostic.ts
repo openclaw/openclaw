@@ -48,12 +48,13 @@ import {
 } from "./diagnostic-runtime.js";
 import {
   classifySessionAttention,
+  isRepeatedModelRequestStalled,
   isTerminalDiagnosticProgressReason,
   type SessionAttentionClassification,
 } from "./diagnostic-session-attention.js";
 import {
-  formatCronSessionDiagnosticFields,
-  resolveCronSessionDiagnosticContext,
+  logWithSessionDiagnosticContext,
+  retireSessionDiagnosticLogs,
 } from "./diagnostic-session-context.js";
 import {
   requestStuckSessionRecovery,
@@ -352,19 +353,14 @@ function isActiveAbortRecoveryEligible(params: {
   if (classification.classification !== "stalled_agent_run") {
     return false;
   }
+  // Repeated requests can be stalled while a tool owns the current phase.
+  // Transport liveness must not replace that independent semantic evidence.
+  if (isRepeatedModelRequestStalled(activity, stuckSessionAbortMs)) {
+    return true;
+  }
   const modelAllowanceExpired =
     activity.activeModelCallRequestTimeoutMs === undefined ||
     lastProgressAgeMs >= activity.activeModelCallRequestTimeoutMs;
-  // Repeated requests can be stalled while a tool owns the current phase.
-  // Transport liveness must not replace that independent semantic evidence.
-  if (
-    activity.hasActiveEmbeddedRun &&
-    (activity.repeatedRequestNoProgressAgeMs ?? 0) >=
-      Math.max(stuckSessionAbortMs, activity.activeModelCallRequestTimeoutMs ?? 0) &&
-    modelAllowanceExpired
-  ) {
-    return true;
-  }
   return (
     (classification.activeWorkKind === "model_call" ||
       classification.activeWorkKind === "embedded_run") &&
@@ -788,26 +784,24 @@ function logSessionAttention(
       : classification.eventType === "session.stalled"
         ? "stalled session"
         : "long-running session";
-  const activityFields = formatSessionActivityLogFields(activity);
-  const sessionFields = formatCronSessionDiagnosticFields(
-    resolveCronSessionDiagnosticContext({
-      sessionKey: params.sessionKey,
-      activeSessionId: params.sessionId,
-    }),
-  );
-  const detailFields = [activityFields, sessionFields].filter(Boolean).join(" ");
-  const message = `${label}: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
-    params.sessionKey ?? "unknown"
-  } state=${params.expectedState} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
-    queueDepth
-  } reason=${classification.reason} classification=${classification.classification}${
-    classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
-  }${detailFields ? ` ${detailFields}` : ""} recovery=${recovery ? "checking" : "none"}`;
-  if (classification.eventType === "session.long_running" && queueDepth <= 0) {
-    diag.debug(message);
-  } else {
-    diag.warn(message);
-  }
+  void logWithSessionDiagnosticContext({
+    level:
+      classification.eventType === "session.long_running" && queueDepth <= 0 ? "debug" : "warn",
+    sessionKey: params.sessionKey,
+    activeSessionId: params.sessionId,
+    format: (sessionFields) => {
+      const detailFields = [formatSessionActivityLogFields(activity), sessionFields]
+        .filter(Boolean)
+        .join(" ");
+      return `${label}: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+        params.sessionKey ?? "unknown"
+      } state=${params.expectedState} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
+        queueDepth
+      } reason=${classification.reason} classification=${classification.classification}${
+        classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
+      }${detailFields ? ` ${detailFields}` : ""} recovery=${recovery ? "checking" : "none"}`;
+    },
+  });
   const baseEvent = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -1013,6 +1007,9 @@ export function startDiagnosticHeartbeat(
             ...(recovery.allowActiveAbort
               ? { allowActiveAbort: true }
               : { staleActiveProgressAbortMs: stuckSessionAbortMs }),
+            ...(recovery.classification.reason === "repeated_model_requests_without_progress"
+              ? { repeatedRequestNoProgressAbortMs: stuckSessionAbortMs }
+              : {}),
             compactionSafetyTimeoutMs,
           },
         });
@@ -1023,6 +1020,7 @@ export function startDiagnosticHeartbeat(
 }
 
 export function stopDiagnosticHeartbeat() {
+  retireSessionDiagnosticLogs();
   stopDiagnosticGcObserver();
   if (heartbeatInterval) {
     clearInterval(heartbeatInterval);

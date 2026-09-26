@@ -52,8 +52,8 @@ dashboard turns collapse their narration and tool activity under **Worked for â€
 above the answer. Expanding it restores the sequence with the existing tool-call
 groups. When no run duration is available, the heading reads **Worked**.
 
-Subagent runs appear in inline transcript activity rows, the chat **Tasks** tab,
-and the [Tasks page](/automation/tasks#control-ui), outside sidebar navigation.
+Subagent runs appear in inline transcript activity rows and the chat **Tasks** tab,
+outside sidebar navigation. Use the [Tasks CLI](/cli/tasks) to inspect work across conversations.
 Their activity rows lead with the child task's display title, using its configured
 `label` when present, followed by the latest activity. The leading claw moves only
 while running; queued and cancelled tasks stay still, and completion briefly turns
@@ -172,7 +172,7 @@ gateway. It survives reloads and switching to another gateway and back, even if
 you open a different agent's chat in team mode. Turning team mode off clears the
 remembered value after restoring it. You can still
 choose a narrower scope; navigating between pages does not reset that choice.
-Automations, Dashboards, Sessions, Tasks, and Usage support all-agent views, with
+Automations, Dashboards, Sessions, and Usage support all-agent views, with
 agent identity shown on mixed-agent rows. In Settings, choose an agent below the
 sidebar title to keep the same target across Agents, Models, Memory, and Skills.
 Global settings remain global. Skill Workshop uses the agent selected through

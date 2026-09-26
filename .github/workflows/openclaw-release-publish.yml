@@ -28,16 +28,6 @@ on:
         description: Exact Full Release Validation run attempt; when omitted, the current attempt is resolved once before publish
         required: false
         type: string
-      stable_soak_waiver:
-        description: Optional override for the stable-soak waiver sealed by Full Release Validation
-        required: false
-        default: ""
-        type: string
-      lane_waiver:
-        description: Operator acknowledgement (reason) for publishing from Full Release Validation evidence sealed under an operator lane waiver; required when the manifest carries one.
-        required: false
-        default: ""
-        type: string
       release_evidence_mode:
         description: Publication evidence contract
         required: true
@@ -155,7 +145,6 @@ jobs:
       prepared_docker_run_attempt: ${{ steps.full_manifest.outputs.prepared_docker_run_attempt }}
       prepared_docker_artifact_name: ${{ steps.full_manifest.outputs.prepared_docker_artifact_name }}
       prepared_docker_manifest_sha256: ${{ steps.full_manifest.outputs.prepared_docker_manifest_sha256 }}
-      stable_soak_waiver: ${{ steps.full_manifest.outputs.stable_soak_waiver }}
       plugin_sdk_api_acknowledgement: ${{ fromJSON(steps.full_manifest.outcome == 'success' && toJSON(steps.full_manifest.outputs.plugin_sdk_api_acknowledgement) || toJSON(inputs.plugin_sdk_api_acknowledgement)) }}
       npm_decisions: ${{ steps.full_manifest.outputs.npm_decisions }}
       coverage_policy: ${{ steps.full_manifest.outputs.coverage_policy }}
@@ -454,10 +443,7 @@ jobs:
         id: full_manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && (inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '') }}
         env:
-          STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
-          OPENCLAW_RELEASE_STABLE_SOAK_WAIVER: ${{ vars.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER }}
           PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
-          LANE_WAIVER: ${{ inputs.lane_waiver }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ steps.full_run.outputs.attempt }}
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -1234,10 +1220,6 @@ jobs:
       clawhub_bootstrap_run_id: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
     if: ${{ !inputs.publish_docker_only }}
     env:
-      # Children receive only the operator's explicit waiver; sealed waivers are
-      # rechecked against the live repository variable at each child's own gate.
-      STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
-      LANE_WAIVER_ACKNOWLEDGEMENT: ${{ inputs.lane_waiver }}
       # Artifact bytes may belong to an FRV child; the input run still authorizes npm dispatch.
       PREFLIGHT_ARTIFACT_RUN_ID: ${{ needs.resolve_release_target.outputs.preflight_artifact_run_id }}
       ANDROID_RELEASE_NOTE: ${{ needs.resolve_release_target.outputs.android_release_note }}
@@ -1547,15 +1529,11 @@ jobs:
           retention-days: 30
 
       - name: Prepare stable npm bootstrap approval
-        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full' || (needs.resolve_release_target.outputs.release_profile == 'beta' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && fromJSON(needs.resolve_release_target.outputs.stable_soak_waiver || '""') != '')) }}
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           RELEASE_PROFILE: ${{ needs.resolve_release_target.outputs.release_profile }}
-          STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve_release_target.outputs.stable_soak_waiver || '""') }}
-          EXPLICIT_STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
-          # A sealed waiver authorizes bootstrap only while the variable still holds it.
-          OPENCLAW_RELEASE_STABLE_SOAK_WAIVER: ${{ vars.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER }}
           VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
@@ -1577,12 +1555,6 @@ jobs:
             throw new Error("Stable npm bootstrap requires an explicit complete plugin selection.");
           }
           const packages = resolveSelectedPublishablePluginPackages({ plugins, selection });
-          const resolvedWaiver = (process.env.STABLE_SOAK_WAIVER ?? "").trim();
-          const explicitWaiver = (process.env.EXPLICIT_STABLE_SOAK_WAIVER ?? "").trim();
-          const currentWaiver = (process.env.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER ?? "").trim();
-          const stableSoakWaiverSource = explicitWaiver ? "explicit" : resolvedWaiver ? "sealed" : "";
-          const stableSoakWaiver =
-            stableSoakWaiverSource === "sealed" && currentWaiver !== resolvedWaiver ? "" : resolvedWaiver;
           const approval = createStablePluginNpmBootstrapApproval({
             repository: process.env.GITHUB_REPOSITORY,
             parentRunId: process.env.GITHUB_RUN_ID,
@@ -1594,8 +1566,6 @@ jobs:
             targetSha: process.env.TARGET_SHA,
             publishTag: "latest",
             releaseProfile: process.env.RELEASE_PROFILE,
-            stableSoakWaiver,
-            stableSoakWaiverSource,
             validationRunId: process.env.VALIDATION_RUN_ID,
             validationRunAttempt: Number(process.env.VALIDATION_RUN_ATTEMPT),
             packages: packages.map((plugin) => plugin.packageName),
@@ -1604,13 +1574,13 @@ jobs:
           NODE
 
       - name: Attest stable npm bootstrap approval
-        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full' || (needs.resolve_release_target.outputs.release_profile == 'beta' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && fromJSON(needs.resolve_release_target.outputs.stable_soak_waiver || '""') != '')) }}
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/npm-stable-bootstrap-approval/approval.json
 
       - name: Upload stable npm bootstrap approval
-        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full' || (needs.resolve_release_target.outputs.release_profile == 'beta' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && fromJSON(needs.resolve_release_target.outputs.stable_soak_waiver || '""') != '')) }}
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: npm-stable-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1803,8 +1773,6 @@ jobs:
       - name: Start core npm publication
         id: core_start
         env:
-          STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
-          LANE_WAIVER: ${{ inputs.lane_waiver }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ steps.clawhub_plan.outputs.child_workflow_ref }}
@@ -1831,7 +1799,7 @@ jobs:
           plugin_npm_run_id="${CHILD_PLUGIN_NPM_RUN_ID}"
           verify_release_tag_target
           # A failed child can still have active publishers; join them before parent cleanup.
-          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" true "" true; then
+          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" false true; then
             echo "Plugin npm publish failed; cancelling dispatched ClawHub child workflows." >&2
             cleanup_clawhub_children || true
             exit 1
@@ -1870,8 +1838,6 @@ jobs:
           openclaw_npm_run_id="$(dispatch_workflow openclaw-npm-release.yml \
             -f tag="${RELEASE_TAG}" \
             -f preflight_only=false \
-            -f stable_soak_waiver="${STABLE_SOAK_WAIVER:-}" \
-            -f lane_waiver="${LANE_WAIVER:-}" \
             -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
             -f release_publish_run_id="${GITHUB_RUN_ID}" \
             -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \
@@ -1882,9 +1848,9 @@ jobs:
             "${evidence_args[@]}")"
           echo "openclaw_npm_run_id=${openclaw_npm_run_id}" >> "$GITHUB_OUTPUT"
           echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
-          # Pass the child environment gate before waiting for ClawHub receipts;
+          # Start the npm publisher before waiting for ClawHub receipts;
           # the remote publisher can advance without a cross-step watcher.
-          if ! wait_for_run openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}" publish_openclaw_npm true npm-release; then
+          if ! wait_for_run openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}" publish_openclaw_npm false; then
             gh run cancel --repo "$GITHUB_REPOSITORY" "${openclaw_npm_run_id}" >/dev/null 2>&1 || true
             exit 1
           fi
