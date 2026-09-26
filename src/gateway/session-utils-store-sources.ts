@@ -16,10 +16,7 @@ import {
 } from "../config/sessions/targets.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  OPENCLAW_AGENT_SCHEMA_VERSION,
-  type OpenClawRegisteredAgentDatabase,
-} from "../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   AgentDatabaseRegistryChangedError,
   listOpenClawRegisteredAgentDatabases,
@@ -28,26 +25,13 @@ import {
 } from "../state/openclaw-agent-db-registry-listing.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
 import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-lookup.js";
-import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
+import type {
+  GatewaySessionStoreReadSources,
+  GatewaySessionStoreSourceRequest,
+} from "./session-utils-store.types.js";
 
-type SessionStoreRouting = {
-  agentIds: string[];
-  store?: string;
-  compatibilityAgentId: string;
-};
-
-type SourceRegistration = Pick<
-  OpenClawRegisteredAgentDatabase,
-  "agentId" | "path" | "schemaVersion"
->;
-
-export type GatewaySessionStoreSourceRequest = {
-  routing: SessionStoreRouting;
-  currentSource: SessionEntryReadSource;
-  env: NodeJS.ProcessEnv;
-  registeredDatabases: readonly SourceRegistration[];
-  candidates?: readonly SessionStoreReadCandidate[];
-};
+type SessionStoreRouting = GatewaySessionStoreSourceRequest["routing"];
+type SourceRegistration = GatewaySessionStoreSourceRequest["registeredDatabases"][number];
 
 function captureSessionStoreRouting(cfg: OpenClawConfig): SessionStoreRouting {
   return withAgentRosterFactsBatch(cfg, () => ({
