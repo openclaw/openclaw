@@ -161,8 +161,8 @@ export async function compactNativeCliSession(params: {
         trigger: "manual",
         controlOperation: "compact",
         disableCliLiveSession: true,
-        // Compaction rewrites the persisted session behind any idle SDK query. Retire that query
-        // after the control turn so the next user turn reloads the compacted conversation.
+        // Queued execution retires the warm process before this control turn rewrites history.
+        // Also join any resources retained by the control turn before reporting completion.
         cleanupCliLiveSessionOnRunEnd: true,
         allowEmptyAssistantReplyAsSilent: true,
         abortSignal: params.compactParams.abortSignal,

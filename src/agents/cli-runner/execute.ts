@@ -649,6 +649,11 @@ export async function executePreparedCliRun(
           assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
         }
         diagnostics?.emitStarted();
+        if (params.controlOperation === "compact") {
+          // A one-shot compactor rewrites the persisted conversation. Retire the
+          // exact queued owner's warm process before it can retain stale history.
+          await restartCliLiveSession(context);
+        }
         if (params.forkCliSessionOnResume && useResume) {
           if (!params.persistCliSessionForkSuccessor) {
             throw new Error("CLI session fork successor persistence is unavailable");
