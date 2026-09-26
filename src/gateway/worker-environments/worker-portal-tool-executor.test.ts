@@ -14,10 +14,7 @@ import {
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
-import {
-  createWorkerPortalToolExecutor,
-  type WorkerPortalToolRequest,
-} from "./worker-portal-tool-executor.js";
+import { createWorkerPortalToolExecutor } from "./worker-portal-tool-executor.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, SessionEntry>());
 
@@ -67,7 +64,7 @@ describe("worker portal tool execution", () => {
   const portalChanged = vi.fn();
   const actualServices = new Set<ReturnType<typeof createGatewayPortalService>>();
 
-  function runPortal(request: WorkerPortalToolRequest["request"], workerIdentity = identity) {
+  function runPortal(request: Parameters<typeof execute>[0]["request"], workerIdentity = identity) {
     return execute({ identity: workerIdentity, toolName: "portal", request });
   }
 

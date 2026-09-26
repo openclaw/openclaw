@@ -17,6 +17,7 @@ import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-su
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
   applyMcpConnectionOverride,
+  buildMcpRequesterRuntimeCacheKey,
   hashMcpResolvedConnections,
   partitionMcpServersByConnectionScope,
   redactMcpServersForFingerprint,

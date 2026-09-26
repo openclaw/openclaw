@@ -5,7 +5,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  FUTURE_FIXTURE_VERSION,
   inspectFirstHopSource,
   LEGACY_UPDATE_COMPAT_CHUNKS,
   listFirstHopSourceVersions,

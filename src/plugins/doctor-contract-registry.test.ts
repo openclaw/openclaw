@@ -30,6 +30,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
+let applyPluginDoctorCompatibilityMigrations: typeof import("./doctor-contract-registry.js").applyPluginDoctorCompatibilityMigrations;
 let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.test-fixtures.js").clearPluginDoctorContractRegistryCache;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionRouteStateOwners;
@@ -64,6 +65,7 @@ describe("doctor-contract-registry module loader", () => {
   beforeAll(async () => {
     vi.resetModules();
     ({
+      applyPluginDoctorCompatibilityMigrations,
       listPluginDoctorLegacyConfigRules,
       listPluginDoctorSessionRouteStateOwners,
       listPluginDoctorSessionStoreAgentIds,

@@ -85,7 +85,10 @@ function secretRequestParams(overrides: Record<string, unknown> = {}) {
 
 function createBridge(
   paramsForRun: Parameters<typeof createCodexUserInputBridge>[0]["paramsForRun"],
-  options: Pick<Parameters<typeof createCodexUserInputBridge>[0], "signal" | "gatewayCall"> = {},
+  options: Pick<
+    Parameters<typeof createCodexUserInputBridge>[0],
+    "signal" | "gatewayCall" | "onOrdinaryResponse"
+  > = {},
 ) {
   return createCodexUserInputBridge({
     paramsForRun,
