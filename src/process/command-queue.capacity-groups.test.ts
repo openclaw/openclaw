@@ -99,7 +99,6 @@ describe("command lane capacity groups", () => {
 
     const cron = getCommandLaneSnapshot(CRON);
     const hook = getCommandLaneSnapshot(HOOK);
-    expect(cron.activeCount + hook.activeCount).toBeLessThanOrEqual(8);
     // Not vacuous: the group must actually be saturated, not merely under cap.
     expect(cron.activeCount + hook.activeCount).toBe(8);
 

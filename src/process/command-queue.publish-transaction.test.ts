@@ -102,7 +102,6 @@ describe("publishLaneConfiguration", () => {
       );
 
       // Sample task entry while all admitted tasks remain parked.
-      expect(peak).toBeLessThanOrEqual(8);
       // And not vacuous — publication must actually have dispatched to the cap.
       expect(peak).toBe(8);
     } finally {
@@ -203,38 +202,6 @@ describe("publishLaneConfiguration", () => {
     await Promise.all([cronRun, hookRun]);
   });
 
-  test("a rejected configuration does not leave lanes widened and dispatching", async () => {
-    setCommandLaneConcurrency(CRON, 0);
-    const gates = Array.from({ length: 4 }, () => createDeferred());
-    const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
-
-    // sum(reservations) > budget is rejected. Validation must happen before any
-    // drain, or the lane is left open at width 8 governed by no group at all.
-    expect(() =>
-      publishLaneConfiguration({
-        lanes: { [CRON]: 8 },
-        groups: {
-          [GROUP]: {
-            budget: 2,
-            members: [CRON, HOOK],
-            reservations: { [CRON]: 2, [HOOK]: 1 },
-          },
-        },
-      }),
-    ).toThrow(/reserves 3 slots but its budget is 2/);
-
-    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
-
-    for (const g of gates) {
-      g.resolve();
-    }
-    // The lane never opened, so this work is still queued. resetAllLanes
-    // PRESERVES queued entries by design, so it would never settle these —
-    // clearCommandLane rejects them instead.
-    clearCommandLane(CRON);
-    await Promise.allSettled(runs);
-  });
-
   test("a rejected configuration does not leave lane maxima mutated", async () => {
     // Stronger than asserting activeCount === 0 after the throw: that only
     // proves no commit-time drain ran, not that the lane was left alone. If
@@ -260,6 +227,7 @@ describe("publishLaneConfiguration", () => {
     ).toThrow(/reserves 3 slots but its budget is 2/);
 
     // The lane must be exactly as it was before the rejected publish.
+    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
     expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(0);
     expect(getCommandLaneSnapshot(CRON).group).toBeUndefined();
 
