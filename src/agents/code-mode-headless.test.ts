@@ -619,6 +619,20 @@ describe("headless Code Mode", () => {
     },
   );
 
+  it("points the model at a tool global when rejecting module access", async () => {
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessCodeModeHarness(),
+        code: "return require('node:fs');",
+      }),
+    );
+
+    expect(result.code).toBe("invalid_input");
+    expect(result.error).toContain("Call an enabled async tool global from guest JavaScript");
+    expect(result.error).toContain("Do not retry the same source with require() or an import.");
+    expect(result.toolCallCount).toBe(0);
+  });
+
   it("injects deeply frozen trigger state and emits replacement state through json", async () => {
     const result = expectCompleted(
       await runCodeModeScriptHeadless({

@@ -58,6 +58,13 @@ function containsModuleAccess(node: import("acorn").AnyNode): boolean {
   return false;
 }
 
+// Existing test assertions match the leading sentence; keep it verbatim.
+export const CODE_MODE_MODULE_ACCESS_ERROR =
+  "code mode module access is disabled. " +
+  "Call an enabled async tool global from guest JavaScript; use " +
+  "catalog.search(query) when the bounded quick index omits it. " +
+  "Do not retry the same source with require() or an import.";
+
 export function prepareSource(code: string): string {
   const parsed = parseCodeModeScriptSyntax(code);
   if (isShellLikeCodeModeSource(code)) {
@@ -75,7 +82,7 @@ export function prepareSource(code: string): string {
     (code.includes("import") || code.includes("require") || code.includes("\\u")) &&
     containsModuleAccess(parsed.program)
   ) {
-    throw new ToolInputError("code mode module access is disabled.");
+    throw new ToolInputError(CODE_MODE_MODULE_ACCESS_ERROR);
   }
   return code;
 }

@@ -510,4 +510,13 @@ describe("Code Mode guest source validation", () => {
       expect(() => prepareSource(executable)).toThrow("code mode module access is disabled");
     }
   });
+
+  it("names the replacement tool path in the module access rejection", () => {
+    const rejectModuleAccess = () => prepareSource("return require('node:fs');");
+
+    expect(rejectModuleAccess).toThrow("code mode module access is disabled.");
+    expect(rejectModuleAccess).toThrow("Call an enabled async tool global from guest JavaScript");
+    expect(rejectModuleAccess).toThrow("catalog.search(query) when the bounded quick index omits");
+    expect(rejectModuleAccess).toThrow("Do not retry the same source with require() or an import.");
+  });
 });
