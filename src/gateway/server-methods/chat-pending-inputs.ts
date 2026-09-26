@@ -25,7 +25,11 @@ export function projectPendingInputMessage(
   projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay),
   resolveCronJobName?: (jobId: string) => string | undefined,
 ) {
-  const projected = projectChatDisplayMessage(input.message, { maxChars, resolveCronJobName });
+  const projected = projectChatDisplayMessage(input.message, {
+    maxChars,
+    redactInlineMedia: true,
+    resolveCronJobName,
+  });
   const message = projected ? projectProfile(projected) : undefined;
   if (!message) {
     return undefined;

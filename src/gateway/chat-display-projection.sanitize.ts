@@ -27,14 +27,12 @@ import {
   takeAssistantManagedMediaUrlsForDisplay,
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
+import { redactResponsesInputImage } from "./chat-display-projection.inline-media.js";
+import { projectWorkspaceConflictDetails } from "./chat-display-projection.workspace-conflict.js";
 import {
   isSuppressedControlReplyText,
   stripSuppressedControlReplyToken,
 } from "./control-reply-text.js";
-import {
-  projectWorkspaceResultConflict,
-  WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-} from "./worker-environments/workspace-conflicts.js";
 
 const MEDIA_PRIVATE_FIELDS = ["data", "blob", "path", "file", "filePath", "localPath"] as const;
 const MEDIA_REFERENCE_FIELDS = ["url", "openUrl", "image_url", "audio_url", "video_url"] as const;
@@ -42,6 +40,11 @@ const MEDIA_FACT_PRIVATE_FIELDS = [
   "workspaceDir",
   ...MEDIA_PRIVATE_FIELDS.filter((field) => field !== "path"),
 ] as const;
+
+type ChatHistorySanitizeOptions = {
+  includeCommentaryFallbacks?: boolean;
+  redactInlineMedia?: boolean;
+};
 
 function projectChatHistoryMediaReference(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -169,7 +172,11 @@ function projectChatHistoryMediaFacts(value: unknown): unknown[] | undefined {
 
 export function sanitizeChatHistoryContentBlock(
   block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
+  opts?: {
+    preserveExactToolPayload?: boolean;
+    maxChars?: number;
+    redactInlineMedia?: boolean;
+  },
 ): { block: unknown; changed: boolean; truncated: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false, truncated: false };
@@ -235,6 +242,10 @@ export function sanitizeChatHistoryContentBlock(
       delete entry[field];
       changed = true;
     }
+  }
+  if (opts?.redactInlineMedia === true) {
+    const inlineMediaChanged = redactResponsesInputImage(entry);
+    changed ||= inlineMediaChanged;
   }
   const mediaChanged = projectChatHistoryMediaBlock(entry);
   const attachmentChanged = projectChatHistoryAttachmentBlock(entry);
@@ -365,42 +376,10 @@ function sanitizeNumericMetadata(
   return Object.keys(projected).length > 0 ? projected : undefined;
 }
 
-function projectWorkspaceConflictDetails(
-  entry: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  if (entry.role !== "custom" || entry.customType !== WORKSPACE_CONFLICT_TRANSCRIPT_TYPE) {
-    return undefined;
-  }
-  const details = readRecord(entry.details);
-  if (
-    !details ||
-    !Array.isArray(details.paths) ||
-    details.paths.length === 0 ||
-    !details.paths.every(
-      (entryPath): entryPath is string => typeof entryPath === "string" && entryPath.length > 0,
-    ) ||
-    typeof details.stagedResultRef !== "string" ||
-    !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef) ||
-    (details.totalCount !== undefined &&
-      (!Number.isSafeInteger(details.totalCount) ||
-        (details.totalCount as number) < details.paths.length))
-  ) {
-    return undefined;
-  }
-  try {
-    return projectWorkspaceResultConflict(
-      details.paths,
-      details.stagedResultRef,
-      details.totalCount as number | undefined,
-    );
-  } catch {
-    return undefined;
-  }
-}
-
 export function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  opts?: Pick<ChatHistorySanitizeOptions, "redactInlineMedia">,
 ): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
@@ -522,6 +501,7 @@ export function sanitizeChatHistoryMessage(
       const sanitized = sanitizeChatHistoryContentBlock(content[index], {
         preserveExactToolPayload,
         maxChars: rawText === undefined ? maxChars : remainingText,
+        redactInlineMedia: opts?.redactInlineMedia,
       });
       if (rawText !== undefined) {
         remainingText -= rawText.length + 1;
@@ -643,7 +623,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  opts?: { includeCommentaryFallbacks?: boolean },
+  opts?: ChatHistorySanitizeOptions,
 ): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -662,7 +642,7 @@ export function sanitizeChatHistoryMessages(
         if (!hasMediaFacts && shouldDropAssistantHistoryMessage(commentary)) {
           continue;
         }
-        const projected = sanitizeChatHistoryMessage(commentary, maxChars);
+        const projected = sanitizeChatHistoryMessage(commentary, maxChars, opts);
         if (hasMediaFacts || !shouldDropAssistantHistoryMessage(projected.message)) {
           next.push(projected.message);
         }
@@ -672,7 +652,7 @@ export function sanitizeChatHistoryMessages(
       changed = true;
       continue;
     }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
+    const res = sanitizeChatHistoryMessage(message, maxChars, opts);
     changed ||= res.changed;
     if (res.changed && shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;

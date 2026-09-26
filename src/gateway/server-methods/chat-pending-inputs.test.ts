@@ -149,6 +149,70 @@ describe("pending input read boundary", () => {
     });
   });
 
+  it("redacts Responses inline images from pending history and message lookup", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:pending-image",
+        sessionId: "pending-image-session",
+      };
+      const imageUrl = "DATA:image/png;BASE64,cGVuZGluZw==";
+      const redactedContent = [
+        {
+          type: "input_image",
+          omitted: true,
+          bytes: Buffer.byteLength(imageUrl, "utf8"),
+        },
+      ];
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const receipt = expectDefined(
+        await stageSessionPendingInput(scope, {
+          runId: "pending-image-run",
+          assertCurrent: () => {},
+          message: {
+            role: "user",
+            content: [{ type: "input_image", image_url: imageUrl }],
+            timestamp: 1,
+            idempotencyKey: "pending-image:user",
+            // Persisted provider-native blocks are wider than the admission type.
+          } as never,
+        }),
+        "pending image receipt",
+      );
+      try {
+        const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 1_000 });
+        expect(page.items[0]?.message).toMatchObject({ content: redactedContent });
+        expect(JSON.stringify(page)).not.toContain(imageUrl);
+
+        const respond = vi.fn();
+        await expectDefined(
+          chatMessageGetHandlers["chat.message.get"],
+          "message handler",
+        )({
+          params: {
+            sessionKey: scope.sessionKey,
+            messageId: `pending:${receipt.inputId}`,
+          },
+          respond,
+          context: { getRuntimeConfig: () => ({}) } as unknown as GatewayRequestContext,
+          req: {} as never,
+          client: null,
+          isWebchatConnect: () => false,
+        });
+        expect(respond).toHaveBeenLastCalledWith(
+          true,
+          expect.objectContaining({
+            ok: true,
+            message: expect.objectContaining({ content: redactedContent }),
+          }),
+        );
+        expect(JSON.stringify(respond.mock.lastCall)).not.toContain(imageUrl);
+      } finally {
+        receipt.finish("interrupted");
+      }
+    });
+  });
+
   it("projects pending input acceptance times with fresh page-scoped sender displays", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
