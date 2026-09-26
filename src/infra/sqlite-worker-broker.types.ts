@@ -5,6 +5,7 @@ import type {
   SqliteWorkerRequest,
   SqliteWorkerReply,
   SqliteWorkerCloseReceipt,
+  SqliteWorkerStateLifecycle,
 } from "./sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -30,7 +31,7 @@ export type RequestBody = SqliteWorkerRequest extends infer Request
   : never;
 type DispatchState = { dispatched: boolean; openNotEntered?: boolean };
 export type Job = {
-  requireStateLifecycle?: boolean;
+  requireStateLifecycle?: SqliteWorkerStateLifecycle;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   maintenanceSchemaFence?: { actor: Actor; delegate: StateLifecycleDelegate };
   gatewaySchemaFence?: { actor: Actor; delegate: StateLifecycleDelegate };
@@ -103,7 +104,7 @@ export type Actor = {
   pendingStateLifecycles: Set<StateLifecycleDelegate>;
 };
 export type OperationScope = {
-  requireStateLifecycle?: boolean;
+  requireStateLifecycle?: SqliteWorkerStateLifecycle;
   createAdmission?: SqliteWorkerAdmissionFactory;
   assertCurrent?: (commandType: PropertyKey) => void;
   active: boolean;

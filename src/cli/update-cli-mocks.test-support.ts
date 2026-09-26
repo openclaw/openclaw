@@ -65,6 +65,10 @@ const sourceRuntimeCompletion = vi.hoisted(() =>
   vi.fn<typeof import("./update-cli/update-command-runtime.js").completeSourceUpdateRuntime>(),
 );
 const pluginAvailabilityPreflight = vi.hoisted(() => vi.fn());
+vi.mock("../daemon/service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: vi.fn(() => "outside"),
+}));
+
 vi.mock("./update-cli/update-command-plugin-preflight.js", () => ({
   preflightConfiguredNpmPluginTargets: pluginAvailabilityPreflight,
 }));
@@ -77,7 +81,7 @@ const mockedRunDaemonInstall = vi.fn();
 const serviceReadCommand = vi.fn();
 const serviceReadRuntime = vi.fn();
 const serviceFixtureState = { absentServicePort: 0 };
-const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid]));
+const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid, 1]));
 const terminateStaleGatewayPids = vi.fn();
 const inspectPortUsage = vi.fn();
 const probePortUsage = vi.fn();
@@ -354,6 +358,10 @@ vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
 
 vi.mock("../infra/restart-stale-pids.js", () => ({
   getSelfAndAncestorPidsSync: () => mockGetSelfAndAncestorPidsSync(),
+  inspectSelfAndAncestorPidsSync: () => {
+    const pids = mockGetSelfAndAncestorPidsSync();
+    return { pids, complete: pids.has(1) };
+  },
   terminateStaleGatewayPids: (...args: unknown[]) => terminateStaleGatewayPids(...args),
 }));
 

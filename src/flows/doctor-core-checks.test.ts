@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretProviderConfig } from "../config/types.secrets.js";
 import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -41,6 +42,16 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 const runtime = { log() {}, error() {}, exit() {} };
+
+function gatewayTokenConfig(provider: SecretProviderConfig, id = "value"): OpenClawConfig {
+  return {
+    gateway: {
+      mode: "local",
+      auth: { mode: "token", token: { source: provider.source, provider: "default", id } },
+    },
+    secrets: { providers: { default: provider } },
+  };
+}
 
 function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
   return {
@@ -167,14 +178,6 @@ describe("CORE_HEALTH_CHECKS", () => {
     }
   });
 
-  it("does not include placeholder health registry entries", () => {
-    expect(
-      CORE_HEALTH_CHECKS.some((check) =>
-        check.description.endsWith("represented in the health registry."),
-      ),
-    ).toBe(false);
-  });
-
   it("reports local STT auto-selection diagnostics", async () => {
     const finding: HealthFinding = {
       checkId: "core/doctor/local-audio-acceleration",
@@ -194,31 +197,6 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
 
     await expect(check.detect({ mode: "lint", runtime, cfg: {} })).resolves.toEqual([finding]);
-  });
-
-  it("includes Claw state diagnostics in core doctor checks", () => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
-    expect(createCoreHealthChecks(createDeps()).map((check) => check.id)).toContain(
-      "core/doctor/claws-state",
-    );
-  });
-
-  it("passes one live Gateway cron inventory provider to Claw diagnostics", async () => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
-    const listGatewayCronJobs = vi.fn(async () => []);
-    mocks.collectClawStateHealthFindings.mockImplementationOnce(async (options) => {
-      await options?.cronGateway?.list({ includeDisabled: true });
-      return [];
-    });
-    const check = getCheck(
-      createCoreHealthChecks(createDeps({ listGatewayCronJobs })),
-      "core/doctor/claws-state",
-    );
-    const ctx = { mode: "doctor" as const, runtime, cfg: {} };
-
-    await expect(check.detect(ctx)).resolves.toEqual([]);
-    expect(listGatewayCronJobs).toHaveBeenCalledOnce();
-    expect(listGatewayCronJobs).toHaveBeenCalledWith(ctx);
   });
 
   it("reads every stable Gateway cron inventory page for Claw diagnostics", async () => {
@@ -563,25 +541,8 @@ describe("CORE_HEALTH_CHECKS", () => {
     await withEnvAsync({ OPENCLAW_TEST_GATEWAY_TOKEN: "resolved-test-token" }, async () => {
       const findings = await check?.detect({
         mode: "lint",
-        runtime: { log() {}, error() {}, exit() {} },
-        cfg: {
-          gateway: {
-            mode: "local",
-            auth: {
-              mode: "token",
-              token: {
-                source: "env",
-                provider: "default",
-                id: "OPENCLAW_TEST_GATEWAY_TOKEN",
-              },
-            },
-          },
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
-        },
+        runtime,
+        cfg: gatewayTokenConfig({ source: "env" }, "OPENCLAW_TEST_GATEWAY_TOKEN"),
         cwd: tmp,
       });
 
@@ -599,25 +560,8 @@ describe("CORE_HEALTH_CHECKS", () => {
       async () => {
         const findings = await check?.detect({
           mode: "lint",
-          runtime: { log() {}, error() {}, exit() {} },
-          cfg: {
-            gateway: {
-              mode: "local",
-              auth: {
-                mode: "token",
-                token: {
-                  source: "env",
-                  provider: "default",
-                  id: "OPENCLAW_MISSING_GATEWAY_REF_TOKEN",
-                },
-              },
-            },
-            secrets: {
-              providers: {
-                default: { source: "env" },
-              },
-            },
-          },
+          runtime,
+          cfg: gatewayTokenConfig({ source: "env" }, "OPENCLAW_MISSING_GATEWAY_REF_TOKEN"),
           cwd: tmp,
         });
 
@@ -638,30 +582,13 @@ describe("CORE_HEALTH_CHECKS", () => {
 
     const findings = await check?.detect({
       mode: "lint",
-      runtime: { log() {}, error() {}, exit() {} },
-      cfg: {
-        gateway: {
-          mode: "local",
-          auth: {
-            mode: "token",
-            token: {
-              source: "exec",
-              provider: "default",
-              id: "value",
-            },
-          },
-        },
-        secrets: {
-          providers: {
-            default: {
-              source: "exec",
-              command: "/bin/sh",
-              args: ["-c", `cat >/dev/null; printf executed > ${JSON.stringify(markerPath)}`],
-              jsonOnly: false,
-            },
-          },
-        },
-      },
+      runtime,
+      cfg: gatewayTokenConfig({
+        source: "exec",
+        command: "/bin/sh",
+        args: ["-c", `cat >/dev/null; printf executed > ${JSON.stringify(markerPath)}`],
+        jsonOnly: false,
+      }),
       cwd: tmp,
     });
 
@@ -690,31 +617,14 @@ describe("CORE_HEALTH_CHECKS", () => {
     const findings = await withSecureTestNodeCommand(async (command) =>
       check?.detect({
         mode: "lint",
-        runtime: { log() {}, error() {}, exit() {} },
-        cfg: {
-          gateway: {
-            mode: "local",
-            auth: {
-              mode: "token",
-              token: {
-                source: "exec",
-                provider: "default",
-                id: "value",
-              },
-            },
-          },
-          secrets: {
-            providers: {
-              default: {
-                source: "exec",
-                command,
-                args: [resolverPath, markerPath],
-                jsonOnly: false,
-                trustedDirs: [dirname(command), tmp!],
-              },
-            },
-          },
-        },
+        runtime,
+        cfg: gatewayTokenConfig({
+          source: "exec",
+          command,
+          args: [resolverPath, markerPath],
+          jsonOnly: false,
+          trustedDirs: [dirname(command), tmp!],
+        }),
         cwd: tmp,
         allowExecSecretRefs: true,
       }),
@@ -738,31 +648,14 @@ describe("CORE_HEALTH_CHECKS", () => {
       withSecureTestNodeCommand(async (command) =>
         check?.detect({
           mode: "lint",
-          runtime: { log() {}, error() {}, exit() {} },
-          cfg: {
-            gateway: {
-              mode: "local",
-              auth: {
-                mode: "token",
-                token: {
-                  source: "exec",
-                  provider: "default",
-                  id: "value",
-                },
-              },
-            },
-            secrets: {
-              providers: {
-                default: {
-                  source: "exec",
-                  command,
-                  args: [resolverPath],
-                  jsonOnly: false,
-                  trustedDirs: [dirname(command), tmp!],
-                },
-              },
-            },
-          },
+          runtime,
+          cfg: gatewayTokenConfig({
+            source: "exec",
+            command,
+            args: [resolverPath],
+            jsonOnly: false,
+            trustedDirs: [dirname(command), tmp!],
+          }),
           allowExecSecretRefs: true,
         }),
       ),

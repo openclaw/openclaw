@@ -53,6 +53,10 @@ type ControlUiE2eScenarioContext = {
     readonly result?: { errors?: readonly unknown[] };
   };
 };
+type ControlUiE2eScenarioOwner = {
+  controller: AbortController;
+  test: ControlUiE2eScenarioContext;
+};
 type ControlUiE2eSuite = {
   readonly artifactDir: string;
   readonly browser: Browser;
@@ -206,9 +210,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
   const scenarios = new Set<Promise<unknown>>();
   const resourceLifetime = new AbortController();
   let activeTest: ControlUiE2eScenarioContext | undefined;
-  let activeScenario:
-    | { controller: AbortController; test: ControlUiE2eScenarioContext }
-    | undefined;
+  let activeScenario: ControlUiE2eScenarioOwner | undefined;
   let unsafeCleanup: { error: unknown; retainedState: () => string | undefined } | undefined;
   let browser: Browser | undefined;
   let server: ControlUiE2eServer | undefined;
@@ -351,11 +353,12 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
   };
   const newBrowserContext = (
     contextOptions: Parameters<Browser["newContext"]>[0],
+    scope = activeScenario,
   ): Promise<BrowserContext> => {
     assertControlUiForkActive();
     const currentBrowser = browser;
-    const owner = activeScenario?.controller;
-    const test = activeScenario?.test ?? activeTest;
+    const owner = scope?.controller;
+    const test = scope?.test ?? activeTest;
     if (!currentBrowser) {
       return Promise.reject(new Error("Control UI E2E browser accessed before suite setup"));
     }
@@ -390,6 +393,78 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     return acquisition;
   };
 
+  const runOwnedScenario = <T>(
+    scope: ControlUiE2eScenarioOwner,
+    scenario: ControlUiE2eScenario<T>,
+  ): Promise<T> => {
+    assertControlUiForkActive();
+    if (stopping) {
+      throw new Error("A Control UI E2E scenario cannot start during teardown");
+    }
+    const { controller: owner, test: context } = scope;
+    const operation = createDeferredCore<T>();
+    const retainedState = scenario.retainedState ?? resources?.retainedState ?? (() => undefined);
+    let cleanupComplete = false;
+    scenarios.add(operation.promise);
+    const abort = () => {
+      owner.abort(context.signal.reason);
+      // Initiate cancellation now; finalization below joins these same closes.
+      void closeOpenBrowserContexts(owner).catch(() => {});
+    };
+    context.signal.addEventListener("abort", abort, { once: true });
+    if (context.signal.aborted) {
+      abort();
+    }
+    // Native timeout rejects its wrapper, not the callback. On failed joining,
+    // fence this file and retain state until native isolated-fork teardown exits.
+    context.onTestFinished(() => {
+      assertControlUiForkActive();
+      const finished = operation.promise.then(
+        () => undefined,
+        (error: unknown) => {
+          if (!cleanupComplete) {
+            throw retireFork(error, retainedState);
+          }
+        },
+      );
+      return joinCleanup(finished, "scenario cleanup", retainedState);
+    }, 0);
+    operation.resolve(
+      runQaGatewayFixture(
+        async () => {
+          owner.signal.throwIfAborted();
+          return await scenario.run(owner.signal);
+        },
+        async () => {
+          owner.abort();
+          try {
+            assertControlUiForkActive();
+            await settleControlUiCleanup([
+              closeOpenBrowserContexts(owner),
+              Promise.resolve().then(scenario.close),
+            ]);
+            // A close can settle after the cleanup deadline retired this fork.
+            assertControlUiForkActive();
+            await scenario.release?.();
+            cleanupComplete = true;
+            if (activeScenario?.controller === owner) {
+              activeScenario = undefined;
+            }
+          } catch (error) {
+            unsafeCleanup = { error, retainedState };
+            throw error;
+          }
+        },
+      ),
+    );
+    const settled = () => {
+      scenarios.delete(operation.promise);
+      context.signal.removeEventListener("abort", abort);
+    };
+    void operation.promise.then(settled, settled);
+    return operation.promise;
+  };
+
   return {
     get artifactDir() {
       return (artifactDir ??= createControlUiE2eArtifactDir(
@@ -418,67 +493,8 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
       if (stopping || activeScenario) {
         throw new Error("A Control UI E2E scenario still owns the suite");
       }
-      const owner = new AbortController();
-      const operation = createDeferredCore<T>();
-      const retainedState = scenario.retainedState ?? resources?.retainedState ?? (() => undefined);
-      let cleanupComplete = false;
-      activeScenario = { controller: owner, test: context };
-      scenarios.add(operation.promise);
-      const abort = () => {
-        owner.abort(context.signal.reason);
-        // Initiate cancellation now; finalization below joins these same closes.
-        void closeOpenBrowserContexts(owner).catch(() => {});
-      };
-      context.signal.addEventListener("abort", abort, { once: true });
-      if (context.signal.aborted) {
-        abort();
-      }
-      // Native timeout rejects its wrapper, not the callback. On failed joining,
-      // fence this file and retain state until native isolated-fork teardown exits.
-      context.onTestFinished(() => {
-        assertControlUiForkActive();
-        const finished = operation.promise.then(
-          () => undefined,
-          (error: unknown) => {
-            if (!cleanupComplete) {
-              throw retireFork(error, retainedState);
-            }
-          },
-        );
-        return joinCleanup(finished, "scenario cleanup", retainedState);
-      }, 0);
-      operation.resolve(
-        runQaGatewayFixture(
-          async () => {
-            owner.signal.throwIfAborted();
-            return await scenario.run(owner.signal);
-          },
-          async () => {
-            owner.abort();
-            try {
-              assertControlUiForkActive();
-              await settleControlUiCleanup([
-                closeOpenBrowserContexts(owner),
-                Promise.resolve().then(scenario.close),
-              ]);
-              // A close can settle after the cleanup deadline retired this fork.
-              assertControlUiForkActive();
-              await scenario.release?.();
-              cleanupComplete = true;
-              activeScenario = undefined;
-            } catch (error) {
-              unsafeCleanup = { error, retainedState };
-              throw error;
-            }
-          },
-        ),
-      );
-      const settled = () => {
-        scenarios.delete(operation.promise);
-        context.signal.removeEventListener("abort", abort);
-      };
-      void operation.promise.then(settled, settled);
-      return operation.promise;
+      activeScenario = { controller: new AbortController(), test: context };
+      return runOwnedScenario(activeScenario, scenario);
     },
     define(defineTests) {
       describeControlUiE2e(options.name, () => {
@@ -577,24 +593,33 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
       });
     },
     async withPage(contextOptions, run, cleanup) {
-      const context = await newBrowserContext(contextOptions);
-      let fixture: ControlUiE2ePage | undefined;
-      return await runQaGatewayFixture(
-        async () => {
-          const page = await context.newPage();
-          fixture = { context, page };
-          installControlUiRpcDiagnostics(page);
-          try {
-            return await run(fixture);
-          } catch (error) {
-            await captureContextFailure(context, error, page);
-            throw error;
-          }
-        },
-        // Capture assertion diagnostics before a test closes its page or drains routes.
-        () => (fixture ? cleanup?.(fixture) : undefined),
-        () => closeBrowserContext(context),
-      );
+      const explicitScenario = activeScenario;
+      const test = explicitScenario?.test ?? activeTest;
+      if (!test) {
+        throw new Error("A Control UI E2E page requires an active test");
+      }
+      const scope = explicitScenario ?? { controller: new AbortController(), test };
+      const runPage = async () => {
+        const context = await newBrowserContext(contextOptions, scope);
+        let fixture: ControlUiE2ePage | undefined;
+        return await runQaGatewayFixture(
+          async () => {
+            const page = await context.newPage();
+            fixture = { context, page };
+            installControlUiRpcDiagnostics(page);
+            try {
+              return await run(fixture);
+            } catch (error) {
+              await captureContextFailure(context, error, page);
+              throw error;
+            }
+          },
+          // Capture assertion diagnostics before a test closes its page or drains routes.
+          () => (fixture ? cleanup?.(fixture) : undefined),
+          () => closeBrowserContext(context),
+        );
+      };
+      return explicitScenario ? await runPage() : await runOwnedScenario(scope, { run: runPage });
     },
   };
 }

@@ -74,7 +74,13 @@ let preparedGatewayActor: number | undefined;
 let lifecycleReply: { actor: number; port: MessagePort } | undefined;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
 let lifecyclePreparation:
-  | { actor: number; port: MessagePort; deadlineNs: bigint; databasePath: string }
+  | {
+      actor: number;
+      port: MessagePort;
+      deadlineNs: bigint;
+      maxPollIntervalMs?: number;
+      databasePath: string;
+    }
   | undefined;
 let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
 // Input and result continuations retain the original job's delegation.
@@ -139,6 +145,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           actor: request.actor,
           port: request.lifecyclePreparation,
           deadlineNs: request.workerStateLifecycle.deadlineNs,
+          maxPollIntervalMs: request.workerStateLifecycle.maxPollIntervalMs,
           databasePath,
         };
       }
@@ -231,6 +238,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           actorId: `${request.actor}:${request.id}`,
           databasePath: preparation.databasePath,
           deadlineNs: preparation.deadlineNs,
+          maxPollIntervalMs: preparation.maxPollIntervalMs,
           runtime:
             request.type === "close"
               ? { ...context.coordinatorRuntime, keepAlive: false }

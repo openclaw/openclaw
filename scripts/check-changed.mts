@@ -325,11 +325,11 @@ export function shouldRunNpmLockGuard(paths: string[]) {
   return paths.some((changedPath) => NPM_LOCK_POLICY_PATH_RE.test(changedPath));
 }
 
-export function shouldRunPromptSnapshotCheck(paths: string[]) {
+function shouldRunPromptSnapshotCheck(paths: string[]) {
   return paths.some((changedPath) => PROMPT_SNAPSHOT_CHECK_PATH_RE.test(changedPath));
 }
 
-export function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
+function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
   return paths.some((changedPath) => PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE.test(changedPath));
 }
 
@@ -337,17 +337,17 @@ export function shouldRunControlUiI18nVerify(paths: string[]) {
   return paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath));
 }
 
-export function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {
+function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {
   return paths.some((changedPath) => RUNTIME_SIDECAR_BASELINE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can drift bundled doctor-contract declarations or closures. */
-export function shouldRunDoctorContractOwnerTests(paths: string[]) {
+function shouldRunDoctorContractOwnerTests(paths: string[]) {
   return paths.some((changedPath) => DOCTOR_CONTRACT_OWNER_TEST_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can affect the sessions/transcripts SQLite schema baseline. */
-export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
+function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
   return paths.some((changedPath) => SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE.test(changedPath));
 }
 
@@ -1314,7 +1314,7 @@ export function createTargetedExtensionLintCommand(
   });
 }
 
-export function createTargetedScriptLintCommand(
+function createTargetedScriptLintCommand(
   paths: string[],
   env: NodeJS.ProcessEnv = process.env,
   options: TargetedLintOptions = {},

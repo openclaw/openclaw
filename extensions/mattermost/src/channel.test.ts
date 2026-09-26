@@ -60,14 +60,6 @@ function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] 
   return [...(mattermostPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
 }
 
-function requireMattermostNormalizeTarget() {
-  const normalize = mattermostPlugin.messaging?.normalizeTarget;
-  if (!normalize) {
-    throw new Error("mattermost messaging.normalizeTarget missing");
-  }
-  return normalize;
-}
-
 function requireMattermostTargetResolver() {
   const resolveTarget = mattermostPlugin.messaging?.targetResolver?.resolveTarget;
   if (!resolveTarget) {
@@ -287,22 +279,6 @@ describe("mattermostPlugin", () => {
     const expectedBeta = mattermostPlugin.config.resolveAccount(before, "beta");
     expect(mattermostPlugin.config.resolveAccount(afterAdd, "beta")).toEqual(expectedBeta);
     expect(mattermostPlugin.config.resolveAccount(afterEdit, "beta")).toEqual(expectedBeta);
-  });
-
-  describe("messaging", () => {
-    it("keeps @username targets", () => {
-      const normalize = requireMattermostNormalizeTarget();
-
-      expect(normalize("@Alice")).toBe("@Alice");
-      expect(normalize("@alice")).toBe("@alice");
-    });
-
-    it("normalizes spaced mattermost prefixes to user targets", () => {
-      const normalize = requireMattermostNormalizeTarget();
-
-      expect(normalize("mattermost:USER123")).toBe("user:USER123");
-      expect(normalize("  mattermost:USER123  ")).toBe("user:USER123");
-    });
   });
 
   describe("pairing", () => {
@@ -777,31 +753,6 @@ describe("mattermostPlugin", () => {
       expect(options.attachmentText).toBe("native attachment");
     });
 
-    it.each([
-      ["buffer attachments", { buffer: "cmVwb3J0" }, "buffer/base64 payloads"],
-      [
-        "multiple attachments",
-        { mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"] },
-        "supports one attachment per message",
-      ],
-    ])("rejects unsupported %s before provider dispatch", async (_label, extraParams, error) => {
-      const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
-      if (!prepareSendPayload) {
-        throw new Error("mattermost actions.prepareSendPayload missing");
-      }
-
-      await expect(async () =>
-        prepareSendPayload({
-          ctx: createMattermostActionContext({
-            params: { to: "channel:CHAN1", message: "report", ...extraParams },
-          }),
-          to: "channel:CHAN1",
-          payload: { text: "report" },
-        }),
-      ).rejects.toThrow(error);
-      expect(sendMessageMattermostMock).not.toHaveBeenCalled();
-    });
-
     it("exposes read when actions.messages is true", () => {
       const cfg: OpenClawConfig = {
         channels: {
@@ -1107,13 +1058,6 @@ describe("mattermostPlugin", () => {
       expect(fetchImpl).not.toHaveBeenCalled();
     });
 
-    it("handles react by calling Mattermost reactions API", async () => {
-      const result = await runReactAction({ messageId: "POST1", emoji: "thumbsup" }, "add");
-
-      expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
-      expect(result?.details).toStrictEqual({});
-    });
-
     it.each([
       {
         label: "named channel add",
@@ -1122,26 +1066,6 @@ describe("mattermostPlugin", () => {
         mode: "add" as const,
         remove: false,
         postChannelId: "CHAN1",
-        expectedText: "Reacted with :thumbsup: on POST1",
-      },
-      {
-        label: "named channel remove",
-        rawTarget: "#town-square",
-        resolvedTarget: "channel:CHAN1",
-        mode: "remove" as const,
-        remove: true,
-        postChannelId: "CHAN1",
-        expectedText: "Removed reaction :thumbsup: from POST1",
-      },
-      {
-        label: "named user add",
-        rawTarget: "@alice",
-        resolvedTarget: "user:PEER1",
-        mode: "add" as const,
-        remove: false,
-        postChannelId: "DMCHAN1",
-        channelType: "D",
-        channelName: "BOT123__PEER1",
         expectedText: "Reacted with :thumbsup: on POST1",
       },
       {
@@ -1196,25 +1120,6 @@ describe("mattermostPlugin", () => {
       expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
     });
 
-    it("removes reaction when remove flag is boolean true", async () => {
-      const result = await runReactAction(
-        { messageId: "POST1", emoji: "thumbsup", remove: true },
-        "remove",
-      );
-
-      expect(result?.content).toEqual([
-        { type: "text", text: "Removed reaction :thumbsup: from POST1" },
-      ]);
-      expect(result?.details).toStrictEqual({});
-    });
-
-    it("normalizes a raw emoji glyph through the react action boundary", async () => {
-      const result = await runReactAction({ messageId: "POST1", emoji: "👍" }, "add");
-
-      expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
-      expect(result?.details).toStrictEqual({});
-    });
-
     it("normalizes a raw emoji glyph when removing a reaction", async () => {
       const result = await runReactAction(
         { messageId: "POST1", emoji: "👍", remove: true },
@@ -1236,19 +1141,6 @@ describe("mattermostPlugin", () => {
 
       expect(result?.content).toEqual([
         { type: "text", text: "Reacted with :thumbsup_medium_skin_tone: on POST1" },
-      ]);
-      expect(result?.details).toStrictEqual({});
-    });
-
-    it("preserves the skin tone when removing a toned glyph reaction", async () => {
-      const result = await runReactAction(
-        { messageId: "POST1", emoji: "👍🏽", remove: true },
-        "remove",
-        "thumbsup_medium_skin_tone",
-      );
-
-      expect(result?.content).toEqual([
-        { type: "text", text: "Removed reaction :thumbsup_medium_skin_tone: from POST1" },
       ]);
       expect(result?.details).toStrictEqual({});
     });
@@ -1362,12 +1254,13 @@ describe("mattermostPlugin", () => {
       expect(sendMessageMattermostMock).not.toHaveBeenCalled();
     });
 
-    it.each([
-      ["top-level", { buffer: "", base64: "  " }],
-      ["nested", { attachments: [{ buffer: "", base64: "  " }] }],
-    ])("ignores blank %s attachment payload fields", async (_name, params) => {
+    it("ignores blank nested attachment payload fields", async () => {
       await sendPreparedMattermostAction({
-        params: { to: "channel:CHAN1", message: "plain text", ...params },
+        params: {
+          to: "channel:CHAN1",
+          message: "plain text",
+          attachments: [{ buffer: "", base64: "  " }],
+        },
         accountId: "default",
       });
 

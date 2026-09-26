@@ -16,7 +16,6 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { createSafeStreamWriter } from "../../packages/terminal-core/src/stream-writer.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -38,6 +37,7 @@ import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
+import { formatDocsHelp } from "./help-format.js";
 
 type LogsTailPayload = {
   file?: string;
@@ -76,15 +76,6 @@ type GatewayRecoveryState =
       abortController: AbortController;
     }
   | { kind: "settled"; result: GatewayRecoveryResult };
-
-type LogSourceIdentity = {
-  file?: string;
-  source?: string;
-  sourceKind?: LogsTailPayload["sourceKind"];
-  servicePid?: number;
-  serviceUnit?: string;
-  localFallback?: boolean;
-};
 
 type LogsCliOptions = GatewayRpcOpts & {
   limit?: string;
@@ -132,15 +123,14 @@ function buildLogSourceIdentity(payload: LogsTailPayload): string | undefined {
   if (!sourceKind && !payload.file && !payload.source) {
     return undefined;
   }
-  const identity: LogSourceIdentity = {
+  return JSON.stringify({
     file: payload.file,
     source: payload.source,
     sourceKind,
     servicePid: payload.service?.pid,
     serviceUnit: payload.service?.unit,
     localFallback: payload.localFallback === true ? true : undefined,
-  };
-  return JSON.stringify(identity);
+  });
 }
 
 function buildLogMetaRecord(payload: LogsTailPayload): Record<string, unknown> {
@@ -518,11 +508,7 @@ export function registerLogsCli(program: Command) {
     .option("--no-color", "Disable ANSI colors")
     .option("--local-time", "Display timestamps in local timezone (default)", false)
     .option("--utc", "Display timestamps in UTC", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/logs", "docs.openclaw.ai/cli/logs")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/logs"));
 
   addGatewayClientOptions(logs);
 
