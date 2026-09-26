@@ -592,7 +592,11 @@ describe("perplexity web search provider", () => {
           { url: string; init: RequestInit },
         ];
         expect(request.url).toBe(url);
-        expect(new Headers(request.init.headers).get("authorization")).toBe(`Bearer ${key}`);
+        const headers = new Headers(request.init.headers);
+        expect(headers.get("authorization")).toBe(`Bearer ${key}`);
+        expect(headers.get("x-pplx-integration")).toBe(
+          url.startsWith("https://api.perplexity.ai/") ? "openclaw" : null,
+        );
         expect(JSON.parse(request.init.body as string)).toEqual(
           chat
             ? { model: entry.model, messages: [{ role: "user", content: query }] }

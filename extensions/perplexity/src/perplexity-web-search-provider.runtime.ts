@@ -84,13 +84,18 @@ function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
   return model.startsWith("perplexity/") ? model.slice("perplexity/".length) : model;
 }
 
-function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Record<string, string> {
+function buildPerplexityRequestHeaders(
+  apiKey: string,
+  baseUrl: string,
+  acceptJson = false,
+): Record<string, string> {
   return {
     "Content-Type": "application/json",
     ...(acceptJson ? { Accept: "application/json" } : {}),
     Authorization: `Bearer ${apiKey}`,
     "HTTP-Referer": "https://openclaw.ai",
     "X-Title": "OpenClaw Web Search",
+    ...(isDirectPerplexityBaseUrl(baseUrl) ? { "X-Pplx-Integration": "openclaw" } : {}),
   };
 }
 
@@ -166,7 +171,7 @@ async function runPerplexitySearchApi(params: {
     body.max_tokens_per_page = params.maxTokensPerPage;
   }
 
-  const headers = buildPerplexityRequestHeaders(params.apiKey, true);
+  const headers = buildPerplexityRequestHeaders(params.apiKey, PERPLEXITY_SEARCH_ENDPOINT, true);
   return withTrustedWebSearchEndpoint(
     {
       url: PERPLEXITY_SEARCH_ENDPOINT,
@@ -218,7 +223,7 @@ async function runPerplexitySearch(params: {
     body.search_recency_filter = params.freshness;
   }
 
-  const headers = buildPerplexityRequestHeaders(params.apiKey);
+  const headers = buildPerplexityRequestHeaders(params.apiKey, params.baseUrl);
   return withTrustedWebSearchEndpoint(
     {
       url: endpoint,
