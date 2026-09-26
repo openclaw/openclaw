@@ -262,16 +262,16 @@ function createCaptureRuntime(): RuntimeEnv & { read: () => string } {
 
 function requireParam(params: Record<string, unknown>, name: string): string {
   const value = readToolStringParam(params, name);
-  if (!value?.trim()) {
+  if (!value) {
     throw new ToolInputError(`openclaw: "${name}" is required for this action`);
   }
-  return value.trim();
+  return value;
 }
 
 function readSetupTarget(
   params: Record<string, unknown>,
 ): "guided" | "classic" | "channels" | "search" | "gateway" {
-  const target = readToolStringParam(params, "target")?.trim() ?? "guided";
+  const target = readToolStringParam(params, "target") ?? "guided";
   if (
     target === "guided" ||
     target === "classic" ||
@@ -288,25 +288,21 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
   const action = readToolStringParam(params, "action", { required: true });
   switch (action) {
     case "status":
-      return { kind: "status" };
     case "models":
-      return { kind: "models" };
     case "agents":
-      return { kind: "agents" };
+    case "audit":
+    case "doctor":
+      return { kind: action };
     case "channels":
       return { kind: "channel-list" };
     case "channel_info":
       return { kind: "channel-info", channel: requireParam(params, "channel").toLowerCase() };
-    case "audit":
-      return { kind: "audit" };
     case "validate_config":
       return { kind: "config-validate" };
-    case "doctor":
-      return { kind: "doctor" };
     case "config_get":
       return { kind: "config-get", path: requireParam(params, "path") };
     case "config_schema": {
-      const configPath = readToolStringParam(params, "path")?.trim();
+      const configPath = readToolStringParam(params, "path");
       return { kind: "config-schema", ...(configPath ? { path: configPath } : {}) };
     }
     case "gateway_status":
@@ -324,14 +320,14 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     case "import_memory":
       return { kind: "memory-import" };
     case "configure_model_provider": {
-      const workspace = readToolStringParam(params, "workspace")?.trim();
+      const workspace = readToolStringParam(params, "workspace");
       return { kind: "model-setup", ...(workspace ? { workspace } : {}) };
     }
     case "manage_model_accounts":
       return { kind: "model-accounts" };
     case "open_agent": {
-      const agentId = readToolStringParam(params, "agentId")?.trim();
-      const workspace = readToolStringParam(params, "workspace")?.trim();
+      const agentId = readToolStringParam(params, "agentId");
+      const workspace = readToolStringParam(params, "workspace");
       return {
         kind: "open-tui",
         ...(agentId ? { agentId } : {}),
@@ -340,7 +336,7 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     }
     case "open_setup": {
       const target = readSetupTarget(params);
-      const channel = readToolStringParam(params, "channel")?.trim().toLowerCase();
+      const channel = readToolStringParam(params, "channel")?.toLowerCase();
       return {
         kind: "open-setup",
         target,
@@ -381,8 +377,8 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       return { kind: "plugin-activate-artifact", path: artifactPath, sha256 };
     }
     case "setup": {
-      const workspace = readToolStringParam(params, "workspace")?.trim();
-      const model = readToolStringParam(params, "model")?.trim();
+      const workspace = readToolStringParam(params, "workspace");
+      const model = readToolStringParam(params, "model");
       return {
         kind: "setup",
         ...(workspace ? { workspace } : {}),
@@ -390,7 +386,7 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       };
     }
     case "set_default_model": {
-      const agentId = readToolStringParam(params, "agentId")?.trim();
+      const agentId = readToolStringParam(params, "agentId");
       return {
         kind: "set-default-model",
         model: requireParam(params, "model"),
@@ -402,10 +398,10 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       if (params.role !== undefined && !role) {
         throw new ToolInputError(`openclaw: unknown role; choose ${listAgentRoles().join(", ")}`);
       }
-      const workspace = readToolStringParam(params, "workspace")?.trim();
-      const name = readToolStringParam(params, "name")?.trim();
-      const purpose = readToolStringParam(params, "purpose")?.trim();
-      const model = readToolStringParam(params, "model")?.trim();
+      const workspace = readToolStringParam(params, "workspace");
+      const name = readToolStringParam(params, "name");
+      const purpose = readToolStringParam(params, "purpose");
+      const model = readToolStringParam(params, "model");
       return {
         kind: "create-agent",
         agentId: requireParam(params, "agentId"),
@@ -417,9 +413,9 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       };
     }
     case "create_team": {
-      const coordinatorId = readToolStringParam(params, "coordinatorId")?.trim();
-      const prefix = readToolStringParam(params, "prefix")?.trim();
-      const workspaceRoot = readToolStringParam(params, "workspaceRoot")?.trim();
+      const coordinatorId = readToolStringParam(params, "coordinatorId");
+      const prefix = readToolStringParam(params, "prefix");
+      const workspaceRoot = readToolStringParam(params, "workspaceRoot");
       return {
         kind: "create-team",
         ...(coordinatorId ? { coordinatorId } : {}),
