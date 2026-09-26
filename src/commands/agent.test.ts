@@ -1911,6 +1911,48 @@ describe("agentCommand", () => {
     });
   });
 
+  it("derives session-stable CLI binding facts for plain agent-command turns", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:discord:direct:requester";
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "requester-session",
+          updatedAt: Date.now(),
+          chatType: "direct",
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "discord", to: "user:requester" },
+            origin: { provider: "discord", chatType: "direct", to: "user:requester" },
+          }),
+        },
+      });
+      const cfg = mockConfig(home, store, {
+        models: {
+          "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+        },
+      });
+      cfg.messages = { visibleReplies: "automatic" };
+
+      const prepared = await prepareAgentCommandExecution(
+        {
+          message: "status ping",
+          sessionKey,
+        },
+        runtime,
+      );
+
+      // A plain agent turn carries no delivery-mode facts of its own; without
+      // session-stable binding facts it hashes a different message tool policy
+      // than chat turns on the same session and resets the CLI binding.
+      expect(prepared.opts.sourceReplyDeliveryMode).toBeUndefined();
+      expect(prepared.opts.cliSessionBindingFacts).toEqual({
+        sourceReplyDeliveryMode: "automatic",
+      });
+    });
+  });
+
   it("passes resolved session-id resume files to embedded runs", async () => {
     await withTempHome(async (home) => {
       const resumeStore = path.join(home, "sessions-resume.json");
