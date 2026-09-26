@@ -4,6 +4,7 @@ import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import type { serializeAgentSchemaInspectionError } from "../state/openclaw-agent-schema-inspection-response.js";
 import { readTaskBackingInstance, type TaskBackingInstance } from "./task-backing-records.js";
+import { isIncognitoTask, projectTaskContentForPersistence } from "./task-content.js";
 import {
   appendTaskEvent,
   mapAgentRunTerminalOutcomeToTaskStatus,
@@ -40,7 +41,7 @@ export type TaskAgentEventInput = {
 
 /** Reduce accepted events to durable fields; tool arguments and streamed prose never enter the queue. */
 export function captureTaskAgentEventChange(
-  task: Pick<TaskRecord, "runtime">,
+  task: Pick<TaskRecord, "runtime" | "ownerKey" | "childSessionKey">,
   event: AgentEventPayload,
   projectTerminal: boolean,
 ): TaskAgentEventChange | undefined {
@@ -87,6 +88,7 @@ export function captureTaskAgentEventChange(
       change.patch.lastToolName = name;
     }
   }
+  change.patch = projectTaskContentForPersistence(isIncognitoTask(task), change.patch);
   return change;
 }
 
