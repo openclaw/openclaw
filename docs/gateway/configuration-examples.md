@@ -61,6 +61,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 
 > JSON5 lets you use comments and trailing commas. Regular JSON works too.
 
+This example leaves `agents.defaults.timeoutSeconds` unset, so ordinary agent runs use the 48-hour default. Set a whole-run limit only when your workflow needs one; see [Agent runtime](/concepts/agent-loop#timeouts).
+
 ```json5
 {
   // Environment + shell
@@ -244,7 +246,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       humanDelay: {
         mode: "natural",
       },
-      timeoutSeconds: 600,
       mediaMaxMb: 5,
       typingIntervalSeconds: 5,
       maxConcurrent: 3,
