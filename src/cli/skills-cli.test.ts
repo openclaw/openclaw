@@ -158,6 +158,7 @@ describe("skills-cli", () => {
           missing: {
             bins: ["ffmpeg"],
             anyBins: ["rg", "grep"],
+            anyEnv: [],
             env: ["API_KEY"],
             config: [],
             os: ["darwin"],
@@ -225,6 +226,7 @@ describe("skills-cli", () => {
           requirements: {
             bins: ["node"],
             anyBins: ["rg", "grep"],
+            anyEnv: [],
             env: ["API_KEY"],
             config: [],
             os: [],
@@ -232,6 +234,7 @@ describe("skills-cli", () => {
           missing: {
             bins: [],
             anyBins: [],
+            anyEnv: [],
             env: ["API_KEY"],
             config: [],
             os: [],
@@ -362,7 +365,7 @@ describe("skills-cli", () => {
           name: "not-ready",
           eligible: false,
           platformIncompatible: false,
-          missing: { bins: ["go"], anyBins: [], env: [], config: [], os: [] },
+          missing: { bins: ["go"], anyBins: [], anyEnv: [], env: [], config: [], os: [] },
         }),
         createMockSkill({ name: "disabled", eligible: false, disabled: true }),
       ]);
@@ -383,7 +386,7 @@ describe("skills-cli", () => {
           emoji: "🎙\uFE0E",
           eligible: false,
           platformIncompatible: false,
-          missing: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
+          missing: { bins: ["ffmpeg"], anyBins: [], anyEnv: [], env: [], config: [], os: [] },
         }),
       ]);
 
@@ -477,13 +480,27 @@ describe("skills-cli", () => {
             name: "excluded-missing",
             eligible: false,
             blockedByAgentFilter: true,
-            missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
+            missing: {
+              bins: ["missing-tool"],
+              anyBins: [],
+              anyEnv: [],
+              env: [],
+              config: [],
+              os: [],
+            },
           }),
           createMockSkill({
             name: "missing-bin",
             eligible: false,
             platformIncompatible: false,
-            missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
+            missing: {
+              bins: ["missing-tool"],
+              anyBins: [],
+              anyEnv: [],
+              env: [],
+              config: [],
+              os: [],
+            },
           }),
           createMockSkill({
             name: "disabled",
@@ -491,7 +508,14 @@ describe("skills-cli", () => {
             disabled: true,
             blockedByAllowlist: true,
             blockedByAgentFilter: true,
-            missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
+            missing: {
+              bins: ["missing-tool"],
+              anyBins: [],
+              anyEnv: [],
+              env: [],
+              config: [],
+              os: [],
+            },
           }),
           createMockSkill({
             name: "blocked-bundled",
@@ -499,7 +523,14 @@ describe("skills-cli", () => {
             platformIncompatible: false,
             blockedByAllowlist: true,
             blockedByAgentFilter: true,
-            missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
+            missing: {
+              bins: ["missing-tool"],
+              anyBins: [],
+              anyEnv: [],
+              env: [],
+              config: [],
+              os: [],
+            },
           }),
         ]),
         agentId: "specialist",

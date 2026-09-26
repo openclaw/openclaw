@@ -495,8 +495,8 @@ metadata:
 
 <ParamField path="always" type="boolean">
   When `true`, include the skill whenever its `os` requirement is compatible,
-  bypassing `requires.bins`, `requires.anyBins`, `requires.env`, and
-  `requires.config`.
+  bypassing `requires.bins`, `requires.anyBins`, `requires.env`,
+  `requires.anyEnv`, and `requires.config`.
 </ParamField>
 
 <ParamField path="emoji" type="string">
@@ -527,6 +527,10 @@ Fresh dependency checks detect binaries installed into directories already on
 
 <ParamField path="requires.env" type="string[]">
   Each env var must exist in the process or be provided via config.
+</ParamField>
+
+<ParamField path="requires.anyEnv" type="string[]">
+  At least one env var must exist in the process or be provided via config.
 </ParamField>
 
 <ParamField path="requires.config" type="string[]">

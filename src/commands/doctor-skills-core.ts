@@ -22,6 +22,7 @@ export function formatMissingSkillSummary(skill: SkillStatusEntry): string {
     ["bins", skill.missing.bins],
     ["any bins", skill.missing.anyBins],
     ["env", skill.missing.env],
+    ["any env", skill.missing.anyEnv],
     ["config", skill.missing.config],
     ["os", skill.missing.os],
   ] as const;

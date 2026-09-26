@@ -371,6 +371,7 @@ describe("hooks CLI metadata config keys", () => {
       missing: {
         bins: ["missing-bin"],
         anyBins: ["missing-any-a", "missing-any-b"],
+        anyEnv: [],
         env: ["MISSING_ENV"],
         config: ["hooks.demo.enabled"],
         os: ["linux"],

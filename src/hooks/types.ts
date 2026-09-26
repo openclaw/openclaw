@@ -22,6 +22,7 @@ export type OpenClawHookMetadata = {
     bins?: string[];
     anyBins?: string[];
     env?: string[];
+    anyEnv?: string[];
     config?: string[];
   };
   install?: HookInstallSpec[];

@@ -119,6 +119,7 @@ describe("doctor skills", () => {
           missing: {
             bins: available ? [] : ["missing-tool"],
             anyBins: [],
+            anyEnv: [],
             env: [],
             config: [],
             os: [],
@@ -150,7 +151,7 @@ describe("doctor skills", () => {
       platformIncompatible: false,
       modelVisible: false,
       commandVisible: false,
-      missing: { bins: ["tool"], anyBins: [], env: [], config: [], os: [] },
+      missing: { bins: ["tool"], anyBins: [], anyEnv: [], env: [], config: [], os: [] },
     });
     const report = createReport([
       createSkill({ name: "ready" }),
@@ -172,6 +173,7 @@ describe("doctor skills", () => {
         missing: {
           bins: ["goplaces"],
           anyBins: [],
+          anyEnv: [],
           env: ["GOOGLE_MAPS_API_KEY"],
           config: [],
           os: [],
@@ -215,7 +217,7 @@ describe("doctor skills", () => {
       skillKey: "github",
       eligible: true,
       platformIncompatible: false,
-      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+      missing: { bins: [], anyBins: [], anyEnv: [], env: [], config: [], os: [] },
     });
     mocks.detectGhConfigDirMismatch.mockReturnValue({
       kind: "mismatch",
@@ -238,7 +240,7 @@ describe("doctor skills", () => {
       skillKey: "github",
       eligible: false,
       platformIncompatible: false,
-      missing: { bins: ["gh"], anyBins: [], env: [], config: [], os: [] },
+      missing: { bins: ["gh"], anyBins: [], anyEnv: [], env: [], config: [], os: [] },
     });
     const calls = await runSkillDoctor([githubSkill]);
     expect(calls.some((call) => call[1] === "GitHub CLI")).toBe(false);
@@ -253,7 +255,7 @@ describe("doctor skills", () => {
       name: "shared",
       skillKey: "shared",
       eligible: false,
-      missing: { bins: ["shared-bin"], anyBins: [], env: [], config: [], os: [] },
+      missing: { bins: ["shared-bin"], anyBins: [], anyEnv: [], env: [], config: [], os: [] },
     });
     mocks.buildWorkspaceSkillStatus.mockImplementation((_workspaceDir, { agentId }) =>
       createReport(agentId === "secondary" ? [missing] : [healthy], agentId),

@@ -80,6 +80,7 @@ export async function buildSkillSnapshot(
       skillKey: resolveSkillKey(entry.skill, entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
+      anyEnv: entry.metadata?.requires?.anyEnv?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
     ...(opts?.skillOverrides ? { skillOverrides: opts.skillOverrides } : {}),

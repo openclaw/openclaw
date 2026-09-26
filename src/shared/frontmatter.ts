@@ -65,6 +65,8 @@ type OpenClawManifestRequires = {
   anyBins: string[];
   /** Environment variables required by the entry. */
   env: string[];
+  /** Alternative environment variables where any one match is enough. */
+  anyEnv: string[];
   /** Config paths required by the entry. */
   config: string[];
 };
@@ -84,6 +86,7 @@ export function resolveOpenClawManifestRequires(
     bins: normalizeStringList(requiresRaw.bins),
     anyBins: normalizeStringList(requiresRaw.anyBins),
     env: normalizeStringList(requiresRaw.env),
+    anyEnv: normalizeStringList(requiresRaw.anyEnv),
     config: normalizeStringList(requiresRaw.config),
   };
 }

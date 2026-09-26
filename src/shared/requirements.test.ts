@@ -44,6 +44,21 @@ describe("requirements evaluation", () => {
     ).toStrictEqual([]);
   });
 
+  it("requires at least one any-env to be satisfied", () => {
+    const metadata = { requires: { anyEnv: ["A_KEY", "B_KEY"] } };
+
+    const missing = evaluate({ metadata });
+    expect(missing.missing.anyEnv).toEqual(["A_KEY", "B_KEY"]);
+    expect(missing.eligible).toBe(false);
+
+    const satisfied = evaluate({
+      metadata,
+      isEnvSatisfied: (envName) => envName === "B_KEY",
+    });
+    expect(satisfied.missing.anyEnv).toStrictEqual([]);
+    expect(satisfied.eligible).toBe(true);
+  });
+
   it("normalizes macos and accepts local or remote platforms", () => {
     expect(evaluate({ metadata: { os: ["linux"] } }).missing.os).toStrictEqual([]);
     expect(
@@ -104,6 +119,7 @@ describe("requirements evaluation", () => {
       bins: ["node"],
       anyBins: ["bun", "deno"],
       env: ["OPENAI_API_KEY"],
+      anyEnv: [],
       config: ["browser.enabled", "gateway.enabled"],
       os: ["darwin"],
     });
@@ -111,6 +127,7 @@ describe("requirements evaluation", () => {
       bins: [],
       anyBins: ["bun", "deno"],
       env: ["OPENAI_API_KEY"],
+      anyEnv: [],
       config: ["browser.enabled"],
       os: ["darwin"],
     });
@@ -135,7 +152,14 @@ describe("requirements evaluation", () => {
       },
     });
 
-    expect(result.missing).toEqual({ bins: [], anyBins: [], env: [], config: [], os: [] });
+    expect(result.missing).toEqual({
+      bins: [],
+      anyBins: [],
+      env: [],
+      anyEnv: [],
+      config: [],
+      os: [],
+    });
     expect(result.configChecks).toEqual([{ path: "browser.enabled", satisfied: false }]);
     expect(result.eligible).toBe(true);
   });
@@ -153,6 +177,7 @@ describe("requirements evaluation", () => {
       bins: [],
       anyBins: [],
       env: [],
+      anyEnv: [],
       config: [],
       os: ["darwin"],
     });
@@ -166,6 +191,7 @@ describe("requirements evaluation", () => {
       bins: [],
       anyBins: [],
       env: [],
+      anyEnv: [],
       config: [],
       os: [],
     });
@@ -173,6 +199,7 @@ describe("requirements evaluation", () => {
       bins: [],
       anyBins: [],
       env: [],
+      anyEnv: [],
       config: [],
       os: [],
     });

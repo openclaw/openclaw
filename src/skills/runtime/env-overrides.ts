@@ -130,9 +130,10 @@ function applySkillConfigEnvOverrides(params: {
   config?: OpenClawConfig;
   primaryEnv?: string | null;
   requiredEnv?: string[] | null;
+  anyEnv?: string[] | null;
   skillKey: string;
 }) {
-  const { updates, primaryEnv, requiredEnv, skillKey } = params;
+  const { updates, primaryEnv, requiredEnv, anyEnv, skillKey } = params;
   if (isSkillSecretOwnerUnavailable(skillKey)) {
     return;
   }
@@ -146,6 +147,12 @@ function applySkillConfigEnvOverrides(params: {
     allowedSensitiveKeys.add(normalizedPrimaryEnv);
   }
   for (const envName of requiredEnv ?? []) {
+    const trimmedEnv = envName.trim();
+    if (trimmedEnv) {
+      allowedSensitiveKeys.add(trimmedEnv);
+    }
+  }
+  for (const envName of anyEnv ?? []) {
     const trimmedEnv = envName.trim();
     if (trimmedEnv) {
       allowedSensitiveKeys.add(trimmedEnv);
@@ -221,6 +228,7 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env,
       skillKey: resolveSkillKey(entry.skill, entry),
+      anyEnv: entry.metadata?.requires?.anyEnv,
     });
   }
 
@@ -242,6 +250,7 @@ export function applySkillEnvOverridesFromSnapshot(params: {
       primaryEnv: skill.primaryEnv,
       requiredEnv: skill.requiredEnv,
       skillKey: skill.skillKey ?? skill.name,
+      anyEnv: skill.anyEnv,
     });
   }
 

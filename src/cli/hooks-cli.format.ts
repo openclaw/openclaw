@@ -69,6 +69,7 @@ const HOOK_REQUIREMENT_GROUPS = [
   ["bins", "Binaries"],
   ["anyBins", "Any binary"],
   ["env", "Environment"],
+  ["anyEnv", "Any environment"],
   ["config", "Config"],
   ["os", "OS"],
 ] as const;
@@ -78,8 +79,8 @@ function formatHookMissingRequirements(hook: HookStatusEntry, itemLimit?: number
     itemLimit === undefined
       ? entries.join(", ")
       : summarizeStringEntries({ entries, limit: itemLimit });
-  return HOOK_REQUIREMENT_GROUPS.filter(([key]) => hook.missing[key].length > 0).map(
-    ([key]) => `${key}: ${formatEntries(hook.missing[key])}`,
+  return HOOK_REQUIREMENT_GROUPS.filter(([key]) => (hook.missing[key] ?? []).length > 0).map(
+    ([key]) => `${key}: ${formatEntries(hook.missing[key] ?? [])}`,
   );
 }
 
@@ -228,7 +229,7 @@ export function formatHookInfo(
   }
 
   const requirementGroups = HOOK_REQUIREMENT_GROUPS.filter(
-    ([key]) => hook.requirements[key].length > 0,
+    ([key]) => (hook.requirements[key] ?? []).length > 0,
   );
 
   if (requirementGroups.length > 0) {
@@ -237,11 +238,11 @@ export function formatHookInfo(
     const formatStatus = (value: string, satisfied: boolean) =>
       satisfied ? theme.success(`✓ ${value}`) : theme.error(`✗ ${value}`);
     for (const [key, label] of requirementGroups) {
-      const required = hook.requirements[key];
-      const missing = hook.missing[key];
+      const required = hook.requirements[key] ?? [];
+      const missing = hook.missing[key] ?? [];
       let requirementStatus: string;
-      if (key === "anyBins" || key === "os") {
-        const prefix = key === "anyBins" ? "any of: " : "";
+      if (key === "anyBins" || key === "anyEnv" || key === "os") {
+        const prefix = key === "anyBins" || key === "anyEnv" ? "any of: " : "";
         requirementStatus = formatStatus(`(${prefix}${required.join(", ")})`, missing.length === 0);
       } else if (key === "config") {
         requirementStatus = hook.configChecks

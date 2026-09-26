@@ -3,6 +3,7 @@ export type Requirements = {
   bins: string[];
   anyBins: string[];
   env: string[];
+  anyEnv: string[];
   config: string[];
   os: string[];
 };
@@ -13,7 +14,7 @@ export type RequirementConfigCheck = {
 };
 
 export type RequirementsMetadata = {
-  requires?: Partial<Pick<Requirements, "bins" | "anyBins" | "env" | "config">>;
+  requires?: Partial<Pick<Requirements, "bins" | "anyBins" | "env" | "anyEnv" | "config">>;
   os?: string[];
 };
 
@@ -52,6 +53,7 @@ export function evaluateRequirementsFromMetadataWithRemote(
     bins: params.metadata?.requires?.bins ?? [],
     anyBins: params.metadata?.requires?.anyBins ?? [],
     env: params.metadata?.requires?.env ?? [],
+    anyEnv: params.metadata?.requires?.anyEnv ?? [],
     config: params.metadata?.requires?.config ?? [],
     os: params.metadata?.os ?? [],
   };
@@ -83,6 +85,11 @@ export function evaluateRequirementsFromMetadataWithRemote(
   }
 
   const missingEnv = required.env.filter((envName) => !params.isEnvSatisfied(envName));
+  const missingAnyEnv =
+    required.anyEnv.length === 0 ||
+    required.anyEnv.some((envName) => params.isEnvSatisfied(envName))
+      ? []
+      : required.anyEnv;
   const configChecks = required.config.map((path) => ({
     path,
     satisfied: params.isConfigSatisfied(path),
@@ -94,6 +101,7 @@ export function evaluateRequirementsFromMetadataWithRemote(
     bins: params.always ? [] : missingBins,
     anyBins: params.always ? [] : missingAnyBins,
     env: params.always ? [] : missingEnv,
+    anyEnv: params.always ? [] : missingAnyEnv,
     config: params.always ? [] : missingConfig,
     os: missingOs,
   };
@@ -104,6 +112,7 @@ export function evaluateRequirementsFromMetadataWithRemote(
       (missing.bins.length === 0 &&
         missing.anyBins.length === 0 &&
         missing.env.length === 0 &&
+        missing.anyEnv.length === 0 &&
         missing.config.length === 0));
 
   return { required, missing, eligible, configChecks };

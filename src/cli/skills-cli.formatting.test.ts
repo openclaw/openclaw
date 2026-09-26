@@ -89,6 +89,7 @@ describe("skills-cli (e2e)", () => {
             bins: [],
             anyBins: [],
             env: [],
+            anyEnv: [],
             config: [],
             os: [],
           },

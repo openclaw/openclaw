@@ -645,6 +645,7 @@ describe("buildWorkspaceSkillStatus", () => {
           bins: ["fakebin"],
           config: [],
           env: [],
+          anyEnv: [],
           os: [mismatchedOs],
         },
         missing: {
@@ -652,6 +653,7 @@ describe("buildWorkspaceSkillStatus", () => {
           bins: [],
           config: [],
           env: [],
+          anyEnv: [],
           os: [mismatchedOs],
         },
         configChecks: [],
@@ -902,6 +904,7 @@ describe("buildWorkspaceSkillStatus", () => {
       bins: [missingBin],
       config: [],
       env: [],
+      anyEnv: [],
       os: [],
     });
     expect(needsBin.install).toStrictEqual([
@@ -920,6 +923,7 @@ describe("buildWorkspaceSkillStatus", () => {
       bins: [],
       config: [],
       env: ["OPENCLAW_TEST_MISSING_SKILL_KEY"],
+      anyEnv: [],
       os: [],
     });
     expectStatusFlags(requireSkillStatus(byName, "prompt-hidden"), {

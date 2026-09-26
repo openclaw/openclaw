@@ -10,6 +10,7 @@ export function computeSkillMissing(skill: SkillStatusEntry): string[] {
       ? [`bin:any of (${skill.missing.anyBins.join(", ")})`]
       : []),
     ...skill.missing.env.map((e) => `env:${e}`),
+    ...(skill.missing.anyEnv?.length ? [`env:any of (${skill.missing.anyEnv.join(", ")})`] : []),
     ...skill.missing.config.map((c) => `config:${c}`),
     ...skill.missing.os.map((o) => `os:${o}`),
   ];

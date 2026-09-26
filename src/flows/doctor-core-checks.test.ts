@@ -76,6 +76,7 @@ function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntr
     requirements: {
       bins: ["openclaw-test-missing-skill-bin"],
       anyBins: [],
+      anyEnv: [],
       env: [],
       config: [],
       os: [],
@@ -83,6 +84,7 @@ function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntr
     missing: {
       bins: ["openclaw-test-missing-skill-bin"],
       anyBins: [],
+      anyEnv: [],
       env: [],
       config: [],
       os: [],

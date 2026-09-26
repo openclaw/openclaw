@@ -191,7 +191,7 @@ describe("unified skill discovery", () => {
     const container = document.createElement("div");
     const skill = createSkill({
       eligible: false,
-      missing: { bins: ["repo-cli"], anyBins: [], env: [], config: [], os: [] },
+      missing: { bins: ["repo-cli"], anyBins: [], anyEnv: [], env: [], config: [], os: [] },
     });
     render(
       renderSkills(
