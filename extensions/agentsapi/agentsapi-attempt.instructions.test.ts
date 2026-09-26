@@ -49,9 +49,8 @@ vi.mock("./agentsapi-tools.js", () => ({
 }));
 
 vi.mock("./agentsapi-files.js", async () => {
-  const files = await vi.importActual<typeof import("./agentsapi-files.js")>(
-    "./agentsapi-files.js",
-  );
+  const files =
+    await vi.importActual<typeof import("./agentsapi-files.js")>("./agentsapi-files.js");
   return {
     ...files,
     collectOutputs: async () => ({ toolMediaUrls: [], hostOwnedToolMediaUrls: [] }),
