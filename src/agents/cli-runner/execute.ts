@@ -63,6 +63,7 @@ import {
 } from "./helpers.js";
 import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
+import { publishCliNativeSession } from "./native-session.js";
 import { composeCliPromptContext } from "./prompt-context.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -276,6 +277,7 @@ export async function executePreparedCliRun(
   let forkResumeClaimed = false;
   let forkSuccessorObserved = false;
   let forkSuccessorPersistence: Promise<void> | undefined;
+  const nativeRun = { params, backendId: context.backendResolved.id, nodePlacement, assertCurrent };
   const observeForkSuccessor = (sessionId: string) => {
     if (
       forkSuccessorObserved ||
@@ -286,6 +288,7 @@ export async function executePreparedCliRun(
       return;
     }
     forkSuccessorObserved = true;
+    publishCliNativeSession(nativeRun, sessionId);
     forkSuccessorPersistence = params.persistCliSessionForkSuccessor?.(sessionId);
     void forkSuccessorPersistence?.catch(() => undefined);
   };
@@ -574,6 +577,9 @@ export async function executePreparedCliRun(
         useResume,
         trigger: params.trigger,
       });
+      if (resolvedSessionId && !forkResumeClaimed) {
+        publishCliNativeSession(nativeRun, resolvedSessionId);
+      }
       runOutput = await executeCliProcess({
         context,
         assertCurrent,

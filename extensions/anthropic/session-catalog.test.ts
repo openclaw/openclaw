@@ -16,6 +16,7 @@ import {
   createClaudeSessionNodeInvokePolicies,
   registerClaudeSessionDiscovery,
 } from "./session-catalog-registration.js";
+import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
 import { createClaudeCatalogWatchDriver } from "./session-catalog-watch.test-support.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
@@ -1020,6 +1021,172 @@ describe("Claude session catalog", () => {
       category: "Home Assistant",
     }));
     expect(hosts?.[0]?.sessions).toEqual([]);
+  });
+
+  it.each(["apw", "personal"])(
+    "preserves the native owner when opened from %s, despite a failed catalog fork",
+    async (agentId) => {
+      const home = await createHome();
+      process.env.HOME = home;
+      const threadId = "owned-native-thread";
+      await writeProject({
+        home,
+        entries: [
+          {
+            sessionId: threadId,
+            fullPath: path.join(home, ".claude", "projects", "-workspace", threadId + ".jsonl"),
+            summary: "APW work",
+            projectPath: "/work/apw",
+          },
+        ],
+        transcripts: { [threadId]: [message(threadId, "user", "owned prompt", 1)] },
+      });
+      const config = {
+        agents: { ownership: "explicit", list: [{ id: "apw" }, { id: "personal" }] },
+      } as OpenClawConfig;
+      const createSessionEntry = vi.fn();
+      const provider = captureCatalogProvider({
+        config: { current: () => config },
+        agent: {
+          session: {
+            createSessionEntry,
+            listSessionEntries: ({ agentId: owner }: { agentId: string }) =>
+              owner === "apw"
+                ? [
+                    {
+                      sessionKey: "agent:apw:main",
+                      entry: {
+                        cliSessionBindings: {
+                          "claude-cli": { sessionId: threadId, authProfileId: "apw-seat" },
+                        },
+                      },
+                    },
+                  ]
+                : [
+                    {
+                      sessionKey: "agent:personal:wrong-adoption",
+                      entry: {
+                        pluginOwnerId: "anthropic",
+                        modelSelectionLocked: true,
+                        pluginExtensions: {
+                          anthropic: { sessionCatalog: { sourceThreadId: threadId } },
+                        },
+                        cliSessionBindings: {
+                          "claude-cli": {
+                            sessionId: threadId,
+                            forceReuse: true,
+                            forkNextResume: true,
+                          },
+                        },
+                      },
+                    },
+                  ],
+          },
+        },
+      } as unknown as PluginRuntime);
+      const listed = await provider.list({ agentId });
+      // The catalog keeps a CLI-routed session's thread out (it owns its own
+      // sidebar row). What matters is that no agent sees it as unowned and continuable.
+      expect(listed[0]?.sessions.map((session) => session.threadId)).not.toContain(threadId);
+      const continued = await provider.continueSession!({
+        agentId,
+        hostId: "gateway:local",
+        threadId,
+      });
+      expect(continued.sessionKey).toBe("agent:apw:main");
+      expect(createSessionEntry).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps concurrent explicit-agent catalog forks independent while native ownership stays global", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const threadId = "concurrent-native-source";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId: threadId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", threadId + ".jsonl"),
+          summary: "Shared source",
+          projectPath: "/work/shared",
+        },
+      ],
+      transcripts: { [threadId]: [message(threadId, "user", "source prompt", 1)] },
+    });
+    const config = {
+      agents: { ownership: "explicit", list: [{ id: "apw" }, { id: "personal" }] },
+    } as OpenClawConfig;
+    type StoredRow = { sessionKey: string; entry: Record<string, unknown> };
+    const rows = new Map<string, StoredRow[]>();
+    const createSessionEntry = vi.fn(
+      async (params: { agentId: string; key: string; initialEntry: Record<string, unknown> }) => {
+        const key = "agent:" + params.agentId + ":" + params.key;
+        const entry = {
+          ...params.initialEntry,
+          sessionId: "openclaw-" + params.agentId,
+          updatedAt: 1,
+          cliSessionBindings: { "claude-cli": params.initialEntry.cliSessionBinding },
+        };
+        rows.set(params.agentId, [{ sessionKey: key, entry }]);
+        return { key, agentId: params.agentId, sessionId: entry.sessionId, entry };
+      },
+    );
+    const provider = captureCatalogProvider({
+      config: { current: () => config },
+      agent: {
+        session: {
+          createSessionEntry,
+          listSessionEntries: ({ agentId }: { agentId: string }) => rows.get(agentId) ?? [],
+        },
+      },
+    } as unknown as PluginRuntime);
+    const continueAs = (agentId: string) =>
+      provider.continueSession!({ agentId, hostId: "gateway:local", threadId });
+    const [apw, personal] = await Promise.all([continueAs("apw"), continueAs("personal")]);
+    expect(apw.sessionKey).toMatch(/^agent:apw:/);
+    expect(personal.sessionKey).toMatch(/^agent:personal:/);
+    expect(createSessionEntry).toHaveBeenCalledTimes(2);
+    for (const [agentId, expected] of [
+      ["apw", apw],
+      ["personal", personal],
+    ] as const) {
+      expect((await provider.list({ agentId }))[0]?.sessions[0]?.sessionKey).toBe(
+        expected.sessionKey,
+      );
+      expect((await continueAs(agentId)).sessionKey).toBe(expected.sessionKey);
+    }
+    rows.get("apw")!.push({
+      sessionKey: "agent:apw:main",
+      entry: { cliSessionBindings: { "claude-cli": { sessionId: threadId } } },
+    });
+    const continued = await Promise.all([continueAs("apw"), continueAs("personal")]);
+    expect(continued.map((item) => item.sessionKey)).toEqual(["agent:apw:main", "agent:apw:main"]);
+    expect(createSessionEntry).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects ambiguous native owners instead of choosing by enumeration order", () => {
+    const api = {
+      id: "anthropic",
+      config: {},
+      runtime: {
+        config: { current: () => ({}) },
+        agent: {
+          session: {
+            listSessionEntries: () =>
+              ["a", "b"].map((id) => ({
+                sessionKey: "agent:main:" + id,
+                entry: {
+                  cliSessionBindings: { "claude-cli": { sessionId: "same-native-thread" } },
+                },
+              })),
+          },
+        },
+      },
+    } as unknown as OpenClawPluginApi;
+    expect(() => listBoundClaudeSessions(api)).toThrow(
+      "multiple OpenClaw sessions bind Claude thread",
+    );
   });
 
   it("continues a local Desktop-app row and lists it as continuable", async () => {

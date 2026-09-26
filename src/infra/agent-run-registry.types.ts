@@ -4,6 +4,7 @@ import type {
   AgentRunApprovalClosureReason,
 } from "./agent-run-approval-leases.js";
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
+import type { AgentRunNativeSession } from "./agent-run-native-session.js";
 
 export type AgentRunModel = { provider: string; model: string };
 
@@ -48,6 +49,8 @@ export type AgentRunContext = {
   /** Exact in-process source owner, intentionally absent from serialized authority. */
   assertSourceCurrent?: () => void;
   approvalLeases?: AgentRunApprovalLeases;
+  /** Catalog identity while the first CLI turn has not settled its durable binding. */
+  nativeSession?: AgentRunNativeSession;
 };
 
 export type AgentRunContextOwnership = {
