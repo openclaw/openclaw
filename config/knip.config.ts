@@ -350,6 +350,7 @@ const rootEntries = [
   "src/docker-healthcheck.ts!",
   // Deployed in the worker archive and launched by path, without a static host import.
   "src/worker/worker-deploy-entry.ts!",
+  "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
   "src/worker/worker-deploy-sqlite-store.ts!",
   "src/worker/workspace-rsync-receiver.ts!",
