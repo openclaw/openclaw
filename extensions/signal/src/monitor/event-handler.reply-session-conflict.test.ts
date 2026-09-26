@@ -386,6 +386,7 @@ describe("signal reply session init conflict retry", () => {
       return { ...record, lastAttemptAt };
     };
 
+    const failures: unknown[] = [];
     try {
       const first = await createIntegratedMonitor();
       await first.monitor.receive(event);
@@ -441,26 +442,45 @@ describe("signal reply session init conflict retry", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(16);
       expect(blockedRestart.tracked.tasks).toHaveLength(0);
       await blockedRestart.monitor.stop();
+    } catch (error) {
+      failures.push(error);
     } finally {
       for (const { abort } of monitors) {
-        abort.abort();
+        try {
+          abort.abort();
+        } catch (error) {
+          failures.push(error);
+        }
       }
-      const stopped = await Promise.allSettled(monitors.map(({ monitor }) => monitor.stop()));
-      const settled = await Promise.allSettled(monitors.flatMap(({ tracked }) => tracked.tasks));
-      const failures = [...stopped, ...settled].flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
+      const stopped = await Promise.allSettled(
+        monitors.map(async ({ monitor }) => await monitor.stop()),
       );
-      vi.useRealTimers();
-      try {
-        await closeOpenClawStateDatabaseAsync();
-        closeOpenClawStateDatabaseForTest();
-        await fs.rm(stateDir, { recursive: true, force: true });
-      } catch (error) {
-        failures.push(error);
+      const settled = await Promise.allSettled(monitors.flatMap(({ tracked }) => tracked.tasks));
+      for (const result of [...stopped, ...settled]) {
+        if (result.status === "rejected") {
+          failures.push(result.reason);
+        }
       }
-      if (failures.length > 0) {
-        throw new AggregateError(failures, "Signal ingress cleanup failed");
+      for (const cleanup of [
+        () => vi.useRealTimers(),
+        async () => {
+          await closeOpenClawStateDatabaseAsync();
+          closeOpenClawStateDatabaseForTest();
+          await fs.rm(stateDir, { recursive: true, force: true });
+        },
+      ]) {
+        try {
+          await cleanup();
+        } catch (error) {
+          failures.push(error);
+        }
       }
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Signal ingress test and cleanup failed");
     }
   });
 

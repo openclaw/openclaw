@@ -298,6 +298,7 @@ describe("Microsoft Teams drain claim ownership", () => {
     const priorImplementation = dispatchMock.getMockImplementation();
     dispatchMock.mockRejectedValue(new Error("Microsoft Teams dispatch failed before adoption"));
 
+    const failures: unknown[] = [];
     let stopCurrent: (() => Promise<void>) | undefined;
     const createIntegratedIngress = () => {
       let capturedDrain: (() => Promise<void>) | undefined;
@@ -323,13 +324,18 @@ describe("Microsoft Teams drain claim ownership", () => {
       const monitor = monitorResult.value;
       const drainDebounce = capturedDrain;
       stopCurrent = async () => {
-        try {
-          await monitor.pause();
-          await monitor.waitForIdle();
-          await vi.advanceTimersByTimeAsync(40);
-          await drainDebounce();
-        } finally {
-          await ingress.stop();
+        for (const stop of [
+          () => monitor.pause(),
+          () => monitor.waitForIdle(),
+          () => vi.advanceTimersByTimeAsync(40),
+          () => drainDebounce(),
+          () => ingress.stop(),
+        ]) {
+          try {
+            await stop();
+          } catch (error) {
+            failures.push(error);
+          }
         }
       };
       return { ...ingress, waitForIdle: monitor.waitForIdle, drainDebounce };
@@ -421,33 +427,36 @@ describe("Microsoft Teams drain claim ownership", () => {
       expect(dispatchMock).toHaveBeenCalledTimes(4);
       expect(await queue.listPending({ limit: "all" })).toEqual([beyondAttempt]);
       await blockedRestart.stop();
+    } catch (error) {
+      failures.push(error);
     } finally {
-      const failures: unknown[] = [];
-      try {
-        await stopCurrent?.();
-      } catch (error) {
-        failures.push(error);
-      } finally {
-        vi.useRealTimers();
-        try {
+      for (const cleanup of [
+        () => stopCurrent?.(),
+        () => vi.useRealTimers(),
+        () => {
           dispatchMock.mockReset();
           if (priorImplementation) {
             dispatchMock.mockImplementation(priorImplementation);
           }
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
+        },
+        async () => {
           await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseForTest();
           await fs.rm(stateDir, { recursive: true, force: true });
+        },
+      ]) {
+        try {
+          await cleanup();
         } catch (error) {
           failures.push(error);
         }
       }
-      if (failures.length > 0) {
-        throw new AggregateError(failures, "Microsoft Teams ingress cleanup failed");
-      }
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Microsoft Teams ingress test and cleanup failed");
     }
   });
 });
