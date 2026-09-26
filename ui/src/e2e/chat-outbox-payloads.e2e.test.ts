@@ -153,7 +153,7 @@ suite.define(() => {
         await gateway.setOnline(false);
         await waitForControlUiGatewayReconnecting(page);
         await stage(page, "Mock Gateway: offline binary submission");
-        await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+        await paneFor(page).getByRole("button", { name: "Queue message", exact: true }).click();
         await expect.poll(async () => (await readQueue(page)).length).toBe(1);
         const queued = (await readQueue(page))[0]!;
         expect(queued.attachmentPayload).toBeDefined();
@@ -211,7 +211,7 @@ suite.define(() => {
       await context.setOffline(true);
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
-      await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+      await paneFor(page).getByRole("button", { name: "Queue message", exact: true }).click();
       await expect.poll(async () => (await readQueue(page)).length).toBe(1);
       const queued = (await readQueue(page))[0]!;
       expect(queued.attachmentPayload).toBeDefined();
@@ -301,7 +301,7 @@ suite.define(() => {
         await gateway.setOnline(false);
         await waitForControlUiGatewayReconnecting(page);
         await stage(page, "Mock Gateway: one logical submission");
-        await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+        await paneFor(page).getByRole("button", { name: "Queue message", exact: true }).click();
         await expect.poll(async () => (await readQueue(page)).length).toBe(1);
         const original = (await readQueue(page))[0]!;
         const independent = await context.newPage();
@@ -401,7 +401,7 @@ suite.define(() => {
         await waitForControlUiGatewayReconnecting(page);
         const message = "Mock Gateway: source keeps its pre-adoption bytes";
         await stage(page, message);
-        await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+        await paneFor(page).getByRole("button", { name: "Queue message", exact: true }).click();
         await expect.poll(async () => (await readQueue(page)).length).toBe(1);
         const original = (await readQueue(page))[0];
         assert(
@@ -658,7 +658,7 @@ suite.define(() => {
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
       await stage(page, "Mock Gateway: credential-owned bytes");
-      await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+      await paneFor(page).getByRole("button", { name: "Queue message", exact: true }).click();
       await expect.poll(async () => (await readQueue(page)).length).toBe(1);
       const original = (await readQueue(page))[0]!;
       await gateway.setMethodResponse("connect", {

@@ -385,7 +385,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
               agentId: this.place.agentId,
               agentIdentity: this.context?.agentIdentity,
               disabled:
-                this.submission.submitting || Boolean(this.submission.pendingPlacement.sessionKey),
+                !this.gateway.connected ||
+                this.submission.submitting ||
+                Boolean(this.submission.pendingPlacement.sessionKey),
               onSelect: (agentId) => this.place.selectAgentId(agentId),
               onOpenChange: (open) => {
                 this.agentPickerOpen = open;

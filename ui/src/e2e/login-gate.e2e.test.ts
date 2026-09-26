@@ -115,18 +115,16 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "test reconnect");
 
-      const notice = page.locator('.connection-action-block[role="status"]');
+      const notice = page.locator(".connection-status-banner");
       await notice.waitFor();
-      expect((await notice.textContent())?.trim()).toBe(
-        "Changes to settings are disabled while the Gateway is reconnecting.",
-      );
-      expect(await notice.locator("svg").count()).toBe(1);
+      expect(await notice.textContent()).toContain("Reconnecting to Gateway");
+      expect(await notice.getByRole("button", { name: "Retry now" }).isEnabled()).toBe(true);
       const outlet = page.locator("openclaw-router-outlet");
-      expect(await outlet.getAttribute("inert")).not.toBeNull();
-      expect(await outlet.getAttribute("aria-disabled")).toBe("true");
+      expect(await outlet.getAttribute("inert")).toBeNull();
+      expect(await outlet.getAttribute("aria-disabled")).toBeNull();
       const bounds = await page.evaluate(() => {
         const noticeRect = document
-          .querySelector(".connection-action-block")
+          .querySelector(".connection-status-banner")
           ?.getBoundingClientRect();
         const navRect = document.querySelector(".shell-nav")?.getBoundingClientRect();
         const mainRect = document.querySelector("#control-ui-main")?.getBoundingClientRect();
@@ -186,7 +184,7 @@ suite.define(() => {
         fullPage: true,
       });
 
-      expect(await page.locator(".connection-action-block").count()).toBe(0);
+      await page.locator(".connection-status-banner").waitFor();
       expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
       const outlet = page.locator("openclaw-router-outlet");
       expect(await outlet.getAttribute("inert")).toBeNull();
@@ -226,7 +224,7 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "test reconnect");
 
-      const notice = page.locator('.connection-action-block[role="status"]');
+      const notice = page.locator(".connection-status-banner");
       await notice.waitFor();
       const bounds = await notice.boundingBox();
       expect(bounds?.x).toBe(0);

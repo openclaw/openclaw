@@ -27,8 +27,9 @@ export type CronProps = {
   /** True once a cron.list response has completed (initial load finished). */
   hasLoaded: boolean;
   listError: string | null;
-  /** Canonical gateway capability for every mutation-capable cron control. */
+  /** Operator permission; local drafts remain editable while disconnected. */
   canManage: boolean;
+  connected: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
   jobs: CronJob[];

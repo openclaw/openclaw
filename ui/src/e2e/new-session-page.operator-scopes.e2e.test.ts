@@ -524,7 +524,7 @@ suite.define(() => {
         )
         .toBe("reconnecting");
 
-      const submit = page.getByRole("button", { name: "Start session" });
+      const submit = page.locator(".new-session-page__start-submit");
       await expect.poll(() => submit.isDisabled()).toBe(true);
       await submit.click({ force: true });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);

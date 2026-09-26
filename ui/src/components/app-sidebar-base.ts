@@ -21,7 +21,10 @@ import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-hand
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import {
+  readNewSessionNavigationAccess,
+  type NewSessionTarget,
+} from "../pages/new-session/location.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
 /** Stable custom-element inputs. Behavior is layered in focused sidebar modules. */
@@ -114,11 +117,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   }
 
   readNewSessionAccess(): SessionMethodAccess {
-    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, {
-      method: "sessions.create",
-      params: {},
-      sessionScope: true,
-    });
+    return readNewSessionNavigationAccess(this.context?.gateway.snapshot);
   }
 
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess {

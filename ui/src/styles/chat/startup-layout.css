@@ -1,5 +1,6 @@
 @media (min-width: 1121px) {
   .content--chat:has(.chat-workbench) {
+    --content-inline-padding: 0px;
     padding-left: 0;
     padding-right: 0;
   }

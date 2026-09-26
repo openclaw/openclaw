@@ -15,6 +15,7 @@ export type NewSessionComposerOptions = {
   attachmentReads?: ChatAttachmentReadLifecycle;
   attachments: ChatAttachment[];
   canSubmit: boolean;
+  reconnecting?: boolean;
   getAttachments: () => ChatAttachment[];
   message: string;
   mentions?: readonly HumanMention[];

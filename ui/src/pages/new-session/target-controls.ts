@@ -64,7 +64,7 @@ export function renderNewSessionPlaceControls({
   data,
   gateway,
   place,
-  submitting,
+  submitting: submissionPending,
   pendingPlacement,
   onConnectMachine,
   onNavigate,
@@ -83,6 +83,8 @@ export function renderNewSessionPlaceControls({
   onFocusComposer: () => void;
   requestUpdate: () => void;
 }) {
+  // These controls discover server-backed targets; local composer preferences remain editable.
+  const submitting = submissionPending || !gateway.connected;
   const browser = place.browser;
   const { machineClass, os } = place.cloudSelection;
   const nativeTerminal = catalog.isTarget(data);

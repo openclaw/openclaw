@@ -508,9 +508,10 @@ suite.define(() => {
       const connections = (await gateway.getRequests("connect")).length;
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "synthetic reconnect");
-      const notice = page.locator('.connection-action-block[role="status"]');
+      const notice = page.locator(".connection-status-banner");
       await expect.poll(() => credential.getAttribute("type")).toBe("password");
-      expect(await notice.count()).toBe(0);
+      await notice.waitFor();
+      expect(await notice.getByRole("button", { name: "Retry now" }).isEnabled()).toBe(true);
       for (const input of [gatewayUrl, credential, sessionKey]) {
         expect(await input.isEditable()).toBe(true);
       }

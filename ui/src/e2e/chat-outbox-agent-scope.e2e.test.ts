@@ -139,7 +139,7 @@ suite.define(() => {
       timeoutStage = "fill composer";
       await composer.fill(prompt);
       timeoutStage = "queue message";
-      await page.getByRole("button", { name: "Send message" }).click();
+      await page.getByRole("button", { name: "Queue message" }).click();
       const queue = page.locator(".chat-queue");
       timeoutStage = "wait for queued outbox";
       await queue.getByText("Waiting for reconnect").waitFor({ timeout: 10_000 });

@@ -79,6 +79,7 @@ describe("AppSidebar new session navigation", () => {
     const onOpenPalette = vi.fn();
     const onToggleSidebar = vi.fn();
     sidebar.basePath = "/control";
+    gateway.snapshot.phase = "offline";
     sidebar.connected = false;
     sidebar.onOpenNewSession = onOpenNewSession;
     sidebar.onOpenPalette = onOpenPalette;
@@ -104,6 +105,17 @@ describe("AppSidebar new session navigation", () => {
     brandLink?.click();
     expect(onOpenNewSession).not.toHaveBeenCalled();
 
+    gateway.snapshot.phase = "reconnecting";
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+    const draftLink = sidebar.querySelector<HTMLAnchorElement>(".sidebar-brand__new-thread");
+    expect(draftLink?.getAttribute("href")).toBe("/control/new?agent=research");
+    expect(draftLink?.hasAttribute("aria-disabled")).toBe(false);
+    draftLink?.click();
+    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+    onOpenNewSession.mockClear();
+
+    gateway.snapshot.phase = "connected";
     sidebar.connected = true;
     await sidebar.updateComplete;
     for (const selector of [
@@ -400,9 +412,8 @@ describe("AppSidebar agent chip", () => {
     expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe("Owner");
     expect(card?.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
     const connectionStatus = sidebar.querySelector(".gateway-status");
-    expect(
-      sidebar.querySelector('.sidebar-footer-bar > [role="status"]')?.getAttribute("aria-live"),
-    ).toBe("polite");
+    // The persistent shell region announces connection changes once.
+    expect(sidebar.querySelector('.sidebar-footer-bar > [role="status"]')).toBeNull();
     expect(connectionStatus?.textContent).not.toContain("Offline");
     expect(connectionStatus?.textContent).toContain("Reconnecting…");
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();

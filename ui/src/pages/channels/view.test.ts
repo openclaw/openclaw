@@ -3,6 +3,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelsStatusSnapshot, WhatsAppStatus } from "../../api/types.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
+import { renderChannelConfigSection } from "./view.config.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import {
   channelEnabled,
@@ -547,6 +548,38 @@ function renderWhatsAppConfigForm(
 }
 
 describe("channel config advanced tier", () => {
+  it("keeps offline configuration editable while save and reload are disabled", () => {
+    const props = createProps(null);
+    props.showAdvancedSettings = true;
+    props.config.configSchema = CHANNEL_TIER_SCHEMA;
+    props.config.configForm = { channels: { whatsapp: { timeoutMs: 5000 } } };
+    props.config.configFormDirty = true;
+    props.config.connected = false;
+    props.onConfigPatch = vi.fn();
+    props.onConfigSave = vi.fn();
+    props.onConfigReload = vi.fn();
+    const container = document.createElement("div");
+    render(renderChannelConfigSection({ channelId: "whatsapp", props }), container);
+
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Timeout Ms"]')!;
+    expect(input.disabled).toBe(false);
+    input.value = "6000";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(props.onConfigPatch).toHaveBeenCalledWith(["channels", "whatsapp", "timeoutMs"], 6000);
+    const actions = [...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) =>
+      ["Save", "Reload"].includes(button.textContent?.trim() ?? ""),
+    );
+    expect(actions).toHaveLength(2);
+    expect(actions.every((button) => button.disabled)).toBe(true);
+    actions.forEach((button) => button.click());
+    expect(props.onConfigSave).not.toHaveBeenCalled();
+    expect(props.onConfigReload).not.toHaveBeenCalled();
+
+    props.config.connected = true;
+    render(renderChannelConfigSection({ channelId: "whatsapp", props }), container);
+    expect(actions.every((button) => !button.disabled)).toBe(true);
+  });
+
   it("hides advanced channel settings behind the disclosure by default", () => {
     const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(false);
 

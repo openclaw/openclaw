@@ -503,30 +503,35 @@ export function renderChatAbortAction(
 
 export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
+  const offlineQueue = !props.connected && !props.suggestionComposer && !props.submissionLabel;
   const steersActiveRun = props.followUpMode === "steer";
   const interruptsActiveRun = props.followUpMode === "interrupt";
   const activeRunActionLabel =
     props.submissionLabel ??
-    (props.suggestionComposer
-      ? t("chat.sessionSuggestions.suggest")
-      : !props.canAbort || props.followUpMode === undefined
-        ? t("chat.runControls.send")
-        : steersActiveRun
-          ? t("chat.queue.steer")
-          : interruptsActiveRun
-            ? t("chat.runControls.send")
-            : t("chat.runControls.queue"));
+    (offlineQueue
+      ? t("chat.runControls.queueMessage")
+      : props.suggestionComposer
+        ? t("chat.sessionSuggestions.suggest")
+        : !props.canAbort || props.followUpMode === undefined
+          ? t("chat.runControls.send")
+          : steersActiveRun
+            ? t("chat.queue.steer")
+            : interruptsActiveRun
+              ? t("chat.runControls.send")
+              : t("chat.runControls.queue"));
   const activeRunActionDescription =
     props.submissionLabel ??
-    (props.suggestionComposer
-      ? t("chat.sessionSuggestions.suggestMessage")
-      : !props.canAbort || props.followUpMode === undefined
-        ? t("chat.runControls.sendMessage")
-        : steersActiveRun
-          ? t("chat.followUpModeSteer")
-          : interruptsActiveRun
-            ? t("chat.runControls.sendMessage")
-            : t("chat.runControls.queueMessage"));
+    (offlineQueue
+      ? t("chat.runControls.queueMessage")
+      : props.suggestionComposer
+        ? t("chat.sessionSuggestions.suggestMessage")
+        : !props.canAbort || props.followUpMode === undefined
+          ? t("chat.runControls.sendMessage")
+          : steersActiveRun
+            ? t("chat.followUpModeSteer")
+            : interruptsActiveRun
+              ? t("chat.runControls.sendMessage")
+              : t("chat.runControls.queueMessage"));
   const alternateActionLabel = t(
     props.alternateFollowUpMode === "queue" ? "chat.runControls.queue" : "chat.queue.steer",
   );
@@ -604,14 +609,14 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
       .content=${props.preparingAttachments ? t("chat.composer.preparingAttachments") : (sendStatus ?? activeRunActionTooltip)}
     >
       <button
-        class="chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}"
+        class="chat-send-btn chat-send-btn--send${offlineQueue ? " chat-send-btn--offline-queue" : ""}${props.sending ? " chat-send-btn--sending" : ""}"
         @pointerdown=${props.onPrimaryActionPointerDown}
         @click=${send}
         ?disabled=${!hasSendableContent}
         aria-label=${sendStatus ?? activeRunActionDescription}
         aria-busy=${sendBusy || props.preparingAttachments ? "true" : "false"}
       >
-        ${sendBusy ? html`<span class="btn__spinner" aria-hidden="true"></span>` : icons.arrowUp}
+        ${sendBusy ? html`<span class="btn__spinner" aria-hidden="true"></span>` : offlineQueue ? icons.inbox : icons.arrowUp}
         <span class="agent-chat__control-label">${activeRunActionLabel}</span>
       </button>
     </openclaw-tooltip>

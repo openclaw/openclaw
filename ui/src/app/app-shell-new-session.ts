@@ -1,4 +1,4 @@
-import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import { readNewSessionNavigationAccess } from "../pages/new-session/location.ts";
 import type { ApplicationContext } from "./context.ts";
 
 export interface ShellNewSessionHost extends HTMLElement {
@@ -29,13 +29,7 @@ export function openShellNewSession(
     }
     return false;
   }
-  if (
-    !readSessionMethodAccess(context.gateway.snapshot, {
-      method: "sessions.create",
-      params: {},
-      sessionScope: true,
-    }).allowed
-  ) {
+  if (!readNewSessionNavigationAccess(context.gateway.snapshot).allowed) {
     return false;
   }
   host.openNewSession(context.agentSelection.state.selectedId ?? "");

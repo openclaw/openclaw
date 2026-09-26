@@ -53,12 +53,14 @@ function submitNewSession(options: NewSessionComposerOptions) {
 function renderStartControl(options: NewSessionComposerOptions) {
   const startLabel = options.submitting
     ? t("newSession.starting")
-    : t(options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
+    : options.reconnecting
+      ? t("newSession.waitingToReconnect")
+      : t(options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
   const reasonedBlock = !options.canSubmit && options.submitDisabledReason !== undefined;
   return html` <openclaw-tooltip content=${options.submitDisabledReason ?? startLabel}>
     <button
       type="button"
-      class="chat-send-btn new-session-page__start-submit ${
+      class="chat-send-btn new-session-page__start-submit ${options.reconnecting ? "new-session-page__start-submit--reconnecting" : ""} ${
         reasonedBlock ? "new-session-page__start-submit--blocked" : ""
       }"
       ?disabled=${!options.canSubmit && !reasonedBlock}
@@ -70,10 +72,13 @@ function renderStartControl(options: NewSessionComposerOptions) {
       ${
         options.submitting || options.pendingAttachmentReads > 0
           ? icons.loader
-          : options.nativeTerminal
-            ? icons.squareTerminal
-            : icons.arrowUp
+          : options.reconnecting
+            ? icons.lock
+            : options.nativeTerminal
+              ? icons.squareTerminal
+              : icons.arrowUp
       }
+      ${options.reconnecting ? html`<span>${startLabel}</span>` : nothing}
     </button>
   </openclaw-tooltip>`;
 }

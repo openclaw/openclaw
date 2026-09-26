@@ -1,9 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { resolveGatewayStatus } from "../../lib/gateway-status.ts";
 import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionDictationControl } from "./composer-dictation-control.ts";
@@ -49,6 +52,16 @@ export function renderNewSessionDraftView(options: {
   const preferences = context?.theme.settings;
   const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
   const dictationLocked = dictation.active;
+  const reconnecting = Boolean(
+    context &&
+    resolveGatewayStatus(
+      context.gateway.snapshot,
+      context.overlays.snapshot.controlUiRefreshRequired,
+    ) === "reconnecting" &&
+    !submission.submitting &&
+    !submission.pendingPlacement.sessionKey &&
+    !submission.submissionOutcomeUnknown,
+  );
   return html`
     <div
       class="new-session-page__draft"
@@ -65,12 +78,27 @@ export function renderNewSessionDraftView(options: {
         titlePreparation.setComposing(false);
       }}
     >
+      ${
+        reconnecting
+          ? html`<div class="new-session-page__reconnect-notice">
+              <span aria-hidden="true">${icons.lock}</span>
+              <div>
+                <strong>${t("newSession.reconnectTitle")}</strong>
+                <p>${t("newSession.reconnectDraftHint")}</p>
+                <a href=${pathForRoute("chat", context?.basePath)}
+                  >${t("newSession.readExistingChat")}</a
+                >
+              </div>
+            </div>`
+          : nothing
+      }
       ${renderTargetBar()} ${renderNewSessionDraftErrors(place, submission, isCatalogTarget)}
       ${renderNewSessionDraftComposer({
         agent: place.selectedAgent(),
         agentId: place.agentId,
         attachmentDraft: submission.attachmentDraft,
         canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
+        reconnecting,
         submitDisabledReason: submission.submitDisabledReason(),
         blockedSubmitNotice: submission.blockedSubmitNotice(),
         get dictationActive() {

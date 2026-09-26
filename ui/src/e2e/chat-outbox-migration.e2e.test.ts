@@ -65,7 +65,7 @@ suite.define(() => {
             "Mock Gateway: retained v3 Blob submission",
             [file.name],
           );
-          await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+          await paneFor(page).getByRole("button", { name: "Queue message", exact: true }).click();
           await expect.poll(async () => (await readQueue(page)).length).toBe(1);
           const original = (await readQueue(page))[0]!;
           const reference = original.attachmentPayload;

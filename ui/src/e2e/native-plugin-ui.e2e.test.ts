@@ -824,7 +824,7 @@ suite.define(() => {
           );
           await expect
             .poll(async () => {
-              const banner = await page.locator(".connection-action-block").boundingBox();
+              const banner = await page.locator(".connection-status-banner").boundingBox();
               const controls = await chrome.boundingBox();
               if (!banner || !controls) {
                 throw new Error("The reconnect banner and shell controls must be visible.");

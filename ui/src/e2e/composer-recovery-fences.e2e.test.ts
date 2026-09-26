@@ -247,7 +247,7 @@ suite.define(() => {
             });
             await expect.poll(() => left.locator(".chat-attachment-thumb").count()).toBe(1);
           }
-          await left.getByRole("button", { name: "Send message", exact: true }).click();
+          await left.getByRole("button", { name: "Queue message", exact: true }).click();
           await expect.poll(() => composer.inputValue()).toBe("");
           await expect.poll(() => right.locator(".chat-queue__item").count()).toBe(index + 1);
         }

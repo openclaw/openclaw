@@ -1,3 +1,19 @@
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+
+/** Opening a local draft is not session creation; submission still requires live access. */
+export function readNewSessionNavigationAccess(
+  snapshot: Parameters<typeof readSessionMethodAccess>[0],
+) {
+  const access = readSessionMethodAccess(snapshot, {
+    method: "sessions.create",
+    params: {},
+    sessionScope: true,
+  });
+  return snapshot?.phase === "reconnecting"
+    ? { allowed: true as const, requiredScope: access.requiredScope }
+    : access;
+}
+
 export type NewSessionRouteData = {
   /** The agent the loader resolved; empty until the Gateway can name one. */
   agentId: string;

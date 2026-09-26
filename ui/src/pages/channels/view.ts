@@ -314,7 +314,12 @@ function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
         </span>
       </button>
       <div class="settings-row__control">
-        <button type="button" class="btn btn--sm" @click=${() => props.onStartSetup(key)}>
+        <button
+          type="button"
+          class="btn btn--sm"
+          ?disabled=${!props.channels.connected}
+          @click=${() => props.onStartSetup(key)}
+        >
           ${t("channels.hub.setUp")}
         </button>
       </div>
@@ -327,6 +332,7 @@ function renderBrowseAllRow(props: ChannelsProps) {
     <button
       type="button"
       class="settings-row settings-row--nav channels-item"
+      ?disabled=${!props.channels.connected}
       @click=${() => props.onStartSetup(null)}
     >
       <span

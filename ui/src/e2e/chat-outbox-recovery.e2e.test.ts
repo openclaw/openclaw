@@ -441,7 +441,7 @@ suite.define(() => {
         await gateway.setOnline(false);
         await page.locator(".agent-chat__input--offline").waitFor();
         await composer.fill(`retain destination ${sessionKey}`);
-        await page.getByRole("button", { name: "Send message" }).click();
+        await page.getByRole("button", { name: "Queue message" }).click();
         await page.locator(".chat-queue").getByText("Waiting for reconnect").waitFor();
         expect(
           await page

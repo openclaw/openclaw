@@ -12,7 +12,7 @@ const suite = createControlUiE2eSuite({ name: "Gateway status with native accoun
 async function connectionStatusOverlapsComposer(page: Page): Promise<boolean> {
   return page.evaluate(() => {
     const statusBounds = document
-      .querySelector(".shell-connection-status")!
+      .querySelector(".connection-status-banner")!
       .getBoundingClientRect();
     const composerBounds = document
       .querySelector(".agent-chat__composer-shell")!
@@ -124,11 +124,8 @@ suite.define(() => {
           expect(await page.locator(".sidebar-identity-card").isVisible()).toBe(false);
 
           await gateway.setOnline(false);
-          const connectionStatus = page.locator(".shell-connection-status");
-          await connectionStatus
-            .locator(".gateway-status__label")
-            .getByText("Reconnecting…", { exact: true })
-            .waitFor({ state: "visible" });
+          const connectionStatus = page.locator(".connection-status-banner");
+          await connectionStatus.getByText("Reconnecting to Gateway", { exact: true }).waitFor();
           const socketCount = await gateway.getSocketCount();
           await connectionStatus.getByRole("button", { name: /Retry now/ }).click();
           await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
@@ -159,8 +156,8 @@ suite.define(() => {
         await page.locator(".shell--nav-collapsed").waitFor({ state: "visible" });
         await gateway.setOnline(false);
         await page
-          .locator(".shell-connection-status .gateway-status__label")
-          .getByText("Reconnecting…", { exact: true })
+          .locator(".connection-status-banner")
+          .getByText("Reconnecting to Gateway", { exact: true })
           .waitFor({ state: "visible" });
         await expect.poll(() => connectionStatusOverlapsComposer(page)).toBe(false);
       },
@@ -209,7 +206,7 @@ suite.define(() => {
         await gateway.setOnline(false);
         for (const message of ["First synthetic draft", "Second synthetic draft"]) {
           await composer.fill(message);
-          await page.getByRole("button", { name: "Send message", exact: true }).click();
+          await page.getByRole("button", { name: "Queue message", exact: true }).click();
           await expect.poll(() => composer.inputValue()).toBe("");
         }
         const footer = page.locator(".sidebar-footer-bar");
@@ -225,15 +222,15 @@ suite.define(() => {
         expect(await visibleStatus.textContent()).toBe("Reconnecting…");
         expect(await footer.locator(".sidebar-identity-card").textContent()).toContain("Alex");
         expect(await footer.locator(".sidebar-identity-card [role=status]").count()).toBe(0);
-        const announcement = footer.getByRole("status");
-        expect(await announcement.textContent()).toContain("Reconnecting…");
+        const announcement = page.locator(".shell-connection-announcement");
+        expect(await announcement.textContent()).toContain("Reconnecting to Gateway");
         expect(await announcement.textContent()).not.toContain("in outbox");
         expect(await footer.textContent()).not.toContain("in outbox");
         expect(await page.locator(".chat-queue__item").count()).toBe(2);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
         await page.setViewportSize({ width: 390, height: 844 });
-        const mobileStatus = page.locator(".shell-connection-status");
+        const mobileStatus = page.locator(".connection-status-banner");
         await mobileStatus.waitFor({ state: "visible" });
         await expect.poll(() => connectionStatusOverlapsComposer(page)).toBe(false);
         expect(await mobileStatus.textContent()).not.toContain("in outbox");

@@ -266,7 +266,7 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   private async saveChannelConfig() {
-    if (!this.context) {
+    if (!this.context || this.context.gateway.snapshot.phase !== "connected") {
       return;
     }
     if (await this.context.runtimeConfig.save()) {
@@ -276,7 +276,7 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   private async reloadChannelConfig() {
     const context = this.context;
-    if (!context) {
+    if (!context || context.gateway.snapshot.phase !== "connected") {
       return;
     }
     await context.runtimeConfig.discardDraft({ reloadOnly: true });
@@ -665,7 +665,10 @@ class ChannelsPage extends OpenClawLightDomElement {
             this.selectedChannel = null;
           },
           onStartSetup: (channelId) => {
-            if (canAdmin) {
+            if (
+              context.gateway.snapshot.phase === "connected" &&
+              hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)
+            ) {
               this.wizardHost.startSetup(channelId);
             }
           },

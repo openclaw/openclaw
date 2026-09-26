@@ -2175,14 +2175,14 @@ describe("chat composer workbench", () => {
     expect(container.querySelector<HTMLInputElement>(".agent-chat__file-input")?.disabled).toBe(
       false,
     );
-    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]');
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Queue message"]');
     expect(send?.disabled).toBe(false);
     send?.click();
     expect(onSend).toHaveBeenCalledTimes(1);
 
     const commandContainer = renderChatView({ connected: false, draft: "/status" });
     expect(
-      commandContainer.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')
+      commandContainer.querySelector<HTMLButtonElement>('button[aria-label="Queue message"]')
         ?.disabled,
     ).toBe(true);
   });
@@ -3396,7 +3396,7 @@ describe("chat composer render invalidation", () => {
     render(renderChat(props), container);
 
     const sendButton = () =>
-      container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]');
+      container.querySelector<HTMLButtonElement>('button[aria-label="Queue message"]');
     expect(sendButton()?.disabled).toBe(false);
     onRequestUpdate.mockClear();
 

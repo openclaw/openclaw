@@ -1,5 +1,5 @@
 import { isRouteId } from "../app-routes.ts";
-import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import { readNewSessionNavigationAccess } from "../pages/new-session/location.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -30,14 +30,7 @@ export function createShellViewCallbacks(host: ShellViewCallbackHost) {
         : Promise.resolve(),
     requestOpenNewSession: (agentId: string, target?: NewSessionTarget) => {
       const context = host.context;
-      if (
-        context &&
-        readSessionMethodAccess(context.gateway.snapshot, {
-          method: "sessions.create",
-          params: {},
-          sessionScope: true,
-        }).allowed
-      ) {
+      if (context && readNewSessionNavigationAccess(context.gateway.snapshot).allowed) {
         host.openNewSession(agentId, target);
       }
     },

@@ -139,6 +139,10 @@ class CronPage extends OpenClawLightDomElement {
     this.requestUpdate();
   });
   private get canManageCron(): boolean {
+    return this.context.gateway.snapshot.phase === "connected" && this.canEditCron;
+  }
+
+  private get canEditCron(): boolean {
     return readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin;
   }
 
@@ -382,7 +386,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private patchForm(patch: Partial<CronFormState>) {
-    if (!this.canManageCron) {
+    if (!this.canEditCron) {
       return;
     }
     const current = this.cron.cronForm;
@@ -458,7 +462,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private openCreate(patch?: Partial<CronFormState>) {
-    if (!this.canManageCron) {
+    if (!this.canEditCron) {
       return;
     }
     this.clearHeartbeatScratch();
@@ -477,7 +481,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private cloneJob(job: CronJob) {
-    if (!this.canManageCron) {
+    if (!this.canEditCron) {
       return;
     }
     this.clearHeartbeatScratch();
@@ -622,7 +626,7 @@ class CronPage extends OpenClawLightDomElement {
         this.cron.cronForm.deliveryAccountId,
       ),
     });
-    const canManage = this.canManageCron;
+    const canManage = this.canEditCron;
     return html`
       ${renderSettingsPageHeader({
         title: titleForRoute("cron"),
@@ -655,6 +659,7 @@ class CronPage extends OpenClawLightDomElement {
           hasLoaded: this.cron.cronJobsSnapshotRevision !== null,
           listError: this.cron.cronJobsError,
           canManage,
+          connected: this.context.gateway.snapshot.phase === "connected",
           status: this.cron.cronStatus,
           jobs: this.cron.cronJobs,
           jobsLoadingMore: this.cron.cronJobsLoadingMore,

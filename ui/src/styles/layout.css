@@ -326,7 +326,7 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   --settings-content-block-start-padding: 4px;
 }
 
-.shell--settings .connection-action-block {
+.content > .connection-status-banner {
   margin-inline: calc(0px - var(--settings-content-inline-padding, var(--content-inline-padding)));
   border-inline: 0;
   border-radius: 0;
@@ -4453,23 +4453,24 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 20px;
 }
 
-.shell--settings .content:has(> .connection-action-block) {
+.shell .content:has(> .connection-status-banner) {
   padding-top: 0;
 }
 
-.shell--settings .content:has(> .connection-action-block) > openclaw-router-outlet {
+.shell--settings .content:has(> .connection-status-banner) > openclaw-router-outlet {
   display: block;
   margin-top: 0;
   padding-top: var(--settings-content-block-start-padding);
 }
 
-.connection-action-block {
+.connection-status-banner {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 44px;
-  padding: 8px 14px;
-  border: 1px solid color-mix(in srgb, var(--warn) 12%, transparent);
+  flex: 0 0 auto;
+  min-height: 70px;
+  padding: 12px 20px;
+  border: 1px solid color-mix(in srgb, var(--warn) 24%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--warn) 7%, var(--secondary));
   color: color-mix(in srgb, var(--warn) 72%, var(--text));
@@ -4477,18 +4478,56 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   line-height: 1.35;
 }
 
-.connection-action-block__icon {
+/* Desktop caption buttons share the expanded chat’s top row. */
+html.openclaw-native-desktop
+  .shell:not(.shell--mobile-nav):not(.shell--nav-collapsed)
+  .content--chat
+  > .connection-status-banner {
+  padding-right: calc(var(--openclaw-native-window-controls-width, 0px) + 20px);
+}
+
+.connection-status-banner__icon {
   display: inline-flex;
   flex: 0 0 auto;
 }
 
-.connection-action-block__icon svg {
+.connection-status-banner__icon svg {
   width: 16px;
   height: 16px;
 }
 
-.connection-action-block__text {
+.connection-status-banner__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
+}
+
+.connection-status-banner__text > span {
+  color: var(--muted);
+}
+
+.btn.connection-status-banner__retry {
+  flex: 0 0 auto;
+  min-height: 44px;
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+  background: transparent;
+}
+
+@media (max-width: 560px) {
+  .connection-status-banner {
+    flex-wrap: wrap;
+    padding: 12px 16px;
+  }
+
+  .connection-status-banner__text {
+    flex-basis: calc(100% - 32px);
+  }
+
+  .btn.connection-status-banner__retry {
+    margin-inline-start: 24px;
+  }
 }
 
 .content--chat {
@@ -4498,6 +4537,12 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   overflow: hidden;
   padding-top: 0;
   padding-bottom: 0;
+}
+
+.shell--nav-collapsed:not(.shell--mobile-nav):not(.shell--settings)
+  .content--chat
+  > .connection-status-banner {
+  margin-top: var(--openclaw-native-titlebar-height, 52px);
 }
 
 .content--chat > * + * {
@@ -4524,6 +4569,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   flex-direction: column;
   overflow: hidden;
   padding: 0;
+}
+
+.content--custodian > .connection-status-banner,
+.content--workboard > .connection-status-banner {
+  margin-inline: 0;
 }
 
 .content--custodian > * + * {
@@ -4616,7 +4666,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   --page-toolbar-clearance: 0px;
   --page-toolbar-reserve: 0px;
 
-  &:has(.content-header:not(.content-header--stacked)):not(:has(> .connection-action-block)) {
+  &:has(.content-header:not(.content-header--stacked)):not(:has(> .connection-status-banner)) {
     padding-top: 0;
   }
 
@@ -4719,12 +4769,12 @@ html.openclaw-native-desktop
       var(--content-inline-padding)
   );
 
-  > .connection-action-block {
+  > .connection-status-banner {
     margin-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance));
   }
 
   /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
-  &:not(:has(.content-header:not(.content-header--stacked), > .connection-action-block)) {
+  &:not(:has(.content-header:not(.content-header--stacked), > .connection-status-banner)) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 }

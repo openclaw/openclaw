@@ -1298,3 +1298,17 @@
     max-height: calc(var(--chat-composer-editor-line) + 8px);
   }
 }
+
+/* Offline custody is explicit even where ordinary Send is icon-only. */
+.agent-chat__input .chat-send-btn--offline-queue {
+  width: auto;
+  padding-inline: 10px;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warn) 10%, var(--secondary));
+  color: var(--warn);
+}
+
+.chat-send-btn--offline-queue .agent-chat__control-label {
+  display: inline;
+}

@@ -237,10 +237,13 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         }
       `
     : nothing;
-  const offlineText =
-    props.offline && props.queuedOutboxCount
+  const offlineText = props.offline
+    ? props.queuedOutboxCount
       ? t("chat.composer.offlineQueuedHint", { count: String(props.queuedOutboxCount) })
-      : null;
+      : props.canSend && !props.submitDisabledReason && !props.modelRequiredReason
+        ? t("chat.composer.offlineQueueHint")
+        : null
+    : null;
   const primaryComposerStatus = props.disabledReason
     ? {
         text: props.disabledReason,
@@ -256,16 +259,19 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       : state.dictationError
         ? { text: state.dictationError, tone: "danger" as const, icon: icons.alertTriangle }
         : offlineText
-          ? { text: offlineText, tone: "info" as const, icon: icons.inbox }
+          ? { text: offlineText, tone: "warn" as const, icon: icons.inbox }
           : null;
   const composerStatus =
     showComposerInput && primaryComposerStatus
-      ? html`<div class="agent-chat__composer-status" data-tone=${primaryComposerStatus.tone}>
+      ? html`<div
+          class="agent-chat__composer-status ${primaryComposerStatus.text === offlineText ? "agent-chat__composer-status--offline" : ""}"
+          data-tone=${primaryComposerStatus.tone}
+        >
           <div
             id=${props.disabledReason ? disabledReasonId : nothing}
             class="agent-chat__composer-status-band"
-            role=${primaryComposerStatus.tone === "danger" ? "alert" : "status"}
-            aria-live="polite"
+            role=${primaryComposerStatus.text === offlineText ? nothing : primaryComposerStatus.tone === "danger" ? "alert" : "status"}
+            aria-live=${primaryComposerStatus.text === offlineText ? nothing : "polite"}
             aria-busy=${props.disabledReasonBusy ? "true" : "false"}
           >
             <span class="agent-chat__composer-status-icon" aria-hidden="true"

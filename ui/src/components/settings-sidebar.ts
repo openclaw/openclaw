@@ -315,6 +315,7 @@ function renderSettingsConnectionStatus(props: SettingsSidebarProps) {
   return props.connectionStatus !== null
     ? renderGatewayStatus({
         kind: props.connectionStatus,
+        announce: false,
         lastError: props.lastError,
         onRetry: props.onRetryConnect,
       })

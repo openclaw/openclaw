@@ -36,6 +36,11 @@ const enNewSessionSetup = {
     checkingGit: "Checking Git availability…",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     starting: "Starting…",
+    reconnectTitle: "Reconnect to start a new chat",
+    reconnectDraftHint:
+      "You can keep writing. Your draft will stay here until you’re ready to start.",
+    readExistingChat: "Read an existing chat instead →",
+    waitingToReconnect: "Waiting to reconnect",
     createFailed: "Couldn't create the session.",
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
     preferenceSaveUnconfirmed:

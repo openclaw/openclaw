@@ -12,6 +12,39 @@ import {
 } from "./view.test-support.ts";
 
 describe("cron view editor", () => {
+  it("disables offline mutations without disabling draft inputs or back navigation", () => {
+    const onFormChange = vi.fn();
+    const onClosePanel = vi.fn();
+    const onSubmit = vi.fn();
+    const job = createJob("offline-job");
+    const container = renderView({
+      connected: false,
+      editingJob: job,
+      onFormChange,
+      onClosePanel,
+      onSubmit,
+    });
+    expect(getElement(container, ".cron-editor", HTMLFieldSetElement).disabled).toBe(false);
+    const name = getElement(container, "#cron-name", HTMLInputElement);
+    name.value = "Offline draft";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onFormChange).toHaveBeenCalledWith({ name: "Offline draft" });
+    for (const selector of ['[data-test-id="cron-submit"]', '[data-test-id="cron-run-now"]']) {
+      const button = getElement(container, selector, HTMLButtonElement);
+      expect(button.disabled).toBe(true);
+      button.click();
+    }
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('wa-dropdown-item[value="remove"]')?.hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      container.querySelector('wa-dropdown-item[value="clone"]')?.hasAttribute("disabled"),
+    ).toBe(false);
+    getElement(container, '[data-test-id="cron-back"]', HTMLButtonElement).click();
+    expect(onClosePanel).toHaveBeenCalledOnce();
+  });
+
   it("renders the create view with prompt, general, and schedule cards", () => {
     const onSubmit = vi.fn();
     const onClosePanel = vi.fn();

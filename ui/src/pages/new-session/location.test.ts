@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { newSessionLocationFromSearch, newSessionSearch } from "./location.ts";
+import {
+  newSessionLocationFromSearch,
+  newSessionSearch,
+  readNewSessionNavigationAccess,
+} from "./location.ts";
 
 describe("new-session location", () => {
+  it("allows a local draft during reconnect without authorizing creation", () => {
+    expect(
+      readNewSessionNavigationAccess({ phase: "reconnecting", hello: null, client: null }).allowed,
+    ).toBe(true);
+    expect(
+      readNewSessionNavigationAccess({ phase: "offline", hello: null, client: null }).allowed,
+    ).toBe(false);
+    expect(
+      readNewSessionNavigationAccess({ phase: "reload-required", hello: null, client: null })
+        .allowed,
+    ).toBe(false);
+  });
   it("round-trips a catalog creation target", () => {
     const search = newSessionSearch("main/agent", {
       catalogId: "claude",

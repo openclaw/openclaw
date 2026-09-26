@@ -256,7 +256,7 @@ describe("renderChatComposer controls", () => {
     },
   );
 
-  it("keeps offline composing quiet until the conversation has queued messages", () => {
+  it("explains offline queue delivery without duplicating the shell announcement", () => {
     const { container } = renderComposer({
       offline: true,
       queuedOutboxCount: 3,
@@ -265,19 +265,21 @@ describe("renderChatComposer controls", () => {
 
     expect(container.querySelector(".agent-chat__input--offline")).not.toBeNull();
     expect(container.querySelector(".agent-chat__composer-status-band")?.textContent?.trim()).toBe(
-      "3 in this conversation’s outbox.",
+      "3 in this conversation’s outbox. Queued messages send automatically when reconnected.",
     );
     expect(container.querySelector(".agent-chat__composer-status")?.getAttribute("data-tone")).toBe(
-      "info",
+      "warn",
     );
     expect(container.querySelector(".agent-chat__composer-status-band")?.getAttribute("role")).toBe(
-      "status",
+      null,
     );
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
     expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
 
     const empty = renderComposer({ offline: true, queuedOutboxCount: 0 });
-    expect(empty.container.querySelector(".agent-chat__composer-status-band")).toBeNull();
+    expect(
+      empty.container.querySelector(".agent-chat__composer-status-band")?.textContent,
+    ).toContain("Keep drafting. Queued messages send automatically when reconnected.");
     expect(empty.container.querySelector(".chat-queue")).toBeNull();
     expect(empty.container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
 

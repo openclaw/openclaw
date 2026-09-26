@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
-import { renderGatewayStatus } from "../components/gateway-status.ts";
+import { renderGatewayReconnectBanner, renderGatewayStatus } from "../components/gateway-status.ts";
 import { icons } from "../components/icons.ts";
 import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { renderNewSessionLink } from "../components/new-session-link.ts";
@@ -15,9 +15,9 @@ import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
-import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId, resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import { readNewSessionNavigationAccess } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -126,18 +126,9 @@ export function renderApplicationShell(host: ShellViewHost) {
     canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
   const activeRoute = host.routeState.routeId ?? "chat";
   const sessionRoute = isSessionRouteId(activeRoute);
-  // Session routes have an offline outbox, New Session keeps a local draft, and
-  // Appearance persists local preference intent for replay. Connection settings
-  // must remain usable to replace an unreachable Gateway. Their server actions
-  // are independently gated; other pages cannot submit useful disconnected work.
+  // Pages own Gateway-dependent actions, not access to cached content or drafts.
   const reloadRequired = gatewaySnapshot.phase === "reload-required";
-  const pageActionsBlocked =
-    !reloadRequired &&
-    !gatewayConnected &&
-    !sessionRoute &&
-    activeRoute !== "new-session" &&
-    activeRoute !== "appearance" &&
-    activeRoute !== "connection";
+  const reconnecting = connectionStatus === "reconnecting";
   // Plugin tabs share one route; the URL picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
@@ -216,11 +207,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const selectedAgentId = routeAgentIsKnown
     ? routeAgentId
     : normalizeAgentId(context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId);
-  const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
-    method: "sessions.create",
-    params: {},
-    sessionScope: true,
-  });
+  const newSessionAccess = readNewSessionNavigationAccess(gatewaySnapshot);
   const openNewSession = callbacks.requestOpenNewSession;
   const uiSettings = context.theme.settings;
   // The new-session draft shares the chat layout: full-height pane that owns
@@ -470,24 +457,9 @@ export function renderApplicationShell(host: ShellViewHost) {
         } ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
         @mousedown=${beginNativeWindowDragFromTopInset}
-        ?inert=${(!nativeEmbed && pageActionsBlocked) || (mobileNavLayout && navDrawerOpen)}
+        ?inert=${mobileNavLayout && navDrawerOpen}
       >
-        ${
-          pageActionsBlocked
-            ? html`<div class="connection-action-block" role="status" aria-live="polite">
-                <span class="connection-action-block__icon" aria-hidden="true"
-                  >${icons.globeOff}</span
-                >
-                <span class="connection-action-block__text">
-                  ${t(
-                    settingsTakeover
-                      ? "connection.settingsChangesUnavailable"
-                      : "connection.actionsUnavailable",
-                  )}
-                </span>
-              </div>`
-            : nothing
-        }
+        ${reconnecting ? renderGatewayReconnectBanner(callbacks.retryGateway) : nothing}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           mobileNavLayout,
@@ -501,8 +473,8 @@ export function renderApplicationShell(host: ShellViewHost) {
         })}
         ${nativeEmbed ? navigationContent : nothing}
         <openclaw-router-outlet
-          ?inert=${pageActionsBlocked || reloadRequired}
-          aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
+          ?inert=${reloadRequired}
+          aria-disabled=${reloadRequired ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
           .retentionScope=${presentationScope}
@@ -518,16 +490,26 @@ export function renderApplicationShell(host: ShellViewHost) {
         !nativeEmbed &&
         !onboarding &&
         connectionStatus &&
-        !initialConnection
+        !initialConnection &&
+        !reconnecting
           ? html`<div class="shell-connection-status">
               ${renderGatewayStatus({
                 kind: connectionStatus,
+                announce: false,
                 lastError: gatewaySnapshot.lastError,
                 onRetry: callbacks.retryGateway,
               })}
             </div>`
           : nothing
       }
+      <span
+        class="shell-connection-announcement sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        ${initialConnection ? "" : reconnecting ? t("connection.reconnectingTitle") : connectionStatus ? t(`connection.${connectionStatus}`) : gatewayConnected ? t("nav.gateway.connected") : ""}
+      </span>
       <openclaw-terminal-panel
         ?inert=${navDrawerOpen}
         .client=${gatewayConnected ? gatewaySnapshot.client : null}

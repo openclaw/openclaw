@@ -28,6 +28,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     hasLoaded: true,
     listError: null,
     canManage: true,
+    connected: true,
     jobsLoadingMore: false,
     status: {
       enabled: true,

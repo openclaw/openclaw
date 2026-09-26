@@ -158,12 +158,16 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
       <div class="settings-row__control">
         <button
           class="btn primary"
-          ?disabled=${disabled || !props.config.configFormDirty}
+          ?disabled=${disabled || !props.config.connected || !props.config.configFormDirty}
           @click=${() => props.onConfigSave()}
         >
           ${props.config.configSaving ? t("common.saving") : t("common.save")}
         </button>
-        <button class="btn" ?disabled=${disabled} @click=${() => props.onConfigReload()}>
+        <button
+          class="btn"
+          ?disabled=${disabled || !props.config.connected}
+          @click=${() => props.onConfigReload()}
+        >
           ${t("common.reload")}
         </button>
       </div>

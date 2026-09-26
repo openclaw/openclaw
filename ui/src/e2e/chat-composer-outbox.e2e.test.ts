@@ -20,10 +20,14 @@ suite.define(() => {
 
       const statusBand = page.locator(".agent-chat__composer-status-band");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
-      expect(await statusBand.count()).toBe(0);
+      expect(await statusBand.textContent()).toContain(
+        "Queued messages send automatically when reconnected.",
+      );
       await composer.fill(prompt);
-      expect(await statusBand.count()).toBe(0);
-      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      expect(await statusBand.textContent()).toContain(
+        "Queued messages send automatically when reconnected.",
+      );
+      await page.getByRole("button", { name: "Queue message", exact: true }).click();
       const queue = page.locator(".chat-queue__item");
       await queue.getByText(prompt, { exact: true }).waitFor();
       expect(await queue.count()).toBe(1);

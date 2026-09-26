@@ -144,6 +144,10 @@
   white-space: nowrap;
 }
 
+.agent-chat__composer-status--offline .agent-chat__composer-status-band {
+  white-space: normal;
+}
+
 .agent-chat__composer-status-icon {
   display: inline-flex;
   flex: 0 0 auto;

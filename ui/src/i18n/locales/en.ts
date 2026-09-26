@@ -2759,6 +2759,8 @@ export const en: TranslationMap & {
     "reload-required": "Refresh required",
     offline: "Disconnected",
     reconnecting: "Reconnecting…",
+    reconnectingTitle: "Reconnecting to Gateway",
+    reconnectingDetail: "Live updates are unavailable. We’ll reconnect automatically.",
     interruptedRetrying:
       "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket {code})",
     interrupted:
@@ -2768,8 +2770,6 @@ export const en: TranslationMap & {
     suspended: "Suspended",
     retryNow: "Retry now",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
-    settingsChangesUnavailable:
-      "Changes to settings are disabled while the Gateway is reconnecting.",
     sessionMoveRefreshFailed: "The session move was saved, but refreshing the list failed: {error}",
     sessionMoveUncertain:
       "The session move could not be confirmed. Refresh and check its group before retrying. {error}",
@@ -3886,7 +3886,9 @@ export const en: TranslationMap & {
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
       placeholderWithAttachments: "Add a message or paste more images...",
-      offlineQueuedHint: "{count} in this conversation’s outbox.",
+      offlineQueuedHint:
+        "{count} in this conversation’s outbox. Queued messages send automatically when reconnected.",
+      offlineQueueHint: "Keep drafting. Queued messages send automatically when reconnected.",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",
       sendingMessage: "Sending message...",

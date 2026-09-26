@@ -117,6 +117,40 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("keeps offline drafts and browsing available while remote mutations are disabled", async () => {
+    const request = vi.fn(async () => ({}));
+    const gateway = gatewayWithSnapshot({ request } as unknown as GatewayBrowserClient, false);
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(gateway);
+    const active = worktree();
+    const removed = { ...worktree("restorable"), removedAt: 2 };
+    page.records = [active, removed];
+    page.createOpen = true;
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+    await page.updateComplete;
+
+    expect(page.textContent).toContain(active.name);
+    expect(page.querySelector(".callout.info")).toBeNull();
+    const name = page.querySelector<HTMLInputElement>('input[aria-label="Name"]')!;
+    expect(name.disabled).toBe(false);
+    name.value = "offline-draft";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(page.createName).toBe("offline-draft");
+    const actions = [...page.querySelectorAll<HTMLButtonElement>("button")].filter((button) =>
+      ["Create", "Delete", "Restore", "Clean up now"].includes(button.textContent?.trim() ?? ""),
+    );
+    expect(actions).toHaveLength(4);
+    expect(actions.every((button) => button.disabled)).toBe(true);
+    await page.createWorktree();
+    await page.removeWorktree(active);
+    await page.restore(removed);
+    await page.gc();
+    page.loadCreateBranches();
+    expect(request).not.toHaveBeenCalled();
+    expect(showConfirmDialog).not.toHaveBeenCalled();
+  });
+
   it("keeps read-only viewers in browsing mode without branch or mutation RPCs", async () => {
     const record = worktree();
     const request = vi.fn(async (method: string) =>

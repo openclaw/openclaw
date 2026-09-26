@@ -640,7 +640,7 @@ function renderJobRow(job: CronJob, props: CronProps) {
                   data-test-id=${`cron-row-run-${job.id}`}
                   title=${t("cron.actions.runNowJob", { name: displayName })}
                   aria-label=${t("cron.actions.runNowJob", { name: displayName })}
-                  ?disabled=${props.busy}
+                  ?disabled=${props.busy || !props.connected}
                   @click=${() => props.onRun(job, "force")}
                 >
                   ${icon("play")}
@@ -789,7 +789,7 @@ function renderJobMenu(props: CronProps, job: CronJob) {
       class="cron-job-menu"
       placement="bottom-end"
       @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-        if (!props.canManage) {
+        if (!props.canManage || (!props.connected && event.detail.item.value !== "clone")) {
           return;
         }
         switch (event.detail.item.value) {
@@ -965,7 +965,7 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
                   type="button"
                   class="btn btn--sm"
                   data-test-id="cron-run-now"
-                  ?disabled=${props.busy}
+                  ?disabled=${props.busy || !props.connected}
                   @click=${() => props.onRun(selectedJob, "force")}
                 >
                   ${icon("play")} ${t("cron.actions.runNow")}
@@ -996,10 +996,10 @@ function renderEnabledSwitch(
     >
       ${renderSettingsToggle({
         checked: job.enabled,
-        disabled: props.busy || !props.canManage,
+        disabled: props.busy || !props.canManage || !props.connected,
         ariaLabel: opts?.compact ? actionLabel : stateLabel,
         onChange: (checked) => {
-          if (props.canManage) {
+          if (props.canManage && props.connected) {
             props.onToggle(job, checked);
           }
         },
@@ -1089,7 +1089,7 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
                 <button
                   class="btn primary"
                   data-test-id="cron-submit"
-                  ?disabled=${props.busy || !props.canSubmit}
+                  ?disabled=${props.busy || !props.connected || !props.canSubmit}
                   @click=${props.onSubmit}
                 >
                   ${
@@ -1106,7 +1106,7 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
                         <button
                           class="btn"
                           data-test-id="cron-submit-run"
-                          ?disabled=${props.busy || !props.canSubmit}
+                          ?disabled=${props.busy || !props.connected || !props.canSubmit}
                           @click=${props.onSubmitRunNow}
                         >
                           ${t("cron.form.createAndRun")}
@@ -1143,7 +1143,7 @@ function renderMenuItem(
       class=${options?.danger ? "cron-job-menu__item danger" : "cron-job-menu__item"}
       value=${value}
       variant=${options?.danger ? "danger" : "default"}
-      ?disabled=${props.busy || !props.canManage}
+      ?disabled=${props.busy || !props.canManage || (!props.connected && value !== "clone")}
     >
       ${label}
     </wa-dropdown-item>

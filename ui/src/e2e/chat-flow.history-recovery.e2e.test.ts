@@ -759,7 +759,7 @@ suite.define(() => {
       await page.locator(".chat-attachment-file__name", { hasText: attachmentName }).waitFor({
         timeout: 10_000,
       });
-      const send = page.getByRole("button", { name: "Send message" });
+      const send = page.getByRole("button", { name: "Queue message" });
       const sendEnabled = await send.isEnabled();
       expect(sendEnabled).toBe(true);
       await send.click();

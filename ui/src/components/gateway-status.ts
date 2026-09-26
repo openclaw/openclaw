@@ -4,6 +4,20 @@ import { redactLoginFailureError } from "../lib/connection-hints.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
 import { icons } from "./icons.ts";
 
+/** The shell owns connection announcements for this shared presentation. */
+export function renderGatewayReconnectBanner(onRetry: () => void) {
+  return html`<div class="connection-status-banner">
+    <span class="connection-status-banner__icon" aria-hidden="true">${icons.globeOff}</span>
+    <div class="connection-status-banner__text">
+      <strong>${t("connection.reconnectingTitle")}</strong>
+      <span>${t("connection.reconnectingDetail")}</span>
+    </div>
+    <button type="button" class="btn connection-status-banner__retry" @click=${onRetry}>
+      ${icons.refresh} ${t("connection.retryNow")}
+    </button>
+  </div>`;
+}
+
 export function canRetryGatewayStatus(kind: GatewayStatus | null): boolean {
   return kind === "reconnecting" || kind === "offline";
 }

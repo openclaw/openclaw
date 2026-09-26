@@ -162,13 +162,12 @@ describe("AppSidebar gateway footer subtitle", () => {
     expect(footer?.querySelectorAll(".gateway-status__label")).toHaveLength(1);
     expect(footer?.querySelector(".gateway-status__label")?.textContent).toBe(label);
     expect(footer?.querySelector("button [role=status]")).toBeNull();
-    expect(footer?.querySelector("[role=status]")?.textContent).toContain(label);
-    expect(footer?.querySelector("[role=status]")?.textContent).not.toContain("in outbox");
+    expect(footer?.querySelector("[role=status]")).toBeNull();
+    expect(footer?.textContent).not.toContain("in outbox");
     expect(footer?.textContent).not.toContain("Offline");
     expect(footer?.querySelector(".gateway-status__outbox")).toBeNull();
     expect(footer?.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Owner");
     expect(footer?.querySelector(".sidebar-identity-card__gateway")).toBeNull();
-    expect(footer?.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
     expect(footer?.querySelector("button button")).toBeNull();
   });
 

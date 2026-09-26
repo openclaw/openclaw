@@ -154,7 +154,7 @@ suite.define(() => {
         await gateway.setOnline(true);
         await composer.fill("An ordinary queued follow-up stays in chat.");
         await gateway.setOnline(false);
-        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        await page.getByRole("button", { name: "Queue message", exact: true }).click();
         await page.locator(".chat-queue__item").waitFor();
         await page.locator(".sidebar-footer-bar .gateway-status--reconnecting").waitFor();
         expect(await page.locator(".sidebar-issues-button").count()).toBe(0);

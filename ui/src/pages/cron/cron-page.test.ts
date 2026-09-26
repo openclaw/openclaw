@@ -47,6 +47,27 @@ describe("CronPage header", () => {
 });
 
 describe("CronPage editor state sync", () => {
+  it("rejects a stale run control when the live snapshot disconnects before repaint", async () => {
+    const job = createCronViewJob("offline-admission");
+    const fallback = createRequest();
+    const request = vi.fn(async (method: string) =>
+      method === "cron.list" ? cronListResponse([job]) : fallback(method),
+    );
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+    await waitForCronPage(() =>
+      expect(page.querySelector('[data-test-id="cron-row-run-offline-admission"]')).not.toBeNull(),
+    );
+    const run = page.querySelector<HTMLButtonElement>(
+      '[data-test-id="cron-row-run-offline-admission"]',
+    )!;
+    expect(run.disabled).toBe(false);
+    // The rendered control and CronState still reflect the last connected frame.
+    gateway.snapshot.phase = "offline";
+    run.click();
+    expect(request.mock.calls.some(([method]) => method === "cron.run")).toBe(false);
+  });
+
   it("does not treat an accepted edit as completion of a newer clone", async () => {
     const job = createCronViewJob("earlier-edit", { name: "Garden reminder" });
     const saved = createDeferred<CronJob>();

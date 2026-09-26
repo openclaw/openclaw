@@ -27,7 +27,10 @@ export class ChannelWizardHost {
 
   constructor(private readonly deps: WizardHostDeps) {
     this.controller = new ChannelWizardController(
-      () => deps.getContext()?.gateway.snapshot.client ?? null,
+      () => {
+        const snapshot = deps.getContext()?.gateway.snapshot;
+        return snapshot?.phase === "connected" ? snapshot.client : null;
+      },
       () => this.handleControllerChange(),
       (value) =>
         deps
@@ -43,9 +46,13 @@ export class ChannelWizardHost {
   }
 
   startSetup(channel: string | null): void {
+    const context = this.deps.getContext();
+    if (context?.gateway.snapshot.phase !== "connected" || !context.gateway.snapshot.client) {
+      return;
+    }
     // Wizard completion resyncs config from disk (discarding local drafts), so
     // refuse to start while the advanced form holds unsaved edits.
-    if (this.deps.getContext()?.runtimeConfig.state.configFormDirty) {
+    if (context.runtimeConfig.state.configFormDirty) {
       this.blockedByDirtyConfig = true;
       this.deps.requestUpdate();
       return;

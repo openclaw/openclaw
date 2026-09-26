@@ -1686,3 +1686,47 @@ wa-popover.new-session-page__where-popover::part(body) {
 .new-session-page__fixed-machine span:last-child {
   color: var(--muted);
 }
+
+.new-session-page__reconnect-notice {
+  display: flex;
+  gap: 12px;
+  width: calc(100% - var(--chat-composer-side-inset, 36px));
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin: 0 auto 20px;
+  padding: 18px 20px;
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--warn) 8%, var(--secondary));
+  font-size: var(--control-ui-text-sm);
+}
+
+.new-session-page__reconnect-notice > span {
+  color: var(--warn);
+}
+
+.new-session-page__reconnect-notice svg {
+  width: 18px;
+  height: 18px;
+}
+
+.new-session-page__reconnect-notice a {
+  color: var(--text);
+}
+
+.new-session-page__reconnect-notice p {
+  margin: 6px 0 10px;
+  color: var(--muted);
+}
+
+.agent-chat__input--mobile-toolbar .new-session-page__start-submit--reconnecting {
+  width: auto;
+  gap: 6px;
+  padding-inline: 10px;
+  border-radius: var(--radius-md);
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
+  background: var(--secondary);
+  color: var(--muted);
+  box-shadow: none;
+  opacity: 1;
+}

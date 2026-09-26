@@ -131,7 +131,12 @@ class WorktreesPage extends OpenClawLightDomElement {
   }
 
   private get canWrite(): boolean {
-    return readGatewayOperatorAccess(this.context.gateway.snapshot).canWrite;
+    const snapshot = this.context.gateway.snapshot;
+    return snapshot.phase === "connected" && readGatewayOperatorAccess(snapshot).canWrite;
+  }
+
+  private get canMutate(): boolean {
+    return this.context.gateway.snapshot.phase === "connected" && this.canAdmin;
   }
 
   private async load(options: { preserveError?: boolean } = {}) {
@@ -171,7 +176,7 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private async removeWorktree(record: WorktreeRecord) {
     const scope = this.gateway.capture();
-    if (!scope || !this.canAdmin || this.operationPending) {
+    if (!scope || !this.canMutate || this.operationPending) {
       return;
     }
     if (
@@ -181,7 +186,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         danger: true,
       })) ||
       !this.gateway.isCurrent(scope) ||
-      !this.canAdmin ||
+      !this.canMutate ||
       this.operationPending
     ) {
       return;
@@ -202,7 +207,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         confirmLabel: t("common.delete"),
         danger: true,
       });
-      if (!this.gateway.isCurrent(scope) || !this.canAdmin) {
+      if (!this.gateway.isCurrent(scope) || !this.canMutate) {
         return;
       }
       if (!force) {
@@ -221,7 +226,7 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private async restore(record: WorktreeRecord) {
     const scope = this.gateway.capture();
-    if (!scope || !this.canAdmin || this.operationPending) {
+    if (!scope || !this.canMutate || this.operationPending) {
       return;
     }
     this.busyId = record.id;
@@ -232,7 +237,7 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private async gc() {
     const scope = this.gateway.capture();
-    if (!scope || !this.canAdmin || this.operationPending) {
+    if (!scope || !this.canMutate || this.operationPending) {
       return;
     }
     this.gcLoading = true;
@@ -266,7 +271,7 @@ class WorktreesPage extends OpenClawLightDomElement {
   private async createWorktree() {
     const scope = this.gateway.capture();
     const repoRoot = this.createRepoRoot.trim();
-    if (!scope || !this.canAdmin || !repoRoot || this.operationPending) {
+    if (!scope || !this.canMutate || !repoRoot || this.operationPending) {
       return;
     }
     this.creating = true;
@@ -376,7 +381,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         control: html`
           <button
             class="btn btn--sm"
-            ?disabled=${this.operationPending || !this.createRepoRoot.trim()}
+            ?disabled=${!this.canMutate || this.operationPending || !this.createRepoRoot.trim()}
             @click=${() => void this.createWorktree()}
           >
             ${this.creating ? t("common.loading") : t("common.create")}
@@ -402,7 +407,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         <button
           class=${record.removedAt ? "btn btn--sm" : "btn btn--sm danger"}
           title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
-          ?disabled=${!this.canAdmin || this.operationPending}
+          ?disabled=${!this.canMutate || this.operationPending}
           @click=${() =>
             void (record.removedAt ? this.restore(record) : this.removeWorktree(record))}
         >
@@ -426,7 +431,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       <button
         class="btn"
         title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
-        ?disabled=${!this.canAdmin || this.operationPending}
+        ?disabled=${!this.canMutate || this.operationPending}
         @click=${() => void this.gc()}
       >
         ${this.loading ? t("common.loading") : t("worktrees.cleanNow")}

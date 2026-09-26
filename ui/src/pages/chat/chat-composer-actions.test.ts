@@ -379,7 +379,7 @@ describe("renderChatComposer controls", () => {
   it("queues ordinary drafts offline but disables live voice", () => {
     const onSend = vi.fn();
     let view = renderComposer({ connected: false, draft: "queue this", onSend });
-    const send = button(view.container, t("chat.runControls.sendMessage"));
+    const send = button(view.container, t("chat.runControls.queueMessage"));
     expect(send.disabled).toBe(false);
     send.click();
     expect(onSend).toHaveBeenCalledOnce();
@@ -714,7 +714,7 @@ describe("renderChatComposer controls", () => {
           onAbort: vi.fn(),
           sendShortcut: "enter" as const,
         },
-        tooltip: t("chat.runControls.queue"),
+        tooltip: t("chat.runControls.queueMessage"),
       },
       {
         overrides: {

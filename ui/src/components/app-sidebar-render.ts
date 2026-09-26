@@ -491,7 +491,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
       ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
       : buildSubtitle;
   const accessibleDetail = identityDetail;
-  const announcement = statusLabel ?? (host.connected ? t("nav.gateway.connected") : "");
   return html`
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
       <button
@@ -526,9 +525,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
           }
         </span>
       </button>
-      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true"
-        >${announcement}</span
-      >
       <span class="sidebar-footer-actions">
         ${
           isHomePanelAvailable(host.sessionDataContext?.gateway)
