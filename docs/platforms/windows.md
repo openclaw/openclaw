@@ -154,6 +154,10 @@ through a generated `gateway.vbs` WScript wrapper, so the background Gateway
 does not open a visible console window. If task creation is denied, OpenClaw
 falls back to a per-user Startup-folder login item.
 
+Newly generated launchers preserve literal `!`, `^`, and `%` characters in paths,
+arguments, and environment values. Status and stop continue to read older
+launchers without rewriting them.
+
 If you append output redirection to the `gateway.cmd` launch line, quote the
 entire target, for example `>> "%USERPROFILE%\.openclaw\logs\gateway-stdout.log" 2>&1`.
 Complete trailing redirections are excluded from process ownership checks.

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { quoteCmdScriptArg } from "./cmd-argv.js";
 import {
   GATEWAY_OWNER,
   GATEWAY_PORT,
@@ -833,16 +834,27 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it("falls back to inspected gateway listeners when sync verification misses on Windows", async () => {
+  it("preserves literal CMD escapes when stopping an inspected Windows gateway listener", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const argv = [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\OpenClaw %% ^! A\\dist\\index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ];
+      await fs.writeFile(
+        resolveTaskScriptPath(env),
+        `@echo off\r\n${argv.map((arg) => quoteCmdScriptArg(arg)).join(" ")}\r\n`,
+      );
       pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
       mockWindowsTaskkillSuccess();
       inspectPortUsageMock
         .mockResolvedValueOnce(
           busyPortUsage(6262, {
-            commandLine:
-              '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789',
+            commandLine: argv.map((arg) => `"${arg}"`).join(" "),
           }),
         )
         .mockResolvedValueOnce(freePortUsage());

@@ -269,7 +269,14 @@ export async function auditScheduledTaskDefinition(
         .replace(/(?: --task-supervisor)?(?:\s*<\s*NUL)?$/iu, "");
     const read = async (file: string) =>
       decodeWindowsLauncherScript({ buffer: await fs.readFile(file) });
-    if (!command || normalize(await read(sourcePath)) !== normalize(buildTaskScript(command))) {
+    const installedScript = normalize(await read(sourcePath));
+    if (
+      !command ||
+      ![false, true].some(
+        (delayedExpansion) =>
+          installedScript === normalize(buildTaskScript(command, { delayedExpansion })),
+      )
+    ) {
       unknown("TaskScript", "The generated task script contains unrecognized behavior.");
     }
     const hiddenSelected = Boolean(launcher && samePath(launcher, hiddenPath));

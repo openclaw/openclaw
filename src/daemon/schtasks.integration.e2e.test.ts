@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { nativeSchtasksIntegrationEnabled } from "../../scripts/lib/vitest-worker-declarations.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -22,6 +23,7 @@ import {
   assertInteractiveLeastPrivilegeTask,
   DIAGNOSTIC_TEXT_LIMIT,
   readRelatedProcessDiagnostics,
+  readTaskDefinitionSnapshot,
   readTaskPrincipal,
   readTaskXml,
   resolveDiagnosticReplacements,
@@ -37,6 +39,7 @@ import {
 } from "./schtasks.integration-observation.test-support.js";
 import * as proof from "./schtasks.integration.test-helpers.js";
 import { resolveTaskScriptPath } from "./schtasks.js";
+import { proveReleasedScheduledTask } from "./schtasks.released-launcher.native-test-support.js";
 import {
   buildGatewayTaskSupervisorProgramArguments,
   createGatewayTaskSupervisorProbe,
@@ -78,8 +81,6 @@ type FailureDiagnosticSnapshot = {
     stderr: string | null;
   };
 };
-
-type TaskDefinitionSnapshot = { exists: false; taskXml: null } | { exists: true; taskXml: string };
 
 async function sleep(delayMs = WAIT_INTERVAL_MS): Promise<void> {
   await new Promise((resolve) => {
@@ -124,21 +125,6 @@ async function waitForLoopbackPortRelease(port: number): Promise<void> {
     await sleep();
   }
   throw new Error(`Timed out waiting for Scheduled Task loopback port ${port} to be reusable`);
-}
-
-async function readTaskDefinitionSnapshot(taskName: string): Promise<TaskDefinitionSnapshot> {
-  const exists = probeScheduledTaskExists(taskName);
-  if (exists === null) {
-    throw new Error(`Could not determine whether Scheduled Task ${taskName} exists`);
-  }
-  if (!exists) {
-    return { exists: false, taskXml: null };
-  }
-  const taskXml = await readTaskXml(taskName);
-  if (!taskXml) {
-    throw new Error(`Could not export Scheduled Task XML for ${taskName}`);
-  }
-  return { exists: true, taskXml };
 }
 
 async function clearActivePid(activePidPath: string, pid: number): Promise<void> {
@@ -386,39 +372,6 @@ function expectProbeProcessAlive(pid: number): void {
   expect(isProcessAlive(pid), `Scheduled Task probe ${pid} did not remain alive`).toBe(true);
 }
 
-function resolveTestId(): string {
-  const configured = process.env.CI_WINDOWS_SCHTASKS_TEST_ID?.trim();
-  if (!configured) {
-    return randomUUID().slice(0, 8);
-  }
-  if (!/^[a-z0-9-]{1,48}$/u.test(configured)) {
-    throw new Error("CI_WINDOWS_SCHTASKS_TEST_ID must use lowercase letters, digits, or -");
-  }
-  return configured;
-}
-
-async function createIntegrationRoot(
-  configuredRoot: string | undefined,
-  id: string,
-): Promise<string> {
-  if (!configuredRoot) {
-    return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-schtasks-int-${id}-`));
-  }
-  const rootDir = path.resolve(configuredRoot);
-  try {
-    // Cleanup may only remove a directory this exact run created.
-    await fs.mkdir(rootDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`CI_WINDOWS_SCHTASKS_ROOT must not already exist: ${rootDir}`, {
-        cause: error,
-      });
-    }
-    throw error;
-  }
-  return rootDir;
-}
-
 describe("schtasks Windows integration principal assertion", () => {
   it("accepts omitted default run level when COM reports least privilege", () => {
     expect(() =>
@@ -456,7 +409,7 @@ describe("schtasks Windows integration principal assertion", () => {
     const existingRoot = path.join(os.tmpdir(), `openclaw-schtasks-existing-${randomUUID()}`);
     await fs.mkdir(existingRoot);
     try {
-      await expect(createIntegrationRoot(existingRoot, "existing")).rejects.toThrow(
+      await expect(proof.createIntegrationRoot(existingRoot, "existing")).rejects.toThrow(
         "CI_WINDOWS_SCHTASKS_ROOT must not already exist",
       );
       await expect(fs.access(existingRoot)).resolves.toBeUndefined();
@@ -494,15 +447,28 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
   afterEach(() => nativeLifetime?.cleanup());
 
   async function runNativeLifecycle(
-    moduleUrls: { taskSupervisor: URL; hostedStop: URL; startupFallback: URL },
+    moduleUrls: {
+      taskSupervisor: URL;
+      hostedStop: URL;
+      startupFallback: URL;
+      cli: URL;
+      packageOwner: URL;
+    },
     lifetime: ReturnType<typeof createFixtureLifetime>,
-  ): Promise<void> {
-    const id = resolveTestId();
-    const configuredRoot = process.env.CI_WINDOWS_SCHTASKS_ROOT?.trim();
-    const rootDir = await createIntegrationRoot(configuredRoot, id);
+    signal: AbortSignal,
+    releasedBindingPath?: string,
+  ): Promise<proof.NativeScheduledTaskProof | undefined> {
+    const startedAt = performance.now();
+    const id = proof.resolveTestId();
+    const configuredRoot = releasedBindingPath
+      ? process.env.CI_WINDOWS_SCHTASKS_RELEASED_ROOT?.trim()
+      : process.env.CI_WINDOWS_SCHTASKS_ROOT?.trim();
+    const rootDir = await proof.createIntegrationRoot(configuredRoot, id);
     const accountHome = os.userInfo().homedir;
     const profile = `schtasks-int-${id}`;
-    const stateDir = path.join(accountHome, `.openclaw-${profile}`);
+    const stateDir = releasedBindingPath
+      ? path.join(rootDir, "state")
+      : path.join(accountHome, `.openclaw-${profile}`);
     const activePidPath = path.join(rootDir, "active-pid.txt");
     const eventsPath = path.join(rootDir, "runs.txt");
     const probe = createGatewayTaskSupervisorProbe(rootDir);
@@ -534,19 +500,21 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
     const scriptPath = resolveTaskScriptPath(env);
     const launcherPath = resolveTaskLauncherScriptPath(env, scriptPath);
 
-    await writeGatewayTaskSupervisorProbe({
-      activePidPath,
-      eventsPath,
-      moduleUrls,
-      probe,
-      stateDir,
-    });
+    if (!releasedBindingPath) {
+      await writeGatewayTaskSupervisorProbe({
+        activePidPath,
+        eventsPath,
+        moduleUrls,
+        probe,
+        stateDir,
+      });
+    }
 
     let testFailed = false;
     let testError: unknown;
     const lifecyclePids: number[] = [];
     let installedPrincipal: ScheduledTaskPrincipal | null = null;
-    let pendingProof: { path: string; content: string } | undefined;
+    let pendingProof: proof.NativeScheduledTaskProof | undefined;
     const programArguments = buildGatewayTaskSupervisorProgramArguments({
       activePidPath,
       eventsPath,
@@ -570,12 +538,46 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
       await fs.mkdir(stateDir);
       await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}\n");
       pendingProof = await withEnvAsync(env, async () => {
+        const defaultTaskBefore = await readTaskDefinitionSnapshot("OpenClaw Gateway");
+        if (releasedBindingPath) {
+          const released = await proveReleasedScheduledTask({
+            bindingPath: releasedBindingPath,
+            env,
+            rootDir,
+            stateDir,
+            profile,
+            taskName,
+            scriptPath,
+            launcherPath,
+            eventsPath,
+            activePidPath,
+            gatewayPort,
+            probe,
+            cliUrl: moduleUrls.cli,
+            packageOwnerUrl: moduleUrls.packageOwner,
+            lifetime,
+            waitForLoopbackPortRelease,
+          });
+          await resolveGatewayService().uninstall({ env, stdout });
+          expect((await execSchtasks(["/Query", "/TN", taskName])).code).not.toBe(0);
+          await expect(fs.access(scriptPath)).rejects.toThrow();
+          await expect(fs.access(launcherPath)).rejects.toThrow();
+          expect(await readTaskDefinitionSnapshot("OpenClaw Gateway")).toEqual(defaultTaskBefore);
+          return proof.prepareNativeProof({
+            result: "pass",
+            profile,
+            taskName,
+            ...released,
+            defaultTaskUnchanged: true,
+          });
+        }
         const startupFallbackProof = await proof.proveNativeStartupFallbackLaunch({
           env,
           rootDir,
           runtimeModuleUrl: moduleUrls.startupFallback,
+          lifetime,
+          signal,
         });
-        const defaultTaskBefore = await readTaskDefinitionSnapshot("OpenClaw Gateway");
         const service = resolveGatewayService();
         const readRuntime = () => service.readRuntime(env);
 
@@ -903,66 +905,48 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
           waitForLoopbackPortRelease,
         });
         lifecyclePids.push(startupFallbackControlProof.gatewayPid);
-        const proofPath = process.env.CI_WINDOWS_SCHTASKS_PROOF_PATH?.trim();
-        if (proofPath) {
-          const proofHead = process.env.CI_WINDOWS_SCHTASKS_HEAD?.trim();
-          if (!proofHead || !/^[0-9a-f]{40}$/u.test(proofHead)) {
-            throw new Error(
-              "CI_WINDOWS_SCHTASKS_HEAD must identify the exact 40-character checkout SHA",
-            );
-          }
-          return {
-            path: proofPath,
-            content: `${JSON.stringify(
-              {
-                result: "pass",
-                head: proofHead,
-                profile,
-                taskName,
-                lifecycle: [
-                  "install",
-                  "failed-run",
-                  "recovery-start",
-                  "schtasks-end",
-                  "external-stop-recovery-start",
-                  "powershell-stop-scheduled-task",
-                  "start",
-                  "restart",
-                  "hosted-restart",
-                  "hosted-stop",
-                  "uninstall",
-                  "startup-fallback-control",
-                ],
-                failedRun: {
-                  taskState: installedPrincipal?.taskState,
-                  lastTaskResult: installedPrincipal?.lastTaskResult,
-                  ...failedProcesses,
-                },
-                pids: lifecyclePids,
-                externalStops,
-                gatewayPort,
-                portReleaseRebind: true,
-                startupFallback: false,
-                startupFallbackProof: {
-                  ...startupFallbackProof,
-                  supervisedControl: startupFallbackControlProof,
-                },
-                hostedStop: hostedStopProof,
-                hostedRestart: hostedRestartProof,
-                defaultTaskUnchanged: true,
-                taskXml: {
-                  interactiveToken: true,
-                  leastPrivilege: true,
-                  logonType: installedPrincipal?.logonType,
-                  runLevel: installedPrincipal?.runLevel,
-                },
-              },
-              null,
-              2,
-            )}\n`,
-          };
-        }
-        return undefined;
+        return proof.prepareNativeProof({
+          result: "pass",
+          profile,
+          taskName,
+          lifecycle: [
+            "install",
+            "failed-run",
+            "recovery-start",
+            "schtasks-end",
+            "external-stop-recovery-start",
+            "powershell-stop-scheduled-task",
+            "start",
+            "restart",
+            "hosted-restart",
+            "hosted-stop",
+            "uninstall",
+            "startup-fallback-control",
+          ],
+          failedRun: {
+            taskState: installedPrincipal?.taskState,
+            lastTaskResult: installedPrincipal?.lastTaskResult,
+            ...failedProcesses,
+          },
+          pids: lifecyclePids,
+          externalStops,
+          gatewayPort,
+          portReleaseRebind: true,
+          startupFallback: false,
+          startupFallbackProof: {
+            ...startupFallbackProof,
+            supervisedControl: startupFallbackControlProof,
+          },
+          hostedStop: hostedStopProof,
+          hostedRestart: hostedRestartProof,
+          defaultTaskUnchanged: true,
+          taskXml: {
+            interactiveToken: true,
+            leastPrivilege: true,
+            logonType: installedPrincipal?.logonType,
+            runLevel: installedPrincipal?.runLevel,
+          },
+        });
       });
     } catch (error) {
       testFailed = true;
@@ -993,14 +977,15 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
     if (testFailed) {
       throw testError;
     }
-    // A passing lifecycle alone is not a completed proof: cleanup must also succeed.
-    if (pendingProof) {
-      await fs.mkdir(path.dirname(pendingProof.path), { recursive: true });
-      await fs.writeFile(pendingProof.path, pendingProof.content, "utf8");
-    }
+    return (
+      pendingProof && {
+        ...pendingProof,
+        value: { ...pendingProof.value, elapsedMs: performance.now() - startedAt },
+      }
+    );
   }
 
-  it("isolates and completes the native Scheduled Task lifecycle", () => {
+  it("isolates and completes the native Scheduled Task lifecycle", ({ signal }) => {
     if (!nativeEntrypoints) {
       throw new Error("Native Scheduled Task integration requires compiled subprocess entrypoints");
     }
@@ -1008,6 +993,8 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
       taskSupervisor: resolveRuntimeWorkerUrl(nativeEntrypoints.taskSupervisor),
       hostedStop: resolveRuntimeWorkerUrl(nativeEntrypoints.hostedStop),
       startupFallback: resolveRuntimeWorkerUrl(nativeEntrypoints.startupFallback),
+      cli: resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli),
+      packageOwner: resolveRuntimeWorkerUrl(nativeEntrypoints.packageOwner),
     };
     if (Object.values(moduleUrls).some((url) => !url.pathname.endsWith(".js"))) {
       throw new Error("Run native Scheduled Task integration through scripts/run-vitest.mjs");
@@ -1020,6 +1007,24 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
     }
     const lifetime = createFixtureLifetime(generationOwner.root);
     nativeLifetime = lifetime;
-    return lifetime.run(() => runNativeLifecycle(moduleUrls, lifetime));
+    return lifetime.run(async () => {
+      const current = await runNativeLifecycle(moduleUrls, lifetime, signal);
+      const binding = process.env.CI_WINDOWS_SCHTASKS_RELEASED_BINDING?.trim();
+      const released = binding
+        ? await runNativeLifecycle(moduleUrls, lifetime, signal, binding)
+        : undefined;
+      // Publish one result only after every selected lifecycle and its cleanup succeeds.
+      if (current) {
+        if (binding && !released) {
+          throw new Error("Released Scheduled Task proof is missing");
+        }
+        const value = { ...current.value };
+        if (released) {
+          value.releasedLauncher = released.value;
+        }
+        await fs.mkdir(path.dirname(current.path), { recursive: true });
+        await fs.writeFile(current.path, JSON.stringify(value, null, 2) + "\n", "utf8");
+      }
+    });
   }, 240_000);
 });

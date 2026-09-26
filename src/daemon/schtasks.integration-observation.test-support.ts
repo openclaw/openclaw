@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const WAIT_INTERVAL_MS = 200;
@@ -36,6 +37,25 @@ export async function readTaskXml(taskName: string): Promise<string | null> {
   return result.code === 0
     ? result.stdout.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "")
     : null;
+}
+
+type TaskDefinitionSnapshot = { exists: false; taskXml: null } | { exists: true; taskXml: string };
+
+export async function readTaskDefinitionSnapshot(
+  taskName: string,
+): Promise<TaskDefinitionSnapshot> {
+  const exists = probeScheduledTaskExists(taskName);
+  if (exists === null) {
+    throw new Error(`Could not determine whether Scheduled Task ${taskName} exists`);
+  }
+  if (!exists) {
+    return { exists: false, taskXml: null };
+  }
+  const taskXml = await readTaskXml(taskName);
+  if (!taskXml) {
+    throw new Error(`Could not export Scheduled Task XML for ${taskName}`);
+  }
+  return { exists: true, taskXml };
 }
 
 export function readTaskPrincipal(taskName: string): ScheduledTaskPrincipal {
@@ -103,7 +123,9 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
 } {
   const script = [
     "$ErrorActionPreference='Stop'",
-    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
+    "$json = Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
+    "$bytes = [Text.Encoding]::UTF8.GetBytes($json)",
+    "[Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)",
   ].join("; ");
   const result = spawnSync(
     getWindowsPowerShellExePath(),

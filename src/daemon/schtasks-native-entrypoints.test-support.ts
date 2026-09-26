@@ -1,5 +1,8 @@
 // Native fixtures share the invocation's compiled runtime and nested process entries.
+import { windowsRepairPackageEntrypoint } from "../../scripts/lib/windows-repair-package.native-test-support.mts";
+
 export const schtasksNativeEntrypoints = {
+  packageOwner: windowsRepairPackageEntrypoint,
   taskSupervisor: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../cli/gateway-cli/task-supervisor",

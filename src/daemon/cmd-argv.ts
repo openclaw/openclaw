@@ -18,14 +18,16 @@ export function quoteCmdScriptArg(
   return `"${escaped}"`;
 }
 
-function unescapeCmdScriptArg(value: string): string {
-  return value.replace(/\^!/g, "!").replace(/%%/g, "%");
-}
-
-export function parseCmdScriptCommandLine(value: string): string[] {
-  // Script renderer escapes quotes (`\"`) and cmd expansions (`%%`, `^!`).
+export function parseCmdScriptCommandLine(
+  value: string,
+  options: { delayedExpansion?: boolean } = {},
+): string[] {
+  // Unmarked shipped scripts retain their `^!` decoding; disabled expansion preserves carets.
   // Keep all other backslashes literal so Windows drive/UNC paths survive.
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" }).map(
-    unescapeCmdScriptArg,
+  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" }).map((argument) =>
+    (options.delayedExpansion === false ? argument : argument.replace(/\^!/g, "!")).replace(
+      /%%/g,
+      "%",
+    ),
   );
 }

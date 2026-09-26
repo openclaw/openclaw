@@ -78,6 +78,8 @@ const config = {
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         // CLI subprocess fixtures consume the shared native-report collector.
         "src/cli/cli-process-child.test-helpers.test.ts!",
+        // Native Scheduled Task declarations consume the released-package worker descriptor.
+        "src/daemon/schtasks-native-entrypoints.test-support.ts!",
         // Core bootstrap packaging consumes the scripts' dist-import scanner.
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
@@ -91,6 +93,7 @@ const config = {
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "src/cli/cli-process-child.test-helpers{,.test}.ts!",
+        "src/daemon/schtasks-native-entrypoints.test-support.ts!",
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
       ],

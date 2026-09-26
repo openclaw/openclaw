@@ -580,8 +580,9 @@ describe("readScheduledTaskCommand", () => {
           'set "OC_CARET=^^"',
           'set "OC_PERCENT=%%TEMP%%"',
           'set "OC_BANG=^!token^!"',
+          'set "OC_CARET_BANG=^^^!"',
           'set "OC_QUOTE=he said ^"hi^""',
-          "node gateway.js --verbose",
+          'node gateway.js --verbose "réseau %%%% ^^!"',
         ],
       },
       async (env) => {
@@ -592,11 +593,62 @@ describe("readScheduledTaskCommand", () => {
           OC_CARET: "^",
           OC_PERCENT: "%TEMP%",
           OC_BANG: "!token!",
+          OC_CARET_BANG: "^!",
           OC_QUOTE: 'he said "hi"',
+        });
+        expect(result?.programArguments).toEqual([
+          "node",
+          "gateway.js",
+          "--verbose",
+          "réseau %% ^!",
+        ]);
+      },
+    );
+  });
+
+  it("reads literal argv, environment and cwd with owned disabled expansion", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "setlocal DisableDelayedExpansion",
+          'cd /d "C:\\réseau %%%% ^!"',
+          'set "OC_VALUE=réseau %%%% ^!"',
+          'node gateway.js "réseau %%%% ^!" < NUL',
+        ],
+      },
+      async (env) => {
+        expect(await readScheduledTaskCommand(env, { requireEffective: true })).toEqual({
+          programArguments: ["node", "gateway.js", "réseau %% ^!"],
+          workingDirectory: "C:\\réseau %% ^!",
+          environment: { OC_VALUE: "réseau %% ^!" },
+          environmentValueSources: { OC_VALUE: "inline" },
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );
   });
+
+  it.each(['"OC_VALUE=%TEMP%"', '"OC_VALUE=he said ^"hi^""', "OC_VALUE=a^b"])(
+    "keeps strict inspection closed for unresolved assignment %s with disabled expansion",
+    async (assignment) => {
+      await withScheduledTaskScript(
+        {
+          scriptLines: [
+            "@echo off",
+            "setlocal DisableDelayedExpansion",
+            `set ${assignment}`,
+            "node gateway.js",
+          ],
+        },
+        async (env) => {
+          await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
+            "Effective Scheduled Task service command could not be inspected.",
+          );
+        },
+      );
+    },
+  );
 });
 
 // Enable policy is not numeric runtime state: a ready task may be disabled.

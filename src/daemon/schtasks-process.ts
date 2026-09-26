@@ -15,7 +15,7 @@ import { killProcessTree } from "../process/kill-tree.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sleep } from "../utils.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
-import { parseCmdScriptCommandLine } from "./cmd-argv.js";
+import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { NODE_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { readScheduledTaskCommand, resolveTaskName } from "./schtasks-layout.js";
@@ -85,7 +85,9 @@ export function findInstalledProcessPid(
     if (!commandLine) {
       continue;
     }
-    const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
+    const argv = splitArgsPreservingQuotes(entry.CommandLine ?? "", {
+      escapeMode: "backslash-quote-only",
+    });
     if (
       !matchesProcess(argv) ||
       parseTcpPortFromArgs(argv) !== port ||
@@ -172,10 +174,12 @@ export function resolveGatewayListenerPids(listeners: PortListener[]): number[] 
       listeners.flatMap((listener) =>
         typeof listener.pid === "number" &&
         listener.commandLine &&
-        classifyOpenClawArgv(parseCmdScriptCommandLine(listener.commandLine), {
-          command: "gateway",
-          pid: listener.pid,
-        }).kind === "openclaw"
+        classifyOpenClawArgv(
+          splitArgsPreservingQuotes(listener.commandLine, {
+            escapeMode: "backslash-quote-only",
+          }),
+          { command: "gateway", pid: listener.pid },
+        ).kind === "openclaw"
           ? [listener.pid]
           : [],
       ),
@@ -351,7 +355,7 @@ async function resolveLegacyScheduledTaskOwnedGatewayPids(
       continue;
     }
     const argv = listener.commandLine
-      ? parseCmdScriptCommandLine(listener.commandLine)
+      ? splitArgsPreservingQuotes(listener.commandLine, { escapeMode: "backslash-quote-only" })
       : process.platform === "win32"
         ? readWindowsProcessArgsSync(listener.pid)
         : null;
@@ -384,7 +388,9 @@ export async function describeUnverifiedPortListeners(
   }
   const described = listeners.map((listener) => {
     const pid = typeof listener.pid === "number" ? listener.pid : null;
-    const argv = listener.commandLine ? parseCmdScriptCommandLine(listener.commandLine) : null;
+    const argv = listener.commandLine
+      ? splitArgsPreservingQuotes(listener.commandLine, { escapeMode: "backslash-quote-only" })
+      : null;
     const identity = argv
       ? classifyOpenClawArgv(argv, { command: "gateway" }).kind === "openclaw"
         ? "openclaw gateway"

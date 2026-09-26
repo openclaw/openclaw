@@ -1,0 +1,10 @@
+{
+  "version": "2026.9.6",
+  "tarball": "https://registry.npmjs.org/openclaw/-/openclaw-2026.9.6.tgz",
+  "integrity": "sha512-Ie0kyQSCVfFqixsgVg39vevUDq01Ch5u3+7Yu5Y3qARczmdAe+lzp8bVnO9925rHiW/+CFp70zfORCyPmCH31g==",
+  "members": {
+    "dist/schtasks-DSAoIeY-.mjs": "ca41e0c27d7db0de159fed4a02374919c3106ce34bc7020a07a4c7058f43f7c3",
+    "dist/schtasks-layout-ZxN1sGLi.mjs": "7996e4573fc4a1030d42aeecea333de0e37b426b624c4ee29306217de6f9da0a",
+    "dist/task-supervisor-D-3-Solw.mjs": "b11dea820a7821a1e2e379d3f399c091b50cbbd0190790f38051278032036e40"
+  }
+}

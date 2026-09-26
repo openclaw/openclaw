@@ -587,6 +587,9 @@ it.each(["canonical-wrapper", "legacy-wrapper", "malformed-args", "wrapper", "me
 
 it.each([
   "canonical",
+  "legacy",
+  "literal",
+  "reenabled-expansion",
   "script",
   "launcher",
   "metadata",
@@ -603,13 +606,18 @@ it.each([
     USERNAME: "fixture",
     ...(kind === "custom-script" ? { OPENCLAW_TASK_SCRIPT_NAME: "gateway.bat" } : {}),
   };
-  const environment: Record<string, string> = { ...staleServiceEnvironment };
+  const environment: Record<string, string> =
+    kind === "legacy" ? { OPENCLAW_SERVICE_KIND: "gateway" } : { ...staleServiceEnvironment };
   if (kind === "path") {
     environment.PATH = "C:\\operator-private";
+  }
+  if (kind === "literal") {
+    environment.OPENCLAW_TEST_LITERAL = "réseau %% ^!";
   }
   const command = {
     programArguments: ["node", "C:\\openclaw\\index.js", "gateway"],
     environment,
+    ...(kind === "literal" ? { workingDirectory: "C:\\réseau %% ^!" } : {}),
   };
   const scriptPath = resolveTaskScriptPath(env);
   const hiddenPath = resolveTaskLauncherScriptPath(
@@ -617,9 +625,13 @@ it.each([
     scriptPath,
   );
   const script =
-    (kind === "path" ? 'set "PATH=C:\\operator-private"\r\n' : "") +
-    buildTaskScript(command) +
-    (kind === "script" ? "echo operator-private\r\n" : "");
+    kind === "legacy"
+      ? '@echo off\r\nset "OPENCLAW_SERVICE_KIND=gateway"\r\nnode C:\\openclaw\\index.js gateway --task-supervisor < NUL\r\n'
+      : (kind === "path" ? 'set "PATH=C:\\operator-private"\r\n' : "") +
+        (kind === "reenabled-expansion"
+          ? buildTaskScript(command).replace("DisableDelayedExpansion", "EnableDelayedExpansion")
+          : buildTaskScript(command)) +
+        (kind === "script" ? "echo operator-private\r\n" : "");
   const launcher =
     buildHiddenLauncherScript({ scriptPath, taskSupervisor: true }) +
     (kind === "launcher" || kind === "planned-launcher"
@@ -664,7 +676,13 @@ it.each([
       environment: { ...environment, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" },
     },
   });
-  if (kind === "canonical" || kind === "missing-launcher" || kind === "custom-script") {
+  if (
+    kind === "canonical" ||
+    kind === "legacy" ||
+    kind === "literal" ||
+    kind === "missing-launcher" ||
+    kind === "custom-script"
+  ) {
     expect(result.definitionDrift).toBeUndefined();
   } else if (kind === "native-defaults") {
     expect(result.definitionDrift).toEqual(
@@ -695,7 +713,7 @@ it.each([
       expect.objectContaining({
         kind: "unknown-edit",
         key:
-          kind === "script"
+          kind === "script" || kind === "reenabled-expansion"
             ? "TaskScript"
             : kind === "launcher" || kind === "planned-launcher"
               ? "TaskLauncher"

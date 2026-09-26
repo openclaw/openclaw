@@ -585,7 +585,9 @@ describe("check-workflows", () => {
     expect(proof.env).toMatchObject({
       EXPECTED_HEAD: "${{ inputs.target_ref }}",
       CI_WINDOWS_SCHTASKS_ROOT:
-        "${{ runner.temp }}\\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}",
+        "${{ runner.temp }}\\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}",
+      CI_WINDOWS_SCHTASKS_RELEASED_ROOT:
+        "${{ runner.temp }}\\openclaw-schtasks-legacy-${{ github.run_id }}-${{ github.run_attempt }}",
       CI_WINDOWS_SCHTASKS_TEST_ID: "${{ github.run_id }}-${{ github.run_attempt }}",
       CI_WINDOWS_SCHTASKS_PROOF_PATH:
         "${{ github.workspace }}\\.artifacts\\windows-schtasks\\proof.json",
@@ -602,6 +604,7 @@ describe("check-workflows", () => {
     expect(cleanup.env).toEqual({
       TEST_ID: proof.env?.CI_WINDOWS_SCHTASKS_TEST_ID,
       TEST_ROOT: proof.env?.CI_WINDOWS_SCHTASKS_ROOT,
+      RELEASED_TEST_ROOT: proof.env?.CI_WINDOWS_SCHTASKS_RELEASED_ROOT,
     });
     expect(remove.env).toEqual(cleanup.env);
     expect(cleanup.run).toContain('"proof_outcome=${{ steps.native_schtasks.outcome }}"');
@@ -611,7 +614,9 @@ describe("check-workflows", () => {
     expect(upload.uses).toMatch(/^actions\/upload-artifact@[0-9a-f]{40}$/u);
     expect(upload.with?.path).toContain(".artifacts/windows-schtasks/proof.json");
     expect(upload.with?.path).toContain("windows-schtasks-isolation.json");
-    expect(upload.with?.path).toContain("failure-diagnostics.json");
+    expect(upload.with?.path).toContain(
+      `${proof.env?.CI_WINDOWS_SCHTASKS_RELEASED_ROOT}\\failure-diagnostics.json`,
+    );
     expect(upload.with?.path).toContain("cleanup-summary.txt");
     expect(upload.with?.path).not.toContain("task-before-cleanup.xml");
     expect(cleanup.run).not.toContain("Copy-Item -LiteralPath $stateDir");
@@ -630,13 +635,14 @@ describe("check-workflows", () => {
     const { native } = readWindowsProbe();
     const cleanup = native.steps.find((step) => step.id === "native_cleanup")!.run;
     const probe = createGatewayTaskSupervisorProbe("probe-root");
+    expect(cleanup).toContain("foreach ($testRoot in @($env:TEST_ROOT, $env:RELEASED_TEST_ROOT))");
     expect(cleanup).toContain(
-      `$probePath = Join-Path $env:TEST_ROOT "${path.basename(probe.probePath)}"`,
+      `$probePath = Join-Path $testRoot "${path.basename(probe.probePath)}"`,
     );
-    expect(cleanup).toContain('$activePidPath = Join-Path $env:TEST_ROOT "active-pid.txt"');
-    expect(cleanup).toContain('$eventsPath = Join-Path $env:TEST_ROOT "runs.txt"');
+    expect(cleanup).toContain('$activePidPath = Join-Path $testRoot "active-pid.txt"');
+    expect(cleanup).toContain('$eventsPath = Join-Path $testRoot "runs.txt"');
     expect(cleanup).toContain(
-      '$process.CommandLine -like "*$probePath*" -and\n        $process.CommandLine -like "*$eventsPath*"',
+      '$process.CommandLine -like "*$probePath*" -and\n          $process.CommandLine -like "*$eventsPath*"',
     );
     expect(cleanup).toContain(
       'throw "Refusing to kill reused or unverifiable process id $probePid."',

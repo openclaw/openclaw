@@ -553,12 +553,23 @@ record("stdout-write-returned");
       ]);
       for (const invocation of invocations) {
         const alive = isProcessAlive(invocation.pid);
+        const observedStartTimeMs =
+          alive && process.platform === "win32"
+            ? readWindowsProcessStartTimeSync(invocation.pid, 0)
+            : null;
+        // An exited Windows child's PID can already belong to a different process.
+        const originalProcessAlive =
+          alive &&
+          (process.platform !== "win32" ||
+            typeof invocation.startTimeMs !== "number" ||
+            observedStartTimeMs === null ||
+            observedStartTimeMs === invocation.startTimeMs);
         expect(
-          alive,
-          alive
+          originalProcessAlive,
+          originalProcessAlive
             ? `${JSON.stringify({
                 invocation,
-                observedStartTimeMs: readWindowsProcessStartTimeSync(invocation.pid, 0),
+                observedStartTimeMs,
                 invocations,
               })}\n${formatShimResult(result)}`
             : undefined,

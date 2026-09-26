@@ -46,7 +46,13 @@ export function readWindowsProcessSnapshot(
     [
       "-NoProfile",
       "-Command",
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+      [
+        "$ErrorActionPreference='Stop'",
+        "$json = Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+        "$bytes = [Text.Encoding]::UTF8.GetBytes($json)",
+        // Write pipe bytes directly: OutputEncoding calls SetConsoleOutputCP without a console.
+        "[Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)",
+      ].join("; "),
     ],
     {
       env: resolveServiceManagerEnv(),

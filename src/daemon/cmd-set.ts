@@ -15,13 +15,17 @@ function escapeCmdSetAssignmentComponent(value: string, delayedExpansion: boolea
   return escaped.replace(/%/g, "%%").replace(/"/g, '^"');
 }
 
-function unescapeCmdSetAssignmentComponent(value: string): string {
-  return value.replace(/\^([\^"!])|%%/g, (_match, escaped: string | undefined) => escaped ?? "%");
+function unescapeCmdSetAssignmentComponent(value: string, delayedExpansion: boolean): string {
+  return value.replace(
+    delayedExpansion ? /\^([\^"!])|%%/g : /\^(")|%%/g,
+    (_match, escaped: string | undefined) => escaped ?? "%",
+  );
 }
 
 export function parseCmdSetAssignment(
   line: string,
   requireLiteral = false,
+  options: { delayedExpansion?: boolean } = {},
 ): CmdSetAssignment | null {
   const raw = requireLiteral ? line.trimStart() : line.trim();
   if (!raw) {
@@ -38,12 +42,12 @@ export function parseCmdSetAssignment(
   if (!key) {
     return null;
   }
-  // Batch expansions and caret/quote decoding depend on the command processor.
-  // Strict service inspection must not report those expressions as effective facts.
+  // Only a quoted assignment in an explicitly disabled context makes caret/bang literal.
+  const unresolved = options.delayedExpansion === false && quoted ? /[%"]/ : /[%!^"]/;
   if (
     requireLiteral &&
     (key !== assignment.slice(0, index) ||
-      /[%!^"]/.test(assignment.replace(/%%/g, "")) ||
+      unresolved.test(assignment.replace(/%%/g, "")) ||
       (!quoted && (assignment.startsWith("/") || /[&|<>()]/.test(assignment))))
   ) {
     return null;
@@ -55,8 +59,11 @@ export function parseCmdSetAssignment(
   // contain paired percent escapes, including in unquoted assignments.
   return {
     // Windows names are case-insensitive; strict maps keep the last assignment.
-    key: unescapeCmdSetAssignmentComponent(requireLiteral ? key.toUpperCase() : key),
-    value: unescapeCmdSetAssignmentComponent(value),
+    key: unescapeCmdSetAssignmentComponent(
+      requireLiteral ? key.toUpperCase() : key,
+      options.delayedExpansion !== false,
+    ),
+    value: unescapeCmdSetAssignmentComponent(value, options.delayedExpansion !== false),
   };
 }
 

@@ -1,13 +1,24 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import type { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
 } from "../infra/windows-install-roots.js";
-import { resolveTaskScriptPath } from "./schtasks-layout.js";
+import {
+  buildTaskScript,
+  encodeWindowsLauncherScript,
+  resolveTaskScriptPath,
+} from "./schtasks-layout.js";
 import { launchFallbackTaskScript } from "./schtasks-runtime.js";
+import {
+  runObservedStartupLaunch,
+  writeStartupObserverFixture,
+} from "./schtasks.startup-observer.native-test-support.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
 const POLL_INTERVAL_MS = 200;
@@ -63,52 +74,6 @@ async function expectNativeLaunchFailure(
     });
   }
   throw new Error("Startup fallback reported success for an unlaunchable command");
-}
-
-async function waitForNativeLaunchMarker(markerPath: string, launcherPid: number): Promise<number> {
-  const deadline = Date.now() + WAIT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const marker = await fs.readFile(markerPath, "utf8").catch(() => "");
-    if (marker) {
-      const [childIdentity, parentIdentity] = marker.trim().split(":");
-      const pid = Number(childIdentity);
-      if (!Number.isSafeInteger(pid) || pid <= 1 || Number(parentIdentity) !== launcherPid) {
-        throw new Error("Startup fallback probe recorded an invalid process identity");
-      }
-      return pid;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, POLL_INTERVAL_MS);
-    });
-  }
-  throw new Error("Startup fallback detached process did not write its launch marker");
-}
-
-async function runShortLivedStartupLauncher(params: {
-  harnessPath: string;
-  markerPath: string;
-  mode: "batch" | "direct";
-  parentPidPath: string;
-  probePath: string;
-}): Promise<{ launcherPid: number; childPid: number }> {
-  const result = spawnSync(
-    process.execPath,
-    [params.harnessPath, params.mode, params.markerPath, params.parentPidPath, params.probePath],
-    { cwd: process.cwd(), encoding: "utf8", windowsHide: true, timeout: WAIT_TIMEOUT_MS },
-  );
-  if (result.error || result.status !== 0) {
-    throw new Error(`Startup fallback ${params.mode} launcher parent did not exit successfully`, {
-      cause: result.error,
-    });
-  }
-  const launcherPid = Number((await fs.readFile(params.parentPidPath, "utf8")).trim());
-  if (!Number.isSafeInteger(launcherPid) || launcherPid <= 1) {
-    throw new Error("Startup fallback recorded an invalid launcher parent identity");
-  }
-  return {
-    launcherPid,
-    childPid: await waitForNativeLaunchMarker(params.markerPath, launcherPid),
-  };
 }
 
 function resolveCurrentWindowsUserSid(): string {
@@ -254,6 +219,8 @@ export async function proveNativeStartupFallbackLaunch(params: {
   env: GatewayServiceEnv;
   rootDir: string;
   runtimeModuleUrl: URL;
+  lifetime: ReturnType<typeof createFixtureLifetime>;
+  signal: AbortSignal;
 }): Promise<NativeStartupFallbackProof> {
   const proofRoot = path.join(params.rootDir, "startup-fallback-proof");
   const stateDir = path.join(proofRoot, "state & %OPENCLAW_STARTUP_PROBE% !");
@@ -271,46 +238,7 @@ export async function proveNativeStartupFallbackLaunch(params: {
   const batchMarkerPath = path.join(proofRoot, "batch.pid");
   const batchParentPidPath = path.join(proofRoot, "batch-parent.pid");
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  await fs.writeFile(
-    probePath,
-    [
-      'const fs = require("node:fs");',
-      'const launcherPid = Number(fs.readFileSync(process.argv[3], "utf8"));',
-      "const deadline = Date.now() + 10_000;",
-      "function waitForLauncherExit() {",
-      "  try { process.kill(launcherPid, 0); } catch (error) {",
-      '    if (error.code !== "ESRCH") throw error;',
-      "    fs.writeFileSync(process.argv[2], `${process.pid}:${launcherPid}`);",
-      "    return;",
-      "  }",
-      "  if (Date.now() >= deadline) process.exit(2);",
-      "  setTimeout(waitForLauncherExit, 25);",
-      "}",
-      "waitForLauncherExit();",
-      "",
-    ].join("\n"),
-  );
-  await fs.writeFile(
-    harnessPath,
-    [
-      'import fs from "node:fs";',
-      `import { launchFallbackTaskScript } from ${JSON.stringify(params.runtimeModuleUrl.href)};`,
-      `const env = ${JSON.stringify({
-        APPDATA: env.APPDATA,
-        OPENCLAW_CONFIG_PATH: env.OPENCLAW_CONFIG_PATH,
-        OPENCLAW_PROFILE: env.OPENCLAW_PROFILE,
-        OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR,
-      })};`,
-      "const [mode, markerPath, parentPidPath, probePath] = process.argv.slice(2);",
-      "fs.writeFileSync(parentPidPath, String(process.pid));",
-      "const command = mode === 'direct' ? {",
-      "  programArguments: [process.execPath, probePath, markerPath, parentPidPath],",
-      `  workingDirectory: ${JSON.stringify(proofRoot)},`,
-      "} : null;",
-      "await launchFallbackTaskScript(env, command);",
-      "",
-    ].join("\n"),
-  );
+  const observerPath = await writeStartupObserverFixture({ proofRoot, probePath, harnessPath });
 
   const missingScriptError = await expectNativeLaunchFailure(
     () => launchFallbackTaskScript(env, null),
@@ -318,8 +246,12 @@ export async function proveNativeStartupFallbackLaunch(params: {
   );
   await fs.writeFile(
     scriptPath,
-    `@echo off\r\n"${process.execPath}" "${probePath}" "${batchMarkerPath}" "${batchParentPidPath}"\r\n`,
-    "utf8",
+    encodeWindowsLauncherScript({
+      format: "cmd",
+      content: buildTaskScript({
+        programArguments: [process.execPath, probePath, batchMarkerPath, batchParentPidPath],
+      }),
+    }),
   );
   const missingExecutableError = await expectNativeLaunchFailure(
     () =>
@@ -329,19 +261,29 @@ export async function proveNativeStartupFallbackLaunch(params: {
       }),
     ["ENOENT"],
   );
-  const directLaunch = await runShortLivedStartupLauncher({
+  const launch = {
+    proofRoot,
     harnessPath,
+    observerPath,
+    scriptPath,
+    probePath,
+    env,
+    runtimeModuleUrl: params.runtimeModuleUrl,
+    timeoutMs: WAIT_TIMEOUT_MS,
+    lifetime: params.lifetime,
+    signal: params.signal,
+  };
+  const directLaunch = await runObservedStartupLaunch({
+    ...launch,
     markerPath: directMarkerPath,
     mode: "direct",
     parentPidPath: directParentPidPath,
-    probePath,
   });
-  const batchLaunch = await runShortLivedStartupLauncher({
-    harnessPath,
+  const batchLaunch = await runObservedStartupLaunch({
+    ...launch,
     markerPath: batchMarkerPath,
     mode: "batch",
     parentPidPath: batchParentPidPath,
-    probePath,
   });
 
   const userSid = `*${resolveCurrentWindowsUserSid()}`;
@@ -435,4 +377,53 @@ export async function waitForExactProbeRun(
     );
   }
   return startedEvent;
+}
+
+export async function createIntegrationRoot(
+  configuredRoot: string | undefined,
+  id: string,
+): Promise<string> {
+  if (!configuredRoot) {
+    return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-schtasks-int-${id}-`));
+  }
+  const rootDir = path.resolve(configuredRoot);
+  try {
+    // Cleanup may only remove a directory this exact run created.
+    await fs.mkdir(rootDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`CI_WINDOWS_SCHTASKS_ROOT must not already exist: ${rootDir}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  return rootDir;
+}
+
+export type NativeScheduledTaskProof = { path: string; value: Record<string, unknown> };
+
+export function prepareNativeProof(
+  value: Record<string, unknown>,
+): NativeScheduledTaskProof | undefined {
+  const proofPath = process.env.CI_WINDOWS_SCHTASKS_PROOF_PATH?.trim();
+  if (!proofPath) {
+    return undefined;
+  }
+  const head = process.env.CI_WINDOWS_SCHTASKS_HEAD?.trim();
+  if (!head || !/^[0-9a-f]{40}$/u.test(head)) {
+    throw new Error("CI_WINDOWS_SCHTASKS_HEAD must identify the exact 40-character checkout SHA");
+  }
+  return { path: proofPath, value: { ...value, head } };
+}
+
+export function resolveTestId(): string {
+  const configured = process.env.CI_WINDOWS_SCHTASKS_TEST_ID?.trim();
+  if (!configured) {
+    return randomUUID().slice(0, 8);
+  }
+  if (!/^[a-z0-9-]{1,48}$/u.test(configured)) {
+    throw new Error("CI_WINDOWS_SCHTASKS_TEST_ID must use lowercase letters, digits, or -");
+  }
+  return configured;
 }

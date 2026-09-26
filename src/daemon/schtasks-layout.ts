@@ -39,6 +39,7 @@ export function resolveTaskName(env: GatewayServiceEnv): string {
 // Keeps the service gateway's stdin off the (possibly hidden) console so TTY
 // heuristics fail closed for permission prompts (#112173).
 const STDIN_NUL_REDIRECT = "< NUL";
+const DISABLE_DELAYED_EXPANSION = "setlocal DisableDelayedExpansion";
 
 function stripTrailingCmdRedirections(commandLine: string): string {
   const tokens: { start: number; end: number; redirect?: string }[] = [];
@@ -329,6 +330,7 @@ export async function readScheduledTaskCommand(
     const content = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
     let workingDirectory = "";
     let commandLine = "";
+    let delayedExpansion = true;
     const environment: Record<string, string> = {};
     for (const rawLine of content.split(/\r?\n/)) {
       const line = rawLine.trim();
@@ -339,10 +341,15 @@ export async function readScheduledTaskCommand(
       if (line.startsWith("@echo") || lower.startsWith("rem ")) {
         continue;
       }
+      if (lower === DISABLE_DELAYED_EXPANSION.toLowerCase()) {
+        delayedExpansion = false;
+        continue;
+      }
       if (lower.startsWith("set ")) {
         const assignment = parseCmdSetAssignment(
           rawLine.trimStart().slice(4),
           options?.requireEffective,
+          { delayedExpansion },
         );
         if (!assignment && options?.requireEffective) {
           throw new Error("Invalid Scheduled Task environment assignment");
@@ -354,7 +361,16 @@ export async function readScheduledTaskCommand(
         continue;
       }
       if (lower.startsWith("cd /d ")) {
-        workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
+        const directory = line.slice("cd /d ".length).trim();
+        if (delayedExpansion) {
+          workingDirectory = directory.replace(/^"|"$/g, "");
+        } else {
+          const directories = parseCmdScriptCommandLine(directory, { delayedExpansion });
+          if (directories.length !== 1 || !directories[0]) {
+            throw new Error("Invalid Scheduled Task working directory");
+          }
+          workingDirectory = directories[0];
+        }
         continue;
       }
       // Generated stdin and operator-added output redirections are shell syntax,
@@ -365,7 +381,7 @@ export async function readScheduledTaskCommand(
     if (!commandLine) {
       throw new Error("Missing Scheduled Task command");
     }
-    const programArguments = parseCmdScriptCommandLine(commandLine).filter(
+    const programArguments = parseCmdScriptCommandLine(commandLine, { delayedExpansion }).filter(
       (argument) => argument !== WINDOWS_TASK_SUPERVISOR_FLAG,
     );
     if (options?.requireEffective && programArguments.length === 0) {
@@ -435,20 +451,23 @@ async function isScheduledTaskDefinitionAbsent(
   return true;
 }
 
-export function buildTaskScript({
-  description,
-  programArguments,
-  workingDirectory,
-  environment,
-}: GatewayServiceRenderArgs): string {
+export function buildTaskScript(
+  { description, programArguments, workingDirectory, environment }: GatewayServiceRenderArgs,
+  options: { delayedExpansion?: boolean } = {},
+): string {
+  // Explicit legacy rendering lets the audit recognize unmarked shipped scripts without rewriting them.
+  const delayedExpansion = options.delayedExpansion === true;
   const lines: string[] = ["@echo off"];
+  if (!delayedExpansion) {
+    lines.push(DISABLE_DELAYED_EXPANSION);
+  }
   const trimmedDescription = description?.trim();
   if (trimmedDescription) {
     assertNoCmdLineBreak(trimmedDescription, "Task description");
     lines.push(`rem ${trimmedDescription}`);
   }
   if (workingDirectory) {
-    lines.push(`cd /d ${quoteCmdScriptArg(workingDirectory)}`);
+    lines.push(`cd /d ${quoteCmdScriptArg(workingDirectory, { delayedExpansion })}`);
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
@@ -463,7 +482,7 @@ export function buildTaskScript({
       ) {
         continue;
       }
-      lines.push(renderCmdSetAssignment(key, value));
+      lines.push(renderCmdSetAssignment(key, value, { delayedExpansion }));
     }
   }
   // Redirect stdin from NUL: a Scheduled Task console (even hidden via the
@@ -476,21 +495,21 @@ export function buildTaskScript({
       ? [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
       : programArguments;
   lines.push(
-    `${commandArguments.map((argument) => quoteCmdScriptArg(argument)).join(" ")} ${STDIN_NUL_REDIRECT}`,
+    `${commandArguments.map((argument) => quoteCmdScriptArg(argument, { delayedExpansion })).join(" ")} ${STDIN_NUL_REDIRECT}`,
   );
   return `${lines.join("\r\n")}\r\n`;
 }
 
 function renderStartupLaunchCommand(scriptPath: string): string {
-  const cmdExePath = quoteCmdScriptArg(getWindowsCmdExePath());
-  return `start "" /min ${cmdExePath} /d /c ${quoteCmdScriptArg(scriptPath)}`;
+  const cmdExePath = quoteCmdScriptArg(getWindowsCmdExePath(), { delayedExpansion: false });
+  return `start "" /min ${cmdExePath} /d /v:off /c ${quoteCmdScriptArg(scriptPath, { delayedExpansion: false })}`;
 }
 
 export function buildStartupLauncherScript(params: {
   description?: string;
   scriptPath: string;
 }): string {
-  const lines = ["@echo off"];
+  const lines = ["@echo off", DISABLE_DELAYED_EXPANSION];
   const trimmedDescription = params.description?.trim();
   if (trimmedDescription) {
     assertNoCmdLineBreak(trimmedDescription, "Startup launcher description");
