@@ -252,6 +252,7 @@ describe("semantic turn context apply", () => {
     let revocations = 0;
     const result = await withPluginRuntimeGatewayRequestScope(
       {
+        isWebchatConnect: () => false,
         resolveGatewayContext: () => {
           queueMicrotask(() => {
             revocations++;
@@ -277,6 +278,7 @@ describe("semantic turn context apply", () => {
     await expect(
       withPluginRuntimeGatewayRequestScope(
         {
+          isWebchatConnect: () => false,
           resolveGatewayContext: () => {
             queueMicrotask(() => {
               revocations++;
