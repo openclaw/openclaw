@@ -9,15 +9,15 @@ export type PlacementTurnClaimReceipt = {
 };
 export type PlacementTurnClaimWorkerOperations = {
   "placementTurns.claim": {
-    input: { claim: Parameters<Claims["claimTurn"]>[0]; nowMs: number };
+    input: { claim: Parameters<Claims["claimTurn"]>[0]; nowMs?: number };
     output: PlacementTurnClaimReceipt;
   };
   "placementTurns.release": {
-    input: { claim: WorkerSessionTurnClaim; nowMs: number };
+    input: { claim: WorkerSessionTurnClaim; nowMs?: number };
     output: PlacementTurnClaimReceipt;
   };
   "placementTurns.releaseIfOwned": {
-    input: { claim: WorkerSessionTurnClaim; nowMs: number };
+    input: { claim: WorkerSessionTurnClaim; nowMs?: number };
     output: PlacementTurnClaimReceipt;
   };
 };

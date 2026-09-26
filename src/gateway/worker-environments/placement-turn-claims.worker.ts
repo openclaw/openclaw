@@ -24,7 +24,7 @@ export function executePlacementTurnClaimCommand(
       const claims = createPlacementTurnClaimOps({
         path: database.path,
         instanceId: "",
-        now: () => command.input.nowMs,
+        now: () => command.input.nowMs ?? Date.now(),
         read: () => db,
         write: (operation) => operation(db),
       });

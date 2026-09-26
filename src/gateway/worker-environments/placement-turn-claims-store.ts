@@ -8,8 +8,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { isCurrentPlacementTurnClaim } from "./placement-record.js";
-import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { isCurrentPlacementTurnClaim, type WorkerSessionTurnOwner } from "./placement-record.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
 import { prepareWorkerTurnClaimClosed } from "./placement-turn-claim-events.js";
 import { ActiveTurnClaimError, type createPlacementTurnClaimOps } from "./placement-turn-claims.js";
@@ -33,13 +32,51 @@ function isReceipt(value: unknown): value is PlacementTurnClaimReceipt {
   );
 }
 
-export function createPlacementTurnClaimWorkerOps(runtime: PlacementStoreRuntime) {
+export function createPlacementTurnClaimWorkerOps(runtime: { path: string; now?: () => number }) {
   const context = captureOpenClawStateWorkerContext({ path: runtime.path });
   async function execute(
     input: SqliteWorkerCommand<PlacementTurnClaimWorkerOperations>,
     assertCurrent?: () => void,
   ): Promise<PlacementTurnClaimReceipt> {
-    const command = structuredClone(input);
+    const requested = input.input.claim;
+    const owner: WorkerSessionTurnOwner =
+      requested.owner.kind === "local"
+        ? {
+            kind: "local",
+            environmentId: requested.owner.environmentId,
+            ownerEpoch: requested.owner.ownerEpoch,
+          }
+        : {
+            kind: "worker",
+            environmentId: requested.owner.environmentId,
+            ownerEpoch: requested.owner.ownerEpoch,
+          };
+    const claim = {
+      sessionId: requested.sessionId,
+      claimId: requested.claimId,
+      runId: requested.runId,
+      owner,
+    };
+    const command: SqliteWorkerCommand<PlacementTurnClaimWorkerOperations> =
+      input.type === "placementTurns.claim"
+        ? {
+            type: input.type,
+            input: {
+              nowMs: input.input.nowMs,
+              claim: {
+                ...claim,
+                agentId: input.input.claim.agentId,
+                sessionKey: input.input.claim.sessionKey,
+              },
+            },
+          }
+        : {
+            type: input.type,
+            input: {
+              nowMs: input.input.nowMs,
+              claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
+            },
+          };
     const close =
       command.type === "placementTurns.claim"
         ? undefined
@@ -126,7 +163,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: PlacementStoreRuntime
               try {
                 await execute({
                   type: "placementTurns.releaseIfOwned",
-                  input: { claim: prepared.claim, nowMs: runtime.now() },
+                  input: { claim: prepared.claim, nowMs: runtime.now?.() },
                 });
                 publication?.rollback();
               } catch (cleanupError) {
@@ -164,7 +201,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: PlacementStoreRuntime
   return {
     async claimTurn(input: Parameters<Claims["claimTurn"]>[0], assertCurrent?: () => void) {
       const receipt = await execute(
-        { type: "placementTurns.claim", input: { claim: input, nowMs: runtime.now() } },
+        { type: "placementTurns.claim", input: { claim: input, nowMs: runtime.now?.() } },
         assertCurrent,
       );
       if (!receipt.claim) {
@@ -174,7 +211,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: PlacementStoreRuntime
     },
     async releaseTurn(claim: Parameters<Claims["releaseTurn"]>[0], assertCurrent?: () => void) {
       const receipt = await execute(
-        { type: "placementTurns.release", input: { claim, nowMs: runtime.now() } },
+        { type: "placementTurns.release", input: { claim, nowMs: runtime.now?.() } },
         assertCurrent,
       );
       if (!receipt.placement) {
@@ -185,7 +222,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: PlacementStoreRuntime
     async releaseTurnIfOwned(claim: Parameters<Claims["releaseTurn"]>[0]) {
       await execute({
         type: "placementTurns.releaseIfOwned",
-        input: { claim, nowMs: runtime.now() },
+        input: { claim, nowMs: runtime.now?.() },
       });
     },
   };

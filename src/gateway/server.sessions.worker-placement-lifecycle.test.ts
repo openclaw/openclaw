@@ -339,6 +339,7 @@ test.each([
         context: {
           workerSessionPlacementService: {
             getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
+            waitForTurnClaimRelease: placementStore.waitForTurnClaimRelease,
             retireSessionPlacement: (retirement: WorkerSessionPlacementRetirement) => {
               expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
               events.push("placement:retire");

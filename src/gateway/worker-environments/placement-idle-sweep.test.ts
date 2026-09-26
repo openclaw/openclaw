@@ -316,44 +316,23 @@ describe("worker placement idle suspension", () => {
   });
 
   it.each(["activity", "disabled policy", "longer timeout"])(
-    "rechecks %s when automatic reclaim waited behind another dispatch",
+    "rechecks %s after delayed automatic reclaim preparation",
     async (change) => {
-      const dispatchStarted = createDeferredCore();
-      const releaseDispatch = createDeferredCore();
-      const reclaimQueued = createDeferredCore();
+      const reclaimStarted = createDeferredCore();
+      const releaseReclaim = createDeferredCore();
       const { harness, idleSweep, profile, info, warn } = createIdleFixture({
-        reclaim: (request, authorize, beforeDrain) => {
-          const pending = coordinated.reclaim(request, authorize, beforeDrain);
-          reclaimQueued.resolve();
-          return pending;
+        reclaim: async (request, authorize, beforeDrain) => {
+          reclaimStarted.resolve();
+          await releaseReclaim.promise;
+          return harness.service.reclaim(request, authorize, beforeDrain);
         },
-        isPlacementOperationInFlight: (sessionId) =>
-          coordinated.isPlacementOperationInFlight(sessionId),
         getSessionWorkAdmissionCheck: async () => () => false,
       });
       const active = await harness.service.dispatch(REQUEST);
-      const coordinated = coordinateWorkerPlacementDispatch(
-        {
-          ...harness.service,
-          dispatch: async () => {
-            dispatchStarted.resolve();
-            await releaseDispatch.promise;
-            return active;
-          },
-        },
-        (_request, run) => run(),
-      );
-      const unrelatedDispatch = coordinated.dispatch({
-        ...REQUEST,
-        sessionId: "another-session",
-        sessionKey: "agent:main:another-session",
-      });
-      let sweeping: Promise<void> | undefined;
+      nowMs += 60_000;
+      const sweeping = idleSweep.sweep();
       try {
-        await dispatchStarted.promise;
-        nowMs += 60_000;
-        sweeping = idleSweep.sweep();
-        await reclaimQueued.promise;
+        await reclaimStarted.promise;
 
         if (change === "activity") {
           const claim = await claimWorkerTurn("turn-during-idle-reclaim-wait");
@@ -362,8 +341,8 @@ describe("worker placement idle suspension", () => {
         } else {
           profile.suspendAfter = change === "disabled policy" ? undefined : "2m";
         }
-        releaseDispatch.resolve();
-        await Promise.all([unrelatedDispatch, sweeping]);
+        releaseReclaim.resolve();
+        await sweeping;
 
         expect(placements.get(REQUEST.sessionId)).toMatchObject({
           state: "active",
@@ -380,8 +359,8 @@ describe("worker placement idle suspension", () => {
         expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
         expect(harness.environments.destroy).toHaveBeenCalledOnce();
       } finally {
-        releaseDispatch.resolve();
-        await Promise.allSettled([unrelatedDispatch, sweeping]);
+        releaseReclaim.resolve();
+        await Promise.allSettled([sweeping]);
       }
     },
   );
