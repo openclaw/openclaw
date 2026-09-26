@@ -397,6 +397,58 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(await stopped).toBe(transportFailure);
   });
 
+  it("still runs every later shutdown owner when tunnel stop fails", async () => {
+    const tunnelError = new Error("tunnel cleanup failed");
+    const tunnelStop = vi.fn().mockRejectedValue(tunnelError);
+    mocks.startTunnel.mockResolvedValue({
+      publicUrl: "https://public.example/voice/webhook",
+      provider: "ngrok",
+      stop: tunnelStop,
+    });
+
+    const runtime = await createVoiceCallRuntime({
+      config: createBaseConfig(),
+      coreConfig: {} as OpenClawConfig,
+      agentRuntime: {} as never,
+    });
+
+    await expect(runtime.stop()).rejects.toBe(tunnelError);
+    expect(tunnelStop).toHaveBeenCalledTimes(1);
+    expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
+    expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+    expect(mocks.managerStop).toHaveBeenCalledOnce();
+  });
+
+  it("attempts every owner in shutdown order and throws the first error when all fail", async () => {
+    const tunnelError = new Error("tunnel cleanup failed");
+    const calls: string[] = [];
+    const failStep = (name: string, error: Error) => async () => {
+      calls.push(name);
+      throw error;
+    };
+    mocks.startTunnel.mockResolvedValue({
+      publicUrl: "https://public.example/voice/webhook",
+      provider: "ngrok",
+      stop: vi.fn(failStep("tunnel", tunnelError)),
+    });
+    mocks.cleanupTailscaleExposure.mockImplementation(
+      failStep("tailscale", new Error("tailscale cleanup failed")),
+    );
+    mocks.webhookStop.mockImplementation(failStep("webhook", new Error("webhook stop failed")));
+    mocks.managerStop.mockImplementation(failStep("manager", new Error("manager drain failed")));
+
+    const runtime = await createVoiceCallRuntime({
+      config: createBaseConfig(),
+      coreConfig: {} as OpenClawConfig,
+      agentRuntime: {} as never,
+    });
+
+    const firstStop = runtime.stop();
+    expect(runtime.stop()).toBe(firstStop);
+    await expect(firstStop).rejects.toBe(tunnelError);
+    expect(calls).toEqual(["tunnel", "tailscale", "webhook", "manager"]);
+  });
+
   it("passes fullConfig to the webhook server for streaming provider resolution", async () => {
     const coreConfig = { tts: { provider: "openai" } } as OpenClawConfig;
     const fullConfig = {
