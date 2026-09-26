@@ -48,6 +48,7 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std"
 
 # Local accessibility proof; replace these paths with upstream releases before shipping.
 [patch.crates-io]
+wry = { path = "/Users/steipete/Projects/oss/wry" }
 gpui-component = { path = "/Users/steipete/Projects/oss/gpui-kit/crates/component" }
 gpui-base = { path = "/Users/steipete/Projects/oss/gpui-kit/crates/base" }
 gpui-kit-assets = { path = "/Users/steipete/Projects/oss/gpui-kit/crates/assets" }
