@@ -37,7 +37,7 @@ import {
   type WorktreeCleanupOwnerPolicy,
 } from "./gc-removal.js";
 import {
-  createWorktreeLockPrefilter,
+  createWorktreeGcPrefilter,
   lockState,
   lockWorktreeForProcess,
   unlockWorktree,
@@ -1289,7 +1289,7 @@ export class ManagedWorktreeService {
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
     const now = this.now();
-    const isLocked = createWorktreeLockPrefilter();
+    const prefilter = createWorktreeGcPrefilter();
     const progress = new WorktreeGcProgress();
     const result = progress.result;
     const { records, leases } = await readWorktreeCleanupState(this.env);
@@ -1302,12 +1302,13 @@ export class ManagedWorktreeService {
     const protect = (record: ManagedWorktreeRecord) =>
       autoRemovalProtectionReason(
         record,
-        isLocked,
+        prefilter,
         hasLiveLease,
         { env: this.env, getConfig: this.getConfig ?? getRuntimeConfig },
         params,
       );
     const onError = createWorktreeGcErrorHandler({ env: this.env, now, progress, policy: params });
+    // Keep cold classification serial: each candidate can request several Git processes.
     for (const record of records) {
       let retiredOwner = false;
       try {

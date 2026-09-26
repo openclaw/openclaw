@@ -141,19 +141,12 @@ const FAILOVER_REASON_BASE_COPY = {
   unknown: () => "LLM request failed with an unknown error.",
 } satisfies Record<FailoverReason, FailoverBaseCopyRenderer>;
 
-function renderFailoverBaseCopy(
-  reason: FailoverReason,
-  context: FailoverUserCopyContext = {},
-): string {
-  return FAILOVER_REASON_BASE_COPY[reason](context);
-}
-
 /** Render rate-limit versus overload copy from the canonical classified reason. */
 export function renderRateLimitOrOverloadedCopy(params: {
   reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
   raw?: string;
 }): string {
-  return renderFailoverBaseCopy(params.reason, { raw: params.raw });
+  return FAILOVER_REASON_BASE_COPY[params.reason]({ raw: params.raw });
 }
 
 export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
@@ -259,10 +252,10 @@ export function renderSanitizedUserFacingText(
       ERROR_PREFIX_RE.test(trimmed) ||
       CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
   ) {
-    return renderFailoverBaseCopy("context_overflow");
+    return FAILOVER_REASON_BASE_COPY.context_overflow();
   }
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
-    return renderFailoverBaseCopy(reason, { raw: trimmed });
+    return FAILOVER_REASON_BASE_COPY[reason]({ raw: trimmed });
   }
   // Labeled HTTP statuses require the full grammar; keep provider retry detail above.
   const providerRequestCode = resolveProviderRequestFailureCode({
@@ -294,7 +287,7 @@ export function renderSanitizedUserFacingText(
       return formatRawAssistantErrorForUi(trimmed);
     }
     if (reason === "timeout") {
-      return renderFailoverBaseCopy("timeout");
+      return FAILOVER_REASON_BASE_COPY.timeout();
     }
     return formatRawAssistantErrorForUi(trimmed);
   }
@@ -637,9 +630,6 @@ export function replaceGenericExternalRunFailureText(text: string): {
   text: string;
   replaced: boolean;
 } {
-  if (text.trim() === GENERIC_EXTERNAL_RUN_FAILURE_TEXT) {
-    return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, replaced: true };
-  }
   const start = text.indexOf(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
   if (start < 0 || text.slice(start + GENERIC_EXTERNAL_RUN_FAILURE_TEXT.length).trim()) {
     return { text, replaced: false };

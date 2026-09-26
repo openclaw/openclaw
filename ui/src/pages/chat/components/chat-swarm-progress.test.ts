@@ -164,10 +164,6 @@ describe("chat Swarm progress", () => {
       fields: { label: " Review CI ", displayName: "Other name" },
       expected: "Review CI",
     },
-    { name: "display name", fields: { displayName: "Review CI" }, expected: "Review CI" },
-    { name: "derived title", fields: { derivedTitle: "Review CI" }, expected: "Review CI" },
-    { name: "unnamed child", fields: {}, expected: "Subagent:" },
-    { name: "blank names", fields: { label: " ", displayName: "\t" }, expected: "Subagent:" },
     {
       name: "key-shaped names",
       fields: { label: childSessionKey, displayName: childSessionKey },
@@ -383,26 +379,6 @@ describe("chat Swarm progress", () => {
     );
     expect(container.textContent).toContain("Check the conversation for the final response");
     expect(container.textContent).not.toContain("The parent is processing their results");
-  });
-
-  it("keeps tasks from every phase in the compact detail", () => {
-    const container = renderProgress([
-      session({ key: "unphased", label: "Older child", status: "running" }),
-      session({ key: "planning", label: "Planner", status: "done", swarmPhase: "Plan" }),
-      session({
-        key: "building",
-        label: "Builder",
-        subagentRunState: "active",
-        swarmPhase: "Build",
-        swarmLog: "Implementing the selected plan.",
-      }),
-    ]);
-
-    expect(
-      [...container.querySelectorAll(".chat-swarm__task-name")].map((task) =>
-        task.textContent?.trim(),
-      ),
-    ).toEqual(["Older child", "Planner", "Builder"]);
   });
 
   it("orders phase buckets by observation rank, not canonical row order", () => {

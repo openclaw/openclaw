@@ -1,4 +1,3 @@
-// PTY adapter wraps pseudo-terminal processes for the process supervisor.
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { signalPtySessionTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
@@ -14,8 +13,6 @@ import { toStringEnv } from "./env.js";
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 declare const WORKER_DEPLOY_BUILD: boolean;
 
-type PtyAdapter = SpawnProcessAdapter;
-
 export async function createPtyAdapter(
   params: ProcessAdapterConstruction & {
     shell: string;
@@ -26,7 +23,7 @@ export async function createPtyAdapter(
     rows?: number;
     name?: string;
   },
-): Promise<PtyAdapter> {
+): Promise<SpawnProcessAdapter> {
   // Worker deploys are portable JavaScript artifacts; exec falls back to the child adapter
   // instead of binding the Gateway host's native PTY binary into the bundle.
   if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
@@ -172,17 +169,8 @@ export async function createPtyAdapter(
   };
 
   const onStdout = (listener: (chunk: string) => void) => {
-    dataListener =
-      pty.onData((chunk) => {
-        listener(chunk);
-      }) ?? null;
+    dataListener = pty.onData(listener) ?? null;
   };
-
-  const onStderr = (_listener: (chunk: string) => void) => {
-    // PTY gives a unified output stream.
-  };
-
-  const wait = async () => await completion.promise;
 
   const kill = (signal: NodeJS.Signals = "SIGKILL") => {
     try {
@@ -207,15 +195,12 @@ export async function createPtyAdapter(
   const dispose = () => {
     stdinDestroyed = true;
     stdinEnded = true;
-    try {
-      dataListener?.dispose();
-    } catch {
-      // ignore disposal errors
-    }
-    try {
-      exitListener?.dispose();
-    } catch {
-      // ignore disposal errors
+    for (const listener of [dataListener, exitListener]) {
+      try {
+        listener?.dispose();
+      } catch {
+        // Both subscriptions must be released even if one disposal fails.
+      }
     }
     clearForceKillWaitFallback();
     dataListener = null;
@@ -229,8 +214,8 @@ export async function createPtyAdapter(
     oomScoreWrapperSelected: preparedSpawn.wrapped,
     supportsRawOutput: false,
     onStdout,
-    onStderr,
-    wait,
+    onStderr: () => {}, // PTY output is unified.
+    wait: async () => await completion.promise,
     kill,
     dispose,
   };

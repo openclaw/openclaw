@@ -381,7 +381,7 @@ extensions/feishu/src/bot-sender-name.ts	2
 extensions/feishu/src/bot.ts	7
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
-extensions/feishu/src/channel.ts	5
+extensions/feishu/src/channel.ts	4
 extensions/feishu/src/client.ts	4
 extensions/feishu/src/comment-handler.ts	2
 extensions/feishu/src/comment-reaction.ts	2
@@ -396,7 +396,6 @@ extensions/feishu/src/media.ts	9
 extensions/feishu/src/monitor.account.ts	4
 extensions/feishu/src/monitor.comment.ts	2
 extensions/feishu/src/monitor.message-handler.ts	1
-extensions/feishu/src/monitor.state.ts	1
 extensions/feishu/src/monitor.transport.ts	1
 extensions/feishu/src/monitor.vc-meeting-invited-handler.ts	1
 extensions/feishu/src/perm.ts	2
@@ -1939,7 +1938,6 @@ src/channels/message/capabilities.ts	1
 src/channels/message/ingress-claim-owner.ts	1
 src/channels/message/ingress-drain.ts	1
 src/channels/message/ingress-monitor.ts	4
-src/channels/message/ingress-queue.ts	1
 src/channels/message/outbound-bridge.ts	1
 src/channels/message/outbound-echo-state.ts	2
 src/channels/model-overrides.ts	1
@@ -2531,9 +2529,9 @@ src/gateway/server.auth.control-ui.bootstrap-lifecycle.suite.ts	8
 src/gateway/server.auth.control-ui.device-token.suite.ts	2
 src/gateway/server.auth.control-ui.mobile-bootstrap.suite.ts	6
 src/gateway/server.auth.control-ui.owner-bootstrap.suite.ts	5
-src/gateway/server.auth.control-ui.pairing.suite.ts	6
-src/gateway/server.auth.control-ui.trusted-proxy.suite.ts	5
-src/gateway/server.auth.default-token.suite.ts	10
+src/gateway/server.auth.control-ui.pairing.suite.ts	2
+src/gateway/server.auth.control-ui.trusted-proxy.suite.ts	4
+src/gateway/server.auth.default-token.suite.ts	9
 src/gateway/server.auth.modes.suite.ts	1
 src/gateway/server/http-listen.ts	1
 src/gateway/server/plugins-http/route-capability.ts	1
@@ -2771,9 +2769,8 @@ src/logging/config.ts	2
 src/logging/console.ts	5
 src/logging/diagnostic-run-activity.ts	1
 src/logging/diagnostic-session-recovery-coordinator.ts	1
-src/logging/diagnostic-stability-bundle.ts	9
+src/logging/diagnostic-stability-bundle.ts	6
 src/logging/diagnostic-stability.ts	2
-src/logging/diagnostic-support-log-redaction.ts	1
 src/logging/diagnostic-support-redaction.ts	1
 src/logging/diagnostic.ts	1
 src/logging/json-console-line.ts	2
@@ -3115,7 +3112,7 @@ src/shared/store-writer-queue.ts	1
 src/shared/transcript-only-openclaw-assistant.ts	4
 src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	2
-src/skills/lifecycle/clawhub-store.ts	12
+src/skills/lifecycle/clawhub-store.ts	4
 src/skills/lifecycle/upload-store.ts	1
 src/skills/lifecycle/workspace-skill-write.ts	1
 src/skills/loading/frontmatter.ts	1
@@ -3330,7 +3327,6 @@ ui/src/components/panel-tab-strip.ts	4
 ui/src/components/select-picker.ts	2
 ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	1
-ui/src/components/session-data-scroll-controller.ts	1
 ui/src/components/session-group-defaults-dialog.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
@@ -3359,7 +3355,6 @@ ui/src/lib/chat/tool-display.ts	1
 ui/src/lib/config-form-utils.ts	7
 ui/src/lib/config/config-draft-model.ts	3
 ui/src/lib/cron/index.ts	2
-ui/src/lib/gateway-diagnostics.ts	2
 ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	2
@@ -3370,7 +3365,6 @@ ui/src/lib/sessions/custom-groups.ts	5
 ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	1
 ui/src/lib/sessions/session-key.ts	4
-ui/src/lib/skills/index.ts	1
 ui/src/lit/stream-auto-follow-controller.ts	1
 ui/src/lit/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2

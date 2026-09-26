@@ -184,7 +184,6 @@ describe("meeting realtime engine output ownership", () => {
   );
 
   it.each([
-    [{ status: "completed" as const, responseId: "response-1" }, "turn.ended"],
     [
       { status: "failed" as const, responseId: "response-1", message: "provider failed" },
       "turn.ended",

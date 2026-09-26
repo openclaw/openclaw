@@ -40,7 +40,7 @@ export type RemoteShellSandboxBackendOptions = {
   runtimeId?: string;
   configLabel?: string;
   configLabelKind?: string;
-  preprovisionedWorkdir?: { runtimeId: string; remoteWorkspaceDir: string };
+  preprovisionedWorkdir?: PreprovisionedRemoteWorkdir;
 };
 
 export async function createRemoteShellSandboxBackend(
@@ -93,7 +93,7 @@ class RemoteShellSandboxBackendImpl {
       configLabel: this.params.configLabel,
       configLabelKind: this.params.configLabelKind,
       workdirValidation: "backend",
-      validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
+      validateWorkdir: (workdir) => this.validateWorkdir(workdir),
       discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),
       workdirRoots: [
         this.params.runtimePaths.remoteWorkspaceDir,
@@ -158,13 +158,13 @@ class RemoteShellSandboxBackendImpl {
           await pending.session.dispose();
         }
       },
-      runShellCommand: async (command) => await this.runRemoteShellScript(command),
+      runShellCommand: (command) => this.runRemoteShellScript(command),
       createFsBridge: ({ sandbox }) =>
         createRemoteShellSandboxFsBridge({
           sandbox,
           runtime: this.asHandle(),
         }),
-      runRemoteShellScript: async (command) => await this.runRemoteShellScript(command),
+      runRemoteShellScript: (command) => this.runRemoteShellScript(command),
     };
   }
 
@@ -466,10 +466,9 @@ export function resolveRemoteShellRuntimePaths(
   };
 }
 
-function resolvePreprovisionedRuntimePaths(params: {
-  runtimeId: string;
-  remoteWorkspaceDir: string;
-}): ResolvedRemoteRuntimePaths {
+function resolvePreprovisionedRuntimePaths(
+  params: PreprovisionedRemoteWorkdir,
+): ResolvedRemoteRuntimePaths {
   const remoteWorkspaceDir = params.remoteWorkspaceDir;
   if (
     !path.posix.isAbsolute(remoteWorkspaceDir) ||

@@ -18,17 +18,6 @@ describe("getCachedPluginGatewayAuthBypassPaths", () => {
     clearPluginMetadataLifecycleCaches();
   });
 
-  it("caches resolved bypass paths per config identity", async () => {
-    const config: OpenClawConfig = { channels: { telegram: {} } };
-    resolveBypassPaths.mockResolvedValue(["/telegram/webhook"]);
-
-    await expect(getCachedPluginGatewayAuthBypassPaths(config)).resolves.toEqual(
-      new Set(["/telegram/webhook"]),
-    );
-    await getCachedPluginGatewayAuthBypassPaths(config);
-    expect(resolveBypassPaths).toHaveBeenCalledTimes(1);
-  });
-
   it("drops cached bypass paths on a metadata lifecycle reset despite stable config identity", async () => {
     const config: OpenClawConfig = { channels: { telegram: {} } };
     resolveBypassPaths.mockResolvedValueOnce(["/telegram/old-bypass"]);

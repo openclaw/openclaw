@@ -3,6 +3,7 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
@@ -16,6 +17,7 @@ const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
 );
 
 export function scheduleRestartSentinelWakeAfterReady(params: {
+  scheduler: GatewayScheduler;
   deps: CliDeps;
   context?: DeliveryQueueStateContext;
   log: { warn: (msg: string) => void };
@@ -25,6 +27,7 @@ export function scheduleRestartSentinelWakeAfterReady(params: {
   let stopped = false;
   const imports = new Set<Promise<unknown>>();
   const timer = scheduleGatewayGenerationTimer({
+    scheduler: params.scheduler,
     delayMs: 750,
     origin: "restart-sentinel:wake",
     shouldRun: params.shouldRun,

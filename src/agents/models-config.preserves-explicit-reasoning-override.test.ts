@@ -27,17 +27,6 @@ function createMinimaxModel(
   } as NonNullable<ProviderConfig["models"]>[number];
 }
 
-function createMinimaxModelWithoutReasoning(): NonNullable<ProviderConfig["models"]>[number] {
-  return {
-    id: MINIMAX_MODEL_ID,
-    name: "MiniMax M2.7",
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1_000_000,
-    maxTokens: 8192,
-  } as NonNullable<ProviderConfig["models"]>[number];
-}
-
 function mergedMinimaxModel(
   explicitModel: NonNullable<ProviderConfig["models"]>[number],
 ): NonNullable<ProviderConfig["models"]>[number] | undefined {
@@ -61,7 +50,7 @@ describe("models-config: explicit reasoning override", () => {
     const merged = mergeProviders({
       implicit: {},
       explicit: {
-        minimax: createMinimaxProvider(createMinimaxModelWithoutReasoning()),
+        minimax: createMinimaxProvider(createMinimaxModel()),
       },
     }).minimax?.models?.find((model) => model.id === MINIMAX_MODEL_ID);
 

@@ -616,34 +616,32 @@ describe("native service command inspection", () => {
     },
   );
 
-  it.each(["o'brien\\cash$", "first line\r\n  second line\nthird 'quoted' \\cash$"])(
-    "reads the recorded generated literal in strict mode: %j",
-    async (literal) => {
-      const envFile = resolveLaunchAgentEnvironmentReadOptions(
-        env,
-        label,
-      ).expectedEnvironmentFilePath;
-      await writeFile(
+  it("reads the recorded multiline generated literal in strict mode", async () => {
+    const literal = "first line\r\n  second line\nthird 'quoted' \\cash$";
+    const envFile = resolveLaunchAgentEnvironmentReadOptions(
+      env,
+      label,
+    ).expectedEnvironmentFilePath;
+    await writeFile(
+      envFile,
+      `export OPENCLAW_STATE_DIR='/recorded-state'\nexport NODE_OPTIONS=''\nexport QUOTE=${quoteLaunchAgentEnvironmentValue(literal)}\n`,
+    );
+    await writeFile(
+      resolveLaunchAgentPlistPath(env),
+      renderPlist([
+        LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+        resolveLaunchAgentEnvWrapperPath(env, label),
         envFile,
-        `export OPENCLAW_STATE_DIR='/recorded-state'\nexport NODE_OPTIONS=''\nexport QUOTE=${quoteLaunchAgentEnvironmentValue(literal)}\n`,
-      );
-      await writeFile(
-        resolveLaunchAgentPlistPath(env),
-        renderPlist([
-          LAUNCH_AGENT_ENV_WRAPPER_SHELL,
-          resolveLaunchAgentEnvWrapperPath(env, label),
-          envFile,
-          ...programArguments,
-        ]),
-      );
-      await expect(
-        readLaunchAgentProgramArguments(env, { requireEffective: true }),
-      ).resolves.toMatchObject({
-        programArguments,
-        environment: { OPENCLAW_STATE_DIR: "/recorded-state", NODE_OPTIONS: "", QUOTE: literal },
-      });
-    },
-  );
+        ...programArguments,
+      ]),
+    );
+    await expect(
+      readLaunchAgentProgramArguments(env, { requireEffective: true }),
+    ).resolves.toMatchObject({
+      programArguments,
+      environment: { OPENCLAW_STATE_DIR: "/recorded-state", NODE_OPTIONS: "", QUOTE: literal },
+    });
+  });
 
   it.each([
     "echo unsupported-command",

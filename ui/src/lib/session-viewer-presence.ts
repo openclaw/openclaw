@@ -31,6 +31,13 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
 
   const isActive = () => watchedByOwner.size > 0;
 
+  const clearReceipt = () => {
+    lastHello = null;
+    lastSignature = null;
+    acknowledgedSignature = null;
+    acknowledgedGeneration = 0;
+  };
+
   const visibleSessionKeys = (): string[] => {
     const hello = gateway.snapshot.hello;
     const keys = new Set<string>();
@@ -49,18 +56,12 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     sync,
     onAttach: () => {
       knownClient = gateway.snapshot.client;
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
+      clearReceipt();
     },
     onDetach: () => {
       requestGeneration += 1;
       retireRequest();
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
+      clearReceipt();
     },
   });
   const { retry } = lifecycle;
@@ -71,10 +72,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     if (client !== knownClient) {
       retry.reset();
       knownClient = client;
-      lastHello = null;
-      lastSignature = null;
-      acknowledgedSignature = null;
-      acknowledgedGeneration = 0;
+      clearReceipt();
     }
     const available =
       snapshot.phase === "connected" &&

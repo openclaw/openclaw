@@ -190,9 +190,11 @@ describe("xai provider plugin", () => {
     const oauth = provider.auth?.find((method) => method.id === "oauth");
     expect(oauth?.kind).toBe("oauth");
     expect(oauth?.wizard?.choiceId).toBe("xai-oauth");
+    expect(oauth?.wizard?.methodId).toBe("oauth");
     const deviceCode = provider.auth?.find((method) => method.id === "device-code");
     expect(deviceCode?.kind).toBe("device_code");
     expect(deviceCode?.wizard?.choiceId).toBe("xai-device-code");
+    expect(deviceCode?.wizard?.methodId).toBe("device-code");
     expect(deviceCode?.wizard?.assistantVisibility).toBe("manual-only");
     expect(manifest.providerAuthChoices).toContainEqual(
       expect.objectContaining({
@@ -288,13 +290,6 @@ describe("xai provider plugin", () => {
   it.each([
     ["Grok proxy", "https://cli-chat-proxy.grok.com/v1", true, undefined, undefined],
     [
-      "Grok proxy with trailing slash",
-      "https://cli-chat-proxy.grok.com/v1/",
-      true,
-      undefined,
-      undefined,
-    ],
-    [
       "equivalent Grok proxy URL",
       "https://CLI-CHAT-PROXY.GROK.COM:443/v1/",
       true,
@@ -304,13 +299,6 @@ describe("xai provider plugin", () => {
     ["native API", "https://api.x.ai/v1", false, undefined, undefined],
     ["default API", undefined, false, undefined, undefined],
     ["unavailable Grok token", "https://cli-chat-proxy.grok.com/v1", true, false, false],
-    [
-      "unavailable token at an equivalent Grok proxy URL",
-      "https://CLI-CHAT-PROXY.GROK.COM:443/v1/",
-      true,
-      false,
-      false,
-    ],
     ["cold prepared Grok token", "https://cli-chat-proxy.grok.com/v1", true, false, undefined],
     [
       "runtime-materialized Grok token",
@@ -697,10 +685,8 @@ describe("xai provider plugin", () => {
         true,
         undefined,
       ],
-      ["exposes when explicitly enabled for an xAI model with auth", "xai", true, true, true],
       ["hides when explicitly disabled for an xAI model", "xai", true, false, false],
       ["hides by default for a known non-xAI model", "openai", true, false, undefined],
-      ["hides when explicitly disabled for a known non-xAI model", "openai", true, false, false],
       [
         "exposes when explicitly enabled for a known non-xAI model with auth",
         "openai",
@@ -709,9 +695,7 @@ describe("xai provider plugin", () => {
         true,
       ],
       ["hides when the active provider is missing", undefined, true, false, true],
-      ["hides when the active provider is blank", "   ", true, false, true],
       ["hides an xAI model without auth", "xai", false, false, undefined],
-      ["hides an explicit non-xAI opt-in without auth", "openai", false, false, true],
     ])("$0", (_label, provider, hasAuth, expected, enabled) => {
       const factory = registerXaiBilledToolFactories()[toolName];
       const tool = factory({

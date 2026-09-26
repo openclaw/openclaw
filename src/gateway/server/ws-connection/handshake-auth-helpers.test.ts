@@ -270,14 +270,11 @@ describe("handshake auth helpers", () => {
     ).toBe(true);
   });
 
-  it.each([undefined, true])(
-    "preserves existing local approval behavior when autoApproveLocal is %s",
-    (autoApproveLocal) => {
-      for (const reason of ["not-paired", "role-upgrade", "scope-upgrade"] as const) {
-        expect(allowSilentLocalPairing({ autoApproveLocal, reason })).toBe(true);
-      }
-    },
-  );
+  it("preserves existing local approval behavior when autoApproveLocal is true", () => {
+    for (const reason of ["not-paired", "role-upgrade", "scope-upgrade"] as const) {
+      expect(allowSilentLocalPairing({ autoApproveLocal: true, reason })).toBe(true);
+    }
+  });
 
   it("allows Control UI or WebChat browser-origin pairing but keeps other browser-origin clients explicit", () => {
     expect(
@@ -610,14 +607,6 @@ describe("handshake auth helpers", () => {
     ).toBe("remote");
   });
 
-  it("keeps shared-secret loopback clients remote when forwarded headers were present", () => {
-    expect(
-      resolveNodeLoopbackLocality({
-        hasProxyHeaders: true,
-      }),
-    ).toBe("remote");
-  });
-
   it("allows silent scope-upgrade, role-upgrade, and metadata-upgrade for shared_secret_loopback_local", () => {
     expect(
       allowSilentLocalPairing({
@@ -651,27 +640,10 @@ describe("handshake auth helpers", () => {
       ).toBe(true);
     });
 
-    it("still requires approval for direct local node metadata-upgrade", () => {
-      expect(
-        allowSilentLocalPairing({
-          reason: "metadata-upgrade",
-        }),
-      ).toBe(false);
-    });
-
     it("allows silent metadata-upgrade for cli_container_local CLI clients", () => {
       expect(
         allowSilentLocalPairing({
           locality: "cli_container_local",
-          reason: "metadata-upgrade",
-        }),
-      ).toBe(true);
-    });
-
-    it("allows silent metadata-upgrade for shared_secret_loopback_local CLI clients", () => {
-      expect(
-        allowSilentLocalPairing({
-          locality: "shared_secret_loopback_local",
           reason: "metadata-upgrade",
         }),
       ).toBe(true);

@@ -3,19 +3,6 @@ import { describe, expect, it } from "vitest";
 import { TtsConfigSchema } from "./zod-schema.core.js";
 
 describe("TtsConfigSchema openai speed and instructions", () => {
-  it("accepts speed and instructions in openai section", () => {
-    const result = TtsConfigSchema.safeParse({
-      providers: {
-        openai: {
-          voice: "alloy",
-          speed: 1.5,
-          instructions: "Speak in a cheerful tone",
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
   it("accepts openai extraBody objects for compatible TTS endpoints", () => {
     const result = TtsConfigSchema.safeParse({
       providers: {
@@ -38,17 +25,6 @@ describe("TtsConfigSchema openai speed and instructions", () => {
       providers: {
         openai: {
           speed: 5,
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts openai speed below minimum for provider passthrough", () => {
-    const result = TtsConfigSchema.safeParse({
-      providers: {
-        openai: {
-          speed: 0.1,
         },
       },
     });

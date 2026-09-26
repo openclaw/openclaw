@@ -1,6 +1,5 @@
 import { channel } from "node:diagnostics_channel";
 import { totalmem } from "node:os";
-// Diagnostic memory helpers capture process memory facts for support diagnostics.
 import { getHeapStatistics } from "node:v8";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -10,7 +9,6 @@ import {
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
-// Diagnostic memory sampler with threshold/growth pressure detection and repeat suppression.
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
 const DEFAULT_RSS_WARNING_BYTES = 1536 * MB;

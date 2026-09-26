@@ -179,7 +179,7 @@ describe("legacy Web Push Doctor migration", () => {
       await gatewayLock.release();
     }
 
-    expect(blocked.warnings[0]).toContain("Gateway or another SQLite maintenance command");
+    expect(blocked.warnings[0]).toContain("gateway already running");
     expect(fs.existsSync(subscriptionsPath!)).toBe(true);
     expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
 
