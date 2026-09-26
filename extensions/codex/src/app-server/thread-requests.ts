@@ -166,11 +166,12 @@ export type CodexThreadConfigurationContext = CodexThreadPromptContext &
     | "scheduledRuntimeAuthority"
   >;
 
-type CodexThreadConfigurationOptions = {
+export type CodexThreadConfigurationOptions = {
   cwd?: string;
   dynamicTools?: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  /** Skill catalog carried with thread developer instructions; refreshable, never generic policy. */
   skillsInstructions?: string;
   config?: JsonObject;
   nativeCodeModeEnabled?: boolean;

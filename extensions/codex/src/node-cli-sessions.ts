@@ -1,4 +1,3 @@
-// Codex plugin module implements node cli sessions behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";

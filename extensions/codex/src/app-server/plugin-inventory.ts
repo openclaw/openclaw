@@ -8,6 +8,7 @@ import type {
   CodexAppInventoryCache,
   CodexAppInventoryCacheRead,
   CodexAppInventoryRequest,
+  CodexAppInventorySnapshot,
 } from "./app-inventory-cache.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -329,11 +330,18 @@ export function resolveRecoverableCodexPluginConfigKeys(params: {
     .toSorted();
 }
 
-async function listCodexPluginMetadata(
-  params: ReadCodexPluginInventoryParams,
+export async function listCodexPluginMetadata(
+  params: Pick<
+    ReadCodexPluginInventoryParams,
+    "request" | "metadataCache" | "appCacheKey" | "configCwd"
+  >,
   marketplaceName: CodexPluginMarketplaceName,
+  options: { forceRefetch?: boolean } = {},
 ): Promise<v2.PluginListResponse> {
-  const requestParams = buildPluginCatalogRequestParams(params, marketplaceName);
+  const requestParams = {
+    ...buildPluginCatalogRequestParams(params, marketplaceName),
+    ...(options.forceRefetch ? { forceRefetch: true } : {}),
+  };
   if (!params.metadataCache || !params.appCacheKey) {
     return (await params.request("plugin/list", requestParams)) as v2.PluginListResponse;
   }
@@ -537,20 +545,28 @@ function resolveOwnedApps(params: {
           needsAuth: true,
         };
       }
-      return Object.assign(
-        {
-          id: info.id,
-          name: app.name,
-          accessible: true,
-          enabled: findCodexAppById(installedApps, info.id)?.enabled ?? false,
-          // Modern plugin summaries carry no auth bit; account-authorized
-          // app/read metadata is the canonical connector access proof.
-          needsAuth: false,
-        },
-        resolveOwnedAppApprovalOverrideKeys(info),
-      );
+      return {
+        ...toCodexPluginOwnedAccountApp(info, findCodexAppById(installedApps, info.id)),
+        name: app.name,
+      };
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+export function toCodexPluginOwnedAccountApp(
+  app: CodexAppInventorySnapshot["apps"][number],
+  installedApp: v2.InstalledApp | undefined,
+): CodexPluginOwnedApp {
+  return {
+    id: app.id,
+    name: app.name,
+    accessible: true,
+    enabled: installedApp?.enabled ?? false,
+    // Modern plugin summaries carry no auth bit; account-authorized
+    // app/read metadata is the canonical connector access proof.
+    needsAuth: false,
+    ...resolveOwnedAppApprovalOverrideKeys(app),
+  };
 }
 
 /** Returns current tool keys whose overrides could bypass the requested reviewer. */

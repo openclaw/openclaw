@@ -324,7 +324,6 @@ describe("runCodexAppServerAttempt question refresh", () => {
         expect(JSON.stringify(questionResults)).toContain("Deep");
         const context = await projectContextEngineAssemblyForCodex({
           assembledMessages: carried,
-          originalHistoryMessages: [],
           prompt: "Continue with updated tools",
           toolPayloadMode: "preserve",
         });
