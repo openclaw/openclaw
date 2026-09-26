@@ -8,32 +8,6 @@ import java.time.format.DateTimeFormatter
 import java.util.Properties
 import java.util.zip.ZipFile
 
-abstract class GenerateAppActionShortcuts : DefaultTask() {
-  @get:InputFile
-  @get:PathSensitive(PathSensitivity.NONE)
-  abstract val templateFile: RegularFileProperty
-
-  @get:Input
-  abstract val applicationId: Property<String>
-
-  @get:OutputDirectory
-  abstract val outputDirectory: DirectoryProperty
-
-  @TaskAction
-  fun generate() {
-    val target = outputDirectory.file("xml/shortcuts.xml").get().asFile
-    target.parentFile.mkdirs()
-    // Google Play requires a literal package name, not a string resource reference.
-    target.writeText(
-      templateFile
-        .get()
-        .asFile
-        .readText()
-        .replace("\${applicationId}", applicationId.get()),
-    )
-  }
-}
-
 abstract class ExtractCloudflareSodium : DefaultTask() {
   @get:InputFile
   @get:PathSensitive(PathSensitivity.NONE)
@@ -238,13 +212,6 @@ val extractCloudflareSodiumTest =
   }
 androidComponents.onVariants { variant ->
   variant.sources.jniLibs?.addGeneratedSourceDirectory(extractCloudflareSodium, ExtractCloudflareSodium::outputDirectory)
-  val generateShortcuts =
-    tasks.register<GenerateAppActionShortcuts>("generate${variant.name.replaceFirstChar(Char::titlecase)}AppActionShortcuts") {
-      templateFile.set(layout.projectDirectory.file("src/main/shortcuts.xml"))
-      applicationId.set(variant.applicationId)
-      outputDirectory.set(layout.buildDirectory.dir("generated/app-action-shortcuts/${variant.name}/res"))
-    }
-  variant.sources.res?.addGeneratedSourceDirectory(generateShortcuts, GenerateAppActionShortcuts::outputDirectory)
 }
 
 ksp {
