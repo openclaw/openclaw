@@ -218,12 +218,7 @@ class IncludeProcessor {
     return this.boundary.configRoot.rootDir;
   }
 
-  /**
-   * Driver loop for the include traversal. Each container the resolver descends
-   * into becomes a suspended generator frame on this heap-allocated stack
-   * instead of a call frame, so document nesting costs heap and previously
-   * accepted deep configs keep resolving instead of overflowing the call stack.
-   */
+  // Suspend child traversals on the heap so config depth cannot exhaust the call stack.
   process(obj: unknown): unknown {
     const stack: Array<Generator<TraversalYield, unknown, unknown>> = [];
     let current = this.traverseValue(obj, null, false, {
@@ -253,10 +248,6 @@ class IncludeProcessor {
     }
   }
 
-  /**
-   * Resolves one value, yielding each child container to the driver and being
-   * resumed with its resolved result. Scalars resolve without a frame.
-   */
   private *traverseValue(
     value: unknown,
     pathLink: IncludePathLink | null,

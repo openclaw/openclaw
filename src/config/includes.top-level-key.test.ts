@@ -86,9 +86,6 @@ describe("resolveConfigIncludesForTopLevelKey", () => {
   });
 });
 
-// The resolver walks nested documents on an explicit work stack, so document
-// depth costs heap instead of call frames and previously accepted deep values
-// keep loading.
 describe("resolveConfigIncludes deep nesting", () => {
   it("resolves object nesting past the previously rejected depth budget", () => {
     expectNestedPath(resolve(nestedObjects(600)), 600, "x", "leaf");
@@ -98,11 +95,11 @@ describe("resolveConfigIncludes deep nesting", () => {
     expectNestedPath(resolve(nestedObjects(4_000)), 4_000, "x", "leaf");
   });
 
-  it("resolves 100,000-level object documents on the work stack", () => {
+  it("preserves 100,000 levels of object nesting", () => {
     expectNestedPath(resolve(nestedObjects(100_000)), 100_000, "x", "leaf");
   });
 
-  it("resolves 100,000-level array documents on the work stack", () => {
+  it("preserves 100,000 levels of array nesting", () => {
     expectNestedPath(resolve(nestedArrays(100_000)), 100_000, "0", "leaf");
   });
 
