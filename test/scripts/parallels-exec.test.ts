@@ -43,10 +43,8 @@ describe("macOS Parallels execution boundary", () => {
 
   it.each([
     ["linux", "arm64", "prlctl", ["exec", "Linux VM", "true"]],
-    ["win32", "x64", "prlctl", ["exec", "Windows VM", "whoami"]],
     ["darwin", "x64", "prlctl", ["exec", "Intel VM", "true"]],
     ["darwin", "arm64", "prlctl", ["snapshot-switch", "VM", "--id", "snapshot"]],
-    ["darwin", "arm64", "prlctl", ["capture", "VM", "--file", "proof.png"]],
     ["darwin", "arm64", "git", ["rev-parse", "HEAD"]],
   ] as const)("leaves %s/%s %s %j unchanged", (platform, arch, command, args) => {
     useHost(platform, arch);

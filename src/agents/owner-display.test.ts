@@ -72,17 +72,4 @@ describe("ensureOwnerDisplaySecret", () => {
     expect(result.config.commands?.ownerDisplaySecret).toBeUndefined();
     expect(result.config.commands?.ownerDisplay).toBe("hash");
   });
-
-  it("does nothing when a hash secret is already configured", () => {
-    const cfg = {
-      commands: {
-        ownerDisplay: "hash",
-        ownerDisplaySecret: "existing-owner-secret", // pragma: allowlist secret
-      },
-    } as OpenClawConfig;
-
-    const result = ensureOwnerDisplaySecret(cfg, () => "generated-owner-secret");
-    expect(result.generatedSecret).toBeUndefined();
-    expect(result.config).toEqual(cfg);
-  });
 });

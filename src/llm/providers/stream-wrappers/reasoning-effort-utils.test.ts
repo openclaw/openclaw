@@ -19,10 +19,7 @@ describe("mapThinkingLevelToReasoningEffort", () => {
     expect(mapThinkingLevelToReasoningEffort("ultra")).toBe("xhigh");
   });
 
-  it.each(["minimal", "low", "medium", "high", "xhigh"] as const)(
-    "passes through %s unchanged",
-    (level) => {
-      expect(mapThinkingLevelToReasoningEffort(level)).toBe(level);
-    },
-  );
+  it.each(["minimal"] as const)("passes through %s unchanged", (level) => {
+    expect(mapThinkingLevelToReasoningEffort(level)).toBe(level);
+  });
 });

@@ -1,4 +1,3 @@
-// Control UI controller for the Logbook tab: state, gateway calls, polling.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type {

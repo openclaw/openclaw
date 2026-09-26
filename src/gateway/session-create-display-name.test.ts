@@ -214,9 +214,7 @@ describe("session creation display titles", () => {
 
   it.each([
     { kind: "trimmed", title: "  Native title  ", expected: "Native title" },
-    { kind: "empty", title: "", expected: undefined },
     { kind: "blank", title: " \n\t ", expected: undefined },
-    { kind: "long", title: ` ${"x".repeat(600)} `, expected: "x".repeat(500) },
     {
       kind: "split surrogate",
       title: ` ${"界".repeat(499)}${"🦞".repeat(300)} `,

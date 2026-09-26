@@ -41,6 +41,7 @@ import {
   delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mts";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
+import { findTypecheckInertPaths } from "../../scripts/lib/typecheck-inert.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   cleanupTempDirs,
@@ -2752,6 +2753,77 @@ describe("scripts/changed-lanes", () => {
     expect(commands.some((command) => command.args[0] === "lint:tmp:tsgo-core-boundary")).toBe(
       expected,
     );
+  });
+
+  it.each([false, true])(
+    "retains non-typecheck gates with inert core edits (mixed=%s)",
+    (mixed) => {
+      const inert = "src/gateway/control-plane-rate-limit.ts";
+      const remaining = mixed ? ["src/gateway/server.ts"] : ["docs/gateway/authentication.md"];
+      const result = detectChangedLanes([inert, ...remaining]);
+      const plan = createChangedCheckPlan(result, {
+        typecheckResult: detectChangedLanesForPaths({ paths: remaining, base: "HEAD" }),
+        env: {},
+      });
+      const names = plan.commands.map((command) => command.name);
+      expect(names.includes("core tsgo graph boundary")).toBe(mixed);
+      expect(names.some((name) => name.startsWith("typecheck"))).toBe(mixed);
+      expect(plan.commands.some((command) => command.args[0]?.startsWith("tsgo:"))).toBe(mixed);
+      expect(names.some((name) => name.startsWith("lint core"))).toBe(true);
+      expect(names).toEqual(
+        expect.arrayContaining([
+          "format changed files",
+          "line-cap growth ratchet",
+          "max-lines suppression ratchet",
+          "assertion SAFETY comment ratchet",
+          "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
+        ]),
+      );
+    },
+  );
+
+  it.each([
+    ["package.json", true],
+    ["CHANGELOG.md", false],
+  ])("keeps unguarded release metadata typechecks for %s: %s", (companion, expected) => {
+    const result = detectChangedLanes(["src/gateway/control-plane-rate-limit.ts", companion]);
+    const plan = createChangedCheckPlan(result, {
+      typecheckResult: detectChangedLanes([companion]),
+      env: {},
+    });
+    expect(plan.commands.some((command) => command.name.startsWith("typecheck"))).toBe(expected);
+  });
+
+  it("compares regular working files with the merge base, excluding path lifecycle changes", () => {
+    const dir = renameTempDirs.make("openclaw-inert-paths-");
+    git(dir, ["init", "-q"]);
+    for (const file of ["kept.ts", "renamed.ts", "deleted.ts", "linked.ts"]) {
+      writeRepoFile(dir, file, "// old\nexport const x = 1;\n");
+    }
+    symlinkSync("kept.ts", path.join(dir, "was-link.ts"));
+    const invalidUtf8 = (byte: number) =>
+      Buffer.concat([
+        Buffer.from("// "),
+        Buffer.from([byte]),
+        Buffer.from("\nexport const x = 1;\n"),
+      ]);
+    writeFileSync(path.join(dir, "bytes.ts"), invalidUtf8(0xff));
+    commitAll(dir, "base");
+    const base = git(dir, ["rev-parse", "HEAD"]);
+    writeRepoFile(dir, "kept.ts", "// branch\nexport const x = 1;\n");
+    commitAll(dir, "branch comment");
+    writeRepoFile(dir, "kept.ts", "// working tree\nexport const x = 1;\n");
+    renameSync(path.join(dir, "renamed.ts"), path.join(dir, "moved.ts"));
+    unlinkSync(path.join(dir, "deleted.ts"));
+    unlinkSync(path.join(dir, "linked.ts"));
+    symlinkSync("kept.ts", path.join(dir, "linked.ts"));
+    unlinkSync(path.join(dir, "was-link.ts"));
+    writeRepoFile(dir, "was-link.ts", "// old\nexport const x = 1;\n");
+    writeFileSync(path.join(dir, "bytes.ts"), invalidUtf8(0xfe));
+    writeRepoFile(dir, "added.ts", "// old\nexport const x = 1;\n");
+    const paths = listChangedPathsFromGit({ base, cwd: dir });
+    expect(findTypecheckInertPaths({ paths, base, cwd: dir })).toEqual(["kept.ts"]);
+    expect(findTypecheckInertPaths({ paths, base: "missing-ref", cwd: dir })).toEqual([]);
   });
 
   it("runs deprecation hygiene checks for outcome-changing paths and all lanes", () => {

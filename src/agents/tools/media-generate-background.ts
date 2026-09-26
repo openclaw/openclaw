@@ -11,6 +11,7 @@ import {
   VIDEO_GENERATION_TASK_KIND,
 } from "../media-generation-task-status.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { ToolInputError, readToolStringParam } from "./common.js";
 import {
   buildMediaGenerationStartedToolResult,
@@ -33,7 +34,6 @@ import {
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
 import { applyAgentDefaultModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
-import type { ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 export type MediaGenerateToolOptions = {
   config?: OpenClawConfig;

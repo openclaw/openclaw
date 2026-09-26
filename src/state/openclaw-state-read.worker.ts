@@ -68,6 +68,8 @@ import {
   readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshot,
 } from "../tasks/task-registry.store.kernel.js";
+import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
+import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
 import {
   readAgentDatabaseDeletionSnapshotInDatabase,
   readAgentDeletionJournalStatusInDatabase,
@@ -676,7 +678,9 @@ serveOwnedWorkerTasks(
                     ),
                   };
                 }
-                return readStateRegistryCommand(db, command);
+                return isTuiLastSessionReadCommand(command)
+                  ? readTuiLastSessionCommand(db, command)
+                  : readStateRegistryCommand(db, command);
               },
               ...locationArgs,
             );
