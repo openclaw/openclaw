@@ -251,6 +251,36 @@ describe("fleet backup runtime", () => {
     await expect(tar.t({ file: archivePath })).resolves.toBeUndefined();
   });
 
+  it.each(["hardlink", "exclusive-copy"] as const)(
+    "rejects a foreign archive replacing its %s publication during directory sync",
+    async (method) => {
+      const archivePath = path.join(root, "replaced-before-sync.tgz");
+      const replacementPath = path.join(root, "replacement.tgz");
+      await fs.writeFile(replacementPath, "foreign archive");
+      if (method === "exclusive-copy") {
+        forceJavaScriptCopyFallback();
+      }
+      const publicationMethods: string[] = [];
+      __setFsSafeTestHooksForTest({
+        beforePublishDirectorySync: async (publishedMethod, targetPath) => {
+          if (targetPath === archivePath && publicationMethods.length === 0) {
+            publicationMethods.push(publishedMethod);
+            await fs.rename(replacementPath, targetPath);
+          }
+        },
+      });
+
+      const [publication] = await Promise.allSettled([backupFleetCell(backupParams(archivePath))]);
+      const target = await fs.readFile(archivePath, "utf8");
+
+      expect({ publicationMethods, publication: publication.status, target }).toEqual({
+        publicationMethods: [method],
+        publication: "rejected",
+        target: "foreign archive",
+      });
+    },
+  );
+
   it("removes an interrupted owned copy and allows a backup retry", async () => {
     const archivePath = path.join(root, "interrupted.tgz");
     interruptCopy(archivePath, (targetPath) => fs.writeFile(targetPath, "partial archive"));

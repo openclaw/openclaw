@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import {
@@ -102,7 +103,7 @@ export async function publishFileNoClobber(
     durability: "fail-closed" | "degrade";
   },
 ) {
-  const sourceIdentity = await fs.lstat(sourcePath);
+  const sourceIdentity = await fs.lstat(sourcePath, { bigint: true });
   const published = await publishFileExclusive({
     sourcePath,
     targetPath,
@@ -122,20 +123,52 @@ export async function publishFileNoClobber(
     }
   }
 
-  if (options.moveSource) {
-    try {
-      const currentSource = await fs.lstat(sourcePath);
-      if (!currentSource.isFile() || !sameFileIdentity(currentSource, sourceIdentity)) {
+  try {
+    const currentTarget = fsSync.lstatSync(targetPath);
+    // The numeric receipt detects observable drift, not exact copy ownership
+    // when Windows identities are unknown or rounded. It never authorizes target deletion.
+    if (
+      !currentTarget.isFile() ||
+      !sameFileIdentity(currentTarget, published.identity) ||
+      currentTarget.size !== published.identity.size ||
+      currentTarget.mtimeMs !== published.identity.mtimeMs ||
+      currentTarget.birthtimeMs !== published.identity.birthtimeMs ||
+      (published.method === "hardlink" &&
+        !sameFileIdentity(fsSync.lstatSync(targetPath, { bigint: true }), sourceIdentity))
+    ) {
+      throw new Error(`File publication target changed before completion: ${targetPath}`);
+    }
+
+    if (options.moveSource) {
+      const currentSource = fsSync.lstatSync(sourcePath, { bigint: true });
+      // Source removal needs exact, known identity; tolerant read comparisons
+      // and the target's numeric receipt cannot supply that authority.
+      const unknownWindowsIdentity =
+        process.platform === "win32" &&
+        (sourceIdentity.dev === 0n ||
+          sourceIdentity.ino === 0n ||
+          currentSource.dev === 0n ||
+          currentSource.ino === 0n);
+      if (
+        !currentSource.isFile() ||
+        unknownWindowsIdentity ||
+        currentSource.dev !== sourceIdentity.dev ||
+        currentSource.ino !== sourceIdentity.ino ||
+        currentSource.size !== sourceIdentity.size ||
+        currentSource.mtimeNs !== sourceIdentity.mtimeNs ||
+        currentSource.birthtimeNs !== sourceIdentity.birthtimeNs
+      ) {
         throw new Error(`File publication source changed before removal: ${sourcePath}`);
       }
-      await fs.unlink(sourcePath);
-    } catch (error) {
-      throw postPublicationFailure({
-        error,
-        phase: published.method === "hardlink" ? "hardlink-verify" : "copy-verify",
-        published,
-      });
+      // Do not yield between the final fences and source removal.
+      fsSync.unlinkSync(sourcePath);
     }
+  } catch (error) {
+    throw postPublicationFailure({
+      error,
+      phase: published.method === "hardlink" ? "hardlink-verify" : "copy-verify",
+      published,
+    });
   }
 
   return { ...published, durability: degraded ? "degraded" : "durable" };

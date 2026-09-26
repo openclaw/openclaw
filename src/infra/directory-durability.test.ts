@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -30,13 +32,148 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const nativeConfig = getFsSafeNativeConfig();
 
 afterEach(() => {
+  __setFsSafeTestHooksForTest(undefined);
+  configureFsSafeNative(nativeConfig);
   durabilityTestState.publishSyncOutcome = undefined;
   vi.restoreAllMocks();
 });
 
+function forceJavaScriptCopyFallback() {
+  configureFsSafeNative({ mode: "off" });
+  vi.spyOn(fs, "link").mockRejectedValue(
+    Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),
+  );
+}
+
 describe("directory durability compatibility", () => {
+  it.each(["hardlink", "exclusive-copy"] as const)(
+    "moves its source after strict no-clobber publication completes (%s)",
+    async (method) => {
+      const directoryPath = tempDirs.make("openclaw-publish-move-");
+      const sourcePath = path.join(directoryPath, "source.txt");
+      const targetPath = path.join(directoryPath, "target.txt");
+      await fs.writeFile(sourcePath, "complete publication");
+      if (method === "exclusive-copy") {
+        forceJavaScriptCopyFallback();
+      }
+
+      const publication = await publishFileNoClobber(sourcePath, targetPath, {
+        strategy: method === "hardlink" ? "link-required" : "link-or-copy",
+        moveSource: true,
+        durability: "fail-closed",
+      });
+
+      expect(publication.method).toBe(method);
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("complete publication");
+      await expect(fs.lstat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each([
+    { method: "hardlink", moveSource: true },
+    { method: "hardlink", moveSource: false },
+    { method: "exclusive-copy", moveSource: true },
+    { method: "exclusive-copy", moveSource: false },
+  ] as const)(
+    "preserves source when target is replaced during publication sync ($method, moveSource: $moveSource)",
+    async ({ method, moveSource }) => {
+      const directoryPath = tempDirs.make("openclaw-publish-target-replaced-");
+      const sourcePath = path.join(directoryPath, "source.txt");
+      const targetPath = path.join(directoryPath, "target.txt");
+      const replacementPath = path.join(directoryPath, "replacement.txt");
+      await fs.writeFile(sourcePath, "complete publication");
+      await fs.writeFile(replacementPath, "racer");
+      const sourceIdentity = await fs.lstat(sourcePath, { bigint: true });
+      const replacementIdentity = await fs.lstat(replacementPath, { bigint: true });
+      expect({ dev: sourceIdentity.dev, ino: sourceIdentity.ino }).not.toEqual({
+        dev: replacementIdentity.dev,
+        ino: replacementIdentity.ino,
+      });
+      if (method === "exclusive-copy") {
+        forceJavaScriptCopyFallback();
+      }
+      const publicationMethods: string[] = [];
+      __setFsSafeTestHooksForTest({
+        beforePublishDirectorySync: async (publishedMethod, publishedPath) => {
+          if (path.resolve(publishedPath) === targetPath && publicationMethods.length === 0) {
+            publicationMethods.push(publishedMethod);
+            await fs.rename(replacementPath, targetPath);
+          }
+        },
+      });
+
+      const [publication] = await Promise.allSettled([
+        publishFileNoClobber(sourcePath, targetPath, {
+          strategy: method === "hardlink" ? "link-required" : "link-or-copy",
+          moveSource,
+          durability: "fail-closed",
+        }),
+      ]);
+      const [source, target] = await Promise.allSettled([
+        fs.readFile(sourcePath, "utf8"),
+        fs.readFile(targetPath, "utf8"),
+      ]);
+
+      expect({
+        publicationMethods,
+        publication: publication.status,
+        details:
+          publication.status === "rejected"
+            ? getPublishFileExclusiveFailureDetails(publication.reason)
+            : undefined,
+        source,
+        target,
+      }).toMatchObject({
+        publicationMethods: [method],
+        publication: "rejected",
+        details: { targetCreated: true, cleanup: "preserved" },
+        source: { status: "fulfilled", value: "complete publication" },
+        target: { status: "fulfilled", value: "racer" },
+      });
+    },
+  );
+
+  it.each(["hardlink", "exclusive-copy"] as const)(
+    "preserves a source replacement during %s publication sync",
+    async (method) => {
+      const directoryPath = tempDirs.make("openclaw-publish-source-replaced-");
+      const sourcePath = path.join(directoryPath, "source.txt");
+      const targetPath = path.join(directoryPath, "target.txt");
+      const replacementPath = path.join(directoryPath, "replacement.txt");
+      await fs.writeFile(sourcePath, "complete publication");
+      await fs.writeFile(replacementPath, "foreign source");
+      if (method === "exclusive-copy") {
+        forceJavaScriptCopyFallback();
+      }
+      const publicationMethods: string[] = [];
+      __setFsSafeTestHooksForTest({
+        beforePublishDirectorySync: async (publishedMethod, publishedPath) => {
+          if (path.resolve(publishedPath) === targetPath && publicationMethods.length === 0) {
+            publicationMethods.push(publishedMethod);
+            await fs.rename(replacementPath, sourcePath);
+          }
+        },
+      });
+
+      const error = await publishFileNoClobber(sourcePath, targetPath, {
+        strategy: method === "hardlink" ? "link-required" : "link-or-copy",
+        moveSource: true,
+        durability: "fail-closed",
+      }).catch((caught: unknown) => caught);
+
+      expect(publicationMethods).toEqual([method]);
+      expect(getPublishFileExclusiveFailureDetails(error)).toMatchObject({
+        targetCreated: true,
+        cleanup: "preserved",
+      });
+      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("foreign source");
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("complete publication");
+    },
+  );
+
   it("accepts completed and unnecessary strict sync outcomes", () => {
     expect(() => requireDirectorySync({ status: "synced" }, "test directory")).not.toThrow();
     expect(() => requireDirectorySync({ status: "not-needed" }, "test directory")).not.toThrow();
