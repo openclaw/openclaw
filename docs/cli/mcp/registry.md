@@ -248,4 +248,42 @@ These examples save server definitions only. Run `openclaw mcp doctor --probe` a
     Direct desktop-control servers inherit the permissions of the process they launch. Use narrow tool filters and OS-level permission prompts.
 
   </Tab>
+  <Tab title="Screenpipe">
+    [Screenpipe](https://screenpipe.com/download) records screen and selected audio
+    sources continuously while recording is enabled. Install and open its desktop
+    app on the same computer as the Gateway, complete its OS permission flow, and
+    enable **Settings → General → Auto-start** for background recording after
+    login. Keep Screenpipe running between OpenClaw sessions. Adding the MCP
+    server does not install the recorder, start capture, or grant permissions.
+
+    With Node.js and `npx` available to the Gateway:
+
+    ```bash
+    openclaw mcp add screenpipe \
+      --command npx \
+      --arg -y \
+      --arg screenpipe-mcp@0.20.0 \
+      --env SCREENPIPE_DISABLE_TELEMETRY=1 \
+      --include 'health-check,activity-summary,search-content,list-meetings,get-meeting'
+    openclaw mcp doctor screenpipe --probe
+    ```
+
+    The bridge defaults to `http://localhost:3030` and discovers the local API
+    key from the Screenpipe installation. On a remote Gateway, localhost refers
+    to the Gateway computer; this recipe does not connect to your laptop.
+
+    Ask the agent to run Screenpipe's `health-check`, then recall a recent
+    activity with Screenpipe timestamps. A successful MCP probe only proves
+    tool discovery, not active capture. If capture is stopped or permissions
+    are missing, resolve that in Screenpipe; respect an intentional pause.
+
+    This recipe exposes read-only recall tools. Retrieved excerpts enter the
+    conversation and may be sent to the agent's model provider. Review exclusions,
+    retention, and recordings in Screenpipe. Pausing capture leaves existing
+    history accessible. To disconnect, run `openclaw mcp unset screenpipe` and
+    ensure the running Gateway or agent applies the removal, restarting that
+    runtime if needed. Removing saved config alone does not revoke a connection
+    that a running runtime still holds.
+
+  </Tab>
 </Tabs>
