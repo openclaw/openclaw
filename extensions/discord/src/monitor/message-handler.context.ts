@@ -51,7 +51,7 @@ import { formatDiscordMediaText, resolveReferencedReplyMediaList } from "./messa
 import type { DiscordMediaInfo } from "./message-media.js";
 import { resolveDiscordMessageText } from "./message-text.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
-import { buildDiscordRoutePeer } from "./route-resolution.js";
+import { buildDiscordRoutePeer, isDiscordRuntimeAcpThreadBinding } from "./route-resolution.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -108,6 +108,7 @@ export async function buildDiscordMessageProcessContext(params: {
     channelConfig,
     baseSessionKey,
     boundSessionKey,
+    threadBinding,
     route,
     commandAuthorized,
     hasControlCommand,
@@ -418,7 +419,11 @@ export async function buildDiscordMessageProcessContext(params: {
     : undefined;
   const originatingTo = autoThreadContext?.OriginatingTo ?? dmConversationTarget ?? replyTarget;
   const effectiveSessionKey =
-    boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey;
+    boundSessionKey &&
+    route.sessionKey !== boundSessionKey &&
+    isDiscordRuntimeAcpThreadBinding(threadBinding)
+      ? route.sessionKey
+      : (boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey);
   const effectivePreviousTimestamp =
     effectiveSessionKey === route.sessionKey
       ? previousTimestamp
