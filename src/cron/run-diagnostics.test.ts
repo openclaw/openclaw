@@ -436,4 +436,37 @@ describe("cron run diagnostics", () => {
       },
     ]);
   });
+
+  it("records pre-execution validation failures from the tool summary", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "RESULT: exec parameter validation failed" }],
+        meta: {
+          toolSummary: {
+            calls: 1,
+            tools: ["exec"],
+            failures: 1,
+            unresolvedError: {
+              toolName: "exec",
+              validationErrorSummary: "exec tool validation failed: invalid arguments",
+            },
+          },
+        },
+      },
+      { finalStatus: "ok", nowMs: () => 600 },
+    );
+
+    expect(diagnostics).toEqual({
+      summary: "exec tool validation failed: invalid arguments",
+      entries: [
+        {
+          ts: 600,
+          source: "tool",
+          severity: "warn",
+          message: "exec tool validation failed: invalid arguments",
+          toolName: "exec",
+        },
+      ],
+    });
+  });
 });

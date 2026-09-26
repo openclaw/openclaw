@@ -5,6 +5,7 @@ import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
 } from "../agents/embedded-agent-runner/terminal-tool-failure.js";
+import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import { normalizeToolPolicyName as normalizePolicyToolName } from "../agents/tool-policy.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
@@ -262,6 +263,21 @@ export function createCronRunDiagnosticsFromAgentResult(
         ...opts,
         severity: opts?.finalStatus === "ok" ? "warn" : "error",
         toolName: terminalToolFailure.toolName,
+      }),
+    );
+  }
+  const toolSummary = asOptionalObjectRecord(meta.toolSummary);
+  const unresolvedError = asOptionalObjectRecord(toolSummary?.unresolvedError);
+  const validationErrorSummary = readToolValidationErrorSummary(
+    unresolvedError?.validationErrorSummary,
+  );
+  const unresolvedToolName = normalizeDiagnosticToolName(unresolvedError?.toolName);
+  if (validationErrorSummary && unresolvedToolName) {
+    diagnostics.push(
+      createCronRunDiagnosticsFromError("tool", validationErrorSummary, {
+        ...opts,
+        severity: opts?.finalStatus === "ok" ? "warn" : "error",
+        toolName: unresolvedToolName,
       }),
     );
   }

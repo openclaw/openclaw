@@ -384,4 +384,48 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
       });
     }
   });
+
+  it("persists and emits a warning for pre-execution tool validation failures", async () => {
+    const modelRef = { provider: "openai", model: "gpt-5.4" };
+    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "RESULT: exec parameter validation failed" }],
+      meta: {
+        agentMeta: {},
+        toolSummary: {
+          calls: 1,
+          tools: ["exec"],
+          failures: 1,
+          unresolvedError: {
+            toolName: "exec",
+            validationErrorSummary: "exec tool validation failed: invalid arguments",
+          },
+        },
+      },
+    });
+
+    const { finished, history } = await runPersistedDiagnosticCase({
+      cfg: configFor(modelRef),
+      modelRef,
+      name: "exec validation failure",
+    });
+
+    for (const outcome of [finished, history]) {
+      expect(outcome).toMatchObject({
+        status: "ok",
+        diagnostics: {
+          summary: "exec tool validation failed: invalid arguments",
+          entries: [
+            expect.objectContaining({
+              source: "tool",
+              severity: "warn",
+              message: "exec tool validation failed: invalid arguments",
+              toolName: "exec",
+            }),
+          ],
+        },
+      });
+    }
+  });
 });

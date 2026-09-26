@@ -28,4 +28,27 @@ describe("tool result summary", () => {
       });
     },
   );
+
+  it("carries a sanitized validation failure into the unresolved tool trace", () => {
+    const errors = createToolErrorState();
+    errors.recordFailure({
+      toolName: "exec",
+      validationErrorSummary: "exec tool validation failed: invalid arguments",
+    });
+
+    expect(
+      buildTraceToolSummary({
+        toolMetas: [{ toolName: "exec", isError: true }],
+        lastToolError: errors.read().lastToolError,
+      }),
+    ).toEqual({
+      calls: 1,
+      tools: ["exec"],
+      failures: 1,
+      unresolvedError: {
+        toolName: "exec",
+        validationErrorSummary: "exec tool validation failed: invalid arguments",
+      },
+    });
+  });
 });
