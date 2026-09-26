@@ -214,7 +214,8 @@ snapshot because history contains display text, not raw assistant-item text.
 
 SDK and ACP recovery share `recoverTerminalReply`: it collects all assistant
 items for the run in transcript order, preserves live item boundaries, and reads
-full messages when history truncated them. It scans at most ten 200-record pages;
+full messages when history truncated them. Recovered text preserves leading
+indentation and trailing whitespace. It scans at most ten 200-record pages;
 an incomplete scan reports unavailable instead of presenting a partial reply. The
 bounded `terminalReply.text` summary is never used as complete output. Local
 normalized recovery events have no `raw` field. Their `data.recovery.status`

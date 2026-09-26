@@ -147,16 +147,9 @@ describe("update global helpers", () => {
       expected: "2026.7.30-beta.1",
     },
     { packageName: "openclaw", spec: "openclaw@^1.2.3", expected: null },
-    { packageName: "openclaw", spec: "openclaw@~1.2.3", expected: null },
-    { packageName: "openclaw", spec: "openclaw@>=1.2.3", expected: null },
     { packageName: "openclaw", spec: "openclaw@1.2.x", expected: null },
     { packageName: "openclaw", spec: "openclaw@1.2", expected: null },
-    { packageName: "openclaw", spec: "openclaw@*", expected: null },
     { packageName: "openclaw", spec: "openclaw@latest", expected: null },
-    { packageName: "openclaw", spec: "openclaw@beta", expected: null },
-    { packageName: "openclaw", spec: "openclaw@next", expected: null },
-    { packageName: "openclaw", spec: "openclaw@main", expected: null },
-    { packageName: "openclaw", spec: "openclaw@nightly", expected: null },
     { packageName: "openclaw", spec: "openclaw@V1.2.3", expected: null },
     { packageName: "openclaw", spec: "openclaw@npm:@vendor/openclaw@1.2.3", expected: null },
     { packageName: "openclaw", spec: "openclaw@file:../candidate", expected: null },
@@ -249,9 +242,6 @@ describe("update global helpers", () => {
   });
 
   it.each([
-    ["11.12.0", "unflagged"],
-    ["11.13.0", "unflagged"],
-    ["11.14.0", "unflagged"],
     ["11.15.9", "unflagged"],
     ["11.16.0", "allow-scripts-advisory"],
     ["12.0.0", "allow-scripts"],

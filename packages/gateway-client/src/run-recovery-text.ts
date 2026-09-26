@@ -135,8 +135,7 @@ export async function recoverTerminalReply(params: {
                 return (part.type === "text" ||
                   part.type === "input_text" ||
                   part.type === "output_text") &&
-                  typeof part.text === "string" &&
-                  part.text.trim()
+                  typeof part.text === "string"
                   ? [part.text]
                   : [];
               })
@@ -149,7 +148,7 @@ export async function recoverTerminalReply(params: {
       }
       outputText += text;
     }
-    return { outputText: outputText.trim() };
+    return { outputText };
   } catch {
     signal.throwIfAborted();
     return { unavailable: "history-request-failed" };

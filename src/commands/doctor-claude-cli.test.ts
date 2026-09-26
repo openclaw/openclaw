@@ -29,6 +29,13 @@ vi.mock("../agents/agent-runtime-metadata.js", async (importOriginal) => ({
   resolveModelAgentRuntimeMetadata: resolveModelAgentRuntimeMetadataMock,
 }));
 
+const defaultClaudeConfig = {
+  agents: {
+    defaults: { model: { primary: "claude-cli/claude-sonnet-4-6" } },
+    entries: { main: { default: true } },
+  },
+};
+
 async function withTempHome<T>(
   run: (params: { homeDir: string; workspaceDir: string }) => Promise<T> | T,
 ): Promise<T> {
@@ -116,23 +123,13 @@ describe("noteClaudeCliHealth", () => {
       fs.mkdirSync(projectDir, { recursive: true });
 
       const noteFn = vi.fn();
-      noteClaudeCliHealth(
-        {
-          agents: {
-            defaults: {
-              model: { primary: "claude-cli/claude-sonnet-4-6" },
-            },
-            entries: { main: { default: true } },
-          },
-        },
-        {
-          homeDir,
-          workspaceDir,
-          noteFn,
-          isAuthenticated: () => true,
-          resolveCommandPath: () => "/opt/homebrew/bin/claude",
-        },
-      );
+      noteClaudeCliHealth(defaultClaudeConfig, {
+        homeDir,
+        workspaceDir,
+        noteFn,
+        isAuthenticated: () => true,
+        resolveCommandPath: () => "/opt/homebrew/bin/claude",
+      });
 
       expect(noteFn).not.toHaveBeenCalled();
     });
@@ -235,23 +232,13 @@ describe("noteClaudeCliHealth", () => {
   it("reports when Claude CLI owns no active login", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       const noteFn = vi.fn();
-      noteClaudeCliHealth(
-        {
-          agents: {
-            defaults: {
-              model: { primary: "claude-cli/claude-sonnet-4-6" },
-            },
-            entries: { main: { default: true } },
-          },
-        },
-        {
-          homeDir,
-          workspaceDir,
-          noteFn,
-          isAuthenticated: () => false,
-          resolveCommandPath: () => "/opt/homebrew/bin/claude",
-        },
-      );
+      noteClaudeCliHealth(defaultClaudeConfig, {
+        homeDir,
+        workspaceDir,
+        noteFn,
+        isAuthenticated: () => false,
+        resolveCommandPath: () => "/opt/homebrew/bin/claude",
+      });
 
       const body = noteBody(noteFn);
       expect(body).toContain("Claude auth: not logged in.");
@@ -263,22 +250,12 @@ describe("noteClaudeCliHealth", () => {
   it("warns when the Claude binary is missing", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       const noteFn = vi.fn();
-      noteClaudeCliHealth(
-        {
-          agents: {
-            defaults: {
-              model: { primary: "claude-cli/claude-sonnet-4-6" },
-            },
-            entries: { main: { default: true } },
-          },
-        },
-        {
-          homeDir,
-          workspaceDir,
-          noteFn,
-          resolveCommandPath: () => undefined,
-        },
-      );
+      noteClaudeCliHealth(defaultClaudeConfig, {
+        homeDir,
+        workspaceDir,
+        noteFn,
+        resolveCommandPath: () => undefined,
+      });
 
       const body = noteBody(noteFn);
       expect(body).toContain('Binary: command "claude" was not found on PATH.');

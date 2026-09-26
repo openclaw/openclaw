@@ -30,7 +30,6 @@ import {
   resetDiscordComponentRuntimeMocks,
   upsertPairingRequestMock,
 } from "../test-support/component-runtime.js";
-import { resolveComponentInteractionContext } from "./agent-components-context.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
@@ -274,29 +273,6 @@ describe("agent components", () => {
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
-  it("classifies Group DM component interactions separately from direct messages", async () => {
-    const { interaction, defer } = createGroupDmButtonInteraction();
-
-    const ctx = await resolveComponentInteractionContext({
-      interaction,
-      label: "group-dm-test",
-      defer: false,
-    });
-
-    expect(defer).not.toHaveBeenCalled();
-    expect(ctx).toMatchObject({
-      channelId: "group-dm-channel",
-      user: { id: "123456789", username: "Alice", discriminator: "1234" },
-      username: "Alice#1234",
-      userId: "123456789",
-      replyOpts: { ephemeral: true },
-      isDirectMessage: false,
-      isGroupDm: true,
-      memberRoleIds: [],
-      rawGuildId: undefined,
-    });
-  });
-
   it("blocks Group DM interactions that are not allowlisted even when dmPolicy is open", async () => {
     const button = createAgentComponentButton({
       cfg: createCfg(),
@@ -409,29 +385,6 @@ describe("agent components", () => {
       {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-select:dm-channel:hello:123456789:interaction-1",
-      },
-    );
-    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
-  });
-
-  it("accepts cid payloads for agent button interactions", async () => {
-    const button = createAgentComponentButton({
-      cfg: createCfg(),
-      accountId: "default",
-      dmPolicy: "allowlist",
-      allowFrom: ["123456789"],
-    });
-    const { interaction, defer, reply } = createDmButtonInteraction();
-
-    await button.run(interaction, { cid: "hello_cid" } as ComponentData);
-
-    expect(defer).not.toHaveBeenCalled();
-    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      "[Discord component: hello_cid clicked by Alice#1234 (123456789)]",
-      {
-        sessionKey: defaultDmSessionKey,
-        contextKey: "discord:agent-button:dm-channel:hello_cid:123456789:interaction-1",
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();

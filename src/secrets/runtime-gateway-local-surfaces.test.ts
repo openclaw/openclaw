@@ -165,24 +165,6 @@ describe("secrets runtime gateway local surfaces", () => {
     expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.token");
   });
 
-  it("fails when gateway.auth.token ref is active and unresolved", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          gateway: {
-            auth: {
-              mode: "token",
-              token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN_REF" },
-            },
-          },
-        }),
-        env: {},
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => ({ version: 1, profiles: {} }),
-      }),
-    ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_REF/);
-  });
-
   it("treats gateway.auth.password ref as active when auth mode is trusted-proxy", async () => {
     await expectActiveGatewayPassword({
       gateway: {

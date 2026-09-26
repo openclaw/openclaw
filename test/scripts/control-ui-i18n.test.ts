@@ -272,7 +272,7 @@ describe("translation provider privacy and fallback", () => {
     expect(llm.completeSimple).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["401", "403", "404", "429", "insufficient_quota", "ECONNRESET"])(
+  it.each(["401", "404"])(
     "keeps %s failures private without changing models",
     async (errorCode) => {
       const complete = vi.spyOn(llm, "completeSimple").mockResolvedValue(

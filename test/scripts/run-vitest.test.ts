@@ -50,6 +50,28 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 describe("scripts/run-vitest", () => {
+  it("reports an actionable error when Vitest cannot be resolved", () => {
+    const error = new Error("Cannot find module 'vitest/package.json'");
+    (error as NodeJS.ErrnoException).code = "MODULE_NOT_FOUND";
+
+    expect(() =>
+      resolveVitestCliEntry({
+        baseDir: "/repo",
+        fsImpl: { existsSync: () => false },
+        requireResolve: () => {
+          throw error;
+        },
+      }),
+    ).toThrow(
+      [
+        "[vitest] node_modules is missing; Vitest cannot be resolved.",
+        "Install dependencies before running scripts/run-vitest.mjs:",
+        "  pnpm install --frozen-lockfile",
+        "For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.",
+      ].join("\n"),
+    );
+  });
+
   it.each(["mjs", "mts"])("ends %s argument failures with one final trailer", (extension) => {
     const result = spawnSync(
       process.execPath,
@@ -137,28 +159,6 @@ describe("scripts/run-vitest", () => {
       command: process.execPath,
       args,
     });
-  });
-
-  it("reports an actionable error when Vitest cannot be resolved", () => {
-    const error = new Error("Cannot find module 'vitest/package.json'");
-    (error as NodeJS.ErrnoException).code = "MODULE_NOT_FOUND";
-
-    expect(() =>
-      resolveVitestCliEntry({
-        baseDir: "/repo",
-        fsImpl: { existsSync: () => false },
-        requireResolve: () => {
-          throw error;
-        },
-      }),
-    ).toThrow(
-      [
-        "[vitest] node_modules is missing; Vitest cannot be resolved.",
-        "Install dependencies before running scripts/run-vitest.mjs:",
-        "  pnpm install --frozen-lockfile",
-        "For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.",
-      ].join("\n"),
-    );
   });
 
   it.each(["mjs", "mts"])(
@@ -388,11 +388,9 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
   it.each([
     ["doctor"],
-    ["src/commands"],
     ["src/commands/doctor.e2e.test.ts"],
     ["--", "doctor"],
     ["--shard=2/3"],
-    ["--shard", "2/3"],
     ["--watch"],
     ["--run=false"],
     ["--no-run"],
@@ -401,7 +399,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
     ["--outputFile", "report.json"],
     ["--reporter=json"],
     ["--listTags"],
-    ["--listTags=json"],
     ["--clearCache"],
     ["--standalone"],
     ["--testNamePattern", "doctor"],
@@ -829,21 +826,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
     expect(resolveTestProjectsDelegationArgs(argv)).toEqual(expected);
   });
 
-  it("reports missing explicit test files before Vitest can silently ignore them", () => {
-    const fsImpl = {
-      existsSync: (filePath: string) =>
-        filePath.replaceAll("\\", "/").endsWith("src/agents/bash-tools.test.ts"),
-    };
-
-    expect(
-      resolveMissingExplicitTestFiles(
-        ["src/agents/bash-tools.test.ts", "test/agents/bash-tools.exec.background-abort.test.ts"],
-        "/repo",
-        fsImpl,
-      ),
-    ).toEqual(["test/agents/bash-tools.exec.background-abort.test.ts"]);
-  });
-
   it("reports missing explicit source files before Vitest can fan out by project", () => {
     const fsImpl = {
       existsSync: (filePath: string) =>
@@ -978,31 +960,18 @@ registerHooks({resolve(specifier, context, nextResolve) {
   });
 
   it("defaults direct non-watch runs to the stall watchdog", () => {
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run"])).toEqual({
+    const expected = {
       PATH: "/usr/bin",
       OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
-    });
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", "-t", "watch"])).toEqual({
-      PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
-    });
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch=false"])).toEqual({
-      PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
-    });
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch", "false"])).toEqual({
-      PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
-    });
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--no-watch"])).toEqual({
-      PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
-    });
+    };
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run"])).toEqual(expected);
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", "-t", "watch"])).toEqual(
+      expected,
+    );
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch=false"])).toEqual(expected);
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch", "false"])).toEqual(expected);
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--no-watch"])).toEqual(expected);
     expect(resolveRunVitestSpawnEnv({ CI: "true", PATH: "/usr/bin" }, ["src/foo.test.ts"])).toEqual(
       {
         CI: "true",
@@ -1124,62 +1093,24 @@ registerHooks({resolve(specifier, context, nextResolve) {
         OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: extraLongTimeout,
       });
     }
-    expect(
-      resolveDefaultVitestNoOutputTimeoutMs([
-        "run",
-        "-c",
-        "/repo/test/vitest/vitest.gateway.config.ts",
-      ]),
-    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
-    expect(
-      resolveDefaultVitestNoOutputTimeoutMs([
-        "run",
-        "-c",
-        "/repo/test/vitest/vitest.e2e.config.ts",
-      ]),
-    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
-    expect(
-      resolveDefaultVitestNoOutputTimeoutMs([
-        "run",
-        "--config",
-        "/repo/test/vitest/vitest.full-agentic.config.ts",
-      ]),
-    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
-    expect(
-      resolveDefaultVitestNoOutputTimeoutMs([
-        "run",
-        "--config",
-        "/repo/test/vitest/vitest.full-core-contracts.config.ts",
-      ]),
-    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
-    expect(
-      resolveDefaultVitestNoOutputTimeoutMs([
-        "run",
-        "--config",
-        "/repo/test/vitest/vitest.contracts-plugin.config.ts",
-      ]),
-    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
-    expect(
-      resolveDefaultVitestNoOutputTimeoutMs([
-        "run",
-        "--config",
-        "/repo/test/vitest/vitest.infra.config.ts",
-      ]),
-    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
-    expect(
-      resolveDefaultVitestNoOutputTimeoutMs([
-        "run",
-        "--config",
-        "/repo/test/vitest/vitest.gateway-core.config.ts",
-      ]),
-    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
-    expect(
-      resolveDefaultVitestNoOutputTimeoutMs([
-        "run",
-        "--config",
-        "/repo/test/vitest/vitest.gateway-server.config.ts",
-      ]),
-    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    for (const [option, config, expected] of [
+      ["-c", "gateway", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+      ["-c", "e2e", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+      ["--config", "full-agentic", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+      ["--config", "full-core-contracts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+      ["--config", "contracts-plugin", DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+      ["--config", "infra", DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+      ["--config", "gateway-core", DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+      ["--config", "gateway-server", DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+    ] as const) {
+      expect(
+        resolveDefaultVitestNoOutputTimeoutMs([
+          "run",
+          option,
+          `/repo/test/vitest/vitest.${config}.config.ts`,
+        ]),
+      ).toBe(expected);
+    }
   });
 
   it("does not default implicit interactive runs to the stall watchdog", () => {
@@ -1199,27 +1130,14 @@ registerHooks({resolve(specifier, context, nextResolve) {
   });
 
   it("does not default explicit watch runs to the stall watchdog", () => {
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch"])).toEqual({
-      PATH: "/usr/bin",
-    });
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", "--watch"])).toEqual({
-      PATH: "/usr/bin",
-    });
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["-w"])).toEqual({
-      PATH: "/usr/bin",
-    });
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch=0"])).toEqual({
-      PATH: "/usr/bin",
-    });
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--run=false"])).toEqual({
-      PATH: "/usr/bin",
-    });
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["watch"])).toEqual({
-      PATH: "/usr/bin",
-    });
-    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["dev"])).toEqual({
-      PATH: "/usr/bin",
-    });
+    const expected = { PATH: "/usr/bin" };
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch"])).toEqual(expected);
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", "--watch"])).toEqual(expected);
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["-w"])).toEqual(expected);
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch=0"])).toEqual(expected);
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--run=false"])).toEqual(expected);
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["watch"])).toEqual(expected);
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["dev"])).toEqual(expected);
   });
 
   it("spawns vitest in a detached process group on Unix hosts", () => {

@@ -397,7 +397,7 @@ export async function updateGitCheckout(params: {
         devTarget,
         refreshedRemotes: fetched.refreshedRemotes,
         beforeSha,
-        beforeBuiltCommit,
+        beforeRuntimeVerified: recovery.serviceRestartSafe,
         sourceRuntimePrepared: opts.sourceRuntimePrepared,
         beforeGitStaging: opts.beforeGitStaging,
         needsCheckoutMain,

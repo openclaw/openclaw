@@ -647,7 +647,7 @@ export class AcpTranslatorPromptStream {
     if (!this.claimPendingPrompt(pending)) {
       return;
     }
-    const sentText = (pending.sentText ?? "").trimStart();
+    const sentText = pending.sentText ?? "";
     const outputText = reply.outputText;
     const unavailable =
       reply.unavailable ??

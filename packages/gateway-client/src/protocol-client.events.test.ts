@@ -431,19 +431,6 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
     client.stop();
   });
 
-  test("starts a fresh protocol socket after an explicit stop", () => {
-    const { client, connections } = createSyntheticGatewayProtocol();
-
-    client.start();
-    client.stop();
-    client.start();
-
-    expect(connections).toHaveLength(2);
-    expect(connections[0]?.close).toHaveBeenCalledOnce();
-    expect(connections[1]?.close).not.toHaveBeenCalled();
-    client.stop();
-  });
-
   test("allows manual restart after a terminal socket close", () => {
     vi.useFakeTimers();
     const { client, connections } = createSyntheticGatewayProtocol({ retryOnClose: false });

@@ -61,7 +61,7 @@ describe("shared terminal transcript recovery", () => {
   it.each([
     ["First item", "Second item", "First item\n\nSecond item"],
     ["First item\n", "\nSecond item", "First item\n\nSecond item"],
-    [" First item\n\n", "\nSecond item ", "First item\n\n\nSecond item"],
+    [" First item\n\n", "\nSecond item ", " First item\n\n\nSecond item "],
   ])(
     "recovers every run item across pages with live display boundaries",
     async (first, second, outputText) => {
@@ -91,14 +91,16 @@ describe("shared terminal transcript recovery", () => {
             __openclaw: metadata,
             content: [
               { type: "text", text: "First" },
+              { type: "text", text: "  " },
               { type: "thinking", thinking: "hidden" },
               { type: "output_text", text: "Second" },
               { type: "input_text", text: "Third" },
+              { type: "text", text: "\n" },
             ],
           },
         ],
       })),
-    ).resolves.toEqual({ outputText: "First\nSecond\nThird" });
+    ).resolves.toEqual({ outputText: "First\n  \nSecond\nThird\n\n" });
   });
 
   it("ignores commentary projections that share the final occurrence's identity", async () => {

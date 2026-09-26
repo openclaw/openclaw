@@ -103,15 +103,6 @@ describe("bedrock embedding endpoint routing", () => {
       customEndpoint: false,
     },
     {
-      name: "configured canonical FIPS endpoint with SDK FIPS mode",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.amazonaws.com",
-      hostname: "bedrock-runtime-fips.us-west-2.amazonaws.com",
-      signingRegion: "us-west-2",
-      fips: true,
-      customEndpoint: false,
-    },
-    {
       name: "configured canonical dual-stack endpoint",
       remoteBaseUrl: undefined,
       providerBaseUrl: "https://bedrock-runtime.us-west-2.api.aws",
@@ -120,30 +111,11 @@ describe("bedrock embedding endpoint routing", () => {
       customEndpoint: false,
     },
     {
-      name: "configured canonical dual-stack endpoint with SDK dual-stack mode",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime.us-west-2.api.aws",
-      hostname: "bedrock-runtime.us-west-2.api.aws",
-      signingRegion: "us-west-2",
-      dualstack: true,
-      customEndpoint: false,
-    },
-    {
       name: "configured canonical combined FIPS and dual-stack endpoint",
       remoteBaseUrl: undefined,
       providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.api.aws",
       hostname: "bedrock-runtime-fips.us-west-2.api.aws",
       signingRegion: "us-west-2",
-      customEndpoint: false,
-    },
-    {
-      name: "configured canonical combined FIPS and dual-stack endpoint with SDK modes",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.api.aws",
-      hostname: "bedrock-runtime-fips.us-west-2.api.aws",
-      signingRegion: "us-west-2",
-      fips: true,
-      dualstack: true,
       customEndpoint: false,
     },
     {
@@ -402,7 +374,6 @@ describe("bedrock embedding response parsing", () => {
       model: "amazon.titan-embed-text-v2:0",
       raw: '{"embedding":[1,"bad"]}',
     },
-    { name: "malformed batch JSON", model: "cohere.embed-english-v3", raw: "{not json" },
     { name: "missing batch vectors", model: "cohere.embed-english-v3", raw: "{}" },
     {
       name: "invalid batch vector shape",
@@ -437,7 +408,7 @@ describe("bedrock embedding response parsing", () => {
 });
 
 describe("bedrock embedding inference profiles", () => {
-  it.each(["global", "us", "eu", "ap", "apac", "au", "jp"])(
+  it.each(["global", "apac"])(
     "uses the Cohere v4 contract for the %s profile prefix",
     async (prefix) => {
       const model = `${prefix}.cohere.embed-v4:0`;

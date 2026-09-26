@@ -75,7 +75,7 @@ describe("SDK run reconciliation over reconnect", () => {
   it.each(["agent-lifecycle", "chat-delta"])(
     "recovers an exact full reply when %s reveals the gap before the lost final",
     async (gapFrame) => {
-      const outputText = "complete answer ".repeat(400).trim();
+      const outputText = `    ${"complete answer ".repeat(400)}\n`;
       const methods: string[] = [];
       gateway.setRequestHandler((socket, request) => {
         methods.push(request.method);

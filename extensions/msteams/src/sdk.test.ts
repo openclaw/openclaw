@@ -7,6 +7,13 @@ import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 
+const secretCredentials: MSTeamsCredentials = {
+  type: "secret",
+  appId: "test-app-id",
+  appPassword: "test-secret",
+  tenantId: "test-tenant",
+};
+
 const privateQaRuntimeSymbol = Symbol.for("openclaw.msteams.privateQaRuntime");
 const privateQaBotToken = [
   Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url"),
@@ -64,25 +71,13 @@ async function createMSTeamsApp(...args: Parameters<typeof loadMSTeamsSdkWithAut
 
 describe("createMSTeamsApp", () => {
   it("does not crash with express 5 path-to-regexp (#55161)", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
-
-    const app = await createMSTeamsApp(creds);
+    const app = await createMSTeamsApp(secretCredentials);
     expect(app).toBeDefined();
     expect(app.tokenProvider).toBeDefined();
   });
 
   it("keeps private QA App options absent in production", async () => {
-    const app = await createMSTeamsApp({
-      type: "secret",
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    });
+    const app = await createMSTeamsApp(secretCredentials);
     const options = (app as unknown as { options?: Record<string, unknown> }).options;
     expect(options?.skipAuth).toBeUndefined();
     expect(options?.token).toBeUndefined();
@@ -105,12 +100,7 @@ describe("createMSTeamsApp", () => {
       botToken: privateQaBotToken,
     };
 
-    const app = await createMSTeamsApp({
-      type: "secret",
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    });
+    const app = await createMSTeamsApp(secretCredentials);
     const options = (app as unknown as { options?: Record<string, unknown> }).options;
     expect(options?.skipAuth).toBe(true);
     expect(options?.clientSecret).toBe("");
@@ -188,12 +178,7 @@ describe("createMSTeamsApp", () => {
     };
 
     try {
-      const app = await createMSTeamsApp({
-        type: "secret",
-        appId: "test-app-id",
-        appPassword: "test-secret",
-        tenantId: "test-tenant",
-      });
+      const app = await createMSTeamsApp(secretCredentials);
       const getAppToken = app.tokenProvider.getAppToken.bind(app.tokenProvider);
       vi.spyOn(app.tokenProvider, "getAppToken").mockImplementation(async (...args) => {
         tokenStarted.resolve();
@@ -357,14 +342,7 @@ describe("createMSTeamsApp", () => {
   });
 
   it("preserves both Teams SDK and OpenClaw User-Agent fragments", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
-
-    const app = await createMSTeamsApp(creds);
+    const app = await createMSTeamsApp(secretCredentials);
     const headers = (
       app as unknown as { client?: { options?: { headers?: Record<string, string> } } }
     ).client?.options?.headers;
@@ -373,14 +351,7 @@ describe("createMSTeamsApp", () => {
   });
 
   it("bounds Teams SDK API requests", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
-
-    const app = await createMSTeamsApp(creds);
+    const app = await createMSTeamsApp(secretCredentials);
     const timeout = (app as unknown as { client?: { options?: { timeout?: number } } }).client
       ?.options?.timeout;
 
@@ -388,28 +359,14 @@ describe("createMSTeamsApp", () => {
   });
 
   it("accepts custom messagingEndpoint", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
-
-    const app = await createMSTeamsApp(creds, {
+    const app = await createMSTeamsApp(secretCredentials, {
       messagingEndpoint: "/custom/webhook",
     });
     expect(app).toBeDefined();
   });
 
   it("passes configured cloud and serviceUrl to the SDK App", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
-
-    const app = await createMSTeamsApp(creds, {
+    const app = await createMSTeamsApp(secretCredentials, {
       cloud: "USGov",
       serviceUrl: "https://smba.infra.gov.teams.microsoft.us/teams/",
     });
@@ -424,14 +381,7 @@ describe("createMSTeamsApp", () => {
   });
 
   it("passes China cloud to the SDK App without requiring a configured serviceUrl", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
-
-    const app = await createMSTeamsApp(creds, {
+    const app = await createMSTeamsApp(secretCredentials, {
       cloud: "China",
     });
 
@@ -447,13 +397,7 @@ describe("createMSTeamsApp", () => {
   });
 
   it("fails closed for Graph tokens when China cloud is configured", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
-    const app = await createMSTeamsApp(creds, { cloud: "China" });
+    const app = await createMSTeamsApp(secretCredentials, { cloud: "China" });
     const tokenProvider = createMSTeamsTokenProvider(app);
 
     await expect(tokenProvider.getAccessToken("https://graph.microsoft.com")).rejects.toThrow(
@@ -462,27 +406,14 @@ describe("createMSTeamsApp", () => {
   });
 
   it("rejects configured serviceUrls outside the Bot Framework allowlist", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
-
     await expect(
-      createMSTeamsApp(creds, {
+      createMSTeamsApp(secretCredentials, {
         serviceUrl: "https://attacker.example.com/teams/",
       }),
     ).rejects.toThrow(/Blocked Microsoft Teams serviceUrl host: attacker\.example\.com/);
   });
 
   it("uses the configured cloud serviceUrl for proactive HTTP posts", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
     const dispatch = vi.fn(async (config: RequestContext["config"]) => ({
       data: { id: "sent-1" },
       status: 201,
@@ -501,7 +432,7 @@ describe("createMSTeamsApp", () => {
       ],
     } satisfies ClientOptions;
 
-    const app = await createMSTeamsApp(creds, {
+    const app = await createMSTeamsApp(secretCredentials, {
       cloud: "USGov",
       serviceUrl: "https://smba.infra.gov.teams.microsoft.us/teams",
       httpClient,

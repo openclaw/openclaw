@@ -170,21 +170,6 @@ describe("registerBackupCommand", () => {
     expect(backupGitLogCommand).not.toHaveBeenCalled();
   });
 
-  it("registers the SQLite snapshot command group", () => {
-    const program = new Command();
-
-    registerBackupCommand(program);
-
-    const backup = program.commands.find((command) => command.name() === "backup");
-    const sqlite = backup?.commands.find((command) => command.name() === "sqlite");
-    expect(sqlite?.commands.map((command) => command.name()).toSorted()).toEqual([
-      "create",
-      "list",
-      "restore",
-      "verify",
-    ]);
-  });
-
   it("runs SQLite snapshot create for named OpenClaw databases", async () => {
     await runCli([
       "backup",

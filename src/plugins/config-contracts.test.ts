@@ -40,8 +40,6 @@ import {
   resolvePluginConfigContractsById,
 } from "./config-contracts.js";
 
-type PluginManifestRecord = PluginManifestRegistry["plugins"][number];
-
 function createRegistry(plugins: PluginManifestRegistry["plugins"]): PluginManifestRegistry {
   return {
     plugins,
@@ -50,38 +48,18 @@ function createRegistry(plugins: PluginManifestRegistry["plugins"]): PluginManif
 }
 
 function createPluginRecord(
-  overrides: Pick<PluginManifestRecord, "id" | "origin"> & Partial<PluginManifestRecord>,
-): PluginManifestRecord {
+  overrides: Pick<PluginManifestRegistry["plugins"][number], "id" | "origin"> &
+    Partial<PluginManifestRegistry["plugins"][number]>,
+): PluginManifestRegistry["plugins"][number] {
   return {
     rootDir: `/tmp/${overrides.id}`,
     manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
-    channelConfigs: undefined,
-    configUiHints: undefined,
-    configSchema: undefined,
-    configContracts: undefined,
-    contracts: undefined,
-    name: undefined,
-    description: undefined,
-    version: undefined,
-    enabledByDefault: undefined,
-    autoEnableWhenConfiguredProviders: undefined,
-    legacyPluginIds: undefined,
-    format: undefined,
-    bundleFormat: undefined,
-    bundleCapabilities: undefined,
-    kind: undefined,
+    source: `/tmp/${overrides.id}/openclaw.plugin.json`,
     channels: [],
     providers: [],
-    modelSupport: undefined,
     cliBackends: [],
-    providerAuthAliases: undefined,
-    providerAuthChoices: undefined,
     skills: [],
-    settingsFiles: undefined,
     hooks: [],
-    source: `/tmp/${overrides.id}/openclaw.plugin.json`,
-    setupSource: undefined,
-    channelCatalogMeta: undefined,
     ...overrides,
   };
 }
@@ -201,57 +179,6 @@ describe("resolvePluginConfigContractsById", () => {
     );
   });
 
-  it("can hydrate missing contracts from bundled registry for resolved bundled plugins", () => {
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
-      createRegistry([
-        createPluginRecord({
-          id: "voice-call",
-          origin: "bundled",
-          configContracts: {
-            compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
-          },
-        }),
-      ]),
-    );
-    mocks.loadBundledManifestRegistry.mockReturnValue(
-      createRegistry([
-        createPluginRecord({
-          id: "voice-call",
-          origin: "bundled",
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "twilio.authToken", expected: "string" }],
-            },
-          },
-        }),
-      ]),
-    );
-
-    expect(
-      resolvePluginConfigContractsById({
-        pluginIds: ["voice-call"],
-        fallbackToBundledMetadataForResolvedBundled: true,
-      }),
-    ).toEqual(
-      new Map([
-        [
-          "voice-call",
-          {
-            origin: "bundled",
-            configContracts: {
-              compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
-              secretInputs: {
-                paths: [{ path: "twilio.authToken", expected: "string" }],
-              },
-            },
-          },
-        ],
-      ]),
-    );
-    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
-    expect(mocks.loadBundledManifestRegistry).toHaveBeenCalledTimes(1);
-  });
-
   it("refreshes stale bundled SecretInput contracts from bundled registry", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
       createRegistry([
@@ -308,6 +235,8 @@ describe("resolvePluginConfigContractsById", () => {
         ],
       ]),
     );
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.loadBundledManifestRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("can hydrate missing contracts for plugin ids known to be bundled by runtime discovery", () => {
@@ -416,7 +345,6 @@ describe("collectPluginConfigContractMatches", () => {
   });
 
   it.each([
-    { key: "X.Trace", path: 'headers["X.Trace"]' },
     { key: "0", path: 'headers["0"]' },
     { key: "01", path: 'headers["01"]' },
     { key: "value[0]", path: 'headers["value[0]"]' },

@@ -329,6 +329,7 @@ export async function prepareGatewayLifecycle(params: {
     },
   };
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
+    scheduler: runtime.scheduler,
     broadcastToConnIds,
     isConnectionActive,
     prepareRead: async (connId, session) => {

@@ -101,6 +101,7 @@ describe("acp translator reconnect settlement", () => {
       } satisfies AcpAgentWaitResult,
       streamed: undefined,
       recovered: "final answer",
+      historyText: undefined,
     },
     {
       name: "sticky timeout suffix",
@@ -110,39 +111,44 @@ describe("acp translator reconnect settlement", () => {
       } satisfies AcpAgentWaitResult,
       streamed: "final",
       recovered: " answer",
+      historyText: undefined,
     },
     {
-      name: "trim-normalized suffix",
+      name: "indented suffix",
       result: {
         status: "ok",
         terminalReply: { disposition: "visible", text: "final answer" },
       } satisfies AcpAgentWaitResult,
-      streamed: " final",
-      recovered: " answer",
+      streamed: "    final",
+      recovered: " answer\n",
+      historyText: "    final answer\n",
     },
-  ])("recovers the $name before resolving", async ({ result, streamed, recovered }) => {
-    const harness = await createReconnectHarness(result);
-    if (streamed) {
-      await streamText(harness, streamed);
-    }
+  ])(
+    "recovers the $name before resolving",
+    async ({ result, streamed, recovered, historyText }) => {
+      const harness = await createReconnectHarness(result, historyText);
+      if (streamed) {
+        await streamText(harness, streamed);
+      }
 
-    reconnect(harness);
+      reconnect(harness);
 
-    await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-    expect(messageChunks(harness).filter((text) => text === recovered)).toHaveLength(1);
-    const replay = await harness.eventLedger.readReplay({
-      sessionId: harness.sessionId,
-      sessionKey: harness.sessionKey,
-    });
-    expect(
-      replay.events.some(
-        (event) =>
-          event.update.sessionUpdate === "agent_message_chunk" &&
-          event.update.content.type === "text" &&
-          event.update.content.text === recovered,
-      ),
-    ).toBe(true);
-  });
+      await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+      expect(messageChunks(harness).filter((text) => text === recovered)).toHaveLength(1);
+      const replay = await harness.eventLedger.readReplay({
+        sessionId: harness.sessionId,
+        sessionKey: harness.sessionKey,
+      });
+      expect(
+        replay.events.some(
+          (event) =>
+            event.update.sessionUpdate === "agent_message_chunk" &&
+            event.update.content.type === "text" &&
+            event.update.content.text === recovered,
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("recovers the full reply after a disconnect beyond the terminal summary cap", async () => {
     const prefix = "A".repeat(5_000);

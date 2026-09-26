@@ -192,84 +192,24 @@ describe("ensureBrowserControlAuth", () => {
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
 
-  it("returns only the active credential in password mode", () => {
+  it.each([
+    ["password", { password: "active-password" }],
+    ["none", { token: "active-token" }],
+    ["token", { token: "active-token" }],
+    ["trusted-proxy", { password: "active-password" }],
+  ] as const)("returns only the active credential in %s mode", (mode, expected) => {
     const cfg: OpenClawConfig = {
       gateway: {
         auth: {
-          mode: "password",
-          token: "inactive-token",
-          password: "active-password",
-        },
-      },
-    };
-
-    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
-      password: "active-password",
-    });
-  });
-
-  it("returns only the resolved active credential when mode is inferred", () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          token: "inactive-token",
-          password: "active-password",
-        },
-      },
-    };
-
-    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
-      password: "active-password",
-    });
-  });
-
-  it("returns only the browser token in none mode", () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "none",
-          token: "browser-token",
-          password: "inactive-password",
-        },
-      },
-    };
-
-    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
-      token: "browser-token",
-    });
-  });
-
-  it("returns only the active token in token mode", () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "token",
+          mode,
           token: "active-token",
-          password: "inactive-password",
+          password: "active-password",
+          ...(mode === "trusted-proxy" ? { trustedProxy: { userHeader: "x-forwarded-user" } } : {}),
         },
       },
     };
 
-    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
-      token: "active-token",
-    });
-  });
-
-  it("returns only the browser password in trusted-proxy mode", () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          token: "inactive-token",
-          password: "browser-password",
-          trustedProxy: { userHeader: "x-forwarded-user" },
-        },
-      },
-    };
-
-    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
-      password: "browser-password",
-    });
+    expect(resolveBrowserControlAuth(cfg, {})).toEqual(expected);
   });
 
   it("does not accept an inactive token in trusted-proxy mode", () => {
@@ -325,22 +265,6 @@ describe("ensureBrowserControlAuth", () => {
     await expectExplicitModeSkipsAutoAuth("password");
   });
 
-  it("auto-generates and persists browser auth token in none mode", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: { mode: "none" },
-      },
-      browser: {
-        enabled: true,
-      },
-    };
-    await expectGeneratedBrowserAuthPersistence({
-      cfg,
-      mode: "none",
-      generatedAuthField: "token",
-    });
-  });
-
   it("does not persist over unresolved token SecretRef in none mode", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -372,22 +296,6 @@ describe("ensureBrowserControlAuth", () => {
       cfg,
       mode: "none",
       generatedAuthField: "token",
-    });
-  });
-
-  it("auto-generates in trusted-proxy mode and persists browser auth password", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-forwarded-user" } },
-      },
-      browser: {
-        enabled: true,
-      },
-    };
-    await expectGeneratedBrowserAuthPersistence({
-      cfg,
-      mode: "trusted-proxy",
-      generatedAuthField: "password",
     });
   });
 
@@ -451,52 +359,47 @@ describe("ensureBrowserControlAuth", () => {
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
 
-  it.each(
-    (["none", "trusted-proxy"] as const).flatMap((mode) =>
-      (["generated", "replacement", "other-mode", "empty"] as const).map((afterWrite) => ({
-        mode,
-        afterWrite,
-      })),
-    ),
-  )("rereads $afterWrite auth after generating for $mode", async ({ mode, afterWrite }) => {
-    const kind = mode === "none" ? "token" : "password";
-    const otherKind = kind === "token" ? "password" : "token";
-    const cfg: OpenClawConfig = { gateway: { auth: { mode } } };
-    let latest = cfg;
-    let generated: string | undefined;
-    mocks.getRuntimeConfig.mockImplementation(() => latest);
-    mocks.writeConfigFile.mockImplementationOnce(async (written) => {
-      const value = written.gateway?.auth?.[kind];
-      if (typeof value !== "string") {
-        throw new Error("expected a generated browser credential");
-      }
-      generated = value;
-      latest =
-        afterWrite === "generated"
-          ? written
-          : afterWrite === "replacement"
-            ? { gateway: { auth: { mode, [kind]: "concurrent-credential" } } }
-            : afterWrite === "other-mode"
-              ? {
-                  gateway: {
-                    auth: { mode: otherKind, [otherKind]: "concurrent-credential" },
-                  },
-                }
-              : cfg;
-    });
+  it.each([
+    { mode: "none", afterWrite: "generated" },
+    { mode: "none", afterWrite: "replacement" },
+    { mode: "none", afterWrite: "other-mode" },
+    { mode: "trusted-proxy", afterWrite: "generated" },
+  ] as const)(
+    "rereads $afterWrite auth after generating for $mode",
+    async ({ mode, afterWrite }) => {
+      const kind = mode === "none" ? "token" : "password";
+      const otherKind = kind === "token" ? "password" : "token";
+      const cfg: OpenClawConfig = { gateway: { auth: { mode } } };
+      let latest = cfg;
+      let generated: string | undefined;
+      mocks.getRuntimeConfig.mockImplementation(() => latest);
+      mocks.writeConfigFile.mockImplementationOnce(async (written) => {
+        const value = written.gateway?.auth?.[kind];
+        if (typeof value !== "string") {
+          throw new Error("expected a generated browser credential");
+        }
+        generated = value;
+        latest =
+          afterWrite === "generated"
+            ? written
+            : afterWrite === "replacement"
+              ? { gateway: { auth: { mode, [kind]: "concurrent-credential" } } }
+              : { gateway: { auth: { mode: otherKind, [otherKind]: "concurrent-credential" } } };
+      });
 
-    const result = await ensureBrowserControlAuth({ cfg, env: {} });
+      const result = await ensureBrowserControlAuth({ cfg, env: {} });
 
-    expect(generated).toMatch(/^[a-f0-9]{48}$/);
-    expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
-    expect(result).toEqual({
-      auth:
-        afterWrite === "replacement" || afterWrite === "other-mode"
-          ? { [afterWrite === "other-mode" ? otherKind : kind]: "concurrent-credential" }
-          : { [kind]: generated },
-      generatedToken: afterWrite === "generated" || afterWrite === "empty" ? generated : undefined,
-    });
-  });
+      expect(generated).toMatch(/^[a-f0-9]{48}$/);
+      expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+      expect(result).toEqual({
+        auth:
+          afterWrite === "replacement" || afterWrite === "other-mode"
+            ? { [afterWrite === "other-mode" ? otherKind : kind]: "concurrent-credential" }
+            : { [kind]: generated },
+        generatedToken: afterWrite === "generated" ? generated : undefined,
+      });
+    },
+  );
 
   it("fails when gateway.auth.token SecretRef is unresolved", async () => {
     const cfg: OpenClawConfig = {

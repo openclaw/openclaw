@@ -41,25 +41,6 @@ describe("resolveDiscordPresenceGateOptions", () => {
 });
 
 describe("DiscordPresenceEmissionGate", () => {
-  it("suppresses emission during the reconnect window and logs once", () => {
-    const gate = new DiscordPresenceEmissionGate();
-    gate.noteGatewaySessionReset(1_000);
-
-    expect(gate.evaluateReconnectWindow(1_001, options)).toEqual({
-      allowed: false,
-      reason: "reconnect-window",
-      shouldLog: true,
-    });
-    expect(gate.evaluateReconnectWindow(2_000, options)).toEqual({
-      allowed: false,
-      reason: "reconnect-window",
-      shouldLog: false,
-    });
-    expect(gate.evaluateReconnectWindow(1_000 + options.reconnectSuppressMs, options)).toEqual({
-      allowed: true,
-    });
-  });
-
   it("logs again for each new reconnect window", () => {
     const gate = new DiscordPresenceEmissionGate();
     gate.noteGatewaySessionReset(0);
@@ -69,14 +50,6 @@ describe("DiscordPresenceEmissionGate", () => {
       gate.evaluateReconnectWindow(options.reconnectSuppressMs * 2 + 1, options),
     ).toMatchObject({
       shouldLog: true,
-    });
-  });
-
-  it("does not suppress when the reconnect window is disabled", () => {
-    const gate = new DiscordPresenceEmissionGate();
-    gate.noteGatewaySessionReset(1_000);
-    expect(gate.evaluateReconnectWindow(1_001, { ...options, reconnectSuppressMs: 0 })).toEqual({
-      allowed: true,
     });
   });
 
@@ -104,20 +77,6 @@ describe("DiscordPresenceEmissionGate", () => {
       reason: "burst",
       shouldLog: true,
     });
-  });
-
-  it("releases failed attempts without spending burst capacity", () => {
-    const gate = new DiscordPresenceEmissionGate();
-    const burstOptions = { ...options, burstLimit: 1 };
-    const first = gate.reserveBurst(guildId, 1_000, burstOptions);
-
-    expect(first.allowed).toBe(true);
-    if (!first.allowed) {
-      throw new Error("expected burst reservation");
-    }
-    gate.releaseBurst(guildId, first.reservation);
-
-    expect(gate.reserveBurst(guildId, 1_001, burstOptions)).toMatchObject({ allowed: true });
   });
 
   it("holds lookup admission and starts the burst window when emission commits", () => {

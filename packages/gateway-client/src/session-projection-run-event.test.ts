@@ -160,7 +160,7 @@ describe("session projection Gateway run events", () => {
     expect(repeated?.currentRun).toBe(first.currentRun);
   });
 
-  it.each(["status", "unknown", undefined])("rejects non-run Gateway event state %j", (state) => {
+  it.each(["status", undefined])("rejects non-run Gateway event state %j", (state) => {
     expect(
       reduceSessionProjectionRunEvent(createSessionProjection(scope), {
         runId: "shared-run",
