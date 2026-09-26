@@ -13,6 +13,7 @@ import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-ru
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import * as sessionRunError from "../sessions/session-run-error.js";
+import { ensureSessionEntryValidityProjection } from "../state/openclaw-agent-db-session-migrations.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -101,6 +102,8 @@ it.each([
                             "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
                           )
                           .run("$.lifecycleRevision", "successor", scope.sessionKey);
+                        // Keep row validity from masking the lifecycle-generation fence.
+                        ensureSessionEntryValidityProjection(other);
                       } finally {
                         other.close();
                       }
