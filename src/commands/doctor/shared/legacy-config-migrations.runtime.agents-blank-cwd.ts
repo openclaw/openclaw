@@ -1,3 +1,4 @@
+import { applyBlankAgentCwdRemoval } from "../../../config/legacy.blank-agent-cwd.js";
 // Doctor migration that removes saved blank agent cwd values, mirroring the
 // load-time and write-path blank-cwd migrations so recovery/doctor repair keeps
 // older saved configurations loadable, writable, and recoverable.
@@ -43,33 +44,11 @@ export const LEGACY_CONFIG_MIGRATION_AGENTS_BLANK_CWD = defineLegacyConfigMigrat
   id: "agents.blank-cwd",
   describe: "Remove blank agent cwd values",
   legacyRules: [BLANK_CWD_RULE],
-  apply: (raw, changes) => {
-    const agents = getRecord(raw.agents);
-    if (agents === null) {
-      return;
-    }
-    const removeFromAgent = (entry: unknown, path: string) => {
-      const record = getRecord(entry);
-      if (record !== null && isBlankString(record.cwd)) {
-        delete record.cwd;
-        changes.push(`Removed blank agents.${path}.cwd; the default cwd applies.`);
-      }
-    };
-    const defaults = getRecord(agents.defaults);
-    if (defaults !== null && isBlankString(defaults.cwd)) {
-      delete defaults.cwd;
-      changes.push("Removed blank agents.defaults.cwd.");
-    }
-    const entries = getRecord(agents.entries);
-    if (entries !== null) {
-      for (const [key, entry] of Object.entries(entries)) {
-        removeFromAgent(entry, `entries.${key}`);
-      }
-    }
-    if (Array.isArray(agents.list)) {
-      for (const [index, entry] of agents.list.entries()) {
-        removeFromAgent(entry, `list[${index}]`);
-      }
-    }
+  apply(raw, changes) {
+    // Delegate to the shared blank-cwd transform so Doctor repair uses exactly
+    // the same traversal and messages as the load/write migration (defaults,
+    // keyed entries, and the legacy list form) and can never disagree with
+    // runtime.
+    applyBlankAgentCwdRemoval(raw, changes);
   },
 });

@@ -129,6 +129,36 @@ function migrateBlankAgentCwdRaw(
     : { config: raw, changed: false, changes, warnings: [] };
 }
 
+/** In-place removal shared with Doctor so recovery/doctor repair uses exactly
+ * the same traversal and messages as the load/write migration: defaults, the
+ * keyed entries map, and the legacy list form are all handled. */
+export function applyBlankAgentCwdRemoval(raw: Record<string, unknown>, changes: string[]): void {
+  const agents = isRecord(raw.agents) ? (raw.agents as Record<string, unknown>) : undefined;
+  if (!agents) {
+    return;
+  }
+  if (isRecord(agents.defaults) && isBlankString(agents.defaults.cwd)) {
+    delete agents.defaults.cwd;
+    changes.push("Removed blank agents.defaults.cwd.");
+  }
+  if (isRecord(agents.entries)) {
+    for (const [key, entry] of Object.entries(agents.entries)) {
+      if (isRecord(entry) && isBlankString(entry.cwd)) {
+        delete entry.cwd;
+        changes.push(`Removed blank agents.entries.${key}.cwd; the default cwd applies.`);
+      }
+    }
+  }
+  if (Array.isArray(agents.list)) {
+    for (const [index, entry] of agents.list.entries()) {
+      if (isRecord(entry) && isBlankString(entry.cwd)) {
+        delete entry.cwd;
+        changes.push(`Removed blank agents.list[${index}].cwd; the default cwd applies.`);
+      }
+    }
+  }
+}
+
 /** Index every agent cwd that is blank in the saved source config, normalized
  * across the legacy list and canonical entries roster forms, plus the defaults
  * cwd. Only these paths count as "saved blanks" for write-path migration. */
