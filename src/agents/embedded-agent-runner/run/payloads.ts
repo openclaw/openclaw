@@ -160,6 +160,13 @@ export function buildEmbeddedRunPayloads(params: {
     // Pre-upgrade recovered messages have no stored facts, and recovery intentionally does not
     // reparse text; one in-flight reply can lose delivery or speech intent across this boundary.
     const storedDelivery = assistantForPayload?.openclawDelivery;
+    // Provider phase hints alone do not carry persisted delivery intent.
+    const hasStoredDeliveryFacts = Boolean(
+      storedDelivery?.audioAsVoice ||
+      storedDelivery?.replyToCurrent ||
+      storedDelivery?.replyToId ||
+      storedDelivery?.tts,
+    );
     const lastAssistantStopReason = assistantForPayload?.stopReason;
     const lastAssistantErrored = lastAssistantStopReason === "error";
     const lastAssistantAborted = lastAssistantStopReason === "aborted";
@@ -293,14 +300,15 @@ export function buildEmbeddedRunPayloads(params: {
         } = preparedAnswerDirectives ?? parseReplyDirectives(text);
         hasIntentionalSilentFinal = isSilent;
         const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
-        const delivery = shouldUseCanonicalFinalAnswer
-          ? {
-              audioAsVoice: storedDelivery?.audioAsVoice,
-              replyToCurrent: storedDelivery?.replyToCurrent,
-              replyToId: storedDelivery?.replyToId,
-              replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
-            }
-          : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
+        const delivery =
+          shouldUseCanonicalFinalAnswer && (hasStoredDeliveryFacts || !currentAssistant)
+            ? {
+                audioAsVoice: storedDelivery?.audioAsVoice,
+                replyToCurrent: storedDelivery?.replyToCurrent,
+                replyToId: storedDelivery?.replyToId,
+                replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
+              }
+            : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
         if (
           !cleanedText &&
           (!mediaUrls || mediaUrls.length === 0) &&
