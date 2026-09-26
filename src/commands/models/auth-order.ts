@@ -103,6 +103,10 @@ export async function modelsAuthOrderClearCommand(
     agentDir,
     provider: resolveProviderIdForAuth(provider, { config: cfg }),
     order: null,
+    // Also clear the shared store order when one was migrated from a shared
+    // auth-state database. Without this, the CLI reports "cleared" but the
+    // migrated shared order still controls profile resolution (#154510).
+    sharedStoreWrite: true,
   });
   if (!updated) {
     throw new Error(
