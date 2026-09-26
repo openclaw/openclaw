@@ -36,7 +36,6 @@ import {
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath as resolveSharedAuthPath,
 } from "./path-resolve.js";
-import { mergeAuthProfileStores } from "./persisted.js";
 import {
   materializePersonalAuthProfile,
   materializePreparedPersonalAuthProfile,
@@ -44,7 +43,7 @@ import {
 import {
   createEmptyAuthProfileStore,
   listRuntimeLocalProfileIds,
-  runtimeStoreInheritsMainState,
+  mergeLocalAuthProfileStoreWithInheritedStore,
   setRuntimeLocalProfileMetadata,
 } from "./runtime-snapshot-owner.js";
 import {
@@ -222,17 +221,13 @@ export function createAuthProfileStoreRuntimeReader({
       effectiveOptions?.inheritedAuthDir,
       env ?? getScopedAuthProfileEnv(),
     );
-    const mergedStore = mainStore
-      ? mergeAuthProfileStores(mainStore, store, { preserveBaseRuntimeExternalProfiles: true })
-      : store;
-    return setRuntimeLocalProfileMetadata(
-      overlayExternalAuthProfiles(mergedStore, {
+    return overlayExternalAuthProfiles(
+      mergeLocalAuthProfileStoreWithInheritedStore(store, mainStore),
+      {
         agentDir: effectiveAgentDir,
         ...(env ? { env } : {}),
         ...externalCli,
-      }),
-      listRuntimeLocalProfileIds(store, mainStore),
-      runtimeStoreInheritsMainState(mergedStore, store),
+      },
     );
   }
 

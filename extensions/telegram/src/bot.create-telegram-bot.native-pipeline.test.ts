@@ -905,18 +905,24 @@ describe("createTelegramBot typed command pipeline", () => {
     });
     try {
       const bot = await createBot(false, true, cfg);
-      // Durable ingress dispatches accepted updates outside the HTTP request deadline.
-      const receiving = bot.handleUpdate({ update_id: 2800, message });
+      const receive = async (update: Parameters<typeof bot.handleUpdate>[0]) => {
+        // Durable ingress dispatches outside the HTTP deadline. Preserve Telegram's
+        // JSON leaf shape while exercising the drain's processing entry point.
+        const wireBody = JSON.stringify(update);
+        const wireUpdate = JSON.parse(wireBody) as typeof update;
+        await bot.handleUpdate(wireUpdate);
+      };
+      const receiving = receive({ update_id: 2800, message });
       await Promise.race([
         describeStarted.promise,
         receiving.then(() => {
-          throw new Error("Sticker handler completed before description started");
+          throw new Error("Sticker update completed before description started");
         }),
       ]);
       expect(harness.replySpy).not.toHaveBeenCalled();
       description.resolve({ text: "A curious sticker" });
       await receiving;
-      await bot.handleUpdate({
+      await receive({
         update_id: 2801,
         message: {
           ...message,
@@ -939,7 +945,7 @@ describe("createTelegramBot typed command pipeline", () => {
         fileId: "refreshed-sticker-file",
         description: "A curious sticker",
       });
-      await bot.handleUpdate({
+      await receive({
         update_id: 2802,
         message: {
           ...message,

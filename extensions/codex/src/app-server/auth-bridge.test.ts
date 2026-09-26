@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  findPersistedAuthProfileCredential,
   loadAuthProfileStoreForSecretsRuntime,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -3538,41 +3539,39 @@ describe("bridgeCodexAppServerStartOptions", () => {
     await withTempDir("openclaw-codex-app-server-", async (root) => {
       const stateDir = path.join(root, "state");
       const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
+      const child = { agentDir: childAgentDir, profileId: "openai:work" };
+      const readRuntimeProfile = (agentDir?: string) =>
+        expectOAuthProfile(
+          loadAuthProfileStoreForSecretsRuntime(agentDir).profiles[child.profileId],
+        );
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       vi.stubEnv("OPENCLAW_AGENT_DIR", "");
-      oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
+      const refreshedCredential = {
         access: "main-refreshed-access-token",
         refresh: "main-refreshed-refresh-token",
         expires: Date.now() + 60_000,
         accountId: "account-main",
-      });
+      };
+      oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce(refreshedCredential);
 
       await fs.mkdir(childAgentDir, { recursive: true });
-      persistProfile(
-        childAgentDir,
-        oauthProfile({
-          access: "child-stale-access-token",
-          refresh: "child-stale-refresh-token",
-          expires: Date.now() - 60_000,
-          accountId: "account-main",
-          email: "main-codex@example.test",
-        }),
-      );
-      upsertAuthProfile({
-        profileId: "openai:work",
-        credential: oauthProfile({
-          access: "main-current-access-token",
-          refresh: "main-owner-refresh-token",
-          expires: Date.now() + 60_000,
-          accountId: "account-main",
-          email: "main-codex@example.test",
-        }),
+      const currentCredential = oauthProfile({
+        access: "main-current-access-token",
+        refresh: "main-owner-refresh-token",
+        expires: Date.now() + 60_000,
+        accountId: "account-main",
+        email: "main-codex@example.test",
       });
-      const staleChildProfile = expectOAuthProfile(
-        loadAuthProfileStoreForSecretsRuntime(childAgentDir).profiles["openai:work"],
-      );
-      expect(staleChildProfile?.access).toBe("child-stale-access-token");
-      expect(staleChildProfile?.refresh).toBe("child-stale-refresh-token");
+      const staleChildCredential = oauthProfile({
+        ...currentCredential,
+        access: "child-stale-access-token",
+        refresh: "child-stale-refresh-token",
+        expires: Date.now() - 60_000,
+      });
+      persistProfile(childAgentDir, staleChildCredential);
+      upsertAuthProfile({ profileId: child.profileId, credential: currentCredential });
+      expect(readRuntimeProfile(childAgentDir)).toEqual(currentCredential);
+      expect(findPersistedAuthProfileCredential(child)).toEqual(staleChildCredential);
 
       await expect(
         refreshCodexAppServerAuthTokens({
@@ -3586,19 +3585,12 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
 
       expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("main-owner-refresh-token");
-      const mainProfile = expectOAuthProfile(
-        loadAuthProfileStoreForSecretsRuntime().profiles["openai:work"],
-      );
-      expect(mainProfile?.provider).toBe("openai");
-      expect(mainProfile?.access).toBe("main-refreshed-access-token");
-      expect(mainProfile?.refresh).toBe("main-refreshed-refresh-token");
-      const childProfile = expectOAuthProfile(
-        loadAuthProfileStoreForSecretsRuntime(childAgentDir).profiles["openai:work"],
-      );
+      const mainProfile = readRuntimeProfile();
+      expect(mainProfile).toMatchObject({ provider: "openai", ...refreshedCredential });
+      expect(readRuntimeProfile(childAgentDir)).toEqual(mainProfile);
       // Refresh ownership writes the main profile; it does not silently mutate
       // the stale child clone that request-time resolution intentionally bypassed.
-      expect(childProfile?.access).toBe("child-stale-access-token");
-      expect(childProfile?.refresh).toBe("child-stale-refresh-token");
+      expect(findPersistedAuthProfileCredential(child)).toEqual(staleChildCredential);
     });
   });
 

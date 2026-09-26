@@ -53,6 +53,7 @@ import {
   settleOAuthRefreshPeerClaims,
   type OAuthRefreshPeerClaim,
 } from "./oauth-refresh-peers.js";
+import { loadStoredOAuthRefreshStore } from "./oauth-refresh-store.js";
 import {
   hasMatchingOAuthIdentity,
   isSafeOAuthOwnerRefreshResult,
@@ -106,13 +107,6 @@ function canReuseOAuthCredentialAfterRefreshFailure(params: {
       params.attempted.access !== params.candidate.access &&
       hasMatchingOAuthIdentity(params.attempted, params.candidate))
   );
-}
-
-function loadStoredOAuthRefreshStore(agentDir?: string, profileId?: string): AuthProfileStore {
-  return loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
-    allowKeychainPrompt: true,
-    profileId,
-  });
 }
 
 /** Create an OAuth manager bound to provider-specific build/refresh adapters. */
@@ -1215,7 +1209,11 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         }
       };
       try {
-        refreshedStore = loadStoredOAuthRefreshStore(params.agentDir, params.profileId);
+        // Recovery and legacy fallback need inherited candidates after owner settlement.
+        refreshedStore = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+          allowKeychainPrompt: true,
+          profileId: params.profileId,
+        });
         recoveryStoreLoaded = true;
       } catch (cleanupError) {
         refreshError = appendOAuthRefreshCleanupErrors(refreshError, [cleanupError]);

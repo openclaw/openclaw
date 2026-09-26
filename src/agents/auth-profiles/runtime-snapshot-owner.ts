@@ -105,15 +105,46 @@ export function mergeLocalAuthProfileStoreWithInheritedStore(
   localStore: AuthProfileStore,
   inheritedStore: AuthProfileStore | undefined,
 ): RuntimeAuthProfileStore {
+  const localProfileIds = listRuntimeLocalProfileIds(localStore, inheritedStore);
+  const inheritedOAuthIds = new Set(
+    Object.entries(inheritedStore?.profiles ?? {}).flatMap(([profileId, credential]) => {
+      const local = localStore.profiles[profileId];
+      return credential.type === "oauth" &&
+        (!local ||
+          shouldUseMainOwnerForLocalOAuthCredential({ profileId, local, main: credential }))
+        ? [profileId]
+        : [];
+    }),
+  );
+  // A copied refresh generation has one owner for both credentials and health.
+  // Do not let an older child row hide that owner's renewed token or current cooldown.
+  const localOverlay =
+    inheritedOAuthIds.size > 0
+      ? {
+          ...localStore,
+          profiles: Object.fromEntries(
+            Object.entries(localStore.profiles).filter(
+              ([profileId]) => !inheritedOAuthIds.has(profileId),
+            ),
+          ),
+          usageStats:
+            localStore.usageStats &&
+            Object.fromEntries(
+              Object.entries(localStore.usageStats).filter(
+                ([profileId]) => !inheritedOAuthIds.has(profileId),
+              ),
+            ),
+        }
+      : localStore;
   // Preserve local ownership so later publication never retains another owner's inherited rows.
   const merged = inheritedStore
-    ? mergeAuthProfileStores(inheritedStore, localStore, {
+    ? mergeAuthProfileStores(inheritedStore, localOverlay, {
         preserveBaseRuntimeExternalProfiles: true,
       })
     : localStore;
   return setRuntimeLocalProfileMetadata(
-    stripRuntimeExternalProfileMetadata(merged),
-    listRuntimeLocalProfileIds(localStore, inheritedStore),
+    merged,
+    localProfileIds,
     runtimeStoreInheritsMainState(merged, localStore),
   );
 }

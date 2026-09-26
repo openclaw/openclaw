@@ -15,7 +15,7 @@ import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { readUserModelAuthProfile } from "../../state/user-model-accounts.js";
 import { isRecord, resolveUserPath } from "../../utils.js";
-import { cloneAuthProfileStore } from "./clone.js";
+import { areAuthProfileStoresEqual, cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
 import {
   syncPersistedExternalCliAuthProfiles,
@@ -1612,7 +1612,9 @@ export function createAuthProfileStoreRuntime(
       options.inheritedAuthDir,
       getScopedAuthProfileEnv(),
     );
-    return mergeLocalAuthProfileStoreWithInheritedStore(store, mainStore);
+    return stripRuntimeExternalProfileMetadata(
+      mergeLocalAuthProfileStoreWithInheritedStore(store, mainStore),
+    );
   }
 
   /** Ensure an auth store is available, including runtime/external profile overlays. */
@@ -1669,7 +1671,7 @@ export function createAuthProfileStoreRuntime(
         next: store,
         existing: runtimeStore,
       });
-      if (!isDeepStrictEqual(materialized, runtimeStore)) {
+      if (!areAuthProfileStoresEqual(materialized, runtimeStore)) {
         updateRuntimeAuthProfileStoreSnapshot(materialized, effectiveAgentDir);
       }
       return store;
@@ -1734,9 +1736,7 @@ export function createAuthProfileStoreRuntime(
       getScopedAuthProfileEnv(),
     );
     return stripRuntimeExternalProfileMetadata(
-      mainStore
-        ? mergeAuthProfileStores(mainStore, store, { preserveBaseRuntimeExternalProfiles: true })
-        : store,
+      mergeLocalAuthProfileStoreWithInheritedStore(store, mainStore),
     );
   }
 
@@ -1764,9 +1764,7 @@ export function createAuthProfileStoreRuntime(
       undefined,
       getScopedAuthProfileEnv(),
     );
-    return mainStore
-      ? mergeAuthProfileStores(mainStore, store, { preserveBaseRuntimeExternalProfiles: true })
-      : store;
+    return mergeLocalAuthProfileStoreWithInheritedStore(store, mainStore);
   }
 
   function saveAuthProfileStoreInTransaction(

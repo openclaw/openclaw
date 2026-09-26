@@ -2,7 +2,7 @@ import path from "node:path";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
-import { mergeAuthProfileStores } from "./persisted.js";
+import { mergeLocalAuthProfileStoreWithInheritedStore } from "./runtime-snapshot-owner.js";
 import { getRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabaseOwnerId, resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
@@ -59,9 +59,7 @@ export function resolveRuntimeAuthProfileStoreFromSnapshots(params: {
   }
   const requestedStore = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(requestedKey);
   if (mainStore && requestedStore) {
-    return mergeAuthProfileStores(mainStore, requestedStore, {
-      preserveBaseRuntimeExternalProfiles: true,
-    });
+    return mergeLocalAuthProfileStoreWithInheritedStore(requestedStore, mainStore);
   }
   if (requestedStore) {
     const persistedMainStore = loadInheritedAuthProfileStore(
@@ -69,15 +67,9 @@ export function resolveRuntimeAuthProfileStoreFromSnapshots(params: {
       params.inheritedAuthDir,
       params.env,
     );
-    return persistedMainStore
-      ? mergeAuthProfileStores(persistedMainStore, requestedStore, {
-          preserveBaseRuntimeExternalProfiles: true,
-        })
-      : requestedStore;
+    return mergeLocalAuthProfileStoreWithInheritedStore(requestedStore, persistedMainStore);
   }
   return mainStore
-    ? mergeAuthProfileStores(mainStore, params.loadStore(params.agentDir), {
-        preserveBaseRuntimeExternalProfiles: true,
-      })
+    ? mergeLocalAuthProfileStoreWithInheritedStore(params.loadStore(params.agentDir), mainStore)
     : null;
 }
