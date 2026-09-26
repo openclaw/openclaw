@@ -349,6 +349,7 @@ describe("durable pre-reply run failure", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed("partial");
       const before = await loadTranscriptEvents(target);
+      const reportTarget = await resolveSessionTranscriptRuntimeTarget(target);
       const started = createDeferred();
       const release = createDeferred();
       const blocker = patchSessionEntryCore(target, async () => {
@@ -365,7 +366,7 @@ describe("durable pre-reply run failure", () => {
       };
       assertCommitAllowed();
       const persistence = recordGatewaySessionRunFailure({
-        target,
+        target: reportTarget,
         runId,
         error: "Run deadline exceeded",
         status: "timeout",

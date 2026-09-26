@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
@@ -19,7 +18,8 @@ import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
 
 // Observe the existing owner boundary without replacing its implementation.
-// Capture the installed sweep for deterministic invocation; keep its real timer.
+// Drive the owner's minute callbacks together, as one real timer tick would.
+// Health and cold-storage timers share the deadline sweep's interval.
 // RPC admission, expiry, abort, persistence, and model HTTP requests run normally.
 const maintenance = vi.hoisted(() => ({
   params: undefined as Parameters<typeof startGatewayMaintenanceTimers>[0] | undefined,
@@ -32,16 +32,23 @@ vi.mock("../server-maintenance.js", async (importOriginal) => {
     startGatewayMaintenanceTimers: (...args: Parameters<typeof startGatewayMaintenanceTimers>) => {
       maintenance.params = args[0];
       const realSetInterval = globalThis.setInterval;
+      const minuteCallbacks: Array<() => void> = [];
       const timer = vi
         .spyOn(globalThis, "setInterval")
         .mockImplementation((callback, delay, ...rest) => {
           if (delay === 60_000) {
-            maintenance.sweep = () => callback(...rest);
+            minuteCallbacks.push(() => callback(...rest));
           }
           return realSetInterval(callback, delay, ...rest);
         });
       try {
-        return actual.startGatewayMaintenanceTimers(...args);
+        const timers = actual.startGatewayMaintenanceTimers(...args);
+        maintenance.sweep = () => {
+          for (const callback of minuteCallbacks) {
+            callback();
+          }
+        };
+        return timers;
       } finally {
         timer.mockRestore();
       }
@@ -52,8 +59,9 @@ vi.mock("../server-maintenance.js", async (importOriginal) => {
 // Hold before the existing report transaction. Neither half of the timeout
 // outcome may reach durable history before the combined report commits.
 const concurrentTurn = vi.hoisted(() => ({
+  reportRunId: undefined as string | undefined,
   beforeReport: undefined as (() => Promise<void>) | undefined,
-  onAdmission: undefined as (() => void) | undefined,
+  onTimeoutWait: undefined as ((runId: string) => void) | undefined,
 }));
 vi.mock("../../sessions/session-run-error.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../sessions/session-run-error.js")>();
@@ -62,22 +70,23 @@ vi.mock("../../sessions/session-run-error.js", async (importOriginal) => {
     recordGatewaySessionRunFailure: async (
       ...args: Parameters<typeof actual.recordGatewaySessionRunFailure>
     ) => {
-      if (args[0].runId === "timeout-proof-partial-timeout") {
+      if (concurrentTurn.reportRunId && args[0].runId === concurrentTurn.reportRunId) {
         await concurrentTurn.beforeReport?.();
       }
       return actual.recordGatewaySessionRunFailure(...args);
     },
   };
 });
-vi.mock("./chat-send-admission.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./chat-send-admission.js")>();
+vi.mock("./chat-send-pre-admission.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-send-pre-admission.js")>();
   return {
     ...actual,
-    admitChatSend: (...args: Parameters<typeof actual.admitChatSend>) => {
-      if (args[0].session.clientRunId === "timeout-proof-next-partial-timeout") {
-        concurrentTurn.onAdmission?.();
-      }
-      return actual.admitChatSend(...args);
+    waitForChatSessionTimeoutPersistence: (
+      ...args: Parameters<typeof actual.waitForChatSessionTimeoutPersistence>
+    ) => {
+      const operation = actual.waitForChatSessionTimeoutPersistence(...args);
+      concurrentTurn.onTimeoutWait?.(args[0].session.clientRunId);
+      return operation;
     },
   };
 });
@@ -107,7 +116,8 @@ type Scenario =
   | "partial-timeout"
   | "user-cancel"
   | "normal"
-  | "duplicate-timeout";
+  | "duplicate-timeout"
+  | "persistence-failure-timeout";
 type CapturedRequest = { body: Record<string, unknown>; response: ServerResponse };
 
 function reportRows(events: readonly unknown[]) {
@@ -145,16 +155,7 @@ describe("deadline outcome real Gateway history proof", () => {
       const chatEvents: Array<Record<string, unknown>> = [];
       let scenario: Scenario = "empty-timeout";
       let nextTurn = false;
-      const reportReady = createDeferred();
-      const releaseReport = createDeferred();
-      const nextAdmission = createDeferred();
-      const concurrentProviderRequest = createDeferred<Record<string, unknown>>();
-      let reportGateReleased = false;
-      concurrentTurn.beforeReport = async () => {
-        reportReady.resolve();
-        await releaseReport.promise;
-      };
-      concurrentTurn.onAdmission = () => nextAdmission.resolve();
+      let releaseHeldReport: (() => void) | undefined;
       const unsubscribe = onAgentEvent((event) => {
         if (event.stream === "lifecycle") {
           lifecycle.push(event);
@@ -166,9 +167,24 @@ describe("deadline outcome real Gateway history proof", () => {
         const workspace = path.join(tempHome, "workspace");
         const configPath = path.join(stateDir, "openclaw.json");
         const bundledPluginsDir = path.join(tempHome, "bundled-plugins");
+        const databasePath = path.join(
+          stateDir,
+          "agents",
+          "main",
+          "agent",
+          "openclaw-agent.sqlite",
+        );
+        const databaseInput = process.env.OPENCLAW_TIMEOUT_HISTORY_PROOF_DATABASE;
+        const databaseOutput = process.env.OPENCLAW_TIMEOUT_HISTORY_PROOF_DATABASE_OUTPUT;
         await Promise.all(
           [stateDir, workspace, bundledPluginsDir].map((dir) => fs.mkdir(dir, { recursive: true })),
         );
+        // An opt-in cross-version run supplies a closed, migrated database made
+        // by the older release's real session writer. Routine CI starts empty.
+        if (databaseInput) {
+          await fs.mkdir(path.dirname(databasePath), { recursive: true });
+          await fs.copyFile(databaseInput, databasePath);
+        }
         for (const [key, value] of Object.entries({
           HOME: tempHome,
           OPENCLAW_STATE_DIR: stateDir,
@@ -197,9 +213,6 @@ describe("deadline outcome real Gateway history proof", () => {
               unknown
             >;
             requests.push({ body, response });
-            if (scenario === "partial-timeout" && nextTurn && !reportGateReleased) {
-              concurrentProviderRequest.resolve(body);
-            }
             if (nextTurn || scenario === "normal") {
               writeOpenAiResponsesText(response, {
                 text: COMPLETE,
@@ -292,10 +305,27 @@ describe("deadline outcome real Gateway history proof", () => {
           "user-cancel",
           "normal",
           "duplicate-timeout",
+          "persistence-failure-timeout",
         ] as const) {
           scenario = current;
           nextTurn = false;
           const sessionKey = `agent:main:timeout-proof-${current}`;
+          const holdReport =
+            current === "partial-timeout" || current === "persistence-failure-timeout";
+          const reportReady = createDeferred();
+          const releaseReport = createDeferred();
+          const timeoutWaitCalled = createDeferred<"wait-called">();
+          releaseHeldReport = () => releaseReport.resolve();
+          concurrentTurn.reportRunId = holdReport ? `timeout-proof-${current}` : undefined;
+          concurrentTurn.beforeReport = async () => {
+            reportReady.resolve();
+            await releaseReport.promise;
+          };
+          concurrentTurn.onTimeoutWait = (runId) => {
+            if (runId === `timeout-proof-next-${current}`) {
+              timeoutWaitCalled.resolve("wait-called");
+            }
+          };
           const requestStart = requests.length;
           const started = await gateway.client.request<{ runId: string; status: string }>(
             "chat.send",
@@ -315,6 +345,7 @@ describe("deadline outcome real Gateway history proof", () => {
           let earlyNextRequestStart: number | undefined;
           let requestBeforeReportRelease: Record<string, unknown> | undefined;
           let reportGateReached: boolean | undefined;
+          let terminalPersistence: Promise<void> | undefined;
           if (current === "partial-timeout") {
             await expect
               .poll(() => maintenance.params?.chatRunState.runs.get(started.runId)?.buffer, {
@@ -333,9 +364,12 @@ describe("deadline outcome real Gateway history proof", () => {
               throw new Error("Gateway maintenance sweep was not installed");
             }
             maintenance.sweep();
+            expect(entry.controller.signal.aborted).toBe(true);
+            expect(entry.abortStopReason).toBe("timeout");
             // Deadline emission installs the owner in this same synchronous
             // stack, before any next RPC or microtask can read the transcript.
             expect(entry.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
+            terminalPersistence = entry.projectSessionTerminalPersistence;
             await expect
               .poll(
                 () =>
@@ -355,55 +389,80 @@ describe("deadline outcome real Gateway history proof", () => {
             });
             expect(aborted.aborted).toBe(true);
           }
-          if (current === "partial-timeout") {
-            reportGateReached = await Promise.race([
-              reportReady.promise.then(() => true),
-              sleep(10_000, false, { ref: false }),
-            ]);
-            expect
-              .soft(reportGateReached, "timeout report must reach its persistence gate")
-              .toBe(true);
-            if (reportGateReached) {
-              const transcriptBeforeCommit = await transcriptFor(sessionKey);
-              expect.soft(JSON.stringify(transcriptBeforeCommit)).not.toContain(PARTIAL);
-              expect.soft(JSON.stringify(transcriptBeforeCommit)).not.toContain(NOTICE);
-              expect(reportRows(transcriptBeforeCommit)).toHaveLength(0);
-              nextTurn = true;
-              earlyNextRequestStart = requests.length;
-              earlyContinued = gateway.client.request<{ runId: string }>("chat.send", {
-                sessionKey,
-                message: "Continue from the previous turn.",
-                deliver: false,
-                idempotencyKey: `timeout-proof-next-${current}`,
-              });
-              // Observe real admission before the bounded absence check. A network
-              // request that has not reached the Gateway cannot satisfy this proof.
-              void earlyContinued.catch(() => {});
-              await nextAdmission.promise;
-              requestBeforeReportRelease = await Promise.race([
-                concurrentProviderRequest.promise,
-                sleep(5_000).then(() => undefined),
-              ]);
-              console.info(
-                `TIMEOUT_CONCURRENT_ADMISSION ${JSON.stringify({
-                  scenario: current,
-                  admissionReached: true,
-                  transcriptBeforeCommit,
-                  gateReleased: false,
-                  providerRequestBeforeRelease: requestBeforeReportRelease ?? null,
-                  providerRequestHasTimeout: requestBeforeReportRelease
-                    ? JSON.stringify(requestBeforeReportRelease).includes(NOTICE)
-                    : null,
-                })}`,
-              );
-              expect.soft(requestBeforeReportRelease).toBeUndefined();
-            } else {
-              console.info(
-                `TIMEOUT_CONCURRENT_ADMISSION ${JSON.stringify({ scenario: current, reportGateReached: false, admissionReached: false, concurrentProbeSkipped: "report persistence gate not reached within 10000ms" })}`,
-              );
+          if (holdReport) {
+            if (!terminalPersistence) {
+              throw new Error("timeout report has no persistence owner");
             }
-            reportGateReleased = true;
-            releaseReport.resolve();
+            await withTestTimeout(
+              Promise.race([
+                reportReady.promise,
+                terminalPersistence.then(() => {
+                  throw new Error("timeout persistence settled without reaching its report gate");
+                }),
+              ]),
+              10_000,
+              "timeout persistence did not reach its report gate",
+            );
+            reportGateReached = true;
+            const transcriptBeforeCommit = await transcriptFor(sessionKey);
+            expect.soft(JSON.stringify(transcriptBeforeCommit)).not.toContain(PARTIAL);
+            expect.soft(JSON.stringify(transcriptBeforeCommit)).not.toContain(NOTICE);
+            expect(reportRows(transcriptBeforeCommit)).toHaveLength(0);
+            expect(
+              maintenance.params?.chatAbortControllers.get(started.runId)
+                ?.projectSessionTerminalPersistence,
+            ).toBe(terminalPersistence);
+            nextTurn = true;
+            earlyNextRequestStart = requests.length;
+            earlyContinued = gateway.client.request<{ runId: string }>("chat.send", {
+              sessionKey,
+              message: "Continue from the previous turn.",
+              deliver: false,
+              idempotencyKey: `timeout-proof-next-${current}`,
+            });
+            // This callback is a scheduling barrier. The failure scenario below
+            // proves the awaited dependency through the actual RPC result.
+            void earlyContinued.catch(() => {});
+            const reached = await withTestTimeout(
+              Promise.race([timeoutWaitCalled.promise, earlyContinued.then(() => "accepted")]),
+              10_000,
+              "next turn did not call the timeout persistence wait",
+            );
+            expect(reached).toBe("wait-called");
+            requestBeforeReportRelease = requests[earlyNextRequestStart]?.body;
+            console.info(
+              `TIMEOUT_CONCURRENT_ADMISSION ${JSON.stringify({
+                scenario: current,
+                admissionReached: true,
+                transcriptBeforeCommit,
+                gateReleased: false,
+                providerRequestBeforeRelease: requestBeforeReportRelease ?? null,
+                providerRequestHasTimeout: requestBeforeReportRelease
+                  ? JSON.stringify(requestBeforeReportRelease).includes(NOTICE)
+                  : null,
+              })}`,
+            );
+            expect.soft(requestBeforeReportRelease).toBeUndefined();
+            if (current === "persistence-failure-timeout") {
+              const failure = new Error("timeout history proof report write failed");
+              releaseReport.reject(failure);
+              await expect(
+                withTestTimeout(
+                  earlyContinued,
+                  10_000,
+                  "next turn did not receive the timeout report failure",
+                ),
+              ).rejects.toMatchObject({
+                name: "GatewayClientRequestError",
+                gatewayCode: "INVALID_REQUEST",
+                message: `Error: ${failure.message}`,
+              });
+              await expect(
+                withTestTimeout(terminalPersistence, 10_000, "timeout report owner did not reject"),
+              ).rejects.toBe(failure);
+            } else {
+              releaseReport.resolve();
+            }
           }
           await expect
             .poll(() => maintenance.params?.chatAbortControllers.has(started.runId), {
@@ -429,6 +488,22 @@ describe("deadline outcome real Gateway history proof", () => {
             emitAgentEvent({ ...terminal });
           }
           const firstTranscript = await transcriptFor(sessionKey);
+          if (current === "persistence-failure-timeout") {
+            expect(reportRows(firstTranscript)).toHaveLength(0);
+            expect(JSON.stringify(firstTranscript)).not.toContain(NOTICE);
+            expect(requests.length).toBe(earlyNextRequestStart);
+            expect(
+              maintenance.params?.chatAbortControllers.has(`timeout-proof-next-${current}`),
+            ).toBe(false);
+            verdicts.push({
+              scenario: current,
+              reportGateReached,
+              reportFailurePropagated: true,
+              durableTimeoutReports: 0,
+              successorProviderRequests: 0,
+            });
+            continue;
+          }
           const firstHistory = await gateway.client.request<{
             messages: unknown[];
             sessionInfo?: { status?: string };
@@ -480,6 +555,11 @@ describe("deadline outcome real Gateway history proof", () => {
           );
           expect.soft(modelInput.includes(NOTICE)).toBe(isTimeout);
           expect.soft(modelInput).not.toContain("This turn did not run");
+          if (databaseInput && (current === "empty-timeout" || current === "partial-timeout")) {
+            const original = `DATABASE_COMPATIBILITY_ORIGINAL_${current}`;
+            expect.soft(JSON.stringify(firstTranscript)).toContain(original);
+            expect.soft(modelInput).toContain(original);
+          }
           if (current === "partial-timeout") {
             expect.soft(modelInput.includes(PARTIAL)).toBe(true);
           }
@@ -510,10 +590,21 @@ describe("deadline outcome real Gateway history proof", () => {
           });
         }
         console.info(`TIMEOUT_HISTORY_VERDICT ${JSON.stringify(verdicts)}`);
+        if (databaseOutput) {
+          const { DatabaseSync, backup } = await import("node:sqlite");
+          const database = new DatabaseSync(databasePath, { readOnly: true });
+          try {
+            await fs.mkdir(path.dirname(databaseOutput), { recursive: true });
+            await backup(database, databaseOutput);
+          } finally {
+            database.close();
+          }
+        }
       } finally {
-        releaseReport.resolve();
+        releaseHeldReport?.();
+        concurrentTurn.reportRunId = undefined;
         concurrentTurn.beforeReport = undefined;
-        concurrentTurn.onAdmission = undefined;
+        concurrentTurn.onTimeoutWait = undefined;
         unsubscribe();
         for (const request of requests) {
           request.response.destroy();

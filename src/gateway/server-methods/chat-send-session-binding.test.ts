@@ -1,6 +1,5 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { expect, it, vi, type MockInstance } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -268,17 +267,25 @@ it.each(admissionScenarios)(
           await vi.waitFor(() => expect(holdDispatch).toHaveBeenCalledOnce(), { timeout: 3_000 });
         }
         if (timeoutDuringAdmission) {
-          await workAdmissionReached.promise;
-          // Admission reached the race window; give the real handler time to
-          // dispatch if it fails to wait on the newly observed terminal owner.
-          await sleep(100);
-          expect.soft(holdDispatch).not.toHaveBeenCalled();
-          expect.soft(respond).not.toHaveBeenCalled();
+          await withTestTimeout(
+            workAdmissionReached.promise,
+            3_000,
+            "send did not reach work admission",
+          );
           if (timeoutPersistenceFails) {
+            // The timeout appeared after the first check. Its failure must
+            // reach this send through the second check, before dispatch starts.
             foreignTerminal.reject(new Error("timeout report commit failed"));
             await handling;
             expect.soft(holdDispatch).not.toHaveBeenCalled();
-            expect.soft(respond).toHaveBeenCalledWith(false, undefined, expect.anything());
+            expect.soft(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "INVALID_REQUEST",
+                message: "Error: timeout report commit failed",
+              }),
+            );
             expect.soft(releaseAdmission).toHaveBeenCalledOnce();
             expect.soft(context.chatAbortControllers.has(runId)).toBe(false);
             return;
