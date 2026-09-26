@@ -25,6 +25,19 @@ of their current conversation's binding, model, permissions, Fast mode, and
 native goal. Host-wide reads are restricted because they can expose other
 conversations, private workspaces, account identities, and connected services.
 
+App-server connectivity and the current conversation binding are separate.
+After a Gateway restart, the next authorized message in a chat attached with
+`/codex bind` restores its native binding. If Codex confirms that the recorded
+thread is gone, OpenClaw creates a replacement once using the conversation's
+model and current execution policy. A replacement starts fresh; it cannot
+recover history from a missing native thread. Connection errors, overload, and
+uncertain resume outcomes do not authorize replacement.
+
+Bindings are scoped to the conversation, including each Telegram topic.
+`/new` resets the OpenClaw session; use `/codex detach` to remove an explicit
+conversation binding. A binding transferred from a source OpenClaw session
+still requires that source session to remain current.
+
 Common forms:
 
 - `/codex status` checks app-server connectivity, models, account, rate

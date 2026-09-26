@@ -28,6 +28,7 @@ import {
   CodexThreadDirectInputError,
 } from "./app-server/protocol-validators.js";
 import type { CodexTurnStartResponse } from "./app-server/protocol.js";
+import { isCodexThreadMissingError } from "./app-server/rpc-error.js";
 import {
   assertCodexBindingMayBeReplaced,
   type CodexAppServerBindingStore,
@@ -524,11 +525,14 @@ async function runBoundTurn(params: {
 export async function runBoundTurnWithMissingThreadRecovery(
   params: Parameters<typeof runBoundTurn>[0],
 ): Promise<BoundTurnResult> {
-  await prepareCodexConversationBinding(params);
   try {
+    await prepareCodexConversationBinding(params);
     return await runBoundTurn(params);
   } catch (error) {
-    if (!isCodexThreadNotFoundError(error)) {
+    const identity = { kind: "conversation" as const, bindingId: params.data.bindingId };
+    const failedThreadId =
+      params.bindingStore.read(identity)?.threadId ?? params.data.start?.threadId;
+    if (!isCodexThreadNotFoundError(error, failedThreadId)) {
       throw error;
     }
     await prepareCodexConversationBinding(params, { forceNew: true });
@@ -536,13 +540,22 @@ export async function runBoundTurnWithMissingThreadRecovery(
   }
 }
 
-function isCodexThreadNotFoundError(error: unknown): boolean {
+function isCodexThreadNotFoundError(error: unknown, threadId: string | undefined): boolean {
   if (isCodexAppServerOverloadError(error) || isCodexAppServerUnsafeSubscriptionError(error)) {
     return false;
   }
   const message = formatErrorMessage(error);
+  if (/\bbound Codex conversation has no thread binding\b/u.test(message)) {
+    return true;
+  }
+  const expectedThreadId = threadId?.trim();
+  if (!expectedThreadId) {
+    return false;
+  }
+  const threadNotFound = `thread not found: ${expectedThreadId}`;
   return (
-    /\bthread not found:/iu.test(message) ||
-    /\bbound Codex conversation has no thread binding\b/u.test(message)
+    isCodexThreadMissingError(error, expectedThreadId) ||
+    message === threadNotFound ||
+    message.endsWith(`: ${threadNotFound}`)
   );
 }

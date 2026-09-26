@@ -28,6 +28,27 @@ export function isCodexThreadReadMissingError(error: unknown, threadId: string):
   );
 }
 
+/** Exact app-server signals that prove a recorded thread can no longer be resumed. */
+export function isCodexThreadMissingError(error: unknown, threadId: string): boolean {
+  const expectedThreadId = threadId.trim();
+  if (!expectedThreadId || !(error instanceof CodexAppServerRpcError) || error.code !== -32_600) {
+    return false;
+  }
+  const threadNotFound = `thread not found: ${expectedThreadId}`;
+  if (error.method === "thread/read") {
+    return (
+      error.message === `thread not loaded: ${expectedThreadId}` || error.message === threadNotFound
+    );
+  }
+  if (error.method === "thread/resume") {
+    return (
+      error.message === `no rollout found for thread id ${expectedThreadId}` ||
+      error.message === threadNotFound
+    );
+  }
+  return error.method === "turn/start" && error.message === threadNotFound;
+}
+
 function formatCodexAppServerRpcErrorMessage(
   error: { message: string; data?: JsonValue },
   method: string,
