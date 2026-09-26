@@ -688,6 +688,9 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Focused sandbox scp tests consume the deadline-sizing seam (slowest supported
+    // throughput, floor, resolver); production sizes the transfer in-module.
+    "src/auto-reply/reply/stage-sandbox-media.ts": ["exports"],
   },
   workspaces: {
     ".": {
