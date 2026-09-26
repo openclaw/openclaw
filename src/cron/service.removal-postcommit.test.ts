@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { readCronJobScratchState, writeCronJobScratch } from "./scratch-store.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { add } from "./service/ops-mutations.js";
@@ -57,6 +58,7 @@ function createState(params: {
   onEvent: (event: CronEvent) => void;
 }): CronServiceState {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath: params.storePath,
     cronEnabled: true,
     log: logger,
@@ -90,7 +92,7 @@ async function executeRemovalPath(
 
 function clearStateTimer(state: CronServiceState): void {
   if (state.timer) {
-    clearTimeout(state.timer);
+    state.timer.cancel();
     state.timer = null;
   }
 }

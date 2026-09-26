@@ -1938,7 +1938,6 @@ src/channels/message/capabilities.ts	1
 src/channels/message/ingress-claim-owner.ts	1
 src/channels/message/ingress-drain.ts	1
 src/channels/message/ingress-monitor.ts	4
-src/channels/message/ingress-queue.ts	1
 src/channels/message/outbound-bridge.ts	1
 src/channels/message/outbound-echo-state.ts	2
 src/channels/model-overrides.ts	1
@@ -2474,7 +2473,7 @@ src/gateway/server-methods/chat-transcript-persistence.ts	4
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	4
-src/gateway/server-methods/cron.ts	4
+src/gateway/server-methods/cron.ts	3
 src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3

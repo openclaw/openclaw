@@ -170,9 +170,6 @@ class CronPage extends OpenClawLightDomElement {
             this.gateway.connected &&
             this.gateway.client
           ) {
-            if (event.event === "task") {
-              this.runTranscript.observe(event.payload);
-            }
             if (event.event === "cron") {
               void this.refreshCron({ tableFilters: true, coalesce: true });
             } else if (modelCatalogEventInvalidation(event)) {
@@ -748,7 +745,7 @@ class CronPage extends OpenClawLightDomElement {
               updateCronRunsFilter(cronState, patch);
               await loadCronRuns(cronState);
             }),
-          onViewRunTranscript: (entry) => void this.runTranscript.open(entry),
+          onViewRunTranscript: (entry, trigger) => void this.runTranscript.open(entry, trigger),
         }),
       )}
     `;

@@ -1,5 +1,13 @@
-// Timer tight-loop tests cover cron service guards against immediate rearm loops.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getActiveGatewayRootWorkCount,
+  getGatewaySuspendAdmissionPhase,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
 import { stop } from "./service/ops-lifecycle.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
@@ -8,280 +16,149 @@ import { onTimer } from "./service/timer.test-support.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
-const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-tight-loop-" });
+const now = Date.parse("2026-02-28T12:32:00.000Z");
 
-/**
- * Create a cron job that is past-due AND has a stuck `runningAtMs` marker.
- * This combination causes `findDueJobs` to return `[]` (blocked by
- * `runningAtMs`) while `nextWakeAtMs` still returns the past-due timestamp,
- * which before the fix resulted in a `setTimeout(0)` tight loop.
- */
-function createStuckPastDueJob(params: { id: string; nowMs: number; pastDueMs: number }): CronJob {
-  const pastDueAt = params.nowMs - params.pastDueMs;
+function job(nextRunAtMs?: number): CronJob {
   return {
-    id: params.id,
-    name: "stuck-job",
+    id: "monitor",
+    name: "monitor",
     enabled: true,
     deleteAfterRun: false,
-    createdAtMs: pastDueAt - 60_000,
-    updatedAtMs: pastDueAt - 60_000,
+    createdAtMs: now - 60_000,
+    updatedAtMs: now - 60_000,
     schedule: { kind: "cron", expr: "*/15 * * * *" },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "monitor" },
     delivery: { mode: "none" },
-    state: {
-      nextRunAtMs: pastDueAt,
-      // Stuck: set from a previous execution that was interrupted.
-      // Not yet old enough for STUCK_RUN_MS (2 h) to clear it.
-      runningAtMs: pastDueAt + 1,
-    },
+    state: { nextRunAtMs },
   };
 }
 
-describe("CronService - armTimer tight loop prevention", () => {
+describe("cron scheduled wakes", () => {
   const states: CronServiceState[] = [];
 
-  function extractTimeoutDelays(timeoutSpy: ReturnType<typeof vi.spyOn>) {
-    const calls = timeoutSpy.mock.calls as Array<[unknown, unknown, ...unknown[]]>;
-    return calls
-      .map(([, delay]: [unknown, unknown, ...unknown[]]) => delay)
-      .filter((d: unknown): d is number => typeof d === "number");
-  }
-
-  function latestTimeoutHandle(timeoutSpy: ReturnType<typeof vi.spyOn>) {
-    const result = timeoutSpy.mock.results.at(-1);
-    if (!result || result.type !== "return") {
-      throw new Error("Expected setTimeout to return a timer handle");
-    }
-    return result.value;
-  }
-
-  function createTimerState(params: {
-    storePath: string;
-    now: number;
-    runIsolatedAgentJob?: () => Promise<{ status: "ok" }>;
-  }) {
+  function createState(
+    storePath = "/tmp/test-cron/jobs.json",
+    clock = createGatewaySchedulerClock(now),
+  ) {
     const state = createCronServiceState({
-      storePath: params.storePath,
+      storePath,
       cronEnabled: true,
-      log: noopLogger,
-      nowMs: () => params.now,
+      log: createNoopLogger(),
+      scheduler: createTestGatewayScheduler(clock.clock),
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob:
-        params.runIsolatedAgentJob ?? vi.fn().mockResolvedValue({ status: "ok" }),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     states.push(state);
     return state;
   }
-
-  beforeEach(() => {
-    noopLogger.debug.mockClear();
-    noopLogger.info.mockClear();
-    noopLogger.warn.mockClear();
-    noopLogger.error.mockClear();
-  });
 
   afterEach(() => {
     for (const state of states) {
       stop(state);
     }
     states.length = 0;
-    vi.clearAllMocks();
   });
 
-  it("enforces a minimum delay when the next wake time is in the past", () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const now = Date.parse("2026-02-28T12:32:00.000Z");
-    const pastDueMs = 17 * 60 * 1000; // 17 minutes past due
+  it("replaces the scheduled wake when an earlier occurrence appears", () => {
+    const state = createState();
+    state.store = { version: 1, jobs: [job(now + 30_000)] };
+    armTimer(state);
+    const replaced = state.timer;
+    expect(state.deps.scheduler.nextWakeAtMs).toBe(now + 30_000);
 
-    const state = createTimerState({
-      storePath: "/tmp/test-cron/jobs.json",
-      now,
-    });
-    state.store = {
-      version: 1,
-      jobs: [createStuckPastDueJob({ id: "monitor", nowMs: now, pastDueMs })],
-    };
+    state.store.jobs[0]!.state.nextRunAtMs = now + 10_000;
+    armTimer(state);
+    replaced?.cancel();
+
+    expect(state.deps.scheduler.nextWakeAtMs).toBe(now + 10_000);
+    stop(state);
+    expect(state.deps.scheduler.nextWakeAtMs).toBeNull();
+  });
+
+  it("keeps a maintenance wake when enabled jobs have no next occurrence", () => {
+    const state = createState();
+    const unscheduled = job();
+    state.store = { version: 1, jobs: [unscheduled] };
 
     armTimer(state);
 
-    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
-    const delays = extractTimeoutDelays(timeoutSpy);
-
-    // Before the fix, delay would be 0 (tight loop).
-    // After the fix, delay must be >= MIN_REFIRE_GAP_MS (2000 ms).
-    expect(delays.length).toBeGreaterThan(0);
-    for (const d of delays) {
-      expect(d).toBeGreaterThanOrEqual(2_000);
-    }
-
-    timeoutSpy.mockRestore();
+    expect(state.deps.scheduler.nextWakeAtMs).toBe(now + 60_000);
+    expect(unscheduled.state.nextRunAtMs).toBeUndefined();
   });
 
-  it("reads enabled and collection length only during one future-wake traversal", () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const now = Date.parse("2026-02-28T12:32:00.000Z");
-
-    const state = createTimerState({
-      storePath: "/tmp/test-cron/jobs.json",
-      now,
-    });
-    const job: CronJob = {
-      id: "future-job",
-      name: "future-job",
-      enabled: true,
-      deleteAfterRun: false,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "cron", expr: "*/15 * * * *" },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "test" },
-      delivery: { mode: "none" },
-      state: { nextRunAtMs: now + 10_000 },
+  it("joins a scheduled tick waiting for admission without reopening suspension", async ({
+    signal,
+  }) => {
+    const clock = createGatewaySchedulerClock(now);
+    const state = createState(undefined, clock);
+    state.store = { version: 1, jobs: [job(now + 1_000)] };
+    armTimer(state);
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const releaseSuspension = () => {
+      suspension?.release();
     };
-    let enabledReads = 0;
-    Object.defineProperty(job, "enabled", {
-      configurable: true,
-      get: () => {
-        enabledReads += 1;
-        if (enabledReads > 1) {
-          throw new Error("enabled read more than once");
-        }
-        return true;
-      },
-    });
-    let lengthReads = 0;
-    const jobs = new Proxy([job], {
-      get(target, property, receiver) {
-        if (property === "length") {
-          lengthReads += 1;
-          if (lengthReads > target.length + 1) {
-            throw new Error("jobs.length read after iteration");
-          }
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
-    state.store = {
-      version: 1,
-      jobs,
-    };
+    signal.addEventListener("abort", releaseSuspension, { once: true });
+    const wake = clock.advanceBy(1_000);
 
     try {
-      armTimer(state);
+      state.deps.scheduler.beginClose();
+      stop(state);
+      await state.deps.scheduler.stop();
+      await wake;
 
-      expect(enabledReads).toBe(1);
-      expect(lengthReads).toBe(2);
-      expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
-      expect(extractTimeoutDelays(timeoutSpy)).toContain(10_000);
-      expect(noopLogger.debug).toHaveBeenLastCalledWith(
-        {
-          nextAt: now + 10_000,
-          nextAtIso: expect.stringMatching(
-            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/,
-          ),
-          delayMs: 10_000,
-          clamped: false,
-        },
-        "cron: timer armed",
-      );
-      const timerLog = noopLogger.debug.mock.lastCall?.[0] as { nextAtIso: string };
-      expect(Date.parse(timerLog.nextAtIso)).toBe(now + 10_000);
+      expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(state.storeLoadedAtMs).toBeNull();
+      expect(state.deps.log.error).not.toHaveBeenCalled();
     } finally {
-      timeoutSpy.mockRestore();
+      signal.removeEventListener("abort", releaseSuspension);
+      releaseSuspension();
+      await wake;
     }
   });
 
-  it("keeps a maintenance wake armed when enabled jobs have no nextRunAtMs", () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const now = Date.parse("2026-02-28T12:32:00.000Z");
-
-    const state = createTimerState({
-      storePath: "/tmp/test-cron/jobs.json",
-      now,
-    });
-    const job: CronJob = {
-      id: "missing-next-run",
-      name: "missing-next-run",
-      enabled: true,
-      deleteAfterRun: false,
-      createdAtMs: now - 60_000,
-      updatedAtMs: now - 30_000,
-      schedule: { kind: "cron", expr: "*/15 * * * *" },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "test" },
-      delivery: { mode: "none" },
-      state: {
-        lastRunStatus: "error",
-        lastRunAtMs: now - 45_000,
-        lastError: "provider overloaded",
-      },
-    };
-    const jobs = [job];
-    const filterSpy = vi.spyOn(jobs, "filter");
-    state.store = {
-      version: 1,
-      jobs,
-    };
-
-    try {
-      armTimer(state);
-
-      expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
-      expect(extractTimeoutDelays(timeoutSpy)).toContain(60_000);
-      expect(filterSpy).not.toHaveBeenCalled();
-      expect(state.store.jobs).toEqual([job]);
-      expect(state.store.jobs[0]).toBe(job);
-      expect(job.state).toEqual({
-        lastRunStatus: "error",
-        lastRunAtMs: now - 45_000,
-        lastError: "provider overloaded",
-      });
-      expect(noopLogger.debug).toHaveBeenLastCalledWith(
-        { jobCount: 1, enabledCount: 1, withNextRun: 0, delayMs: 60_000 },
-        "cron: timer armed for maintenance recheck",
-      );
-    } finally {
-      timeoutSpy.mockRestore();
-    }
-  });
-
-  it("breaks the onTimer→armTimer hot-loop with stuck runningAtMs", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+  it("rechecks after clock rollback without executing a future stored occurrence", async () => {
     const store = await makeStorePath();
-    const now = Date.parse("2026-02-28T12:32:00.000Z");
-    const pastDueMs = 17 * 60 * 1000;
+    const nextRunAtMs = now + 10 * 60_000;
+    const future = {
+      ...job(nextRunAtMs),
+      schedule: { kind: "every" as const, everyMs: 10 * 60_000, anchorMs: now },
+    };
+    await saveCronStore(store.storePath, { version: 1, jobs: [future] });
+    const clock = createGatewaySchedulerClock(now);
+    const state = createState(store.storePath, clock);
+    state.store = { version: 1, jobs: [future] };
+    armTimer(state);
 
-    await saveCronStore(store.storePath, {
-      version: 1,
-      jobs: [createStuckPastDueJob({ id: "monitor", nowMs: now, pastDueMs })],
-    });
+    clock.setTime(now - 60 * 60_000);
+    await clock.advanceBy(60_000);
 
-    const state = createTimerState({
-      storePath: store.storePath,
-      now,
-    });
+    expect(state.storeLoadedAtMs).toBe(clock.clock.now());
+    expect(state.store?.jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
+    expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(state.deps.scheduler.nextWakeAtMs).toBe(clock.clock.now() + 60_000);
 
-    // Simulate the onTimer path: it will find no runnable jobs (blocked by
-    // runningAtMs) and re-arm the timer in its finally block.
+    clock.setTime(nextRunAtMs);
+    await clock.advanceBy(60_000);
+
+    expect(state.deps.runIsolatedAgentJob).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a past-due active occurrence from producing a zero-delay loop", async () => {
+    const store = await makeStorePath();
+    const overdue = job(now - 17 * 60_000);
+    overdue.state.runningAtMs = overdue.state.nextRunAtMs! + 1;
+    await saveCronStore(store.storePath, { version: 1, jobs: [overdue] });
+    const state = createState(store.storePath);
+
     await onTimer(state);
 
     expect(state.running).toBe(false);
-    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
-
-    // The re-armed timer must NOT use delay=0. It should use at least
-    // MIN_REFIRE_GAP_MS to prevent the hot-loop.
-    const allDelays = extractTimeoutDelays(timeoutSpy);
-
-    // The last setTimeout call is from the finally→armTimer path.
-    const lastDelay = allDelays[allDelays.length - 1];
-    expect(lastDelay).toBeGreaterThanOrEqual(2_000);
-
-    timeoutSpy.mockRestore();
+    expect(state.deps.scheduler.nextWakeAtMs).toBeGreaterThanOrEqual(now + 2_000);
   });
 });

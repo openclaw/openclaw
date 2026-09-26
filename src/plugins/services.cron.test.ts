@@ -5,6 +5,7 @@ import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-h
 import { loadCronStore } from "../cron/store.js";
 import { getGatewayProcessInstanceId } from "../gateway/process-instance.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.js";
@@ -31,6 +32,8 @@ afterEach(async () => {
 async function createScheduler() {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: false,
     log: createNoopLogger(),

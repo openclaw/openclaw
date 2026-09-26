@@ -2,7 +2,12 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { bundledPluginFile } from "../scripts/lib/bundled-plugin-paths.mjs";
-import { filterUnitConfigTestFiles, isUnitConfigTestFile } from "./vitest/vitest.unit-paths.mjs";
+import {
+  filterUnitConfigTestFiles,
+  isUnitConfigTestFile,
+  unitTestAdditionalExcludePatterns,
+  unitTestIncludePatterns,
+} from "./vitest/vitest.unit-paths.mjs";
 
 describe("isUnitConfigTestFile", () => {
   it("retains the runtime's hidden-file ownership in bulk and singleton discovery", () => {
@@ -26,6 +31,33 @@ describe("isUnitConfigTestFile", () => {
         packageFile,
       ]),
     ).toEqual([packageFile, sourceFile, packageFile]);
+  });
+
+  it("preserves native exclusions for noncanonical paths in bulk and singleton discovery", () => {
+    const included = "src/unowned-fixture.test.ts";
+    const excluded = "src/state/openclaw-database-verify.process.test.ts";
+    const files = [
+      included,
+      excluded,
+      `./${excluded}`,
+      excluded.replace("/state/", "//state/"),
+      excluded.replace("/state/", "/state/./"),
+      excluded.replace("/state/", "/state/../state/"),
+      excluded.replaceAll("/", "\\"),
+      excluded.toUpperCase(),
+      included,
+    ];
+    const expected = files.filter((file) => {
+      const normalized = file.split(path.sep).join("/");
+      return (
+        unitTestIncludePatterns.some((pattern) => path.matchesGlob(normalized, pattern)) &&
+        !unitTestAdditionalExcludePatterns.some((pattern) => path.matchesGlob(normalized, pattern))
+      );
+    });
+    expect(filterUnitConfigTestFiles(files)).toEqual(expected);
+    for (const file of files) {
+      expect(isUnitConfigTestFile(file)).toBe(expected.includes(file));
+    }
   });
 
   it("accepts unit-config package tests", () => {
