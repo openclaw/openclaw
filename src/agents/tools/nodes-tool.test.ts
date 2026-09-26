@@ -95,6 +95,9 @@ vi.mock("../../cli/nodes-camera.js", () => ({
   resolveCameraClipTarget: nodesCameraMocks.resolveCameraClipTarget,
   resolveCameraSnapTargets: nodesCameraMocks.resolveCameraSnapTargets,
   writeCameraClipPayloadToFile: nodesCameraMocks.writeCameraClipPayloadToFile,
+  // This suite isolates tool orchestration; rollback ownership has real-filesystem coverage.
+  withCameraArtifactBatch: async <T>(paths: string[], publish: (paths: string[]) => Promise<T>) =>
+    publish(paths),
   writeCameraPayloadToFile: nodesCameraMocks.writeCameraPayloadToFile,
 }));
 
