@@ -48,8 +48,7 @@ export function createEmbeddedRunPermissionChanges(
   let revision = 0;
   let pending:
     | {
-        mode: NonNullable<RunEmbeddedAgentParams["permissionMode"]> | null;
-        revision: number;
+        mode: PermissionMode;
         promise: Promise<boolean>;
         resolve: (applied: boolean) => void;
       }
@@ -79,7 +78,8 @@ export function createEmbeddedRunPermissionChanges(
     }
     pending?.resolve(false);
     const completion = createDeferredCore<boolean>();
-    pending = { mode, revision: ++revision, ...completion };
+    revision += 1;
+    pending = { mode, ...completion };
     return pending.promise;
   };
   return {

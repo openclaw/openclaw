@@ -45,11 +45,8 @@ export function isCurrentAttemptReplaySafe(
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
-  const hadUnsafeTools = params.toolMetas.some((entry) => entry.replaySafe !== true);
-  const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
-    hadUnsafeTools ||
-    hadAsyncStartedTool ||
+    params.toolMetas.some((entry) => entry.replaySafe !== true || entry.asyncStarted === true) ||
     hasMessagingToolDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     (params.successfulCronAdds ?? 0) > 0;
@@ -100,12 +97,7 @@ export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean 
     attempt.hasToolMediaBlockReply ||
     attempt.didDeliverSourceReplyViaMessageTool ||
     attempt.messagingToolSourceReplyPayloads?.length ||
-    hasMessagingToolDeliveryEvidence({
-      didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-      messagingToolSentTexts: attempt.messagingToolSentTexts ?? [],
-      messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls ?? [],
-      messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
-    }) ||
+    hasMessagingToolDeliveryEvidence(attempt) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     hasAsyncActivity(attempt.toolMetas) ||
     (attempt.successfulCronAdds ?? 0) > 0,

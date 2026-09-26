@@ -22,15 +22,10 @@ type EmbeddedStreamOptions = Parameters<StreamFn>[2] & {
 export function resolveEmbeddedAgentBaseStreamFn(params: {
   session: { agent: { streamFn?: StreamFn } };
 }): StreamFn {
-  const cached = embeddedAgentBaseStreamFnCache.get(params.session);
-  if (cached !== undefined || embeddedAgentBaseStreamFnCache.has(params.session)) {
-    if (!cached) {
-      throw new Error("Agent session has no lifecycle-owned base stream.");
-    }
-    return cached;
+  if (!embeddedAgentBaseStreamFnCache.has(params.session)) {
+    embeddedAgentBaseStreamFnCache.set(params.session, params.session.agent.streamFn);
   }
-  const baseStreamFn = params.session.agent.streamFn;
-  embeddedAgentBaseStreamFnCache.set(params.session, baseStreamFn);
+  const baseStreamFn = embeddedAgentBaseStreamFnCache.get(params.session);
   if (!baseStreamFn) {
     throw new Error("Agent session has no lifecycle-owned base stream.");
   }

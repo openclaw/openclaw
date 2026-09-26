@@ -1,13 +1,13 @@
-import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { SessionSuspensionParams } from "../../session-suspension.js";
-import { resolveRunWorkspaceDir } from "../../workspace-run.js";
-import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
+import type { resolveRunWorkspaceDir } from "../../workspace-run.js";
+import type { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
-import { createEmbeddedRunLaneController } from "./lane-controller.js";
+import type { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
-import { createEmbeddedRunProgressController } from "./progress-controller.js";
-import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { createEmbeddedRunProgressController } from "./progress-controller.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 
 export type PreparedEmbeddedRunInput = {

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   isKnownCliHistoryBoundary,
@@ -18,6 +17,7 @@ import { resolveSessionTranscriptReadFence } from "../../config/sessions/session
 import { assertOwnedTranscriptWriteCommit } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { bindAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import {
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
@@ -84,9 +84,7 @@ export async function prepareCliHistoryBoundary(
           ? ["token", credential.provider, credential.token]
           : undefined;
   const fingerprint = owner
-    ? createHash("sha256")
-        .update(JSON.stringify(["cli-history-v1", normalizeProviderId(params.provider), owner]))
-        .digest("hex")
+    ? sha256Hex(JSON.stringify(["cli-history-v1", normalizeProviderId(params.provider), owner]))
     : undefined;
   const writerRunId = params.expectedWriterRunId ?? params.runId;
   let allowed = Boolean(
@@ -152,8 +150,7 @@ export async function prepareCliHistoryBoundary(
       ) {
         throw new Error("CLI history owner changed before preparation");
       }
-      const patch: Partial<InternalSessionEntry> = { cliHistoryBoundary: boundary };
-      return patch;
+      return { cliHistoryBoundary: boundary };
     },
     {
       preserveActivity: true,

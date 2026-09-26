@@ -1,8 +1,5 @@
-/**
- * Reports prompt pressure and owns explicit mid-turn recovery routing.
- */
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
-import type { AssembleResult } from "../../../context-engine/types.js";
+import type { AssembleResult, ContextEngine } from "../../../context-engine/types.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -14,7 +11,6 @@ import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
-import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
@@ -142,7 +138,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   appendOnlyRuntimeContext?: boolean;
   attempt: AttemptPromptPreflightParams &
     Pick<EmbeddedRunAttemptParams, "model" | "runtimePlan" | "authProfileId">;
-  activeContextEngine?: Pick<AttemptContextEngine, "info">;
+  activeContextEngine?: Pick<ContextEngine, "info">;
   compactionReplayEnabled: boolean;
   contextEngineAssemblySucceeded: boolean;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
@@ -225,7 +221,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     preemptiveCompaction = null;
   }
   if (preemptiveCompaction) {
-    contextBudgetStatus = buildPrePromptContextBudgetStatus({
+    const precheckSummary = {
       result: preemptiveCompaction,
       provider: attempt.provider,
       modelId: attempt.modelId,
@@ -237,21 +233,12 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       input.unwindowedContextEngineMessagesForPrecheck
         ? { unwindowedMessageCount: input.unwindowedContextEngineMessagesForPrecheck.length }
         : {}),
-    });
+    };
+    contextBudgetStatus = buildPrePromptContextBudgetStatus(precheckSummary);
     log.debug(
       formatPrePromptPrecheckLog({
-        result: preemptiveCompaction,
-        provider: attempt.provider,
-        modelId: attempt.modelId,
-        messageCount: input.sessionMessageCount,
-        contextTokenBudget: input.contextTokenBudget,
-        reserveTokens: input.reserveTokens,
+        ...precheckSummary,
         ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-        ...(attempt.sessionId ? { sessionId: attempt.sessionId } : {}),
-        ...(input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
-        input.unwindowedContextEngineMessagesForPrecheck
-          ? { unwindowedMessageCount: input.unwindowedContextEngineMessagesForPrecheck.length }
-          : {}),
         ...(attempt.sessionFile ? { sessionFile: attempt.sessionFile } : {}),
       }),
     );

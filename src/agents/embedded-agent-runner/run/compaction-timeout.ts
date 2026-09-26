@@ -1,6 +1,3 @@
-/**
- * Computes run timeout behavior while compaction is in progress.
- */
 import type { AgentMessage } from "../../runtime/index.js";
 
 /** Timeout state used to distinguish normal run deadlines from compaction stalls. */
@@ -12,10 +9,7 @@ type CompactionTimeoutSignal = {
 
 /** Flags only run-timeout events that overlap pending, retrying, or active compaction work. */
 export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): boolean {
-  if (!signal.isTimeout) {
-    return false;
-  }
-  return signal.isCompactionPendingOrRetrying || signal.isCompactionInFlight;
+  return signal.isTimeout && (signal.isCompactionPendingOrRetrying || signal.isCompactionInFlight);
 }
 
 /**
@@ -105,17 +99,8 @@ export function selectCompactionTimeoutSnapshot(
     }
   }
 
-  const continuableCurrentSnapshot = trimToContinuableTail(params.currentSnapshot);
-  if (continuableCurrentSnapshot) {
-    return {
-      messagesSnapshot: continuableCurrentSnapshot,
-      sessionIdUsed: params.currentSessionId,
-      source: "current",
-    };
-  }
-
   return {
-    messagesSnapshot: [],
+    messagesSnapshot: trimToContinuableTail(params.currentSnapshot) ?? [],
     sessionIdUsed: params.currentSessionId,
     source: "current",
   };

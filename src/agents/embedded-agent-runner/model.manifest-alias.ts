@@ -1,6 +1,8 @@
 import type { ModelCatalogAlias } from "@openclaw/model-catalog-core/model-catalog-types";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { ModelProviderConfig } from "../../config/types.models.js";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planManifestModelCatalogSuppressions } from "../../model-catalog/manifest-planner.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
@@ -16,30 +18,6 @@ import {
 } from "../../plugins/manifest-registry.js";
 import { staticModelIdMatches } from "./model.static-id.js";
 
-function hasModelCatalogAliasTransportOverride(alias: ModelCatalogAlias): boolean {
-  return Boolean(alias.api?.trim() || alias.baseUrl?.trim());
-}
-
-function hasModelCatalogAliasEndpointSurface(alias: ModelCatalogAlias): boolean {
-  return Boolean(alias.baseUrl?.trim());
-}
-
-function findConfiguredModelCatalogProviderConfig(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-}): Partial<ModelProviderConfig> | undefined {
-  const provider = normalizeProviderId(params.provider);
-  if (!provider) {
-    return undefined;
-  }
-  for (const [providerId, providerConfig] of Object.entries(params.cfg?.models?.providers ?? {})) {
-    if (normalizeProviderId(providerId) === provider) {
-      return providerConfig;
-    }
-  }
-  return undefined;
-}
-
 function hasConfiguredModelCatalogProviderEndpointSurface(params: {
   provider: string;
   modelId?: string;
@@ -49,7 +27,7 @@ function hasConfiguredModelCatalogProviderEndpointSurface(params: {
   if (!provider) {
     return false;
   }
-  const config = findConfiguredModelCatalogProviderConfig({ provider, cfg: params.cfg });
+  const config = findNormalizedProviderValue(params.cfg?.models?.providers, provider);
   if (config?.baseUrl?.trim()) {
     return true;
   }
@@ -74,7 +52,9 @@ function resolveConfiguredModelCatalogProviderApi(params: {
   cfg?: OpenClawConfig;
 }): ModelCatalogAlias["api"] {
   const provider = normalizeProviderId(params.provider);
-  const config = findConfiguredModelCatalogProviderConfig({ provider, cfg: params.cfg });
+  const config = provider
+    ? findNormalizedProviderValue(params.cfg?.models?.providers, provider)
+    : undefined;
   const modelId = params.modelId?.trim();
   const model =
     provider && modelId && Array.isArray(config?.models)
@@ -221,7 +201,7 @@ function resolveManifestModelCatalogProviderAlias(params: {
           plugin,
         });
       const hasEndpointSurface =
-        hasModelCatalogAliasEndpointSurface(alias) ||
+        Boolean(alias.baseUrl?.trim()) ||
         hasConfiguredModelCatalogProviderEndpointSurface({
           provider,
           modelId: params.modelId,
@@ -239,7 +219,7 @@ function resolveManifestModelCatalogProviderAlias(params: {
           provider: normalizedTarget,
           modelId: params.modelId,
         });
-      const hasTransportOverride = hasModelCatalogAliasTransportOverride(alias);
+      const hasTransportOverride = Boolean(alias.api?.trim() || alias.baseUrl?.trim());
       const retainsTransportAlias =
         hasTransportOverride &&
         hasEndpointSurface &&
@@ -260,15 +240,12 @@ function resolveManifestModelCatalogProviderAlias(params: {
       });
     }
   }
-  if (claims.length === 0) {
+  const claim = claims[0];
+  if (!claim) {
     return { kind: "none" };
   }
   if (claims.length > 1) {
     return { kind: "conflict" };
-  }
-  const claim = claims[0];
-  if (!claim) {
-    return { kind: "none" };
   }
   if (claim.incompleteTransport) {
     return { kind: "incomplete-transport" };

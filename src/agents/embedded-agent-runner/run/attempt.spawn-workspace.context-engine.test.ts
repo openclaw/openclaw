@@ -11,12 +11,12 @@ import {
   createSessionEntryWithTranscript,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import { clearMemoryPluginState } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { sumToolResultTextChars } from "../tool-result-context-guard.test-support.js";
-import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import {
   cleanupTempPaths,
   createDefaultEmbeddedSession,
@@ -97,7 +97,7 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
   }
 }
 
-function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
+function createTestContextEngine(params: Partial<ContextEngine>): ContextEngine {
   return {
     info: {
       id: "test-context-engine",
@@ -111,7 +111,7 @@ function createTestContextEngine(params: Partial<AttemptContextEngine>): Attempt
       reason: "not used in this test",
     }),
     ...params,
-  } as AttemptContextEngine;
+  } as ContextEngine;
 }
 
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {

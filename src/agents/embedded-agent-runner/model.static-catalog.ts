@@ -1,6 +1,3 @@
-/**
- * Resolves bundled static catalog rows for embedded-agent model selection.
- */
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   findNormalizedProviderValue,
@@ -42,31 +39,10 @@ import { buildInlineProviderModels, completeInlineProviderModel } from "./model.
 import { resolveProviderTransport } from "./model.provider-transport.js";
 import { modelFromStaticCatalogRow } from "./model.static-catalog-row.js";
 import type { BundledStaticCatalogState } from "./model.static-catalog.types.js";
-import {
-  createStaticModelIdMatcher,
-  staticModelIdMatches,
-  type StaticModelIdMatcher,
-} from "./model.static-id.js";
+import { createStaticModelIdMatcher, staticModelIdMatches } from "./model.static-id.js";
 
 export { resolveManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
 export type { ManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
-
-/**
- * Resolves bundled plugin static model-catalog rows into runtime model records.
- */
-function rowMatchesModel(params: {
-  row: NormalizedModelCatalogRow;
-  provider: string;
-  modelId: string;
-  matchesStaticModelId: StaticModelIdMatcher;
-}): boolean {
-  return params.matchesStaticModelId({
-    candidateId: params.row.id,
-    provider: params.provider,
-    modelId: params.modelId,
-    rowProvider: params.row.provider,
-  });
-}
 
 type StaticCatalogPlugin = Parameters<
   typeof planEffectiveModelCatalogRows
@@ -243,11 +219,11 @@ export function createBundledStaticCatalogModelResolver(params?: {
         continue;
       }
       const row = entry.rows.find((candidate: NormalizedModelCatalogRow) =>
-        rowMatchesModel({
-          row: candidate,
+        matchesStaticModelId({
+          candidateId: candidate.id,
           provider,
           modelId: lookup.modelId,
-          matchesStaticModelId,
+          rowProvider: candidate.provider,
         }),
       );
       if (row) {
@@ -354,15 +330,7 @@ export function resolveBundledStaticCatalogModel(
     metadataSnapshot?: PluginMetadataSnapshot;
   },
 ): ProviderRuntimeModel | undefined {
-  return createBundledStaticCatalogModelResolver({
-    cfg: params.cfg,
-    ...(params.env ? { env: params.env } : {}),
-    ...(params.includeRuntimeDiscovery !== undefined
-      ? { includeRuntimeDiscovery: params.includeRuntimeDiscovery }
-      : {}),
-    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-  })(params);
+  return createBundledStaticCatalogModelResolver(params)(params);
 }
 
 function resolveBundledProviderStaticCatalogPluginIds(params: {

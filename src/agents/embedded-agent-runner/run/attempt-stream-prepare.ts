@@ -1,6 +1,3 @@
-/**
- * Prepares stream subscription, tool execution, and the active run queue.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
@@ -30,7 +27,6 @@ import {
   createAgentRunSupersededAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
-import type { AgentMessage } from "../../runtime/index.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
@@ -138,18 +134,10 @@ function prepareStream(
   const shouldRunBeforeAgentFinalize =
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("before_agent_finalize");
-  const onBeforeTerminalDelivery = shouldRunBeforeAgentFinalize
-    ? async (event: {
-        messages: AgentMessage[];
-        willRetry: boolean;
-        assistantEntryId?: string;
-        lastAssistant?: AgentMessage;
-        assistantTexts: readonly string[];
-        hasAssistantVisibleText: boolean;
-        isError: boolean;
-        incompleteTerminalAssistant: boolean;
-        hadDeterministicSideEffect: boolean;
-      }): Promise<void | { suppressTerminalDelivery: true }> => {
+  const onBeforeTerminalDelivery: Parameters<
+    typeof subscribeEmbeddedAgentSession
+  >[0]["onBeforeTerminalDelivery"] = shouldRunBeforeAgentFinalize
+    ? async (event): Promise<void | { suppressTerminalDelivery: true }> => {
         if (
           beforeAgentFinalizeRevisionReason ||
           event.willRetry ||
@@ -547,7 +535,7 @@ function prepareStream(
     terminalReplyExpectation: resolveReplyExpectation(attempt),
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
     cancel: abortActiveRunExternally,
-    abort: (reason) => abortActiveRunExternally(reason),
+    abort: abortActiveRunExternally,
   };
   attempt.replyOperation?.attachBackend(queueHandle);
   setActiveEmbeddedRunLifecycleGeneration(

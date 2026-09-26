@@ -1,7 +1,3 @@
-/**
- * Settles prompt dispatch, stream cleanup, and result projection.
- * It may assume stream runtime preparation and session state are ready.
- */
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readMessageIdempotencyKey } from "../../../config/sessions/transcript-message-identity.js";
@@ -43,8 +39,6 @@ import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { buildPromptImageFailureNotice } from "./images.js";
 import type { EmbeddedAttemptExecutionState, EmbeddedRunAttemptParams } from "./types.js";
-
-/** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
 
 const FAILED_PROMPT_MEDIA_NOTE_TYPE = "openclaw.system-note";
 const FAILED_PROMPT_MEDIA_NOTE_SOURCE = "prompt-image-hydration";
@@ -248,14 +242,7 @@ export async function runEmbeddedAttemptSettledPhase(
             input.activeContextEngine && !getBeforeAgentFinalizeRevisionReason(),
           ),
           subscription,
-          readLifecycleState: () => {
-            const terminal = readTerminal();
-            return {
-              aborted: terminal.aborted,
-              timedOut: terminal.timedOut,
-              timedOutDuringCompaction: terminal.timedOutDuringCompaction,
-            };
-          },
+          readLifecycleState: readTerminal,
           markTimedOutDuringCompaction: () => {
             state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
               kind: "timeout",

@@ -9,7 +9,10 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,7 +27,6 @@ import type {
 } from "../../plugins/types.js";
 import {
   annotateInterSessionPromptText,
-  hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
@@ -129,72 +131,46 @@ function createProviderReplayPluginParams(params: ProviderReplayHookParams) {
 
 function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
-  const out: AgentMessage[] = [];
-  for (const msg of messages) {
-    if (!hasInterSessionUserProvenance(msg as { role?: unknown; provenance?: unknown })) {
-      out.push(msg);
-      continue;
+  const out = messages.map((message) => {
+    if (message?.role !== "user") {
+      return message;
     }
-    const provenance = normalizeInputProvenance((msg as { provenance?: unknown }).provenance);
-    const user = msg as Extract<AgentMessage, { role: "user" }>;
-    if (typeof user.content === "string") {
-      const annotated = annotateInterSessionPromptText(user.content, provenance);
-      if (annotated === user.content) {
-        out.push(msg);
-        continue;
+    const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+    if (provenance?.kind !== "inter_session") {
+      return message;
+    }
+    if (typeof message.content === "string") {
+      const content = annotateInterSessionPromptText(message.content, provenance);
+      if (content === message.content) {
+        return message;
       }
       touched = true;
-      out.push({
-        ...msg,
-        content: annotated,
-      } as AgentMessage);
-      continue;
+      return { ...message, content };
     }
-    if (!Array.isArray(user.content)) {
-      out.push(msg);
-      continue;
+    if (!Array.isArray(message.content)) {
+      return message;
     }
-
-    const textIndex = user.content.findIndex(
-      (block) =>
-        block &&
-        typeof block === "object" &&
-        (block as { type?: unknown }).type === "text" &&
-        typeof (block as { text?: unknown }).text === "string",
-    );
-
-    if (textIndex >= 0) {
-      const existing = user.content[textIndex] as { type: "text"; text: string };
-      const annotated = annotateInterSessionPromptText(existing.text, provenance);
-      if (annotated === existing.text) {
-        out.push(msg);
-        continue;
+    const content = [...message.content];
+    const textIndex = content.findIndex((block) => {
+      const record = asOptionalObjectRecord(block);
+      return record?.type === "text" && typeof record.text === "string";
+    });
+    if (textIndex < 0) {
+      content.unshift({
+        type: "text",
+        text: annotateInterSessionPromptText("Inter-session content follows.", provenance),
+      });
+    } else {
+      const existing = content[textIndex] as { type: "text"; text: string };
+      const text = annotateInterSessionPromptText(existing.text, provenance);
+      if (text === existing.text) {
+        return message;
       }
-      const nextContent = [...user.content];
-      nextContent[textIndex] = {
-        ...existing,
-        text: annotated,
-      };
-      touched = true;
-      out.push({
-        ...msg,
-        content: nextContent,
-      } as AgentMessage);
-      continue;
+      content[textIndex] = { ...existing, text };
     }
-
     touched = true;
-    out.push({
-      ...msg,
-      content: [
-        {
-          type: "text",
-          text: annotateInterSessionPromptText("Inter-session content follows.", provenance),
-        },
-        ...user.content,
-      ],
-    } as AgentMessage);
-  }
+    return { ...message, content };
+  });
   return touched ? out : messages;
 }
 
@@ -386,7 +362,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
         if (!normalized) {
           continue;
         }
-        assistantMessage = normalized as AssistantReplayMessage;
+        assistantMessage = normalized;
       }
     }
     if (isReasoningOnlyLengthAssistantTurn(assistantMessage)) {
@@ -478,48 +454,30 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       continue;
     }
     const normalizedUsage = normalizeAssistantUsageSnapshot(message.usage);
-    const usageCost =
-      message.usage && typeof message.usage === "object"
-        ? (message.usage as { cost?: unknown }).cost
-        : undefined;
-    const rawContextUsage =
-      message.usage && typeof message.usage === "object"
-        ? (message.usage as { contextUsage?: unknown }).contextUsage
-        : undefined;
+    const usage = asOptionalObjectRecord(message.usage);
+    const usageCost = asOptionalObjectRecord(usage?.cost);
+    const rawContextUsage = asOptionalObjectRecord(usage?.contextUsage);
     const normalizedContextUsage = normalizedUsage.contextUsage;
     const contextUsageMatches =
       normalizedContextUsage === undefined
-        ? rawContextUsage === undefined
-        : normalizedContextUsage.state === "unavailable"
-          ? rawContextUsage !== null &&
-            typeof rawContextUsage === "object" &&
-            (rawContextUsage as { state?: unknown }).state === "unavailable"
-          : rawContextUsage !== null &&
-            typeof rawContextUsage === "object" &&
-            (rawContextUsage as { state?: unknown }).state === "available" &&
-            (rawContextUsage as { promptTokens?: unknown }).promptTokens ===
-              normalizedContextUsage.promptTokens &&
-            (rawContextUsage as { totalTokens?: unknown }).totalTokens ===
-              normalizedContextUsage.totalTokens;
+        ? usage?.contextUsage === undefined
+        : rawContextUsage?.state === normalizedContextUsage.state &&
+          (normalizedContextUsage.state === "unavailable" ||
+            (rawContextUsage.promptTokens === normalizedContextUsage.promptTokens &&
+              rawContextUsage.totalTokens === normalizedContextUsage.totalTokens));
     const normalizedCost = normalizedUsage.cost;
     if (
-      message.usage &&
-      typeof message.usage === "object" &&
-      (message.usage as { input?: unknown }).input === normalizedUsage.input &&
-      (message.usage as { output?: unknown }).output === normalizedUsage.output &&
-      (message.usage as { cacheRead?: unknown }).cacheRead === normalizedUsage.cacheRead &&
-      (message.usage as { cacheWrite?: unknown }).cacheWrite === normalizedUsage.cacheWrite &&
-      (message.usage as { totalTokens?: unknown }).totalTokens === normalizedUsage.totalTokens &&
+      usage &&
+      (["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const).every(
+        (field) => usage[field] === normalizedUsage[field],
+      ) &&
       contextUsageMatches &&
-      ((normalizedCost &&
-        usageCost &&
-        typeof usageCost === "object" &&
-        (usageCost as { input?: unknown }).input === normalizedCost.input &&
-        (usageCost as { output?: unknown }).output === normalizedCost.output &&
-        (usageCost as { cacheRead?: unknown }).cacheRead === normalizedCost.cacheRead &&
-        (usageCost as { cacheWrite?: unknown }).cacheWrite === normalizedCost.cacheWrite &&
-        (usageCost as { total?: unknown }).total === normalizedCost.total) ||
-        (!normalizedCost && usageCost === undefined))
+      (normalizedCost
+        ? usageCost &&
+          (["input", "output", "cacheRead", "cacheWrite", "total"] as const).every(
+            (field) => usageCost[field] === normalizedCost[field],
+          )
+        : usage.cost === undefined)
     ) {
       continue;
     }

@@ -1,4 +1,5 @@
-import crypto from "node:crypto";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
 function buildCliLogArgs(params: {
@@ -93,11 +94,7 @@ export function parseCliBackendPreserveEnv(raw: string | undefined): Set<string>
   if (trimmed.startsWith("[")) {
     try {
       const parsed = JSON.parse(trimmed) as unknown;
-      return new Set(
-        Array.isArray(parsed)
-          ? parsed.filter((entry): entry is string => typeof entry === "string")
-          : [],
-      );
+      return new Set(filterStringEntries(parsed));
     } catch {
       return new Set();
     }
@@ -132,7 +129,7 @@ function fingerprintCliSessionId(sessionId?: string): string {
   if (!trimmed) {
     return "none";
   }
-  return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
+  return sha256Hex(trimmed).slice(0, 12);
 }
 function formatCliSessionReuseLogState(reusableSession: CliReusableSession): string {
   switch (reusableSession.mode) {

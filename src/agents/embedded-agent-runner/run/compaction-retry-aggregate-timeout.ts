@@ -1,6 +1,3 @@
-/**
- * Caps compaction retry waits against the aggregate run timeout.
- */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
 export function hasActiveCompactionRetryWork(params: {
@@ -25,7 +22,6 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
 }): Promise<{ timedOut: boolean }> {
   const timeoutMs = resolveTimerTimeoutMs(params.aggregateTimeoutMs, 1);
 
-  let timedOut = false;
   // Reflect the retry promise so late rejections after a timeout stay handled
   // without masking failures that settle before the timeout path wins.
   const waitPromise = params.waitForCompactionRetry().then(
@@ -47,7 +43,7 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
 
       if (result !== "timeout") {
         if (result.kind === "done") {
-          break;
+          return { timedOut: false };
         }
         throw result.error;
       }
@@ -59,15 +55,12 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
         continue;
       }
 
-      timedOut = true;
       params.onTimeout?.();
-      break;
+      return { timedOut: true };
     } finally {
       if (timer !== undefined) {
         clearTimeout(timer);
       }
     }
   }
-
-  return { timedOut };
 }

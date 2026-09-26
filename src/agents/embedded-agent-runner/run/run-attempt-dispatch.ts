@@ -42,7 +42,6 @@ import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparatio
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import { CODEX_HARNESS_ID, resolveAttemptTrajectoryAttribution } from "./runtime-resolution.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
-import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
 import type { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -624,7 +623,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
-    ...resolveSkillWorkshopAttemptParams(params),
+    skillWorkshopAutonomousCapture: params.skillWorkshopAutonomousCapture,
+    skillWorkshopUpdateProposals: params.skillWorkshopUpdateProposals,
+    skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
+    skillWorkshopProposalEnv: params.skillWorkshopProposalEnv,
+    skillWorkshopOrigin: params.skillWorkshopOrigin,
+    skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+    skillWorkshopProposalRevision: params.skillWorkshopProposalRevision,
+    skillLibraryAuthoring: params.skillLibraryAuthoring,
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
     enforceFinalTag: params.enforceFinalTag,

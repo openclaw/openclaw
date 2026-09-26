@@ -18,7 +18,7 @@ import { resolveRunFailoverDecision } from "./failover-policy.js";
 import {
   buildErrorAgentMeta,
   normalizeAssistantUsageForContext,
-  resolveActiveErrorContext,
+  resolveReportedModelRef,
   resolveLatestCallUsage,
 } from "./helpers.js";
 import {
@@ -96,7 +96,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
         ReturnType<typeof normalizeEmbeddedRunAttemptResult>["setTerminalLifecycleMeta"]
       >;
       attemptCompactionCount: number;
-      activeErrorContext: ReturnType<typeof resolveActiveErrorContext>;
+      activeErrorContext: ReturnType<typeof resolveReportedModelRef>;
       resolveReplayInvalidForAttempt: (incompleteTurnText?: string | null) => boolean;
       assistantErrorText: string | undefined;
       canRestartForLiveSwitch: boolean;
@@ -245,7 +245,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
   if (attempt.contextBudgetStatus) {
     input.contextRecoveryState.lastContextBudgetStatus = attempt.contextBudgetStatus;
   }
-  const activeErrorContext = resolveActiveErrorContext({
+  const activeErrorContext = resolveReportedModelRef({
     provider,
     model: modelId,
     assistant: attemptAssistant,

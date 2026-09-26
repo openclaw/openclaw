@@ -162,12 +162,6 @@ function normalizeToolSchemaFingerprint(
   }
 }
 
-function buildToolDigest(tools: readonly PromptCacheToolSnapshot[]): string {
-  // Cache identity includes the exact visible descriptor, not just its name;
-  // canonical ordering prevents discovery order from looking like a break.
-  return sha256Hex(stableStringify(sortPromptCacheToolsByName(tools)));
-}
-
 function setTracker(key: string, tracker: PromptCacheTracker): void {
   if (trackers.has(key)) {
     trackers.delete(key);
@@ -305,7 +299,7 @@ export function beginPromptCacheObservation(params: {
     ...(splitSystemPrompt
       ? { systemPromptSuffixDigest: sha256Hex(splitSystemPrompt.dynamicSuffix) }
       : {}),
-    toolDigest: buildToolDigest(tools),
+    toolDigest: sha256Hex(stableStringify(tools)),
     toolCount: tools.length,
     toolNames: tools.map((tool) => tool.name),
   };
