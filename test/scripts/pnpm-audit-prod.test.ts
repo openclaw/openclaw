@@ -572,32 +572,6 @@ snapshots:
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("clamps oversized bulk advisory request timers before scheduling", async () => {
-    let signal: AbortSignal | undefined;
-    const request = fetchBulkAdvisories({
-      payload: { axios: ["1.0.0"] },
-      timeoutMs: Number.MAX_SAFE_INTEGER,
-      fetchImpl: (async (_url, init) => {
-        signal = init?.signal ?? undefined;
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, 25);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              clearTimeout(timer);
-              reject(new Error("aborted"));
-            },
-            { once: true },
-          );
-        });
-        return new Response("{}", { status: 200 });
-      }) as typeof fetch,
-    });
-
-    await expect(request).resolves.toEqual({});
-    expect(signal?.aborted).toBe(false);
-  });
-
   it.each([
     { status: 200, attempts: 4 },
     { status: 503, attempts: 4 },
@@ -713,7 +687,11 @@ snapshots:
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it.each([200, 503, 403])("bounds stalled HTTP %s bodies by the total budget", async (status) => {
+  it.each([
+    { status: 200, timeoutMs: Number.MAX_SAFE_INTEGER },
+    { status: 503, timeoutMs: 1000 },
+    { status: 403, timeoutMs: 1000 },
+  ])("bounds stalled HTTP $status bodies by the total budget", async ({ status, timeoutMs }) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     let cancelled = false;
     const fetchImpl = vi.fn(
@@ -733,16 +711,16 @@ snapshots:
         fetchBulkAdvisories({
           payload: { axios: ["1.0.0"] },
           fetchImpl,
-          timeoutMs: 1000,
+          timeoutMs,
           budgetMs: 20,
         }),
       ).rejects.toThrow(status === 403 ? "failed (403" : "timeout");
       await vi.advanceTimersByTimeAsync(19);
       expect(cancelled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
-      await request;
       expect(fetchImpl).toHaveBeenCalledOnce();
       expect(cancelled).toBe(true);
+      await request;
     } finally {
       vi.useRealTimers();
     }
