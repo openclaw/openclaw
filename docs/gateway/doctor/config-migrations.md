@@ -28,10 +28,11 @@ not enter a restart loop. Add the reported binding and restart the Gateway.
 
 ## Channel webhook listeners
 
-Feishu and Telegram now receive webhooks on Gateway HTTP routes. Their plugin-owned
+Feishu, Nextcloud Talk, and Telegram receive webhooks on Gateway HTTP routes. Their plugin-owned
 Doctor migrations move an explicitly configured `webhookPort` and effective bind host
 into `legacyWebhook: { port, host? }`. An explicit host without a port keeps that
-host with the channel's previous port (`3000` for Feishu, `8787` for Telegram).
+host with the channel's previous port (`3000` for Feishu, `8788` for Nextcloud Talk,
+`8787` for Telegram).
 Doctor validates and backs up the config through the normal write flow. The
 compatibility listener forwards only its registered webhook
 routes through the same Gateway request pipeline, preserving signatures and retry
@@ -47,8 +48,9 @@ window does not schedule removal of the default listener.
 Update the external callback or reverse-proxy upstream to the Gateway port and
 the channel's webhook path, verify delivery, then set `legacyWebhook: false` to
 close the old port. Omitting `legacyWebhook` preserves Feishu's previous
-`127.0.0.1:3000` listener or Telegram's `127.0.0.1:8787` listener whenever the
-account uses webhook mode. An explicit object selects its configured endpoint;
+`127.0.0.1:3000` listener, Nextcloud Talk's `0.0.0.0:8788` listener, or Telegram's
+`127.0.0.1:8787` listener while webhook transport is active.
+An explicit object selects its configured endpoint;
 an account-level value overrides the
 channel-level setting. Doctor explains the canonical Gateway route and opt-out
 without changing implicit settings. A shared compatibility port closes when no
