@@ -1,7 +1,6 @@
 import AppKit
 import KeyboardShortcuts
 import Observation
-import OpenClawChatUI
 import SwiftUI
 
 private let quickChatLogger = Logger(subsystem: "ai.openclaw", category: "quickchat")
@@ -89,13 +88,7 @@ final class QuickChatController: NSObject {
         recentSessionsProvider: @escaping RecentSessionsProvider = {
             try await SessionLoader.loadSnapshot(limit: 5).rows
         },
-        replyViewModelFactory: @escaping QuickChatReplyBinding.ViewModelFactory = {
-            let transport = MacGatewayChatTransport(defaultGlobalAgentID: $0.agentID)
-            return OpenClawChatViewModel(
-                sessionKey: $0.sessionKey,
-                transport: transport,
-                activeAgentId: $0.agentID)
-        },
+        replyViewModelFactory: @escaping QuickChatReplyBinding.ViewModelFactory = QuickChatReplyBinding.makeViewModel,
         allowsHotkeyRegistrationInTests: Bool = false)
     {
         self.enableUI = enableUI
@@ -144,8 +137,7 @@ final class QuickChatController: NSObject {
     /// completions no-op, and cancels/clears the task so the picker stays usable.
     private func invalidateRecentsFetch() {
         self.recentSessionsRequestID = UUID()
-        self.recentSessionsTask?.cancel()
-        self.recentSessionsTask = nil
+        SimpleTaskSupport.stop(task: &self.recentSessionsTask)
     }
 
     private func registerHotkeyIfNeeded() {
@@ -171,8 +163,7 @@ final class QuickChatController: NSObject {
         self.isStarted = false
         self.dismiss(immediate: true)
         self.model.cancelAllTasks()
-        self.recentSessionsTask?.cancel()
-        self.recentSessionsTask = nil
+        SimpleTaskSupport.stop(task: &self.recentSessionsTask)
         self.replyBinding.clear()
         NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
         self.panel?.delegate = nil
@@ -238,11 +229,8 @@ final class QuickChatController: NSObject {
             quickChatLogger.info("quick chat dismiss immediate=\(immediate)")
         }
         self.windowPicker?.cancel()
-        self.recentSessionsRequestID = UUID()
-        self.recentSessionsTask?.cancel()
-        self.recentSessionsTask = nil
-        self.presentationTask?.cancel()
-        self.presentationTask = nil
+        self.invalidateRecentsFetch()
+        SimpleTaskSupport.stop(task: &self.presentationTask)
         self.model.endPresentation()
         self.replyBinding.clear()
         self.removeDismissMonitors()
@@ -437,8 +425,7 @@ final class QuickChatController: NSObject {
 
     private func stopDictation() {
         self.dictationRequestID = UUID()
-        self.dictationStartTask?.cancel()
-        self.dictationStartTask = nil
+        SimpleTaskSupport.stop(task: &self.dictationStartTask)
         self.dictation.stop()
         self.model.stopDictation()
     }
@@ -579,8 +566,7 @@ final class QuickChatController: NSObject {
 
     private func cancelPasteRequest() {
         self.pasteRequestID = UUID()
-        self.pasteTask?.cancel()
-        self.pasteTask = nil
+        SimpleTaskSupport.stop(task: &self.pasteTask)
         if self.replyBinding.isPastingReply {
             self.replyBinding.finishPaste()
         }
@@ -606,19 +592,7 @@ final class QuickChatController: NSObject {
     }
 
     private func showAgentPicker() {
-        guard self.model.agents.count > 1,
-              let panel,
-              let contentView = panel.contentView
-        else { return }
-
-        self.isMenuActive = true
-        self.removeDismissMonitors()
-        defer {
-            self.isMenuActive = false
-            if self.isVisible { self.installDismissMonitors() }
-            self.focusEditor()
-        }
-
+        guard self.model.agents.count > 1 else { return }
         let menu = NSMenu()
         for agent in self.model.agents {
             let title = agent.emoji.map { "\($0) \(agent.name)" } ?? agent.name
@@ -633,19 +607,18 @@ final class QuickChatController: NSObject {
                 }
             })
         }
-        let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        let contentPoint = contentView.convert(windowPoint, from: nil)
-        // Competing interaction: invalidate any in-flight recents fetch before blocking.
-        self.invalidateRecentsFetch()
-        _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        self.presentMenu(menu, invalidatingRecents: true)
     }
 
     private func showModelMenu() {
-        guard self.model.canUseModelControls,
-              let panel,
-              let contentView = panel.contentView
-        else { return }
+        guard self.model.canUseModelControls else { return }
+        self.withMenuInteraction { panel, contentView in
+            QuickChatModelMenuPresenter.present(model: self.model, panel: panel, contentView: contentView)
+        }
+    }
 
+    private func withMenuInteraction(_ present: (NSPanel, NSView) -> Void) {
+        guard let panel, let contentView = panel.contentView else { return }
         self.isMenuActive = true
         self.removeDismissMonitors()
         defer {
@@ -654,10 +627,17 @@ final class QuickChatController: NSObject {
             self.focusEditor()
         }
 
-        QuickChatModelMenuPresenter.present(
-            model: self.model,
-            panel: panel,
-            contentView: contentView)
+        present(panel, contentView)
+    }
+
+    private func presentMenu(_ menu: NSMenu, invalidatingRecents: Bool = false) {
+        self.withMenuInteraction { panel, contentView in
+            let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+            let contentPoint = contentView.convert(windowPoint, from: nil)
+            // Competing interactions retire a pending recents fetch before AppKit starts tracking.
+            if invalidatingRecents { self.invalidateRecentsFetch() }
+            _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        }
     }
 
     private func showRecentSessionsPicker() {
@@ -709,19 +689,10 @@ final class QuickChatController: NSObject {
     }
 
     private func presentRecentSessionsMenu(rows: [SessionRow]) {
-        guard let panel, let contentView = panel.contentView else { return }
         let items = QuickChatRecentMenuLogic.items(
             rows: rows,
             agentName: self.model.agentDisplay.name,
             selectedTarget: self.model.targetSessionOverride)
-
-        self.isMenuActive = true
-        self.removeDismissMonitors()
-        defer {
-            self.isMenuActive = false
-            if self.isVisible { self.installDismissMonitors() }
-            self.focusEditor()
-        }
 
         let menu = NSMenu()
         for (index, recent) in items.enumerated() {
@@ -734,25 +705,11 @@ final class QuickChatController: NSObject {
                 }
             })
         }
-        let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        let contentPoint = contentView.convert(windowPoint, from: nil)
-        _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        self.presentMenu(menu)
     }
 
     private func showCaptureMenu() {
-        guard self.model.canCaptureWindow,
-              let panel,
-              let contentView = panel.contentView
-        else { return }
-
-        self.isMenuActive = true
-        self.removeDismissMonitors()
-        defer {
-            self.isMenuActive = false
-            if self.isVisible { self.installDismissMonitors() }
-            self.focusEditor()
-        }
-
+        guard self.model.canCaptureWindow else { return }
         let menu = NSMenu()
         for (title, area) in [
             (String(localized: "Capture Window…"), false),
@@ -762,11 +719,7 @@ final class QuickChatController: NSObject {
                 self?.startCapturePicker(area: area)
             })
         }
-        let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        let contentPoint = contentView.convert(windowPoint, from: nil)
-        // Competing interaction: invalidate any in-flight recents fetch before blocking.
-        self.invalidateRecentsFetch()
-        _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        self.presentMenu(menu, invalidatingRecents: true)
     }
 
     private func startCapturePicker(area: Bool) {

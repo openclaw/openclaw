@@ -5,7 +5,7 @@ extension VoiceWakeOverlayController {
     @discardableResult
     func startSession(
         token: UUID = UUID(),
-        source: Source,
+        source: VoiceSessionCoordinator.Source,
         transcript: String,
         attributed: NSAttributedString? = nil,
         forwardEnabled: Bool = false,
@@ -33,7 +33,7 @@ extension VoiceWakeOverlayController {
         return token
     }
 
-    func snapshot() -> (token: UUID?, source: Source?, text: String, isVisible: Bool) {
+    func snapshot() -> (token: UUID?, source: VoiceSessionCoordinator.Source?, text: String, isVisible: Bool) {
         (self.activeToken, self.activeSource, self.model.text, self.model.isVisible)
     }
 
@@ -109,6 +109,9 @@ extension VoiceWakeOverlayController {
     }
 
     func updateText(_ text: String) {
+        if let token = self.activeToken {
+            VoiceSessionCoordinator.shared.updateEditedText(token: token, text: text)
+        }
         self.model.text = text
         self.model.isSending = false
         self.model.attributed = self.makeAttributed(from: text)

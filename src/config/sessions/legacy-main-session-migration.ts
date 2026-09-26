@@ -527,10 +527,17 @@ async function migrateLegacyMainSessionKeysInternal(
       ? aliases.every((claim) => claimsMatch(claim, destinationCanonical))
       : false;
 
-    if (foreignCanonical.length > 0 || (destinationCanonical && !canonicalMatches)) {
-      const divergentClaims = [...canonicalClaims, ...aliases];
+    const divergence =
+      foreignCanonical.length > 0 || (destinationCanonical && !canonicalMatches)
+        ? "divergent-canonical"
+        : !aliasesIdentical
+          ? "divergent-aliases"
+          : undefined;
+    if (divergence) {
+      const divergentClaims =
+        divergence === "divergent-canonical" ? [...canonicalClaims, ...aliases] : aliases;
       const outcome: LegacyMainSessionMigrationOutcome = {
-        kind: "divergent-canonical",
+        kind: divergence,
         canonicalKey,
         paths: [...new Set(divergentClaims.map((claim) => claim.store.path))],
         sourceKeys: divergentClaims.map((claim) => claim.key),
@@ -541,47 +548,19 @@ async function migrateLegacyMainSessionKeysInternal(
           canonicalKey,
           claims: divergentClaims,
           destination,
-          ...(destinationCanonical ? { destinationCanonical } : {}),
+          ...(divergence === "divergent-canonical" && destinationCanonical
+            ? { destinationCanonical }
+            : {}),
           env,
           ownerAgentId,
         });
         outcome.quarantinedKeys = repaired.quarantinedKeys;
         if (repaired.resolved) {
           outcome.resolved = true;
-        } else {
-          warnings.push(warningForDivergence("divergent-canonical", canonicalKey, divergentClaims));
         }
-      } else {
-        warnings.push(warningForDivergence("divergent-canonical", canonicalKey, divergentClaims));
       }
-      outcomes.push(outcome);
-      continue;
-    }
-
-    if (!aliasesIdentical) {
-      const outcome: LegacyMainSessionMigrationOutcome = {
-        kind: "divergent-aliases",
-        canonicalKey,
-        paths: [...new Set(aliases.map((claim) => claim.store.path))],
-        sourceKeys: aliases.map((claim) => claim.key),
-      };
-      if (params.mode === "doctor-fix") {
-        const repaired = await repairDivergentClaims({
-          beforePersistentApply: params.beforePersistentApply,
-          canonicalKey,
-          claims: aliases,
-          destination,
-          env,
-          ownerAgentId,
-        });
-        outcome.quarantinedKeys = repaired.quarantinedKeys;
-        if (repaired.resolved) {
-          outcome.resolved = true;
-        } else {
-          warnings.push(warningForDivergence("divergent-aliases", canonicalKey, aliases));
-        }
-      } else {
-        warnings.push(warningForDivergence("divergent-aliases", canonicalKey, aliases));
+      if (!outcome.resolved) {
+        warnings.push(warningForDivergence(divergence, canonicalKey, divergentClaims));
       }
       outcomes.push(outcome);
       continue;

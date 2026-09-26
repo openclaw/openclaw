@@ -68,22 +68,14 @@ enum ExecHostExecutor {
                     reason: "approval-cancelled")
             }
 
-            let followupDecision: ExecApprovalDecision
-            switch decision {
-            case .deny:
-                followupDecision = .deny
-            case .allowAlways:
+            if decision != .deny {
                 explicitlyApproved = true
-                followupDecision = .allowAlways
-            case .allowOnce:
-                explicitlyApproved = true
-                followupDecision = .allowOnce
             }
-            persistAllowlist = followupDecision == .allowAlways
+            persistAllowlist = decision == .allowAlways
 
             switch ExecHostRequestEvaluator.evaluate(
                 context: context,
-                approvalDecision: followupDecision,
+                approvalDecision: decision,
                 approvalSource: approvalSource)
             {
             case let .deny(error):

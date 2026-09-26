@@ -73,12 +73,12 @@ function resolveRestartRecoveryTerminalDeliveryDisposition(
       // The source turn already completed a terminal send.
       return "already-delivered";
     }
-    if (entry.sessionId === scope.sessionId && hasClaimlessLiveDeliveryState(entry, scope)) {
+    if (hasClaimlessLiveDeliveryState(entry, scope)) {
       // No durable claim was ever armed for this turn.
       return "not-applicable";
     }
   }
-  if (!entry || entry.sessionId !== scope.sessionId || !hasActiveClaim(entry, scope)) {
+  if (!entry || !hasActiveClaim(entry, scope)) {
     return "stale";
   }
   if (entry.restartRecoveryDeliveryReceiptState || entry.restartRecoveryDeliveryToolCallId) {
@@ -189,10 +189,6 @@ export async function beginRestartRecoveryTerminalDelivery(
   if (disposition === "startable") {
     throw new Error("failed to persist terminal delivery intent");
   }
-  if (disposition === "not-applicable") {
-    return "not-applicable";
-  }
-  // already-delivered | delivery-ambiguous | stale
   return disposition;
 }
 

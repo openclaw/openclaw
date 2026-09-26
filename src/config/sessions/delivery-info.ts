@@ -1,4 +1,3 @@
-// Delivery lookup recovers routable channel context from persisted session stores.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveSessionStoreIdentity,
@@ -347,12 +346,8 @@ function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly string
 
 function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string, SessionEntry> {
   const index = new Map<string, SessionEntry>();
-  for (const { sessionKey: key, entry } of store.entries()) {
-    if (!entry) {
-      continue;
-    }
-    const normalized = normalizeStoreSessionKey(key);
-    const existing = index.get(normalized);
+  const indexEntry = (key: string, entry: SessionEntry) => {
+    const existing = index.get(key);
     const entryRoutable = hasDeliveryTargetFields(deliveryContextFromSession(entry));
     const existingRoutable = hasDeliveryTargetFields(deliveryContextFromSession(existing));
     if (
@@ -360,26 +355,22 @@ function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string
       (entryRoutable && !existingRoutable) ||
       (entryRoutable === existingRoutable && (entry.updatedAt ?? 0) > (existing.updatedAt ?? 0))
     ) {
-      index.set(normalized, entry);
+      index.set(key, entry);
     }
+  };
+  for (const { sessionKey: key, entry } of store.entries()) {
+    if (!entry) {
+      continue;
+    }
+    const normalized = normalizeStoreSessionKey(key);
+    indexEntry(normalized, entry);
     // Lowercase aliases are only indexed when case folding is not proof-sensitive; Matrix-style
     // opaque ids must keep exact-case delivery evidence.
     const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
     if (foldedLegacyKey === normalized || requiresFoldedSessionKeyAliasProof(normalized)) {
       continue;
     }
-    const foldedExisting = index.get(foldedLegacyKey);
-    const foldedExistingRoutable = hasDeliveryTargetFields(
-      deliveryContextFromSession(foldedExisting),
-    );
-    if (
-      !foldedExisting ||
-      (entryRoutable && !foldedExistingRoutable) ||
-      (entryRoutable === foldedExistingRoutable &&
-        (entry.updatedAt ?? 0) > (foldedExisting.updatedAt ?? 0))
-    ) {
-      index.set(foldedLegacyKey, entry);
-    }
+    indexEntry(foldedLegacyKey, entry);
   }
   return index;
 }
