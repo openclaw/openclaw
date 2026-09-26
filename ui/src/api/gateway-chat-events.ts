@@ -36,9 +36,13 @@ export class GatewayChatEvents {
     const result = await client.request<T>(method, params, options);
     if (method === "sessions.messages.unsubscribe" && generation === this.generation) {
       const key = asNullableRecord(result)?.key;
+      const request = asNullableRecord(params);
       const agentId =
-        asNullableRecord(params)?.agentId ??
-        (typeof key === "string" ? parseAgentSessionKeyParts(key)?.agentId : undefined);
+        (typeof key === "string" ? parseAgentSessionKeyParts(key)?.agentId : undefined) ??
+        request?.agentId ??
+        (key === "global" && typeof request?.key === "string"
+          ? parseAgentSessionKeyParts(request.key)?.agentId
+          : undefined);
       for (const [runId, stream] of this.messages) {
         const streamAgentId =
           stream.agentId ?? parseAgentSessionKeyParts(stream.sessionKey)?.agentId;

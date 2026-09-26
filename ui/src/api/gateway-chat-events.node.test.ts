@@ -94,6 +94,7 @@ describe("GatewayBrowserClient chat delivery", () => {
       boundary,
       sessionKey: "agent:main:chat",
       eventAgentId: undefined,
+      unsubscribeKey: undefined,
       unsubscribeAgentId: undefined,
       retained: false,
     })),
@@ -102,6 +103,7 @@ describe("GatewayBrowserClient chat delivery", () => {
       boundary: "unsubscribe",
       sessionKey: "agent:work:chat",
       eventAgentId: undefined,
+      unsubscribeKey: undefined,
       unsubscribeAgentId: "work",
       retained: false,
     },
@@ -110,6 +112,7 @@ describe("GatewayBrowserClient chat delivery", () => {
       boundary: "unsubscribe",
       sessionKey: "global",
       eventAgentId: "research",
+      unsubscribeKey: undefined,
       unsubscribeAgentId: undefined,
       retained: true,
     },
@@ -118,6 +121,7 @@ describe("GatewayBrowserClient chat delivery", () => {
       boundary: "unsubscribe",
       sessionKey: "global",
       eventAgentId: undefined,
+      unsubscribeKey: undefined,
       unsubscribeAgentId: "work",
       retained: true,
     },
@@ -126,12 +130,38 @@ describe("GatewayBrowserClient chat delivery", () => {
       boundary: "unsubscribe",
       sessionKey: "global",
       eventAgentId: "work",
+      unsubscribeKey: undefined,
       unsubscribeAgentId: "work",
       retained: false,
     },
+    {
+      name: "qualified main unsubscribe acknowledged as global",
+      boundary: "unsubscribe",
+      sessionKey: "global",
+      eventAgentId: "work",
+      unsubscribeKey: "agent:work:main",
+      unsubscribeAgentId: undefined,
+      retained: false,
+    },
+    {
+      name: "qualified main unsubscribe preserves another global owner",
+      boundary: "unsubscribe",
+      sessionKey: "global",
+      eventAgentId: "research",
+      unsubscribeKey: "agent:work:main",
+      unsubscribeAgentId: undefined,
+      retained: true,
+    },
   ])(
     "retires only an owned baseline on $name",
-    async ({ boundary, sessionKey, eventAgentId, unsubscribeAgentId, retained }) => {
+    async ({
+      boundary,
+      sessionKey,
+      eventAgentId,
+      unsubscribeKey,
+      unsubscribeAgentId,
+      retained,
+    }) => {
       const onEvent = vi.fn();
       const listener = vi.fn();
       const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL, onEvent });
@@ -156,7 +186,7 @@ describe("GatewayBrowserClient chat delivery", () => {
           ws = getLatestWebSocket();
         } else if (boundary === "unsubscribe") {
           const unsubscribe = client.request("sessions.messages.unsubscribe", {
-            key: payload.sessionKey,
+            key: unsubscribeKey ?? payload.sessionKey,
             ...(unsubscribeAgentId ? { agentId: unsubscribeAgentId } : {}),
           });
           const request = JSON.parse(ws.sent.at(-1) ?? "{}");
