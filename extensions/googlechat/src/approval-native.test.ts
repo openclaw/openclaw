@@ -1,5 +1,5 @@
 import type { ChannelOutboundPayloadHint } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { GoogleChatAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it } from "vitest";
 import {
@@ -7,7 +7,6 @@ import {
   shouldHandleGoogleChatNativeApprovalRequest,
   shouldSuppressLocalGoogleChatExecApprovalPrompt,
 } from "./approval-native.js";
-import type { GoogleChatAccountConfig } from "./types.config.js";
 
 const GOOGLE_CHAT_APPROVAL_ACCOUNT = {
   serviceAccount: {
