@@ -382,9 +382,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     admittedRunContext,
     abortSignal: attemptAbortController.signal,
     onAbort: () => {
-      if (!params.abortSignal?.aborted) {
-        params.replyOperation?.abortByUser();
-      }
+      params.replyOperation?.abortByUser();
     },
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
