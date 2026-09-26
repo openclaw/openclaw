@@ -376,7 +376,6 @@ export class ProviderHttpError extends Error {
 export class ProviderJsonParseError extends Error {
   constructor(label: string, cause: unknown, options?: { omitCause?: boolean }) {
     super(`${label}: malformed JSON response`, options?.omitCause ? undefined : { cause });
-    this.name = "ProviderJsonParseError";
   }
 }
 

@@ -497,7 +497,10 @@ describe("provider error utils", () => {
     }).catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(ProviderJsonParseError);
-    expect(error).toMatchObject({ message: "Provider response failed: malformed JSON response" });
+    expect(error).toMatchObject({
+      name: "Error",
+      message: "Provider response failed: malformed JSON response",
+    });
     expect(String((error as Error).cause)).not.toContain(credential);
   });
 

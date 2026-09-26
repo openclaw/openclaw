@@ -465,7 +465,7 @@ a saved policy is not proof that the running Gateway applied it.
 Import `ProviderJsonParseError` and the bounded JSON readers from
 `openclaw/plugin-sdk/provider-http`. `readProviderJsonResponse` and its
 object/array variants throw this `Error` subtype only when UTF-8 decoding or
-JSON parsing fails. Its `name` is `ProviderJsonParseError`; its message remains
+JSON parsing fails. It preserves the `Error` name and the message
 `<label>: malformed JSON response`.
 
 Catch it with `error instanceof ProviderJsonParseError` when your plugin needs
