@@ -148,10 +148,8 @@ vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => channelWizardMocks.prompter,
 }));
 
-vi.mock("../flows/channel-setup.js", async () => {
-  const actual = await vi.importActual<typeof import("../flows/channel-setup.js")>(
-    "../flows/channel-setup.js",
-  );
+vi.mock("../flows/channel-setup.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../flows/channel-setup.js")>();
   return {
     ...actual,
     setupChannels: (...args: Parameters<typeof actual.setupChannels>) =>

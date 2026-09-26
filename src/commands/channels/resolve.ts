@@ -178,9 +178,9 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   }
   let results: ChannelResolveResult[];
   if (preferredKind) {
-    results = resolved.map(({ input, resolved, id, name, note }) => ({
+    results = resolved.map(({ input, resolved: isResolved, id, name, note }) => ({
       input,
-      resolved,
+      resolved: isResolved,
       id,
       name,
       note,
