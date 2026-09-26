@@ -40,7 +40,10 @@ const sessionSchema = z.looseObject({
   status: z.enum(["idle", "in_progress", "requires_action", "failed"]),
   error: z.string().nullable(),
   usage: usageSchema.nullable().optional(),
-  environment: z.looseObject({ type: z.literal("openai_hosted"), id: z.string().min(1) }),
+  environment: z.union([
+    z.looseObject({ type: z.literal("openai_hosted"), id: z.string().min(1) }),
+    z.looseObject({ type: z.literal("none") }),
+  ]),
   required_actions: z.array(
     z.union([
       functionCallSchema,
@@ -205,6 +208,34 @@ export class AgentsApiClient {
     );
     this.assertCurrent();
     return session.id;
+  }
+
+  async createIsolated(
+    signal: AbortSignal,
+    instructions: string,
+    input: string,
+    model: string,
+    reasoning: AgentReasoningParam,
+  ) {
+    const session = await this.sessions.create(
+      {
+        agent: { model, instructions, reasoning, tools: [], multi_agent: { enabled: false } },
+        environment: { type: "none" },
+        input,
+        vault_ids: [],
+      },
+      { signal, headers: { "Idempotency-Key": randomUUID() } },
+    );
+    this.assertCurrent();
+    return session;
+  }
+
+  async deleteSession(sessionId: string, signal: AbortSignal): Promise<void> {
+    const deleted = await this.sessions.delete(sessionId, { signal });
+    this.assertCurrent();
+    if (deleted.id !== sessionId || !deleted.deleted) {
+      throw new Error("Agents API did not delete the requested isolated session");
+    }
   }
 
   async setReasoningEffort(
