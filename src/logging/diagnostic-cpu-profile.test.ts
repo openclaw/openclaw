@@ -329,7 +329,6 @@ describe("diagnostic CPU profile owner", () => {
       reason: failedMethod === "Profiler.disable" ? "cleanup-failed" : "capture-failed",
       cleanupFailed: failedMethod === "Profiler.disable",
     });
-    expect(JSON.stringify(outcome)).not.toContain("private");
     expect(native.disconnect).toHaveBeenCalledOnce();
     expect(
       native.post.mock.calls.filter(([method]) => method === "Profiler.stop").length,

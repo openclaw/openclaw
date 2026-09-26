@@ -198,7 +198,12 @@ describe("async logger file transport", () => {
     }
     const flushing = fileLogTransport.flush();
     try {
-      await issued.promise;
+      await Promise.race([
+        issued.promise,
+        flushing.then(() => {
+          throw new Error("File log flush settled before the append checkpoint");
+        }),
+      ]);
       expect(issuedRecords).toBeGreaterThan(1);
       fileLogTransport.enqueue({
         file: logPath,
