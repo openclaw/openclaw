@@ -79,8 +79,8 @@ describe("Slack QA debug capture", () => {
       },
     ];
     const store = {
-      getSessionEvents: () => events,
-      readBlob: () => null,
+      getSessionEvents: async () => events,
+      readBlob: async () => null,
     };
 
     await expect(
@@ -114,8 +114,8 @@ describe("Slack QA debug capture", () => {
     request.dataBlobId = "request";
     response.dataBlobId = "response";
     const store = {
-      getSessionEvents: () => [response, request],
-      readBlob: (blobId: string) => blobs.get(blobId) ?? null,
+      getSessionEvents: async () => [response, request],
+      readBlob: async (blobId: string) => blobs.get(blobId) ?? null,
     };
 
     await expect(
@@ -132,14 +132,14 @@ describe("Slack QA debug capture", () => {
     const nextRequest = { id: 5, ...buildMessageRequest({ flowId: "next", text: "NEXT" }) };
     let reads = 0;
     const store = {
-      getSessionEvents: () => {
+      getSessionEvents: async () => {
         reads += 1;
         return reads < 3 ? [nextRequest, oldRequest] : [buildResponse("next", true), nextRequest];
       },
-      readBlob: () => null,
+      readBlob: async () => null,
     };
 
-    expect(getSlackQaMessageWriteCursor({ sessionId: "qa-slack", store })).toBe(5);
+    await expect(getSlackQaMessageWriteCursor({ sessionId: "qa-slack", store })).resolves.toBe(5);
     await expect(
       readSlackQaMessageWrites({
         afterRequestEventId: 4,
@@ -149,7 +149,7 @@ describe("Slack QA debug capture", () => {
     ).resolves.toEqual([expect.objectContaining({ text: "NEXT" })]);
   });
 
-  it("separates accepted native mutations from rejected writes and visual evidence", () => {
+  it("separates accepted native mutations from rejected writes and visual evidence", async () => {
     const methods = [
       "chat.delete",
       "reactions.add",
@@ -184,10 +184,10 @@ describe("Slack QA debug capture", () => {
       { ...buildResponse("rejected", false), id: 12 },
       { id: 11, ...buildMessageRequest({ flowId: "rejected", method: "reactions.add", text: "" }) },
     );
-    const writes = readSlackQaNativeWrites({
+    const writes = await readSlackQaNativeWrites({
       afterRequestEventId: 0,
       sessionId: "qa-slack",
-      store: { getSessionEvents: () => events.toReversed(), readBlob: () => null },
+      store: { getSessionEvents: async () => events.toReversed(), readBlob: async () => null },
     });
     expect(writes.map((write) => [write.method, write.evidence])).toEqual(
       methods.map((method) => [method, "api-accepted"]),
@@ -206,7 +206,7 @@ describe("Slack QA debug capture", () => {
     expect(JSON.stringify(writes)).not.toContain("private-url");
   });
 
-  it("retains unresolved mutations without treating read-only calls or rejections as side effects", () => {
+  it("retains unresolved mutations without treating read-only calls or rejections as side effects", async () => {
     const events: Array<Record<string, unknown>> = [
       {
         id: 1,
@@ -248,9 +248,9 @@ describe("Slack QA debug capture", () => {
     const params = {
       afterRequestEventId: 1,
       sessionId: "qa-slack",
-      store: { getSessionEvents: () => events.toReversed(), readBlob: () => null },
+      store: { getSessionEvents: async () => events.toReversed(), readBlob: async () => null },
     };
-    const writes = readSlackQaNativeWrites(params);
+    const writes = await readSlackQaNativeWrites(params);
     expect(writes).toEqual([
       expect.objectContaining({
         requestEventId: 2,
@@ -276,7 +276,7 @@ describe("Slack QA debug capture", () => {
     expect(JSON.stringify(writes)).not.toContain("private-");
 
     events.push({ id: 10, ...buildResponse("pending", true) });
-    const settled = readSlackQaNativeWrites(params);
+    const settled = await readSlackQaNativeWrites(params);
     expect(settled.find((write) => write.requestEventId === 2)).toMatchObject({
       evidence: "api-accepted",
       messageId: "2.000000",

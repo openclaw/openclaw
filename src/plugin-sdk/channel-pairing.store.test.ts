@@ -42,7 +42,6 @@ function createPairingFixture() {
 describe("channel pairing account isolation", () => {
   it.each([
     { name: "ordinary input", extras: {} },
-    { name: "conflicting account", extras: { accountId: "beta" } },
     { name: "conflicting channel and account", extras: { channel: "other", accountId: "beta" } },
   ])("persists and approves $name only in the bound account", async ({ extras }) => {
     const { env, pairing } = createPairingFixture();

@@ -3,18 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { createGatewayBrowserClientFixture } from "../chat-pane.test-support.ts";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
-import { renderTaskActivityFeed } from "./chat-task-activity-feed.ts";
 import {
   readTaskTranscript,
   requestTaskFullMessage,
   type TaskDetailHost,
 } from "./chat-task-detail-state.ts";
+import { renderChatTranscriptFeed } from "./chat-transcript-feed.ts";
 
 afterEach(() => document.body.replaceChildren());
 
 function mount(messages: unknown[]) {
   const container = document.body.appendChild(document.createElement("div"));
-  render(renderTaskActivityFeed(messages), container);
+  render(renderChatTranscriptFeed(messages), container);
   return container;
 }
 
@@ -31,7 +31,7 @@ function toolResult(toolCallId: string, isError = false) {
   };
 }
 
-describe("task activity feed", () => {
+describe("chat transcript feed", () => {
   const capped = {
     role: "assistant",
     content: "Capped preview",
@@ -54,7 +54,7 @@ describe("task activity feed", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const rerender = () =>
       render(
-        renderTaskActivityFeed(messages, {
+        renderChatTranscriptFeed(messages, {
           getState: (messageId) => host.taskDetailState?.fullMessages.get(messageId),
           request: (messageId) => {
             void requestTaskFullMessage(host, { loader, ...target, messageId });
@@ -494,7 +494,7 @@ describe("task activity feed", () => {
     original[2]!.querySelector("summary")!.click();
     expect(original[2]!.open).toBe(true);
     render(
-      renderTaskActivityFeed([first, anonymous("inserted-message", "echo inserted"), one, two]),
+      renderChatTranscriptFeed([first, anonymous("inserted-message", "echo inserted"), one, two]),
       container,
     );
     const current = container.querySelectorAll<HTMLDetailsElement>(".chat-task-feed__tool-line");

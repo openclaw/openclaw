@@ -39,16 +39,6 @@ type SqliteTranscriptParentTokenEstimate = {
 
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
 
-function formatParentForkTooLargeMessage(params: {
-  parentTokens: number;
-  maxTokens: number;
-}): string {
-  return (
-    `Parent context is too large to fork (${params.parentTokens}/${params.maxTokens} tokens); ` +
-    "starting with isolated context instead."
-  );
-}
-
 export function planParentForkDecision(
   parentEntry: SessionEntry,
   transcriptEstimate?: SqliteTranscriptParentTokenEstimate,
@@ -67,7 +57,9 @@ export function planParentForkDecision(
       reason: "parent-too-large",
       maxTokens,
       parentTokens,
-      message: formatParentForkTooLargeMessage({ parentTokens, maxTokens }),
+      message:
+        `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); ` +
+        "starting with isolated context instead.",
     };
   }
   return {
@@ -129,13 +121,10 @@ export function estimateParentForkPromptTokens(
       continue;
     }
     const contextUsage = readTranscriptContextUsage(usageRaw);
-    if (message?.api === "cli" && contextUsage === undefined) {
-      latestUsageEstimate = undefined;
-      latestUsageEstimateIsExactContext = false;
-      trailingBytes = 0;
-      continue;
-    }
-    if (contextUsage?.state === "unavailable") {
+    if (
+      (message?.api === "cli" && contextUsage === undefined) ||
+      contextUsage?.state === "unavailable"
+    ) {
       latestUsageEstimate = undefined;
       latestUsageEstimateIsExactContext = false;
       trailingBytes = 0;

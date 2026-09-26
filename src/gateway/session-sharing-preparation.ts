@@ -354,7 +354,7 @@ export async function prepareSessionMutationFacts(
               env: inventory.env,
               targetDiscoveryCache,
             },
-            async (reads) => {
+            async (reads, select) => {
               for (const read of reads) {
                 assertActive();
                 const loaded = await readSessionEntriesFromStoreInWorker({
@@ -394,6 +394,7 @@ export async function prepareSessionMutationFacts(
                   }
                 }
               }
+              return select();
             },
           );
           discovery.assertCurrent();

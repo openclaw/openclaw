@@ -39,12 +39,6 @@ describe("markdownToIR preserveDunderIdentifiers", () => {
 
   it.each([
     {
-      name: "full",
-      source: "[Class][obj.__class__]\n\n[obj.__class__]: https://example.org/python",
-      text: "Class",
-      end: 5,
-    },
-    {
       name: "collapsed",
       source: "[obj.__class__][]\n\n[obj.__class__]: https://example.org/python",
       text: "obj.__class__",

@@ -1,4 +1,3 @@
-// Control UI renders the agent file save error and its conflict resolution.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 

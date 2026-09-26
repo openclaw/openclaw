@@ -1,17 +1,6 @@
-// Defines default port ranges for gateway and service config.
+import { asFiniteNumberInRange } from "@openclaw/normalization-core/number-coercion";
+
 type PortRange = { start: number; end: number };
-
-function isValidPort(port: number): boolean {
-  return Number.isFinite(port) && port > 0 && port <= 65535;
-}
-
-function clampPort(port: number, fallback: number): number {
-  return isValidPort(port) ? port : fallback;
-}
-
-function derivePort(base: number, offset: number, fallback: number): number {
-  return clampPort(base + offset, fallback);
-}
 
 /** Default browser-CDP sidecar port range used when no browser-control-relative range is safe. */
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
@@ -22,7 +11,9 @@ const DEFAULT_BROWSER_CDP_PORT_RANGE_SPAN =
 
 /** Derives the browser-CDP sidecar range from the browser-control port when it fits. */
 export function deriveDefaultBrowserCdpPortRange(browserControlPort: number): PortRange {
-  const start = derivePort(browserControlPort, 9, DEFAULT_BROWSER_CDP_PORT_RANGE_START);
+  const start =
+    asFiniteNumberInRange(browserControlPort + 9, { min: 0, minExclusive: true, max: 65535 }) ??
+    DEFAULT_BROWSER_CDP_PORT_RANGE_START;
   const end = start + DEFAULT_BROWSER_CDP_PORT_RANGE_SPAN;
   if (end <= 65535) {
     return { start, end };
