@@ -4,7 +4,6 @@ import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveServiceEntrypointIndex } from "./service-layout.js";
 import {
-  hasGatewayServiceEnvironmentOverride,
   resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
 } from "./service-types.js";
@@ -125,8 +124,9 @@ export function resolveGatewayHeapNodeOptions(
   if (controls || runtime !== "bun") {
     return controls;
   }
-  // Bun retains its existing environment budget; only direct Node services move
-  // automatic sizing to argv. Do not change Bun's spawned-Node behavior here.
+  // Bun retains its existing environment budget and does not share V8's
+  // process-flag precedence, so it keeps automatic sizing. Direct Node services
+  // carry no automatic process-wide flag; see resolveGatewayHeapExecArgv.
   const limit = resolveGatewayHeapLimit().maxOldSpaceSizeMiB;
   return limit === null ? "" : `--max-old-space-size=${Math.min(GATEWAY_HEAP_CAP_MIB, limit)}`;
 }
@@ -140,18 +140,13 @@ export function resolveGatewayHeapExecArgv(
   existingCommand?: GatewayServiceCommandConfig | null,
 ): string[] {
   const managed = resolveManagedGatewayServiceCommand(existingCommand);
-  const existing = readServiceHeapExecArgv(managed?.programArguments ?? []);
-  // Stored argv already has native precedence. A new automatic flag must not
-  // shadow operator-owned NODE_OPTIONS, even an empty value or an environment reset.
-  if (
-    existing.length ||
-    resolveGatewayHeapNodeOptions(managed?.environment?.NODE_OPTIONS) ||
-    hasGatewayServiceEnvironmentOverride(existingCommand, ["NODE_OPTIONS"])
-  ) {
-    return existing;
-  }
-  const limit = resolveGatewayHeapLimit().maxOldSpaceSizeMiB;
-  return limit === null ? [] : [`--max-old-space-size=${limit}`];
+  // Never inject an automatic process-wide --max-old-space-size. V8 applies the
+  // process flag to every worker isolate and it overrides each worker's
+  // resourceLimits.maxOldGenerationSizeMb, so an automatic ceiling silently
+  // disables the per-worker budgets. Preserve only operator-owned heap controls
+  // already stored in the service argv; a fresh install uses Node's default
+  // main-isolate heap so the declared worker budgets stay effective.
+  return readServiceHeapExecArgv(managed?.programArguments ?? []);
 }
 
 export function inspectGatewayHeapLimit(

@@ -372,8 +372,10 @@ through its own notifications. Selected native-model discovery has an independen
 acquisition owner and does not wait for provider inventory renewal. Both owners
 merge their results with the latest accepted counterpart before publication.
 Catalog workers use a 512 MiB V8 old-generation limit rather than inheriting the
-Gateway's default heap budget. Explicit process-wide heap flags override this
-limit; native and external allocations are outside it.
+Gateway's default heap budget. A managed Node Gateway install does not set a
+process-wide heap flag, so this worker budget stays effective; an explicit
+operator-owned process-wide flag overrides it. Native and external allocations
+are outside it.
 
 Catalog and authentication refresh tasks carry the host's prepared Claw consent
 provenance. Worker config reconstruction and provider imports consume these facts

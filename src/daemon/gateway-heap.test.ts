@@ -72,6 +72,17 @@ describe("Gateway service heap controls", () => {
     ).toEqual([]);
   });
 
+  it("never adds an automatic process-wide heap flag to a fresh Node service", () => {
+    expect(resolveGatewayHeapExecArgv()).toEqual([]);
+    expect(resolveGatewayHeapExecArgv(null)).toEqual([]);
+    expect(resolveGatewayHeapExecArgv({ programArguments: [] })).toEqual([]);
+    expect(
+      resolveGatewayHeapExecArgv({
+        programArguments: ["/usr/bin/node", "/opt/openclaw/dist/index.js", "gateway"],
+      }),
+    ).toEqual([]);
+  });
+
   it.each([
     undefined,
     "--require /tmp/preload.js --inspect=9229",

@@ -196,8 +196,9 @@ export async function resolveGatewayProgramArguments(params: {
     wrapperPath: params.wrapperPath,
   });
   if (params.runtime === "node" && !params.wrapperPath?.trim()) {
-    // Size only the managed Gateway, before Node loads its entrypoint. Keeping
-    // automatic flags out of NODE_OPTIONS leaves ordinary spawned Node children alone.
+    // Restore operator-owned heap controls already stored in the service argv.
+    // An automatic process-wide --max-old-space-size is intentionally not added:
+    // it would override every worker's resourceLimits.maxOldGenerationSizeMb.
     result.programArguments.splice(1, 0, ...resolveGatewayHeapExecArgv(params.existingCommand));
   }
   return result;

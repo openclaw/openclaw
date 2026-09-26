@@ -977,7 +977,7 @@ describe("runDaemonInstall integration", () => {
       name: "PATH-only override",
       options: "",
       overrides: { environment: { keys: ["PATH"] } },
-      expected: ["--max-old-space-size=16384"],
+      expected: [],
     },
     {
       name: "stored managed argv",
