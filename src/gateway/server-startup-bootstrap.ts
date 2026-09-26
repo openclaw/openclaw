@@ -192,7 +192,15 @@ export async function prepareGatewayServerBootstrap(input: {
     description: "raw stream log path override",
   });
   if (!minimalTestGateway && !opts.updateCanary) {
-    await startupTrace.measure("runtime.agent-cli", () => prepareGatewayAgentCliShim());
+    await startupTrace.measure("runtime.agent-cli", () =>
+      prepareGatewayAgentCliShim({
+        onUnavailable: (error) => {
+          log.warn(
+            `gateway agent CLI shim unavailable; continuing startup without the generated openclaw command: ${formatErrorMessage(error)}`,
+          );
+        },
+      }),
+    );
   }
   const startupConfigModulePromise = startupTrace.measure(
     "config.runtime-imports",
