@@ -994,6 +994,80 @@ export class RealtimeCallHandler {
     const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
     let provisionalCloseReason: RealtimeVoiceCloseReason | undefined;
     let sessionClosed = false;
+    let lastAssistantAudioSentAt = 0;
+    const ASSISTANT_SPEECH_TAIL_MS = 400;
+    // The model is instructed to give the caller a five-second window to answer the consent
+    // question and then apologise + end the call on silence, but nothing in the bridge ever
+    // *wakes* the model on silence - it just sits on an open line. This arms a timer once the
+    // agent asks a question and, if the caller never speaks, injects a user message telling the
+    // agent the window expired so it says its apology/goodbye and ends the call.
+    const CONSENT_WINDOW_MS = 5_000;
+    const CONSENT_WINDOW_POLL_MS = 250;
+    const consentWindow: {
+      timer?: ReturnType<typeof setTimeout>;
+      fired: boolean;
+      callerResponded: boolean;
+    } = { timer: undefined, fired: false, callerResponded: false };
+    const clearConsentWindow = (): void => {
+      if (consentWindow.timer) {
+        clearTimeout(consentWindow.timer);
+        consentWindow.timer = undefined;
+      }
+    };
+    const consentWindowBotSpeaking = (): boolean =>
+      audioPacer.hasPendingAudio() ||
+      Date.now() - lastAssistantAudioSentAt < ASSISTANT_SPEECH_TAIL_MS;
+    const armConsentWindow = (): void => {
+      if (consentWindow.callerResponded || consentWindow.fired || sessionClosed) {
+        return;
+      }
+      clearConsentWindow();
+      const countdown = (): void => {
+        consentWindow.timer = undefined;
+        if (consentWindow.callerResponded || consentWindow.fired || sessionClosed) {
+          return;
+        }
+        if (consentWindowBotSpeaking()) {
+          consentWindow.timer = setTimeout(countdown, CONSENT_WINDOW_POLL_MS);
+          consentWindow.timer.unref?.();
+          return;
+        }
+        consentWindow.timer = setTimeout(fireConsentWindowExpired, CONSENT_WINDOW_MS);
+        consentWindow.timer.unref?.();
+      };
+      consentWindow.timer = setTimeout(countdown, CONSENT_WINDOW_POLL_MS);
+      consentWindow.timer.unref?.();
+    };
+    const fireConsentWindowExpired = (): void => {
+      consentWindow.timer = undefined;
+      if (consentWindow.callerResponded || consentWindow.fired || sessionClosed) {
+        return;
+      }
+      if (this.activeBridgesByCallId.get(callId) !== session) {
+        return;
+      }
+      if (consentWindowBotSpeaking()) {
+        armConsentWindow();
+        return;
+      }
+      consentWindow.fired = true;
+      console.log(
+        `[voice-call] realtime consent window expired callId=${callId} providerCallId=${callSid} windowMs=${CONSENT_WINDOW_MS} - instructing the agent to apologise and end the call`,
+      );
+      try {
+        session.sendUserMessage(
+          `NO CONSENT ANSWER RECEIVED. The caller did not answer your consent question within five seconds. Apologise briefly and warmly in ONE short sentence that ends with the word "Goodbye.", then call ${REALTIME_VOICE_END_CALL_TOOL_NAME} immediately. Do not ask again.`,
+        );
+      } catch (error) {
+        console.warn(
+          `[voice-call] realtime consent window prompt failed callId=${callId}: ${formatErrorMessage(error)}`,
+        );
+      }
+    };
+    const noteCallerResponded = (): void => {
+      consentWindow.callerResponded = true;
+      clearConsentWindow();
+    };
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
@@ -1093,6 +1167,7 @@ export class RealtimeCallHandler {
         sendAudio: (muLaw, metadata) => {
           harness.recordOutputAudio(muLaw);
           audioPacer.sendAudio(muLaw, metadata);
+          lastAssistantAudioSentAt = Date.now();
         },
         // Telephony pacing knows what actually reached the line; the provider's
         // inbound media clock can run far ahead of playout.
@@ -1157,6 +1232,7 @@ export class RealtimeCallHandler {
             if (!transcript) {
               return;
             }
+            noteCallerResponded();
             console.log(
               `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=false chars=${text.trim().length} aggregateChars=${transcript.length}`,
             );
@@ -1173,6 +1249,7 @@ export class RealtimeCallHandler {
             rawPartial: state.rawPartial,
             final: text,
           });
+          noteCallerResponded();
           this.clearPartialUserTranscript(callId, userTranscriptOwner);
           this.setRecentFinalUserTranscript(callId, userTranscriptOwner, transcript);
           console.log(
@@ -1215,6 +1292,9 @@ export class RealtimeCallHandler {
           });
           void transcriptPersistence.catch(reportTranscriptFailure);
           return;
+        }
+        if (/\?/.test(text)) {
+          armConsentWindow();
         }
         transcriptPersistence = this.manager
           .processEvent({
@@ -1357,6 +1437,7 @@ export class RealtimeCallHandler {
         if (ownsCallState) {
           void closeBinding(telephonyBinding, reason);
         }
+        clearConsentWindow();
         this.streamDisconnectLifecycle.retire(callSid, streamSid);
         if (ws.readyState === WebSocket.OPEN) {
           ws.close(reason === "error" ? 1011 : 1000, "Bridge disconnected");
@@ -1415,6 +1496,7 @@ export class RealtimeCallHandler {
         return;
       }
       if (speechDetector.accept({ rms: calculateMulawRms(audio), peak: 0 })) {
+        noteCallerResponded();
         console.log(
           `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
@@ -1434,6 +1516,7 @@ export class RealtimeCallHandler {
         return sessionClosePromise ?? Promise.resolve();
       }
       sessionClosed = true;
+      clearConsentWindow();
       this.cancelConsultSession(callId, session);
       audioPacer.close();
       sessionClosePromise = drainProviderClose(closeSession).finally(() => {
