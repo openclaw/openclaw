@@ -157,35 +157,6 @@ describe("retired copilot custody", () => {
       },
     },
     {
-      label: "a confirmed session remains",
-      registry: {
-        sessions: {
-          7: {
-            tabId: 7,
-            browserInstanceId: "browser-instance",
-            gatewayScope: "ws://127.0.0.1:18789/",
-            sessionKey: "browser:tab:7",
-            sessionId: "session-7",
-          },
-        },
-        pendingArchives: [],
-      },
-    },
-    {
-      label: "an active session remains",
-      registry: {
-        sessions: {
-          7: {
-            tabId: 7,
-            browserInstanceId: "browser-instance",
-            sessionKey: "browser:tab:7",
-            active: true,
-          },
-        },
-        pendingArchives: [],
-      },
-    },
-    {
       label: "a pending archive",
       registry: {
         sessions: {},

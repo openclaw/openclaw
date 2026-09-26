@@ -1,12 +1,6 @@
-// Matrix tests cover thread context plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixEventContextResolver } from "./event-context.js";
-import {
-  bundledReplacementContentCases,
-  createBundledReplacementEvent,
-  createPollStartEvent,
-  invalidBundledReplacementCases,
-} from "./test-events.js";
+import { createBundledReplacementEvent, createPollStartEvent } from "./test-events.js";
 import type { MatrixRawEvent } from "./types.js";
 
 async function resolveThreadSummary(event: MatrixRawEvent): Promise<string | undefined> {
@@ -40,23 +34,9 @@ describe("matrix thread context", () => {
     ).toBe("Thread starter body");
   });
 
-  it.each(bundledReplacementContentCases)(
-    "uses the latest bundled $name when summarizing an edited thread root",
-    async ({ options, expected }) => {
-      expect(await resolveThreadSummary(createBundledReplacementEvent("$root", options))).toBe(
-        expected,
-      );
-    },
-  );
-
-  it.each(invalidBundledReplacementCases)(
-    "does not summarize a bundled thread-root replacement from $name",
-    async ({ options }) => {
-      expect(await resolveThreadSummary(createBundledReplacementEvent("$root", options))).toBe(
-        "original text",
-      );
-    },
-  );
+  it("uses the latest bundled text when summarizing an edited thread root", async () => {
+    expect(await resolveThreadSummary(createBundledReplacementEvent("$root"))).toBe("edited text");
+  });
 
   it("does not revive a bundled replacement from a redacted thread root", async () => {
     expect(

@@ -76,9 +76,8 @@ export function resolveDiscordRestFetch(
     return fetcher;
   }
 
-  const fetcher = createDiscordRestFetchWithDispatcher(
+  return createDiscordRestFetchWithDispatcher(
     createEnvProxyDiscordRestDispatcher(runtime) ??
       createHttp1Agent({ connect: { lookup: discordDnsLookup } }),
   );
-  return fetcher;
 }

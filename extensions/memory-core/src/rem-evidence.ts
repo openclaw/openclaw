@@ -106,10 +106,7 @@ type ParsedMarkdownSection = {
   lines: ParsedSectionLine[];
 };
 
-type SectionSnippet = {
-  text: string;
-  line: number;
-};
+type SectionSnippet = ParsedSectionLine;
 
 type SectionSummary = {
   title: string;
@@ -245,24 +242,16 @@ function countMatchingSnippets(snippets: SectionSnippet[], pattern: RegExp): num
 
 function scoreSection(section: ParsedMarkdownSection, snippets: SectionSnippet[]) {
   const title = section.title;
-  const titleBonus = (pattern: RegExp) => (pattern.test(title) ? 1 : 0);
-  const preference =
-    countMatchingSnippets(snippets, REM_MEMORY_SIGNAL_RE) + titleBonus(REM_MEMORY_SIGNAL_RE);
-  const build =
-    countMatchingSnippets(snippets, REM_BUILD_SIGNAL_RE) + titleBonus(REM_BUILD_SIGNAL_RE);
-  const incident =
-    countMatchingSnippets(snippets, REM_INCIDENT_SIGNAL_RE) + titleBonus(REM_INCIDENT_SIGNAL_RE);
-  const logistics =
-    countMatchingSnippets(snippets, REM_LOGISTICS_SIGNAL_RE) + titleBonus(REM_LOGISTICS_SIGNAL_RE);
-  const tasks =
-    countMatchingSnippets(snippets, REM_TASK_SIGNAL_RE) + titleBonus(REM_TASK_SIGNAL_RE);
-  const routing =
-    countMatchingSnippets(snippets, REM_ROUTING_SIGNAL_RE) + titleBonus(REM_ROUTING_SIGNAL_RE);
-  const externalization =
-    countMatchingSnippets(snippets, REM_EXTERNALIZATION_SIGNAL_RE) +
-    titleBonus(REM_EXTERNALIZATION_SIGNAL_RE);
-  const retries =
-    countMatchingSnippets(snippets, REM_RETRY_SIGNAL_RE) + titleBonus(REM_RETRY_SIGNAL_RE);
+  const score = (pattern: RegExp) =>
+    countMatchingSnippets(snippets, pattern) + Number(pattern.test(title));
+  const preference = score(REM_MEMORY_SIGNAL_RE);
+  const build = score(REM_BUILD_SIGNAL_RE);
+  const incident = score(REM_INCIDENT_SIGNAL_RE);
+  const logistics = score(REM_LOGISTICS_SIGNAL_RE);
+  const tasks = score(REM_TASK_SIGNAL_RE);
+  const routing = score(REM_ROUTING_SIGNAL_RE);
+  const externalization = score(REM_EXTERNALIZATION_SIGNAL_RE);
+  const retries = score(REM_RETRY_SIGNAL_RE);
   const overall =
     preference * 2 +
     build * 1.6 +
@@ -311,7 +300,7 @@ function chooseSummarySnippets(
   snippets: SectionSnippet[],
 ): SectionSnippet[] {
   const selectionLimit = REM_GENERIC_SECTION_RE.test(section.title) ? 2 : 3;
-  return [...snippets]
+  return snippets
     .toSorted((left, right) => {
       const scoreDelta =
         scoreSnippet(right.text, section.title) - scoreSnippet(left.text, section.title);

@@ -26,9 +26,9 @@ function buildQuery(params: {
     return latest;
   }
   if (params.config.queryMode === "full") {
-    const allTurns = (params.recentTurns ?? [])
-      .map((turn) => `${turn.role}: ${turn.text.trim().replace(/\s+/g, " ")}`)
-      .filter((turn) => turn.length > 0);
+    const allTurns = (params.recentTurns ?? []).map(
+      (turn) => `${turn.role}: ${turn.text.trim().replace(/\s+/g, " ")}`,
+    );
     if (allTurns.length === 0) {
       return latest;
     }
@@ -134,7 +134,7 @@ function buildSearchQuery(params: {
   if (latest.length >= 12 || !params.recentTurns?.length) {
     return latest || clampSearchQuery(params.latestUserMessage);
   }
-  const previousUser = [...params.recentTurns]
+  const previousUser = params.recentTurns
     .toReversed()
     .find((turn) => turn.role === "user" && turn.text.trim() !== params.latestUserMessage.trim());
   if (!previousUser) {

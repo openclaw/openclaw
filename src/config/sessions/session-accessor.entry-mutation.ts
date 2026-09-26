@@ -21,7 +21,10 @@ import {
   patchSessionEntryCore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
-import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
+import {
+  assertSessionCreationLabelAvailable,
+  readSessionCreationSnapshotInDatabase,
+} from "./session-accessor.sqlite-creation-read.js";
 import { createSessionEntryWithTranscriptInWorker } from "./session-accessor.sqlite-creation-worker.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import {
@@ -41,6 +44,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -464,9 +468,11 @@ export async function createSessionEntryWithTranscript<TError = string>(
         }
       };
       options.onPhase?.("transcript");
-      const transcriptError = withCommit
-        ? await withCommit(initializeTranscript)
-        : await initializeTranscript();
+      const transcriptError = created.transcriptEvents
+        ? undefined
+        : withCommit
+          ? await withCommit(initializeTranscript)
+          : await initializeTranscript();
       if (transcriptError !== undefined) {
         return {
           ok: false,
@@ -482,17 +488,26 @@ export async function createSessionEntryWithTranscript<TError = string>(
         removals: legacyKeys.map((sessionKey) => ({ sessionKey })),
         upserts: [{ sessionKey: normalizedKey, entry }],
         skipMaintenance: true,
-        ...(commitGuard ? { beforeCommitInTransaction: commitGuard } : {}),
+        beforeCommitInTransaction: () => {
+          commitGuard?.();
+          assertSessionCreationLabelAvailable(creationDatabase, normalizedKey, options.label);
+        },
         ...(withCommit ? { withCommit } : {}),
-        ...(ownerAssignment
-          ? {
-              afterFreshUpsertsInTransaction: (database) => {
-                if (!replaceSessionOwnerInTransaction(database, normalizedKey, ownerAssignment)) {
-                  throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
-                }
-              },
-            }
-          : {}),
+        afterFreshUpsertsInTransaction: (database) => {
+          if (created.transcriptEvents) {
+            appendTranscriptEventsInTransaction(
+              database,
+              { ...resolved, sessionKey: normalizedKey, sessionId: entry.sessionId },
+              created.transcriptEvents,
+            );
+          }
+          if (
+            ownerAssignment &&
+            !replaceSessionOwnerInTransaction(database, normalizedKey, ownerAssignment)
+          ) {
+            throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
+          }
+        },
         ...(onLifecycleCommitted
           ? { onLifecycleCommitted: () => onLifecycleCommitted(entry) }
           : {}),

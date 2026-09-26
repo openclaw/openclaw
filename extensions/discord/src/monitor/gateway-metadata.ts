@@ -47,16 +47,6 @@ const discordGatewayBotInfoSchema = Type.Object({
 
 const gatewayMetadataFallbackLogLastAt = new WeakMap<RuntimeEnv, number>();
 
-function resolveFetchInputUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-}
-
 async function materializeGuardedResponse(response: Response): Promise<Response> {
   const body = new Uint8Array(
     await readResponseWithLimit(response, DISCORD_GATEWAY_METADATA_MAX_BYTES, {
@@ -174,6 +164,7 @@ async function fetchDiscordGatewayInfo(params: {
   fetchInit?: DiscordGatewayFetchInit;
 }): Promise<APIGatewayBotInfo> {
   let response: DiscordGatewayMetadataResponse;
+  let body: string;
   try {
     response = await params.fetchImpl(params.gatewayBotUrl ?? DISCORD_GATEWAY_BOT_URL, {
       ...params.fetchInit,
@@ -182,16 +173,6 @@ async function fetchDiscordGatewayInfo(params: {
         Authorization: `Bot ${params.token}`,
       },
     });
-  } catch (error) {
-    throw createGatewayMetadataError({
-      detail: formatErrorMessage(error),
-      transient: true,
-      cause: error,
-    });
-  }
-
-  let body: string;
-  try {
     body = await response.text();
   } catch (error) {
     throw createGatewayMetadataError({
@@ -285,7 +266,7 @@ export async function fetchDiscordGatewayMetadataGuarded(
   const requestInit = init as RequestInit | undefined;
   const signal = requestInit?.signal ?? undefined;
   const guarded = await fetchWithSsrFGuard({
-    url: resolveFetchInputUrl(input),
+    url: input,
     init: requestInit,
     // DNS and proxy preflight run before RequestInit reaches fetch. Surface the
     // existing metadata watchdog here so the whole lookup shares one deadline.

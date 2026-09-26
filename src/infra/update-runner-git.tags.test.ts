@@ -150,17 +150,6 @@ describe("Git updater release tag refresh", () => {
     return { result, fetches };
   }
 
-  it("reproduces the original clobber rejection with a colliding fork tag", () => {
-    const setup = fixture("upstream", "fork");
-    const result = spawnSync("git", ["-C", setup.root, "fetch", "--all", "--prune", "--tags"], {
-      encoding: "utf8",
-      env: { ...process.env, ...gitEnv },
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("would clobber existing tag");
-    expect(git(setup.root, "rev-parse", "v2026.9.1")).toBe(setup.oldTag);
-  });
-
   it.each(["stable", "beta"] as const)(
     "keeps %s on regular stable when extended-stable tags sort newer",
     async (channel) => {

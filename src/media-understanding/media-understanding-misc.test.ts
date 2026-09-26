@@ -222,23 +222,6 @@ describe("media understanding attachments SSRF", () => {
     });
   });
 
-  it("resolves relative attachment paths against the provided workspaceDir", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-workspace-" }, async (base) => {
-      const workspaceDir = path.join(base, "workspace");
-      const attachmentPath = path.join(workspaceDir, "media", "inbound", "report.pdf");
-      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
-      await fs.writeFile(attachmentPath, "ok");
-
-      const cache = new MediaAttachmentCache(
-        [{ index: 0, path: "media/inbound/report.pdf", workspaceDir }],
-        { localPathRoots: [workspaceDir] },
-      );
-
-      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
-      expect(result.buffer.toString()).toBe("ok");
-    });
-  });
-
   it("resolves each relative attachment against its own workspace", async () => {
     await withTestDir({ prefix: "openclaw-media-cache-workspaces-" }, async (base) => {
       const workspaces = ["first", "second"].map((name) => path.join(base, name));

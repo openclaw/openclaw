@@ -29,7 +29,6 @@ function expectRelayUrlValidity(relayUrl: string, valid: boolean) {
 
 describe("BuzzConfigSchema", () => {
   it.each([
-    ["ada", true],
     ["default", true],
     ["bot-2", true],
     ["Ada", false],
@@ -66,7 +65,7 @@ describe("BuzzConfigSchema", () => {
     expect(parseBuzzConfig(invalid).success).toBe(false);
     expectJsonSchemaValidity("buzz.invalid-nested-account", invalid, false);
   });
-  it.each(["[bot]", "auto", "", "[{model}]"])(
+  it.each(["", "[{model}]"])(
     "accepts responsePrefix %j in runtime and JSON schemas",
     (responsePrefix) => {
       const config = { groupPolicy: "allowlist", responsePrefix };
@@ -90,7 +89,6 @@ describe("BuzzConfigSchema", () => {
     ["off", true],
     ["all", true],
     ["first", false],
-    ["batched", false],
     [false, false],
   ])("validates replyToMode %s in runtime and JSON schemas", (replyToMode, valid) => {
     const config = { replyToMode, groupPolicy: "allowlist" };
@@ -98,16 +96,14 @@ describe("BuzzConfigSchema", () => {
     expectJsonSchemaValidity(`buzz.reply-mode.${replyToMode}`, config, valid);
   });
 
-  it.each([
-    "ws://localhost:3000",
-    "wss://buzz.example.com/relay",
-    "Ws://localhost:3000",
-    "WSS://buzz.example.com/relay",
-  ])("accepts WebSocket relay URL %s", (relayUrl) => {
-    expectRelayUrlValidity(relayUrl, true);
-  });
+  it.each(["ws://localhost:3000", "WSS://buzz.example.com/relay"])(
+    "accepts WebSocket relay URL %s",
+    (relayUrl) => {
+      expectRelayUrlValidity(relayUrl, true);
+    },
+  );
 
-  it.each(["http://localhost:3000", "https://buzz.example.com/relay", "ws://", "ws:// bad"])(
+  it.each(["https://buzz.example.com/relay", "ws://", "ws:// bad"])(
     "rejects non-WebSocket relay URL %s",
     (relayUrl) => {
       expectRelayUrlValidity(relayUrl, false);

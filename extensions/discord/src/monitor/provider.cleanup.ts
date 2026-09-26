@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
 import type { DiscordMonitorStatusSink } from "./status.js";

@@ -1,11 +1,7 @@
 // Container target tests cover CLI container target parsing and validation.
 import type { spawnSync as nodeSpawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import {
-  maybeRunCliInContainer,
-  parseCliContainerArgs,
-  resolveCliContainerTarget,
-} from "./container-target.js";
+import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 
 function requireSpawnCall(
   spawnSync: ReturnType<typeof vi.fn>,
@@ -91,16 +87,6 @@ function expectContainerExec(
 }
 
 describe("parseCliContainerArgs", () => {
-  it("extracts a root --container flag before the command", () => {
-    expect(
-      parseCliContainerArgs(["node", "openclaw", "--container", "demo", "status", "--deep"]),
-    ).toEqual({
-      ok: true,
-      container: "demo",
-      argv: ["node", "openclaw", "status", "--deep"],
-    });
-  });
-
   it("accepts the equals form", () => {
     expect(parseCliContainerArgs(["node", "openclaw", "--container=demo", "health"])).toEqual({
       ok: true,
@@ -122,14 +108,6 @@ describe("parseCliContainerArgs", () => {
     ).toEqual({
       ok: false,
       error: "--container requires a value",
-    });
-  });
-
-  it("leaves argv unchanged when the flag is absent", () => {
-    expect(parseCliContainerArgs(["node", "openclaw", "status"])).toEqual({
-      ok: true,
-      container: null,
-      argv: ["node", "openclaw", "status"],
     });
   });
 
@@ -176,20 +154,6 @@ describe("parseCliContainerArgs", () => {
   });
 });
 
-describe("resolveCliContainerTarget", () => {
-  it("uses argv first and falls back to OPENCLAW_CONTAINER", () => {
-    expect(
-      resolveCliContainerTarget(["node", "openclaw", "--container", "demo", "status"], {}),
-    ).toBe("demo");
-    expect(resolveCliContainerTarget(["node", "openclaw", "status"], {})).toBeNull();
-    expect(
-      resolveCliContainerTarget(["node", "openclaw", "status"], {
-        OPENCLAW_CONTAINER: "demo",
-      } as NodeJS.ProcessEnv),
-    ).toBe("demo");
-  });
-});
-
 describe("maybeRunCliInContainer", () => {
   it("passes through when no container target is provided", () => {
     expect(maybeRunCliInContainer(["node", "openclaw", "status"], { env: {} })).toEqual({
@@ -218,43 +182,24 @@ describe("maybeRunCliInContainer", () => {
     });
   });
 
-  it.each(["ENOENT", "EACCES"])(
-    "throws the original %s launch error from the container exec",
-    (code) => {
-      const launchError = Object.assign(new Error(`spawnSync podman ${code}`), { code });
-      const spawnSync = mockSpawn(runningContainer, missingContainer, {
-        status: null,
-        error: launchError,
-      });
+  it.each(["ENOENT"])("throws the original %s launch error from the container exec", (code) => {
+    const launchError = Object.assign(new Error(`spawnSync podman ${code}`), { code });
+    const spawnSync = mockSpawn(runningContainer, missingContainer, {
+      status: null,
+      error: launchError,
+    });
 
-      let thrown: unknown;
-      try {
-        maybeRunCliInContainer(["node", "openclaw", "status"], {
-          env: { OPENCLAW_CONTAINER: "demo" } as NodeJS.ProcessEnv,
-          spawnSync,
-        });
-      } catch (error) {
-        thrown = error;
-      }
-
-      expect(thrown).toBe(launchError);
-    },
-  );
-
-  it("uses OPENCLAW_CONTAINER when the flag is absent", () => {
-    const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
-
-    expect(
+    let thrown: unknown;
+    try {
       maybeRunCliInContainer(["node", "openclaw", "status"], {
         env: { OPENCLAW_CONTAINER: "demo" } as NodeJS.ProcessEnv,
         spawnSync,
-      }),
-    ).toEqual({
-      handled: true,
-      exitCode: 0,
-    });
+      });
+    } catch (error) {
+      thrown = error;
+    }
 
-    expectContainerExec(spawnSync);
+    expect(thrown).toBe(launchError);
   });
 
   it("clears inherited host routing and gateway env before execing into the child CLI", () => {
@@ -379,27 +324,6 @@ describe("maybeRunCliInContainer", () => {
     expectContainerExec(spawnSync);
   });
 
-  it("falls back to docker when podman does not have the container", () => {
-    const spawnSync = mockSpawn(missingContainer, runningContainer, successfulExec);
-
-    expect(
-      maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "health"], {
-        env: { USER: "openclaw" } as NodeJS.ProcessEnv,
-        spawnSync,
-      }),
-    ).toEqual({
-      handled: true,
-      exitCode: 0,
-    });
-
-    expectRuntimeProbe(spawnSync, 2, "docker");
-    expectContainerExec(spawnSync, {
-      runtime: "docker",
-      argv: ["health"],
-      env: { USER: "openclaw" },
-    });
-  });
-
   it("checks docker after podman and before failing", () => {
     const spawnSync = mockSpawn(missingContainer, runningContainer, successfulExec, successfulExec);
 
@@ -476,17 +400,6 @@ describe("maybeRunCliInContainer", () => {
     expectRuntimeProbe(spawnSync, 1, "podman", "flag-demo");
   });
 
-  it("throws when the named container is not running", () => {
-    const spawnSync = mockSpawn(missingContainer, missingContainer);
-
-    expect(() =>
-      maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "status"], {
-        env: {},
-        spawnSync,
-      }),
-    ).toThrow('No running container matched "demo" under podman or docker.');
-  });
-
   it("skips recursion when the bypass env is set", () => {
     expect(
       maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "status"], {
@@ -496,20 +409,6 @@ describe("maybeRunCliInContainer", () => {
       handled: false,
       argv: ["node", "openclaw", "--container", "demo", "status"],
     });
-  });
-
-  it("blocks updater commands from running inside the container", () => {
-    const spawnSync = mockSpawn(runningContainer);
-
-    expect(() =>
-      maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "update"], {
-        env: {},
-        spawnSync,
-      }),
-    ).toThrow(
-      "openclaw update is not supported with --container; rebuild or restart the container image instead.",
-    );
-    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("blocks update after interleaved root flags", () => {

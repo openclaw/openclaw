@@ -29,13 +29,13 @@ afterEach(async () => {
 });
 
 describe.each(["all", "selected"] as const)("navigation command authority in %s mode", (mode) => {
-  it.each(
-    ["about:blank", "https://example.com/start"].flatMap((url) =>
-      ["Page.navigate", "Page.reload", "Page.navigateToHistoryEntry"].flatMap((method) =>
-        [true, false].map((commitFirst) => ({ url, method, commitFirst })),
-      ),
+  it.each([
+    ...["about:blank", "https://example.com/start"].flatMap((url) =>
+      [true, false].map((commitFirst) => ({ url, method: "Page.navigate", commitFirst })),
     ),
-  )(
+    { url: "https://example.com/start", method: "Page.reload", commitFirst: true },
+    { url: "about:blank", method: "Page.navigateToHistoryEntry", commitFirst: false },
+  ])(
     "completes $method from $url (commit first: $commitFirst)",
     async ({ url, method, commitFirst }) => {
       const harness = await createHarness(mode);

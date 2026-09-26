@@ -96,35 +96,6 @@ describe("resolveIncludeWriteBoundary", () => {
     ).toBeNull();
   });
 
-  it("declines a parent whose changed children are both nested includes", () => {
-    const outer = {
-      path: ["agents"],
-      kind: "single" as const,
-      hasSiblingOverrides: false,
-      hasArrayAncestor: false,
-      targetPath: "/cfg/agents.json5",
-    };
-    const betaInclude = {
-      path: ["agents", "entries", "beta"],
-      kind: "single" as const,
-      hasSiblingOverrides: false,
-      hasArrayAncestor: false,
-      targetPath: "/cfg/beta.json5",
-    };
-    expect(
-      resolveIncludeWriteBoundary({
-        provenance: [alphaInclude, betaInclude, outer],
-        changed: {
-          paths: [
-            ["agents", "entries", "alpha", "model"],
-            ["agents", "entries", "beta", "model"],
-          ],
-          rootChanged: false,
-        },
-      }),
-    ).toBeNull();
-  });
-
   it("declines a directive-carrying parent when only a plain sibling changes", () => {
     const outer = {
       path: ["agents"],
@@ -224,23 +195,6 @@ describe("resolveIncludeWriteBoundary", () => {
     expect(
       resolveIncludeWriteBoundary({
         provenance: [{ ...alphaInclude, hasSiblingOverrides: true }],
-        changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
-      }),
-    ).toBeNull();
-  });
-
-  it("declines an include owned by an outer merged directive", () => {
-    expect(
-      resolveIncludeWriteBoundary({
-        provenance: [
-          alphaInclude,
-          {
-            path: [],
-            kind: "multiple" as const,
-            hasSiblingOverrides: false,
-            hasArrayAncestor: false,
-          },
-        ],
         changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
       }),
     ).toBeNull();

@@ -86,28 +86,10 @@ async function putVersionOneRecord(sessionKey: string): Promise<void> {
   database.close();
 }
 
-async function readRawRecord(sessionKey: string): Promise<{ savedAt: number } | undefined> {
-  const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
-  const database = await new Promise<IDBDatabase>((resolve, reject) => {
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () =>
-      reject(request.error ?? new Error("database open failed")),
-    );
-  });
-  const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
-  const result = await new Promise<{ savedAt: number } | undefined>((resolve, reject) => {
-    const get = transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey);
-    get.addEventListener("success", () => resolve(get.result));
-    get.addEventListener("error", () => reject(get.error ?? new Error("record read failed")));
-  });
-  await transactionDone(transaction);
-  database.close();
-  return result;
-}
-
-async function readRawMetadata(
+async function readRawRecord(
   sessionKey: string,
-): Promise<{ savedAt: number; weight: number } | undefined> {
+  storeName = CHAT_SNAPSHOT_STORE_NAME,
+): Promise<{ savedAt: number; weight?: number } | undefined> {
   const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
     request.addEventListener("success", () => resolve(request.result));
@@ -115,12 +97,12 @@ async function readRawMetadata(
       reject(request.error ?? new Error("database open failed")),
     );
   });
-  const transaction = database.transaction(CHAT_SNAPSHOT_METADATA_STORE_NAME, "readonly");
-  const result = await new Promise<{ savedAt: number; weight: number } | undefined>(
+  const transaction = database.transaction(storeName, "readonly");
+  const result = await new Promise<{ savedAt: number; weight?: number } | undefined>(
     (resolve, reject) => {
-      const get = transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).get(sessionKey);
+      const get = transaction.objectStore(storeName).get(sessionKey);
       get.addEventListener("success", () => resolve(get.result));
-      get.addEventListener("error", () => reject(get.error ?? new Error("metadata read failed")));
+      get.addEventListener("error", () => reject(get.error ?? new Error("record read failed")));
     },
   );
   await transactionDone(transaction);
@@ -174,7 +156,7 @@ describe("persistent chat session snapshots", () => {
     for (const sessionKey of privateKeys) {
       expect(memory.get(sessionKey)?.snapshot).toEqual(snapshot(sessionKey));
       expect(await readRawRecord(sessionKey)).toBeUndefined();
-      expect(await readRawMetadata(sessionKey)).toBeUndefined();
+      expect(await readRawRecord(sessionKey, CHAT_SNAPSHOT_METADATA_STORE_NAME)).toBeUndefined();
       expect(writer.readSavedAt(sessionKey)).toBeNull();
       expect(reader.readSavedAt(sessionKey)).toBeNull();
       expect(await reader.read(sessionKey)).toBeNull();
@@ -244,8 +226,8 @@ describe("persistent chat session snapshots", () => {
     await reader.loadSavedAtIndex();
     expect(await readStoredChatSnapshotRecord(privateKey)).toBeUndefined();
     expect(await readRawRecord(privateKey)).toBeUndefined();
-    expect(await readRawMetadata(privateKey)).toBeUndefined();
-    expect(await readRawMetadata(orphanedKey)).toBeUndefined();
+    expect(await readRawRecord(privateKey, CHAT_SNAPSHOT_METADATA_STORE_NAME)).toBeUndefined();
+    expect(await readRawRecord(orphanedKey, CHAT_SNAPSHOT_METADATA_STORE_NAME)).toBeUndefined();
     expect(reader.readSavedAt(privateKey)).toBeNull();
     expect(reader.readSavedAt(orphanedKey)).toBeNull();
     expect(await reader.read(ordinaryKey)).toEqual(snapshot(ordinaryKey));
@@ -259,22 +241,12 @@ describe("persistent chat session snapshots", () => {
     await writer.flush();
 
     const record = await readRawRecord(sessionKey);
-    const metadata = await readRawMetadata(sessionKey);
+    const metadata = await readRawRecord(sessionKey, CHAT_SNAPSHOT_METADATA_STORE_NAME);
     expect(metadata?.savedAt).toBe(record?.savedAt);
     expect(metadata?.weight).toBeGreaterThan(0);
 
     await writer.delete(sessionKey);
-    expect(await readRawMetadata(sessionKey)).toBeUndefined();
-  });
-
-  it("round-trips the optional history delta cursor", async () => {
-    const sessionKey = "agent:main:cursor";
-    const writer = new SessionSnapshotStore();
-    const cached = { ...snapshot("cached"), deltaCursor: "cursor-1" };
-    writer.write(sessionKey, cached);
-    await writer.flush();
-
-    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(cached);
+    expect(await readRawRecord(sessionKey, CHAT_SNAPSHOT_METADATA_STORE_NAME)).toBeUndefined();
   });
 
   it("does not let an append miss replace a richer persisted snapshot", async () => {

@@ -28,6 +28,7 @@ import {
   annotateInterSessionPromptText,
   isSubagentCoordinationInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { getFollowupTaskProjection } from "../../tasks/task-followup-projection.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -392,7 +393,7 @@ export async function prepareAgentRunDispatch(
   if (followupSuccessor) {
     registeredFollowupTask = {
       kind: "receipt",
-      ...followupSuccessor.owner.receipt,
+      ...getFollowupTaskProjection(followupSuccessor.owner),
       completion: followupSuccessor.owner,
     };
   }

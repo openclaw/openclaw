@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   PluginHookSkillEvaluationFinding,
   PluginHookSkillProposalEvaluateResult,
@@ -216,7 +215,11 @@ export async function evaluateSkillProposal(
 export async function listSkillProposalEvents(
   input: SkillProposalEventsListInput,
 ): Promise<SkillProposalEventsListResult> {
-  return await readSkillProposalEvents(input, storeOptions(input.env, input.agentId, input.config));
+  return await readSkillProposalEvents(input, {
+    env: input.env,
+    agentId: input.agentId,
+    config: input.config,
+  });
 }
 
 export function assertExpectedRevisionHash(actual: string, expected?: string): void {
@@ -366,16 +369,4 @@ function boundedRequired(value: string, maxLength: number, fallback: string): st
 function boundedOptional(value: string | undefined, maxLength: number): string | undefined {
   const normalized = normalizeOptionalString(value);
   return normalized === undefined ? undefined : truncateUtf16Safe(normalized, maxLength);
-}
-
-function storeOptions(
-  env: NodeJS.ProcessEnv | undefined,
-  agentId: string | undefined,
-  config: OpenClawConfig,
-) {
-  return {
-    ...(env ? { env } : {}),
-    ...(agentId ? { agentId } : {}),
-    config,
-  };
 }

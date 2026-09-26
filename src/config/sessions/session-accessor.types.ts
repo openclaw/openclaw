@@ -826,7 +826,7 @@ export type SessionEntryCreateWithTranscriptResult<TError = string> =
   | { ok: false; error: string; phase: "transcript" };
 
 export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
-  | { ok: true; entry: SessionEntry }
+  | { ok: true; entry: SessionEntry; transcriptEvents?: readonly TranscriptEvent[] }
   | { ok: false; error: TError };
 
 /** Original physical writer custody; captured facts are not a new admission. */
@@ -844,7 +844,7 @@ export type SessionEntryCreationPhase =
   | "publication";
 
 export type SessionEntryCreateWithTranscriptOptions = {
-  /** Explicit label whose sibling occupancy is prepared with the target. */
+  /** Explicit label claim, checked again inside the final write transaction. */
   label?: string;
   onPhase?: (phase: SessionEntryCreationPhase) => void;
   /** Bind retained target facts to this creator's own placeholder publication. */

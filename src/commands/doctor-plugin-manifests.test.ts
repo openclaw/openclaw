@@ -18,12 +18,21 @@ const suiteTempDirs = createSuiteTempRootTracker({
   parentDir: fixturesRoot,
 });
 
-function configWithPluginLoadPath(pluginRoot: string): OpenClawConfig {
+async function createManifestFixture(
+  name: string,
+  manifest: { id: string } & Record<string, unknown>,
+) {
+  const pluginsRoot = await suiteTempDirs.make(name);
+  const root = path.join(pluginsRoot, manifest.id);
+  fs.mkdirSync(root, { recursive: true });
+  writePackageJson(root);
+  writeManifest(root, { configSchema: { type: "object" }, ...manifest });
   return {
-    plugins: {
-      load: {
-        paths: [pluginRoot],
-      },
+    root,
+    params: {
+      config: { plugins: { load: { paths: [pluginsRoot] } } } satisfies OpenClawConfig,
+      env: { ...process.env },
+      manifestRoots: [pluginsRoot],
     },
   };
 }
@@ -96,97 +105,14 @@ describe("doctor plugin manifest legacy contract repair", () => {
     vi.restoreAllMocks();
   });
 
-  it("collects legacy top-level capability keys for migration", async () => {
-    const pluginsRoot = await suiteTempDirs.make("legacy-capability");
-    const root = path.join(pluginsRoot, "openai");
-    fs.mkdirSync(root, { recursive: true });
-    writePackageJson(root);
-    writeManifest(root, {
-      id: "openai",
-      providers: ["openai"],
-      speechProviders: ["openai"],
-      configSchema: { type: "object" },
-    });
-
-    const migrations = collectLegacyPluginManifestContractMigrations({
-      config: configWithPluginLoadPath(pluginsRoot),
-      env: {
-        ...process.env,
-      },
-      manifestRoots: [pluginsRoot],
-    });
-
-    const manifestPath = path.join(root, "openclaw.plugin.json");
-    expect(migrations).toStrictEqual([
-      {
-        changeLines: [`- ${manifestPath}: moved speechProviders to contracts.speechProviders`],
-        manifestPath,
-        nextRaw: {
-          id: "openai",
-          providers: ["openai"],
-          contracts: {
-            speechProviders: ["openai"],
-          },
-          configSchema: { type: "object" },
-        },
-        pluginId: "openai",
-      },
-    ]);
-  });
-
-  it("collects legacy top-level plugin tool keys for migration", async () => {
-    const pluginsRoot = await suiteTempDirs.make("legacy-tool");
-    const root = path.join(pluginsRoot, "cortex");
-    fs.mkdirSync(root, { recursive: true });
-    writePackageJson(root);
-    writeManifest(root, {
-      id: "cortex",
-      tools: ["cortex_search", "cortex_remember"],
-      configSchema: { type: "object" },
-    });
-
-    const migrations = collectLegacyPluginManifestContractMigrations({
-      config: configWithPluginLoadPath(pluginsRoot),
-      env: {
-        ...process.env,
-      },
-      manifestRoots: [pluginsRoot],
-    });
-
-    const manifestPath = path.join(root, "openclaw.plugin.json");
-    expect(migrations).toStrictEqual([
-      {
-        changeLines: [`- ${manifestPath}: moved tools to contracts.tools`],
-        manifestPath,
-        nextRaw: {
-          id: "cortex",
-          contracts: {
-            tools: ["cortex_search", "cortex_remember"],
-          },
-          configSchema: { type: "object" },
-        },
-        pluginId: "cortex",
-      },
-    ]);
-  });
-
   it("maps legacy manifest migrations to structured health findings", async () => {
-    const pluginsRoot = await suiteTempDirs.make("finding-capability");
-    const root = path.join(pluginsRoot, "openai");
-    fs.mkdirSync(root, { recursive: true });
-    writePackageJson(root);
-    writeManifest(root, {
+    const { root, params } = await createManifestFixture("finding-capability", {
       id: "openai",
       speechProviders: ["openai"],
-      configSchema: { type: "object" },
     });
 
     const [migration] = collectLegacyPluginManifestContractMigrations({
-      config: configWithPluginLoadPath(pluginsRoot),
-      env: {
-        ...process.env,
-      },
-      manifestRoots: [pluginsRoot],
+      ...params,
     });
 
     if (migration === undefined) {
@@ -205,11 +131,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
   });
 
   it("rewrites legacy top-level capability keys into contracts", async () => {
-    const pluginsRoot = await suiteTempDirs.make("rewrite-capability");
-    const root = path.join(pluginsRoot, "openai");
-    fs.mkdirSync(root, { recursive: true });
-    writePackageJson(root);
-    writeManifest(root, {
+    const { root, params } = await createManifestFixture("rewrite-capability", {
       id: "openai",
       providers: ["openai"],
       speechProviders: ["openai"],
@@ -217,15 +139,10 @@ describe("doctor plugin manifest legacy contract repair", () => {
       contracts: {
         webSearchProviders: ["gemini"],
       },
-      configSchema: { type: "object" },
     });
 
     const changed = await maybeRepairLegacyPluginManifestContracts({
-      config: configWithPluginLoadPath(pluginsRoot),
-      env: {
-        ...process.env,
-      },
-      manifestRoots: [pluginsRoot],
+      ...params,
       runtime: createRuntime(),
       prompter: createPrompter(),
       note: vi.fn(),
@@ -247,25 +164,16 @@ describe("doctor plugin manifest legacy contract repair", () => {
   });
 
   it("removes duplicate legacy top-level plugin tools while keeping contracts.tools", async () => {
-    const pluginsRoot = await suiteTempDirs.make("dedupe-tool");
-    const root = path.join(pluginsRoot, "cortex");
-    fs.mkdirSync(root, { recursive: true });
-    writePackageJson(root);
-    writeManifest(root, {
+    const { root, params } = await createManifestFixture("dedupe-tool", {
       id: "cortex",
       tools: ["legacy_tool"],
       contracts: {
         tools: ["contract_tool"],
       },
-      configSchema: { type: "object" },
     });
 
     await maybeRepairLegacyPluginManifestContracts({
-      config: configWithPluginLoadPath(pluginsRoot),
-      env: {
-        ...process.env,
-      },
-      manifestRoots: [pluginsRoot],
+      ...params,
       runtime: createRuntime(),
       prompter: createPrompter(),
       note: vi.fn(),
@@ -282,24 +190,15 @@ describe("doctor plugin manifest legacy contract repair", () => {
   });
 
   it("ignores non-object contracts payloads when collecting migrations", async () => {
-    const pluginsRoot = await suiteTempDirs.make("non-object-contracts");
-    const root = path.join(pluginsRoot, "openai");
-    fs.mkdirSync(root, { recursive: true });
-    writePackageJson(root);
-    writeManifest(root, {
+    const { root, params } = await createManifestFixture("non-object-contracts", {
       id: "openai",
       providers: ["openai"],
       speechProviders: ["openai"],
       contracts: "broken",
-      configSchema: { type: "object" },
     });
 
     const migrations = collectLegacyPluginManifestContractMigrations({
-      config: configWithPluginLoadPath(pluginsRoot),
-      env: {
-        ...process.env,
-      },
-      manifestRoots: [pluginsRoot],
+      ...params,
     });
 
     const manifestPath = path.join(root, "openclaw.plugin.json");

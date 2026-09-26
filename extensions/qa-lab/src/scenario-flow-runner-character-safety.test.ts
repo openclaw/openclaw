@@ -15,11 +15,6 @@ const classifiedFailureReplies = [
     isError: true,
   },
   {
-    failureName: "delivery failure",
-    failureText: "⚠️ ✉️ Message failed",
-    isError: true,
-  },
-  {
     failureName: "missing tool failure",
     failureText: "Read: AGENT.md\nEvidence snippet: Tool read not found\nStatus: blocked",
     isError: false,

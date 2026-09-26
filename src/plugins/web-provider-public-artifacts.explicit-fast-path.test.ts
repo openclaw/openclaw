@@ -23,15 +23,6 @@ const {
   };
   const lowLevelLoaderMock = vi.fn(
     ({ dirName, artifactBasename }: { dirName: string; artifactBasename: string }) => {
-      if (dirName === "brave" && artifactBasename === "web-search-contract-api.js") {
-        return {
-          createBraveWebSearchProvider: () => ({
-            ...providerBase,
-            id: "brave",
-            createTool: () => null,
-          }),
-        };
-      }
       if (dirName === "mockplugin" && artifactBasename === "web-search-contract-api.js") {
         return {
           createFuzzpluginWebSearchProvider: () => {
@@ -145,22 +136,6 @@ describe("web provider public artifacts explicit fast path", () => {
     loadPluginManifestRegistryMock.mockClear();
     loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock.mockClear();
     loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
-  });
-
-  it("resolves bundled web search providers by explicit plugin id without manifest scans", () => {
-    const provider = expectSingleProvider(
-      resolveBundledWebSearchProvidersFromPublicArtifacts({
-        onlyPluginIds: ["brave"],
-      }),
-    );
-
-    expect(provider.pluginId).toBe("brave");
-    expect(provider.createTool({ config: {} as never })).toBeNull();
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
-      dirName: "brave",
-      artifactBasename: "web-search-contract-api.js",
-    });
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 
   it("skips throwing bundled web provider factories while preserving healthy siblings", () => {

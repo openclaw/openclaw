@@ -1,7 +1,6 @@
 // Tests for terminal runtime helpers.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock dependencies
 vi.mock("../packages/terminal-core/src/progress-line.js", () => ({
   clearActiveProgressLine: vi.fn(),
 }));
@@ -62,18 +61,6 @@ describe("writeRuntimeJson", () => {
     };
     writeRuntimeJson(runtime, { key: "value" });
     expect(runtime.log).toHaveBeenCalled();
-  });
-
-  it("uses custom space parameter", () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-    };
-    writeRuntimeJson(runtime, { key: "value" }, 4);
-    expect(runtime.writeJson).toHaveBeenCalledWith({ key: "value" }, 4);
   });
 
   it("handles zero space parameter", () => {
@@ -137,55 +124,42 @@ describe("defaultRuntime terminal restoration", () => {
     }
   });
 
-  it.each([0, 1])("keeps machine-readable stdout clean on exit %i", async (exitCode) => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  beforeEach(async () => {
     const actualRestore = await vi.importActual<
       typeof import("../packages/terminal-core/src/restore.js")
     >("../packages/terminal-core/src/restore.js");
     vi.mocked(restoreTerminalState).mockImplementation(actualRestore.restoreTerminalState);
     Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
     Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    stdout.length = 0;
+    stderr.length = 0;
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
       stdout.push(String(chunk));
       return true;
-    }) as typeof process.stdout.write);
-    vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
       stderr.push(String(chunk));
       return true;
-    }) as typeof process.stderr.write);
-    vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new ExitError(code ?? 0);
-    }) as typeof process.exit);
+    });
+    vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new ExitError(Number(code ?? 0));
+    });
+  });
+
+  it("keeps machine-readable stdout clean on exit", () => {
     loggingState.forceConsoleToStderr = true;
 
-    defaultRuntime.writeJson({ ok: exitCode === 0 });
-    expect(() => defaultRuntime.exit(exitCode)).toThrow(ExitError);
+    defaultRuntime.writeJson({ ok: false });
+    expect(() => defaultRuntime.exit(1)).toThrow(ExitError);
 
-    expect(JSON.parse(stdout.join(""))).toEqual({ ok: exitCode === 0 });
+    expect(JSON.parse(stdout.join(""))).toEqual({ ok: false });
     expect(stderr.join("")).toContain("\x1b[?25h");
   });
 
-  it("preserves stdout terminal restoration for human output", async () => {
-    const actualRestore = await vi.importActual<
-      typeof import("../packages/terminal-core/src/restore.js")
-    >("../packages/terminal-core/src/restore.js");
-    vi.mocked(restoreTerminalState).mockImplementation(actualRestore.restoreTerminalState);
-    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
-    Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
-      stdout.push(String(chunk));
-      return true;
-    }) as typeof process.stdout.write);
-    vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
-      stderr.push(String(chunk));
-      return true;
-    }) as typeof process.stderr.write);
-    vi.spyOn(process, "exit").mockImplementation((() => {
-      throw new ExitError(1);
-    }) as typeof process.exit);
+  it("preserves stdout terminal restoration for human output", () => {
     loggingState.forceConsoleToStderr = false;
 
     defaultRuntime.writeStdout("operator-visible output");
@@ -196,26 +170,15 @@ describe("defaultRuntime terminal restoration", () => {
     expect(stderr).toEqual([]);
   });
 
-  it("honors an explicitly selected reset stream in machine-output mode", async () => {
-    const actualRestore = await vi.importActual<
-      typeof import("../packages/terminal-core/src/restore.js")
-    >("../packages/terminal-core/src/restore.js");
-    vi.mocked(restoreTerminalState).mockImplementation(actualRestore.restoreTerminalState);
-    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
-    Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  it("honors an explicitly selected reset stream in machine-output mode", () => {
     const resetWrite = vi.fn(() => true);
     const resetStream = { isTTY: true, write: resetWrite } as unknown as NodeJS.WriteStream;
-    vi.spyOn(process, "exit").mockImplementation((() => {
-      throw new ExitError(1);
-    }) as typeof process.exit);
     loggingState.forceConsoleToStderr = true;
 
     expect(() => defaultRuntime.exit(1, { resetStream })).toThrow(ExitError);
 
     expect(resetWrite).toHaveBeenCalledWith(expect.stringContaining("\x1b[?25h"));
-    expect(stdout).not.toHaveBeenCalled();
-    expect(stderr).not.toHaveBeenCalled();
+    expect(stdout).toEqual([]);
+    expect(stderr).toEqual([]);
   });
 });

@@ -345,8 +345,14 @@ test.each([false, true])(
       const onMessage = (message: unknown) => {
         if (isRecord(message) && message.type === "commit-request") {
           reclamationWorker = worker;
+          nativeSettled = false;
         }
-        if (isRecord(message) && message.type === "reclaimed" && message.settled === true) {
+        if (
+          worker === reclamationWorker &&
+          isRecord(message) &&
+          (message.type === "reclaimed" || message.type === "refused") &&
+          message.settled === true
+        ) {
           nativeSettled = true;
         }
       };

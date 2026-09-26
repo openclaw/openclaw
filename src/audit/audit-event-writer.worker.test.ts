@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { listAuditEvents } from "./audit-event-store.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
@@ -65,8 +66,13 @@ describe("audit writer shared worker", () => {
       }, 1);
       const counters = observeMainThreadSql({ includeClose: true });
       const startedAt = performance.now();
-      const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+      const writer = createAuditEventWriter({
+        scheduler: createTestGatewayScheduler(),
+        stateDir,
+        onError: (error) => errors.push(error),
+      });
       const recorder = createAuditEventRecorder({
+        scheduler: createTestGatewayScheduler(),
         getConfig: () => ({ logging: { audit: { messages: "all" } } }),
         writer,
       });

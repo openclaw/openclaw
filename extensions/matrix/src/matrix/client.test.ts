@@ -5,7 +5,7 @@ import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
-import type { CoreConfig } from "../types.js";
+import type { CoreConfig, MatrixConfig } from "../types.js";
 import { backfillMatrixAuthDeviceIdAfterStartup, resolveMatrixAuth } from "./client/config.js";
 import * as credentialsReadModule from "./credentials-read.js";
 
@@ -145,6 +145,10 @@ describe("client constructor lazy loading", () => {
   });
 });
 
+function createConfig(matrix: MatrixConfig): CoreConfig {
+  return { channels: { matrix } };
+}
+
 describe("resolveMatrixAuth", () => {
   beforeEach(() => {
     vi.mocked(credentialsReadModule.loadMatrixCredentialsAsync).mockReset();
@@ -173,16 +177,12 @@ describe("resolveMatrixAuth", () => {
       device_id: "DEVICE123",
     });
 
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          password: "secret", // pragma: allowlist secret
-          encryption: true,
-        },
-      },
-    } as CoreConfig;
+    const cfg = createConfig({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      password: "secret", // pragma: allowlist secret
+      encryption: true,
+    });
 
     const auth = await resolveMatrixAuth({
       cfg,
@@ -217,15 +217,11 @@ describe("resolveMatrixAuth", () => {
   it("surfaces password login errors when account credentials are invalid", async () => {
     matrixDoRequestMock.mockRejectedValueOnce(new Error("Invalid username or password"));
 
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          password: "secret", // pragma: allowlist secret
-        },
-      },
-    } as CoreConfig;
+    const cfg = createConfig({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      password: "secret", // pragma: allowlist secret
+    });
 
     await expect(
       resolveMatrixAuth({
@@ -252,15 +248,11 @@ describe("resolveMatrixAuth", () => {
     });
     vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReturnValue(true);
 
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          password: "secret", // pragma: allowlist secret
-        },
-      },
-    } as CoreConfig;
+    const cfg = createConfig({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      password: "secret", // pragma: allowlist secret
+    });
 
     const auth = await resolveMatrixAuth({
       cfg,
@@ -287,13 +279,9 @@ describe("resolveMatrixAuth", () => {
     });
     vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReturnValue(true);
 
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-        },
-      },
-    } as CoreConfig;
+    const cfg = createConfig({
+      homeserver: "https://matrix.example.org",
+    });
     const env = {
       MATRIX_OPS_USER_ID: "@ops:example.org",
     } as NodeJS.ProcessEnv;
@@ -315,14 +303,10 @@ describe("resolveMatrixAuth", () => {
   });
 
   it("rejects embedded credentials in Matrix homeserver URLs", async () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://user:pass@matrix.example.org",
-          accessToken: "tok-123",
-        },
-      },
-    } as CoreConfig;
+    const cfg = createConfig({
+      homeserver: "https://user:pass@matrix.example.org",
+      accessToken: "tok-123",
+    });
 
     await expect(resolveMatrixAuth({ cfg, env: {} as NodeJS.ProcessEnv })).rejects.toThrow(
       "Matrix homeserver URL must not include embedded credentials",
@@ -338,17 +322,13 @@ describe("resolveMatrixAuth", () => {
     });
     vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReturnValue(true);
 
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "tok-123",
-          deviceId: "DEVICE123",
-          encryption: true,
-        },
-      },
-    } as CoreConfig;
+    const cfg = createConfig({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok-123",
+      deviceId: "DEVICE123",
+      encryption: true,
+    });
 
     const auth = await resolveMatrixAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
@@ -394,20 +374,16 @@ describe("resolveMatrixAuth", () => {
       device_id: "OPSDEVICE",
     });
 
-    const cfg = {
-      channels: {
-        matrix: {
-          userId: "@base:example.org",
+    const cfg = createConfig({
+      userId: "@base:example.org",
+      homeserver: "https://matrix.example.org",
+      accounts: {
+        ops: {
           homeserver: "https://matrix.example.org",
-          accounts: {
-            ops: {
-              homeserver: "https://matrix.example.org",
-              accessToken: "ops-token",
-            },
-          },
+          accessToken: "ops-token",
         },
       },
-    } as CoreConfig;
+    });
 
     const auth = await resolveMatrixAuth({
       cfg,
@@ -429,21 +405,17 @@ describe("resolveMatrixAuth", () => {
       device_id: "OPSDEVICE",
     });
 
-    const cfg = {
-      channels: {
-        matrix: {
+    const cfg = createConfig({
+      homeserver: "https://matrix.example.org",
+      accessToken: "legacy-token",
+      accounts: {
+        ops: {
           homeserver: "https://matrix.example.org",
-          accessToken: "legacy-token",
-          accounts: {
-            ops: {
-              homeserver: "https://matrix.example.org",
-              userId: "@ops:example.org",
-              password: "ops-pass", // pragma: allowlist secret
-            },
-          },
+          userId: "@ops:example.org",
+          password: "ops-pass", // pragma: allowlist secret
         },
       },
-    } as CoreConfig;
+    });
 
     const auth = await resolveMatrixAuth({
       cfg,
@@ -471,15 +443,11 @@ describe("resolveMatrixAuth", () => {
       device_id: "DEVICE123",
     });
 
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          accessToken: "tok-123",
-          encryption: true,
-        },
-      },
-    } as CoreConfig;
+    const cfg = createConfig({
+      homeserver: "https://matrix.example.org",
+      accessToken: "tok-123",
+      encryption: true,
+    });
 
     const auth = await resolveMatrixAuth({
       cfg,
@@ -511,14 +479,10 @@ describe("resolveMatrixAuth", () => {
         device_id: "DEVICE123",
       });
 
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          accessToken: "tok-123",
-        },
-      },
-    } as CoreConfig;
+    const cfg = createConfig({
+      homeserver: "https://matrix.example.org",
+      accessToken: "tok-123",
+    });
 
     const auth = await resolveMatrixAuth({
       cfg,
@@ -535,16 +499,12 @@ describe("resolveMatrixAuth", () => {
   it("does not call whoami when token auth already has a userId and only deviceId is missing", async () => {
     matrixDoRequestMock.mockRejectedValue(new Error("whoami should not be called"));
 
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "tok-123",
-          encryption: true,
-        },
-      },
-    } as CoreConfig;
+    const cfg = createConfig({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok-123",
+      encryption: true,
+    });
 
     const auth = await resolveMatrixAuth({
       cfg,
@@ -577,15 +537,11 @@ describe("resolveMatrixAuth", () => {
         device_id: "DEVICE123",
       });
 
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          password: "secret", // pragma: allowlist secret
-        },
-      },
-    } as CoreConfig;
+    const cfg = createConfig({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      password: "secret", // pragma: allowlist secret
+    });
 
     const auth = await resolveMatrixAuth({
       cfg,
@@ -987,16 +943,12 @@ describe("resolveMatrixAuth", () => {
     });
     vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReturnValue(true);
 
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          deviceId: "DEVICE123",
-          encryption: true,
-        },
-      },
-    } as CoreConfig;
+    const cfg = createConfig({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      deviceId: "DEVICE123",
+      encryption: true,
+    });
 
     const auth = await resolveMatrixAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
@@ -1011,21 +963,17 @@ describe("resolveMatrixAuth", () => {
   });
 
   it("falls back to the sole configured account when no global homeserver is set", async () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              homeserver: "https://ops.example.org",
-              userId: "@ops:example.org",
-              accessToken: "ops-token",
-              deviceId: "OPSDEVICE",
-              encryption: true,
-            },
-          },
+    const cfg = createConfig({
+      accounts: {
+        ops: {
+          homeserver: "https://ops.example.org",
+          userId: "@ops:example.org",
+          accessToken: "ops-token",
+          deviceId: "OPSDEVICE",
+          encryption: true,
         },
       },
-    } as CoreConfig;
+    });
 
     const auth = await resolveMatrixAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
