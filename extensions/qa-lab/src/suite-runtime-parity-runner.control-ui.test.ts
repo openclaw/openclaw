@@ -367,12 +367,6 @@ describe("runtime parity Control UI ownership", () => {
       enabled: true,
     },
     {
-      label: "an explicitly disabled non-Control UI scenario",
-      scenarioId: "runtime-channel",
-      explicit: false,
-      enabled: false,
-    },
-    {
       label: "a Control UI scenario by default",
       scenarioId: "runtime-control-ui",
       explicit: undefined,

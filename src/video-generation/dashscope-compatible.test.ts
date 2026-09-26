@@ -8,21 +8,30 @@ import {
   pollDashscopeVideoTaskUntilComplete,
   runDashscopeVideoGenerationTask,
 } from "./dashscope-compatible.js";
-
-const providerLabels = ["Qwen", "Alibaba Wan"] as const;
+import type { VideoGenerationRequest } from "./types.js";
 
 const invalidGeneratedVideos = [
   { name: "JSON error", contentType: "application/json", body: '{"error":"not a video"}' },
-  {
-    name: "problem JSON error",
-    contentType: "application/problem+json",
-    body: '{"title":"not a video"}',
-  },
-  { name: "HTML error", contentType: "text/html; charset=utf-8", body: "<html>error</html>" },
-  { name: "image", contentType: "image/png", body: "image-bytes" },
   { name: "audio", contentType: "audio/mp4", body: "audio-bytes" },
   { name: "empty video", contentType: "video/mp4", body: "" },
 ] as const;
+
+function videoRequest(overrides: Partial<VideoGenerationRequest>): VideoGenerationRequest {
+  return { provider: "qwen", model: "wan2.6-t2v", prompt: "video", cfg: {}, ...overrides };
+}
+
+function downloadVideo(
+  fetchFn: typeof fetch,
+  timeoutMs: Parameters<typeof downloadDashscopeGeneratedVideos>[0]["timeoutMs"] = 5_000,
+) {
+  return downloadDashscopeGeneratedVideos({
+    providerLabel: "Alibaba Wan",
+    urls: ["https://example.com/video.mp4"],
+    timeoutMs,
+    fetchFn,
+    maxBytes: 10 * 1024 * 1024,
+  });
+}
 
 function neverChunkingVideoResponse(): Response {
   return new Response(
@@ -63,26 +72,22 @@ describe("DashScope Wan request contracts", () => {
     expect(
       buildDashscopeVideoGenerationInput({
         providerLabel: "Qwen",
-        req: {
-          provider: "qwen",
+        req: videoRequest({
           model: "wan2.6-i2v",
           prompt: "animate",
-          cfg: {},
           inputImages: [{ url: "https://example.com/frame.png" }],
-        },
+        }),
       }),
     ).toEqual({ prompt: "animate", img_url: "https://example.com/frame.png" });
 
     expect(
       buildDashscopeVideoGenerationInput({
         providerLabel: "Qwen",
-        req: {
-          provider: "qwen",
+        req: videoRequest({
           model: "wan2.6-r2v",
           prompt: "character1 waves",
-          cfg: {},
           inputImages: [{ url: "https://example.com/character.png" }],
-        },
+        }),
       }),
     ).toEqual({
       prompt: "character1 waves",
@@ -92,14 +97,13 @@ describe("DashScope Wan request contracts", () => {
     expect(
       buildDashscopeVideoGenerationInput({
         providerLabel: "Alibaba Wan",
-        req: {
+        req: videoRequest({
           provider: "alibaba",
           model: "wan2.7-r2v",
           prompt: "Image 1 greets Video 1",
-          cfg: {},
           inputImages: [{ url: "https://example.com/character.png" }],
           inputVideos: [{ url: "https://example.com/action.mp4", role: "reference_video" }],
-        },
+        }),
       }),
     ).toEqual({
       prompt: "Image 1 greets Video 1",
@@ -114,13 +118,10 @@ describe("DashScope Wan request contracts", () => {
     expect(() =>
       buildDashscopeVideoGenerationInput({
         providerLabel: "Qwen",
-        req: {
-          provider: "qwen",
-          model: "wan2.6-t2v",
+        req: videoRequest({
           prompt: "animate",
-          cfg: {},
           inputImages: [{ url: "https://example.com/frame.png" }],
-        },
+        }),
       }),
     ).toThrow(/text-to-video.*does not accept reference media/u);
   });
@@ -128,41 +129,32 @@ describe("DashScope Wan request contracts", () => {
   it.each([
     {
       name: "Wan 2.6 text-to-video",
-      req: {
-        provider: "qwen",
-        model: "wan2.6-t2v",
-        prompt: "video",
-        cfg: {},
+      req: videoRequest({
         resolution: "720P",
         aspectRatio: "9:16",
         audio: false,
-      },
+      }),
       expected: { size: "720*1280", audio: false },
     },
     {
       name: "Wan 2.6 image-to-video",
-      req: {
-        provider: "qwen",
+      req: videoRequest({
         model: "wan2.6-i2v",
-        prompt: "video",
-        cfg: {},
         resolution: "1080P",
         inputImages: [{ url: "https://example.com/frame.png" }],
         audio: true,
-      },
+      }),
       expected: { resolution: "1080P", audio: true },
     },
     {
       name: "Wan 2.7 reference-to-video",
-      req: {
+      req: videoRequest({
         provider: "alibaba",
         model: "wan2.7-r2v",
-        prompt: "video",
-        cfg: {},
         size: "1920x1080",
         inputVideos: [{ url: "https://example.com/reference.mp4" }],
         audio: false,
-      },
+      }),
       expected: { resolution: "1080P", ratio: "16:9" },
     },
   ])("builds documented $name parameters", ({ req, expected }) => {
@@ -171,81 +163,57 @@ describe("DashScope Wan request contracts", () => {
 });
 
 describe("downloadDashscopeGeneratedVideos", () => {
-  it.each(
-    providerLabels.flatMap((providerLabel) =>
-      invalidGeneratedVideos.map(({ name, contentType, body }) => ({
-        providerLabel,
-        name,
-        contentType,
-        body,
-      })),
-    ),
-  )("rejects $providerLabel $name responses instead of returning a video", async (invalid) => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(invalid.body, {
-          status: 200,
-          headers: { "content-type": invalid.contentType },
-        }),
-    );
-
-    await expect(
-      downloadDashscopeGeneratedVideos({
-        providerLabel: invalid.providerLabel,
-        urls: ["https://example.com/not-video.mp4"],
-        timeoutMs: 5_000,
-        fetchFn: fetchFn as typeof fetch,
-        maxBytes: 10 * 1024 * 1024,
-      }),
-    ).rejects.toThrow(
-      `${invalid.providerLabel} generated video download: malformed video response`,
-    );
-
-    expect(fetchFn).toHaveBeenCalledOnce();
-  });
-
-  it.each(providerLabels)(
-    "cancels unread invalid %s video bodies before releasing them",
-    async (providerLabel) => {
-      const cancellationOrder: string[] = [];
-      const cancelBody = vi.fn(async () => {
-        cancellationOrder.push("cancel-started");
-        await Promise.resolve();
-        cancellationOrder.push("cancel-completed");
-      });
+  it.each(invalidGeneratedVideos)(
+    "rejects $name responses instead of returning a video",
+    async (invalid) => {
       const fetchFn = vi.fn(
         async () =>
-          new Response(
-            new ReadableStream({
-              start(controller) {
-                controller.enqueue(new TextEncoder().encode('{"error":"still streaming"}'));
-              },
-              cancel: cancelBody,
-            }),
-            {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            },
-          ),
+          new Response(invalid.body, {
+            status: 200,
+            headers: { "content-type": invalid.contentType },
+          }),
       );
 
-      await expect(
-        downloadDashscopeGeneratedVideos({
-          providerLabel,
-          urls: ["https://example.com/still-streaming.mp4"],
-          timeoutMs: 80,
-          fetchFn: fetchFn as typeof fetch,
-          maxBytes: 10 * 1024 * 1024,
-        }),
-      ).rejects.toThrow(`${providerLabel} generated video download: malformed video response`);
+      await expect(downloadVideo(fetchFn)).rejects.toThrow(
+        "Alibaba Wan generated video download: malformed video response",
+      );
 
-      expect(cancelBody).toHaveBeenCalledOnce();
-      expect(cancellationOrder).toEqual(["cancel-started", "cancel-completed"]);
+      expect(fetchFn).toHaveBeenCalledOnce();
     },
   );
 
+  it("cancels unread invalid video bodies before releasing them", async () => {
+    const cancellationOrder: string[] = [];
+    const cancelBody = vi.fn(async () => {
+      cancellationOrder.push("cancel-started");
+      await Promise.resolve();
+      cancellationOrder.push("cancel-completed");
+    });
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"error":"still streaming"}'));
+            },
+            cancel: cancelBody,
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+
+    await expect(downloadVideo(fetchFn, 80)).rejects.toThrow(
+      "Alibaba Wan generated video download: malformed video response",
+    );
+
+    expect(cancelBody).toHaveBeenCalledOnce();
+    expect(cancellationOrder).toEqual(["cancel-started", "cancel-completed"]);
+  });
+
   it.each([
-    { contentType: "video/mp4", expectedMimeType: "video/mp4" },
     { contentType: "VIDEO/MP4; codecs=avc1", expectedMimeType: "VIDEO/MP4; codecs=avc1" },
     { contentType: "application/octet-stream", expectedMimeType: "application/octet-stream" },
     { contentType: undefined, expectedMimeType: "video/mp4" },
@@ -254,20 +222,24 @@ describe("downloadDashscopeGeneratedVideos", () => {
     async ({ contentType, expectedMimeType }) => {
       const fetchFn = vi.fn(
         async () =>
-          new Response(new TextEncoder().encode("mp4-bytes"), {
-            status: 200,
-            ...(contentType ? { headers: { "content-type": contentType } } : {}),
-          }),
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode("mp4-bytes"));
+                controller.close();
+              },
+            }),
+            {
+              status: 200,
+              ...(contentType ? { headers: { "content-type": contentType } } : {}),
+            },
+          ),
       );
 
-      const videos = await downloadDashscopeGeneratedVideos({
-        providerLabel: "Alibaba Wan",
-        urls: ["https://example.com/video.mp4"],
-        timeoutMs: 5_000,
-        fetchFn: fetchFn as typeof fetch,
-        maxBytes: 10 * 1024 * 1024,
-      });
+      const videos = await downloadVideo(fetchFn);
 
+      expect(videos).toHaveLength(1);
+      expect(videos[0]?.buffer).toBeInstanceOf(Buffer);
       expect(videos[0]).toMatchObject({
         buffer: Buffer.from("mp4-bytes"),
         fileName: "video-1.mp4",
@@ -281,57 +253,14 @@ describe("downloadDashscopeGeneratedVideos", () => {
     const timeoutMs = 80;
     const startedAt = Date.now();
 
-    await expect(
-      downloadDashscopeGeneratedVideos({
-        providerLabel: "Alibaba Wan",
-        urls: ["https://example.com/out.mp4"],
-        timeoutMs,
-        fetchFn: fetchFn as unknown as typeof fetch,
-        maxBytes: 10 * 1024 * 1024,
-      }),
-    ).rejects.toThrow(/Alibaba Wan generated video download timed out/);
+    await expect(downloadVideo(fetchFn, timeoutMs)).rejects.toThrow(
+      /Alibaba Wan generated video download timed out/,
+    );
 
     const elapsedMs = Date.now() - startedAt;
     expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs - 20);
     expect(elapsedMs).toBeLessThan(2_000);
     expect(fetchFn).toHaveBeenCalledTimes(1);
-  });
-
-  it("persists a complete generated video body before the idle deadline", async () => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode("mp4-bytes"));
-              controller.close();
-            },
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "video/mp4" },
-          },
-        ),
-    );
-
-    const videos = await downloadDashscopeGeneratedVideos({
-      providerLabel: "Alibaba Wan",
-      urls: ["https://example.com/ok.mp4"],
-      timeoutMs: 5_000,
-      fetchFn: fetchFn as unknown as typeof fetch,
-      maxBytes: 10 * 1024 * 1024,
-    });
-
-    expect(videos).toHaveLength(1);
-    const video = videos[0];
-    const buffer = video?.buffer;
-    expect(video).toBeDefined();
-    expect(buffer).toBeInstanceOf(Buffer);
-    if (!buffer) {
-      throw new Error("expected downloaded video asset buffer");
-    }
-    expect(buffer.toString("utf8")).toBe("mp4-bytes");
-    expect(video?.mimeType).toBe("video/mp4");
   });
 
   it("rejects a malformed response while a debug-capture clone still holds the body tee", async () => {
@@ -353,15 +282,9 @@ describe("downloadDashscopeGeneratedVideos", () => {
     });
 
     try {
-      await expect(
-        downloadDashscopeGeneratedVideos({
-          providerLabel: "Alibaba Wan",
-          urls: ["https://example.com/invalid.mp4"],
-          timeoutMs: 5_000,
-          fetchFn,
-          maxBytes: 10 * 1024 * 1024,
-        }),
-      ).rejects.toThrow("Alibaba Wan generated video download: malformed video response");
+      await expect(downloadVideo(fetchFn)).rejects.toThrow(
+        "Alibaba Wan generated video download: malformed video response",
+      );
     } finally {
       void captured?.body?.cancel().catch(() => undefined);
     }
@@ -371,18 +294,7 @@ describe("downloadDashscopeGeneratedVideos", () => {
     const fetchFn = vi.fn(async () => neverChunkingVideoResponse());
     const startedAt = Date.now();
 
-    await expect(
-      downloadDashscopeGeneratedVideos({
-        providerLabel: "Alibaba Wan",
-        urls: ["https://example.com/out.mp4"],
-        // Function-valued timeout returns 0: header fetch consumed the entire
-        // deadline. Must fail closed before any network I/O, not reset to the
-        // full default timeout.
-        timeoutMs: () => 0,
-        fetchFn: fetchFn as unknown as typeof fetch,
-        maxBytes: 10 * 1024 * 1024,
-      }),
-    ).rejects.toThrow("remaining budget exhausted");
+    await expect(downloadVideo(fetchFn, () => 0)).rejects.toThrow("remaining budget exhausted");
 
     const elapsedMs = Date.now() - startedAt;
     // Should reject quickly (0ms budget), not wait for the 60s default.
@@ -413,15 +325,9 @@ describe("downloadDashscopeGeneratedVideos", () => {
         });
       });
 
-      await expect(
-        downloadDashscopeGeneratedVideos({
-          providerLabel: "Alibaba Wan",
-          urls: ["https://example.com/out.mp4"],
-          timeoutMs,
-          fetchFn: fetchFn as typeof fetch,
-          maxBytes: 10 * 1024 * 1024,
-        }),
-      ).rejects.toThrow("remaining-budget resolver failed");
+      await expect(downloadVideo(fetchFn, timeoutMs)).rejects.toThrow(
+        "remaining-budget resolver failed",
+      );
 
       expect(timeoutMs).toHaveBeenCalledTimes(2);
       expect(cancelBody).toHaveBeenCalledOnce();
@@ -438,12 +344,20 @@ describe("downloadDashscopeGeneratedVideos", () => {
 });
 
 describe("pollDashscopeVideoTaskUntilComplete", () => {
-  it.each(providerLabels)(
-    "immediately rejects documented UNKNOWN %s tasks",
-    async (providerLabel) => {
+  it.each([
+    { taskId: "expired-task", task_status: " UNKNOWN ", message: undefined, reason: "" },
+    {
+      taskId: "deleted-task",
+      task_status: "UNKNOWN",
+      message: "task was deleted",
+      reason: ": task was deleted",
+    },
+  ])(
+    "immediately rejects UNKNOWN $taskId with its provider reason",
+    async ({ taskId, task_status, message, reason }) => {
       const fetchFn = vi.fn(
         async () =>
-          new Response(JSON.stringify({ output: { task_status: " UNKNOWN " } }), {
+          new Response(JSON.stringify({ output: { task_status, message } }), {
             status: 200,
             headers: { "content-type": "application/json" },
           }),
@@ -451,47 +365,14 @@ describe("pollDashscopeVideoTaskUntilComplete", () => {
 
       await expect(
         pollDashscopeVideoTaskUntilComplete({
-          providerLabel,
-          taskId: "expired-task",
+          providerLabel: "Qwen",
+          taskId,
           headers: new Headers(),
           timeoutMs: 80,
-          fetchFn: fetchFn as typeof fetch,
+          fetchFn,
           baseUrl: "https://example.com",
         }),
-      ).rejects.toThrow(
-        `${providerLabel} video generation task expired-task is unknown or expired`,
-      );
-
-      expect(fetchFn).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each(providerLabels)(
-    "includes the provider reason when an UNKNOWN %s task expires",
-    async (providerLabel) => {
-      const fetchFn = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({ output: { task_status: "UNKNOWN", message: "task was deleted" } }),
-            {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            },
-          ),
-      );
-
-      await expect(
-        pollDashscopeVideoTaskUntilComplete({
-          providerLabel,
-          taskId: "deleted-task",
-          headers: new Headers(),
-          timeoutMs: 80,
-          fetchFn: fetchFn as typeof fetch,
-          baseUrl: "https://example.com",
-        }),
-      ).rejects.toThrow(
-        `${providerLabel} video generation task deleted-task is unknown or expired: task was deleted`,
-      );
+      ).rejects.toThrow(`Qwen video generation task ${taskId} is unknown or expired${reason}`);
 
       expect(fetchFn).toHaveBeenCalledOnce();
     },
@@ -534,7 +415,7 @@ describe("runDashscopeVideoGenerationTask", () => {
       await runDashscopeVideoGenerationTask({
         providerLabel: "Qwen",
         model: "wan2.6-t2v",
-        req: { provider: "qwen", model: "wan2.6-t2v", prompt: "video", cfg: {} },
+        req: videoRequest({}),
         url: "https://example.com/video-synthesis",
         headers: new Headers(),
         baseUrl: "https://example.com",

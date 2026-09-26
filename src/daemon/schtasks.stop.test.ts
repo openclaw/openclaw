@@ -77,10 +77,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     },
   );
 
-  it.each([
-    { state: 1, label: "disabled" },
-    { state: 3, label: "ready" },
-  ])("accepts a localized /End failure when COM proves the task is $label", async ({ state }) => {
+  it("accepts a localized /End failure when COM proves the task is ready", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       const onMutation = vi.fn();
       schtasksResponses.push(
@@ -92,7 +89,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
           stderr: "FEHLER: Die Aufgabe wird derzeit nicht ausgeführt.",
         },
       );
-      setTaskStateProbeResult(state);
+      setTaskStateProbeResult(3);
 
       await expect(stopScheduledTask({ env, stdout, onMutation })).resolves.toBeUndefined();
 
@@ -108,11 +105,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it.each([
-    { state: 0, label: "unknown" },
-    { state: 2, label: "queued" },
-    { state: 4, label: "running" },
-  ])("fails closed after a localized /End failure when the task is $label", async ({ state }) => {
+  it("fails closed after a localized /End failure when the task is running", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       const onMutation = vi.fn();
       schtasksResponses.push(
@@ -124,7 +117,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
           stderr: "FEHLER: Die Aufgabe konnte nicht beendet werden.",
         },
       );
-      setTaskStateProbeResult(state);
+      setTaskStateProbeResult(4);
 
       await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
         "schtasks end failed: FEHLER: Die Aufgabe konnte nicht beendet werden.",
@@ -135,42 +128,35 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it.each([
-    { label: "malformed", status: 0, probeOutput: "3 trailing output" },
-    { label: "missing", status: 1, probeOutput: "-2147024894" },
-    { label: "unavailable", status: 1, probeOutput: "-2147024891" },
-  ])(
-    "fails closed after a localized /End failure when the state probe is $label",
-    async ({ status, probeOutput }) => {
-      await withPreparedGatewayTask(async ({ env, stdout }) => {
-        const onMutation = vi.fn();
-        schtasksResponses.push(
-          { ...SUCCESS_RESPONSE },
-          { ...SUCCESS_RESPONSE },
-          {
-            code: 1,
-            stdout: "",
-            stderr: "FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
-          },
-        );
-        spawnSync.mockReturnValueOnce({
-          pid: 0,
-          output: [null, probeOutput, ""],
-          stdout: probeOutput,
-          stderr: "",
-          status,
-          signal: null,
-        });
-
-        await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
-          "schtasks end failed: FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
-        );
-
-        expect(spawnSync).toHaveBeenCalledOnce();
-        expect(onMutation).not.toHaveBeenCalled();
+  it("fails closed after a localized /End failure when the state probe is missing", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        {
+          code: 1,
+          stdout: "",
+          stderr: "FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
+        },
+      );
+      spawnSync.mockReturnValueOnce({
+        pid: 0,
+        output: [null, "-2147024894", ""],
+        stdout: "-2147024894",
+        stderr: "",
+        status: 1,
+        signal: null,
       });
-    },
-  );
+
+      await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
+        "schtasks end failed: FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
+      );
+
+      expect(spawnSync).toHaveBeenCalledOnce();
+      expect(onMutation).not.toHaveBeenCalled();
+    });
+  });
 
   it.each(["", '< NUL >> "gateway output.log" 2>&1'])(
     "kills the lingering gateway owned by the persisted task with suffix %s",

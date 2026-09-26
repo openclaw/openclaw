@@ -29,6 +29,7 @@ function createFixture(): string {
     ["remote", "add", "origin", path.join(fixtureRoot, "origin.git")],
     ["add", "."],
     ["commit", "-m", "Synthetic Android release source"],
+    ["push", "origin", "HEAD:refs/openclaw/mobile-releases/android/2026.8.2-2026080203"],
   ]) {
     const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
       cwd: fixtureRoot,

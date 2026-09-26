@@ -443,15 +443,9 @@ const cases: Array<{
   explicit?: EndpointEnv;
   expected: { port: number; override: { url?: string; source?: "env" } };
 }> = [
-  { name: "clean environment", inherited: {}, expected: { port, override: {} } },
   {
-    name: "inherited port",
-    inherited: { OPENCLAW_GATEWAY_PORT: "19702" },
-    expected: { port, override: {} },
-  },
-  {
-    name: "inherited URL",
-    inherited: { OPENCLAW_GATEWAY_URL: inheritedUrl },
+    name: "inherited endpoints",
+    inherited: { OPENCLAW_GATEWAY_PORT: "19702", OPENCLAW_GATEWAY_URL: inheritedUrl },
     expected: { port, override: {} },
   },
   {

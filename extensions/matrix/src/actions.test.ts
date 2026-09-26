@@ -11,27 +11,8 @@ const runtimeStub = {
   config: {
     current: () => ({}),
   },
-  media: {
-    loadWebMedia: async () => {
-      throw new Error("not used");
-    },
-    mediaKindFromMime: () => "image",
-    isVoiceCompatibleAudio: () => false,
-    getImageMetadata: async () => null,
-    resizeToJpeg: async () => Buffer.from(""),
-  },
   state: {
     resolveStateDir: () => "/tmp/openclaw-matrix-test",
-  },
-  channel: {
-    text: {
-      resolveTextChunkLimit: () => 4000,
-      resolveChunkMode: () => "length",
-      chunkMarkdownText: (text: string) => (text ? [text] : []),
-      chunkMarkdownTextWithMode: (text: string) => (text ? [text] : []),
-      resolveMarkdownTableMode: () => "code",
-      convertMarkdownTables: (text: string) => text,
-    },
   },
 } as unknown as PluginRuntime;
 

@@ -22,6 +22,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,6 +38,7 @@ import { installTelegramIngressQueueRuntime } from "./runtime-state.test-support
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+import * as telegramIngressFactory from "./telegram-ingress-drain-factory.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
 import {
   writeTelegramSpooledUpdate,
@@ -158,7 +160,6 @@ const gateway = createTelegramWebhookTestGateway({
 });
 const {
   startWebhook: startTelegramWebhook,
-  withWebhook: withStartedWebhook,
   server: gatewayServer,
   pendingRequests: pendingRouteRequests,
 } = gateway;
@@ -215,6 +216,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
   clearTelegramRuntime();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   const stateDir = webhookStateDir;
   webhookStateDir = undefined;
@@ -222,6 +224,31 @@ afterEach(async () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 });
+
+async function withStartedWebhook<T>(
+  options: Parameters<typeof gateway.withWebhook>[0],
+  run: (ctx: {
+    server: typeof gateway.server;
+    port: number;
+    ingress: ReturnType<typeof telegramIngressFactory.createTelegramTransportIngressMonitor>;
+  }) => Promise<T>,
+): Promise<T> {
+  const createIngress = telegramIngressFactory.createTelegramTransportIngressMonitor;
+  let ingress: ReturnType<typeof createIngress> | undefined;
+  const ingressFactory = vi
+    .spyOn(telegramIngressFactory, "createTelegramTransportIngressMonitor")
+    .mockImplementation((params) => (ingress = createIngress(params)));
+  try {
+    return await gateway.withWebhook(options, async (ctx) => {
+      if (!ingress) {
+        throw new Error("Expected the started webhook's ingress monitor");
+      }
+      return await run({ ...ctx, ingress });
+    });
+  } finally {
+    ingressFactory.mockRestore();
+  }
+}
 
 async function runNearLimitPayloadTestAndExpectUpdate(
   mode: "single" | "random-chunked",
@@ -1437,6 +1464,8 @@ describe("startTelegramWebhook", () => {
         finishRetry?.();
         await waitForWebhookState(() => expect(seenUpdateIds).toEqual([40, 40, 41]));
       } finally {
+        finishFirstUpdate?.();
+        finishRetry?.();
         await started.stop();
       }
     } finally {
@@ -1492,9 +1521,11 @@ describe("startTelegramWebhook", () => {
           (record) => record.laneKey,
         ),
       ).toEqual([persistedLaneKey, canonicalLaneKey]);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
 
       const seenUpdateIds: number[] = [];
+      const firstUpdateStarted = createDeferred<void>();
       let releaseFirstUpdate: (() => void) | undefined;
       const firstUpdateCompleted = new Promise<void>((resolve) => {
         releaseFirstUpdate = resolve;
@@ -1503,6 +1534,7 @@ describe("startTelegramWebhook", () => {
         const updateId = (update as { update_id: number }).update_id;
         seenUpdateIds.push(updateId);
         if (updateId === firstUpdate.update_id) {
+          firstUpdateStarted.resolve();
           await firstUpdateCompleted;
         }
       });
@@ -1513,16 +1545,15 @@ describe("startTelegramWebhook", () => {
             secret: TELEGRAM_SECRET,
             path: TELEGRAM_WEBHOOK_PATH,
           },
-          async () => {
-            await waitForWebhookState(() => expect(seenUpdateIds).toEqual([130]));
-            await sleep(25);
+          async ({ ingress }) => {
+            await firstUpdateStarted.promise;
+            await ingress.waitForPumpIdle();
             expect(seenUpdateIds).toEqual([130]);
 
             releaseFirstUpdate?.();
-            await waitForWebhookState(() => expect(seenUpdateIds).toEqual([130, 131]));
-            await waitForWebhookState(async () =>
-              expect(await listTelegramSpooledUpdates(requireWebhookQueueScope())).toEqual([]),
-            );
+            await ingress.waitForIdle();
+            expect(seenUpdateIds).toEqual([130, 131]);
+            expect(await listTelegramSpooledUpdates(requireWebhookQueueScope())).toEqual([]);
             expect(
               await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.(),
             ).toEqual([]);
@@ -1679,6 +1710,7 @@ describe("startTelegramWebhook", () => {
         update,
         laneKey: persistedLaneKey,
       });
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
 
       handleUpdateSpy.mockImplementationOnce(async () => {
@@ -1689,13 +1721,12 @@ describe("startTelegramWebhook", () => {
 
       await withStartedWebhook(
         { secret: TELEGRAM_SECRET, path: TELEGRAM_WEBHOOK_PATH },
-        async () => {
-          await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalledOnce());
+        async ({ ingress }) => {
+          await ingress.waitForIdle();
+          expect(handleUpdateSpy).toHaveBeenCalledOnce();
           expect(handleUpdateSpy).toHaveBeenCalledWith(update);
-          await waitForWebhookState(async () =>
-            expect(
-              await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.(),
-            ).toEqual([]),
+          expect(await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.()).toEqual(
+            [],
           );
         },
       );
@@ -1737,6 +1768,7 @@ describe("startTelegramWebhook", () => {
         update,
         laneKey: persistedLaneKey,
       });
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
 
       await withStartedWebhook(
@@ -1744,8 +1776,9 @@ describe("startTelegramWebhook", () => {
           secret: TELEGRAM_SECRET,
           path: TELEGRAM_WEBHOOK_PATH,
         },
-        async () => {
-          await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalledOnce());
+        async ({ ingress }) => {
+          await ingress.waitForIdle();
+          expect(handleUpdateSpy).toHaveBeenCalledOnce();
           expect(handleUpdateSpy).toHaveBeenCalledWith(update);
           expect(await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.()).toEqual(
             [],
@@ -2009,6 +2042,7 @@ describe("startTelegramWebhook", () => {
       },
       laneKey,
     });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     await withStartedWebhook(
@@ -2016,14 +2050,11 @@ describe("startTelegramWebhook", () => {
         secret: TELEGRAM_SECRET,
         path: TELEGRAM_WEBHOOK_PATH,
       },
-      async () => {
-        await waitForWebhookState(async () =>
-          expect(
-            await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({
-              limit: "all",
-            }),
-          ).toMatchObject([{ reason: "invalid-event", laneKey }]),
-        );
+      async ({ ingress }) => {
+        await ingress.waitForIdle();
+        expect(
+          await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({ limit: "all" }),
+        ).toMatchObject([{ reason: "invalid-event", laneKey }]);
         expect(handleUpdateSpy).not.toHaveBeenCalled();
       },
     );
@@ -2045,6 +2076,7 @@ describe("startTelegramWebhook", () => {
         },
         laneKey,
       });
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
 
       await withStartedWebhook(
@@ -2052,14 +2084,13 @@ describe("startTelegramWebhook", () => {
           secret: TELEGRAM_SECRET,
           path: TELEGRAM_WEBHOOK_PATH,
         },
-        async () => {
-          await waitForWebhookState(async () =>
-            expect(
-              await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({
-                limit: "all",
-              }),
-            ).toMatchObject([{ reason: "invalid-event", laneKey }]),
-          );
+        async ({ ingress }) => {
+          await ingress.waitForIdle();
+          expect(
+            await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({
+              limit: "all",
+            }),
+          ).toMatchObject([{ reason: "invalid-event", laneKey }]);
           expect(handleUpdateSpy).not.toHaveBeenCalled();
           expect(await listTelegramSpooledUpdates(requireWebhookQueueScope())).toEqual([]);
         },
@@ -2130,6 +2161,7 @@ describe("startTelegramWebhook", () => {
       update,
       laneKey,
     });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     await withStartedWebhook(
@@ -2137,14 +2169,11 @@ describe("startTelegramWebhook", () => {
         secret: TELEGRAM_SECRET,
         path: TELEGRAM_WEBHOOK_PATH,
       },
-      async () => {
-        await waitForWebhookState(async () =>
-          expect(
-            await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({
-              limit: "all",
-            }),
-          ).toMatchObject([{ reason: "invalid-event", laneKey }]),
-        );
+      async ({ ingress }) => {
+        await ingress.waitForIdle();
+        expect(
+          await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({ limit: "all" }),
+        ).toMatchObject([{ reason: "invalid-event", laneKey }]);
         expect(handleUpdateSpy).not.toHaveBeenCalled();
       },
     );

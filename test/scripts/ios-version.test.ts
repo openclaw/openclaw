@@ -1,4 +1,3 @@
-// Ios Version tests cover ios version script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +14,13 @@ import { extractChangelogSection } from "../../scripts/lib/mobile-changelog.ts";
 import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-support.ts";
 
 installIosFixtureCleanup();
+
+function runCli(script: string, ...args: string[]) {
+  return spawnSync(process.execPath, ["--import", "tsx", script, ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+}
 
 describe("resolveIosVersion", () => {
   it("checks archive version inputs without requiring changelog release notes", () => {
@@ -37,26 +43,12 @@ describe("resolveIosVersion", () => {
   });
 
   it("rejects missing CLI option values before reading version files", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/ios-version.ts", "--field"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    const result = runCli("scripts/ios-version.ts", "--field");
 
     expect(result.status).toBe(1);
     expect(result.stderr).toBe("Missing value for --field.\n");
 
-    const shortFlagResult = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/ios-version.ts", "--field", "-h"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    const shortFlagResult = runCli("scripts/ios-version.ts", "--field", "-h");
 
     expect(shortFlagResult.status).toBe(1);
     expect(shortFlagResult.stderr).toBe("Missing value for --field.\n");
@@ -67,21 +59,12 @@ describe("resolveIosVersion", () => {
       packageVersion: "2026.4.6",
       changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.6\n\nStable notes.\n",
     });
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/ios-version.ts",
-        "--root",
-        rootDir,
-        "--field",
-        "canonicalVersion",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
+    const result = runCli(
+      "scripts/ios-version.ts",
+      "--root",
+      rootDir,
+      "--field",
+      "canonicalVersion",
     );
 
     expect(result.status).toBe(0);
@@ -94,23 +77,14 @@ describe("resolveIosVersion", () => {
       packageVersion: "2026.4.6",
       changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.7\n\nStable notes.\n",
     });
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/ios-version.ts",
-        "--root",
-        rootDir,
-        "--version",
-        "2026.4.7",
-        "--field",
-        "canonicalVersion",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
+    const result = runCli(
+      "scripts/ios-version.ts",
+      "--root",
+      rootDir,
+      "--version",
+      "2026.4.7",
+      "--field",
+      "canonicalVersion",
     );
 
     expect(result.status).toBe(0);
@@ -123,22 +97,16 @@ describe("resolveIosVersion", () => {
       packageVersion: "2026.7.2",
       changelog: "# OpenClaw iOS Changelog\n\n## 2026.7.21\n\nRevision notes.\n",
     });
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/ios-version.ts",
-        "--root",
-        rootDir,
-        "--version",
-        "2026.7.2",
-        "--revision",
-        "1",
-        "--field",
-        "marketingVersion",
-      ],
-      { cwd: process.cwd(), encoding: "utf8" },
+    const result = runCli(
+      "scripts/ios-version.ts",
+      "--root",
+      rootDir,
+      "--version",
+      "2026.7.2",
+      "--revision",
+      "1",
+      "--field",
+      "marketingVersion",
     );
 
     expect(result.status).toBe(0);
@@ -151,23 +119,14 @@ describe("resolveIosVersion", () => {
       packageVersion: "2026.4.6",
       changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.7\n\nGenerated notes.\n",
     });
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/ios-version.ts",
-        "--root",
-        rootDir,
-        "--version",
-        "2026.4.7",
-        "--field",
-        "releaseNotes",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
+    const result = runCli(
+      "scripts/ios-version.ts",
+      "--root",
+      rootDir,
+      "--version",
+      "2026.4.7",
+      "--field",
+      "releaseNotes",
     );
 
     expect(result.status).toBe(0);
@@ -176,26 +135,12 @@ describe("resolveIosVersion", () => {
   });
 
   it("rejects missing iOS sync CLI root values before reading version files", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/ios-sync-versioning.ts", "--root", "--check"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    const result = runCli("scripts/ios-sync-versioning.ts", "--root", "--check");
 
     expect(result.status).toBe(1);
     expect(result.stderr).toBe("Missing value for --root.\n");
 
-    const shortFlagResult = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/ios-sync-versioning.ts", "--root", "-h"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    const shortFlagResult = runCli("scripts/ios-sync-versioning.ts", "--root", "-h");
 
     expect(shortFlagResult.status).toBe(1);
     expect(shortFlagResult.stderr).toBe("Missing value for --root.\n");

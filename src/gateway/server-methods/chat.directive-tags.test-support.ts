@@ -25,6 +25,7 @@ import {
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 
 type ChatDirectiveSessionState = {
@@ -65,7 +66,7 @@ export function createChatDirectiveSuiteResources() {
       setTestEnvValue("OPENCLAW_STATE_DIR", root);
       openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
       // Session cases share the installed inventory through per-case runtime resets.
-      metadataOwner = retainGatewayPluginMetadata();
+      metadataOwner = retainGatewayPluginMetadata(createTestGatewayScheduler());
       const snapshot = metadataOwner.runBootstrap(() =>
         loadPluginMetadataSnapshot({ config: {}, allowCurrent: false }),
       );

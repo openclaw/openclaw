@@ -40,6 +40,18 @@ function gatewayPrompt(overrides: Partial<QuestionPrompt> = {}): QuestionPrompt 
   };
 }
 
+function freeTextQuestion(
+  overrides: Partial<QuestionPrompt["questions"][number]> = {},
+): QuestionPrompt["questions"][number] {
+  return {
+    questionId: "value",
+    header: "Value",
+    question: "Provide a value",
+    options: [],
+    ...overrides,
+  };
+}
+
 async function panelIn(container: HTMLElement): Promise<ChatQuestionPanelElement> {
   const panel = container.querySelector("openclaw-chat-question-panel") as ChatQuestionPanelElement;
   await panel.updateComplete;
@@ -84,6 +96,16 @@ describe("shared question panel", () => {
       );
     };
     redraw();
+  }
+
+  function drawUncontrolled(options: Parameters<typeof createGatewayQuestionPanelProps>[1]) {
+    render(
+      html`<openclaw-chat-question-panel
+        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), options)}
+      ></openclaw-chat-question-panel>`,
+      container,
+    );
+    return panelIn(container);
   }
 
   it("steps from single-select to multi-select and preserves array answers", async () => {
@@ -225,15 +247,7 @@ describe("shared question panel", () => {
     "preserves draft text and normalizes only submitted non-secrets: $isSecret / '$value'",
     async ({ isSecret, value, expected }) => {
       const prompt = gatewayPrompt({
-        questions: [
-          {
-            questionId: "value",
-            header: "Value",
-            question: "Provide a value",
-            options: [],
-            isSecret,
-          },
-        ],
+        questions: [freeTextQuestion({ isSecret })],
         drafts: new Map([["value", { selected: new Set<string>(), freeText: value }]]),
       });
       const onSubmit = vi.fn();
@@ -258,14 +272,7 @@ describe("shared question panel", () => {
   it("labels optionless answers when the compact header is empty", async () => {
     drawGateway(
       gatewayPrompt({
-        questions: [
-          {
-            questionId: "value",
-            header: "",
-            question: "Provide a value",
-            options: [],
-          },
-        ],
+        questions: [freeTextQuestion({ header: "" })],
       }),
     );
     await panelIn(container);
@@ -333,15 +340,7 @@ describe("shared question panel", () => {
   it("does not expose an Other shortcut for optionless free text", async () => {
     drawGateway(
       gatewayPrompt({
-        questions: [
-          {
-            questionId: "value",
-            header: "Value",
-            question: "Provide a value",
-            options: [],
-            isOther: true,
-          },
-        ],
+        questions: [freeTextQuestion({ isOther: true })],
       }),
     );
     await panelIn(container);
@@ -459,13 +458,7 @@ describe("shared question panel", () => {
   });
 
   it("disables actions whose gateway callbacks are unavailable", async () => {
-    render(
-      html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {})}
-      ></openclaw-chat-question-panel>`,
-      container,
-    );
-    await panelIn(container);
+    await drawUncontrolled({});
 
     expect(
       container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.disabled,
@@ -482,13 +475,7 @@ describe("shared question panel", () => {
   });
 
   it("manages collapse state when no controlled callback is supplied", async () => {
-    render(
-      html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {})}
-      ></openclaw-chat-question-panel>`,
-      container,
-    );
-    const panel = await panelIn(container);
+    const panel = await drawUncontrolled({});
 
     container.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
     await panel.updateComplete;
@@ -501,15 +488,7 @@ describe("shared question panel", () => {
 
   it("retains answers with submit-only wiring", async () => {
     const onSubmit = vi.fn();
-    render(
-      html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {
-          onSubmit,
-        })}
-      ></openclaw-chat-question-panel>`,
-      container,
-    );
-    const panel = await panelIn(container);
+    const panel = await drawUncontrolled({ onSubmit });
 
     container.querySelector<HTMLButtonElement>('[role="radio"]')?.click();
     await panel.updateComplete;
@@ -593,15 +572,7 @@ describe("shared question panel", () => {
 
   it("keeps Skip available with skip-only wiring", async () => {
     const onSkip = vi.fn();
-    render(
-      html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {
-          onSkip,
-        })}
-      ></openclaw-chat-question-panel>`,
-      container,
-    );
-    await panelIn(container);
+    await drawUncontrolled({ onSkip });
 
     expect(
       container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.disabled,
