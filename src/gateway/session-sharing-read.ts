@@ -188,19 +188,22 @@ export function prepareProjectedSessionSharing(params: {
   const profile = identity && retained?.aliases.has(identity.id) ? retained : undefined;
   const roleProfile =
     actor?.kind === "operator" && retained?.aliases.has(actor.profileId) ? retained : undefined;
-  const sessionCap =
+  const operatorRolePolicy =
     actor?.kind === "system"
       ? undefined
       : resolveOperatorRolePolicyForAssignment(
           roleProfile?.profileId,
           roleProfile?.role ?? null,
           cfg,
-        )?.sessions.others;
-  return prepareSessionSharing(params, {
-    aliases: profile?.aliases ?? new Set(),
-    sessionCap,
-    isMember,
-  });
+        );
+  return {
+    ...prepareSessionSharing(params, {
+      aliases: profile?.aliases ?? new Set(),
+      sessionCap: operatorRolePolicy?.sessions.others,
+      isMember,
+    }),
+    operatorRolePolicy,
+  };
 }
 
 /** Deleted metadata cannot establish a profile's child-session entitlement. */

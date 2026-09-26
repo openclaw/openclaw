@@ -27,6 +27,7 @@ import {
   ensureProfileForEmail,
   setUserProfileRole,
 } from "../state/user-profiles.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import {
   resolveSessionMutationAuthorization,
@@ -585,7 +586,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
   });
   const successorKey = recovered.payload?.key ?? "";
   const successorSessionId = recovered.payload?.sessionId ?? "";
-  expect(concurrentRetry).toMatchObject({
+  expect(concurrentRetry, JSON.stringify(concurrentRetry)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -638,7 +639,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     agentId: "main",
     key: sourceKey,
   });
-  expect(repeated).toMatchObject({
+  expect(repeated, JSON.stringify(repeated)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -739,8 +740,11 @@ test.each([
       context: {
         getRuntimeConfig: () =>
           identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
+        getCommittedRuntimeConfig: () =>
+          identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
       },
     };
+    prepareGatewayRecipientProfile(request.client);
     type RecoveryPayload = { key: string; continuation: { status: string } };
     const recovered = await directSessionReq<RecoveryPayload>(
       "sessions.recover",

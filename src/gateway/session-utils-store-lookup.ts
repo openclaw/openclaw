@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds } from "../agents/agent-scope.js";
@@ -16,6 +17,8 @@ import type {
   SessionEntryListScope,
   SessionEntryReadSource,
 } from "../config/sessions/session-accessor.types.js";
+import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionMember } from "../config/sessions/session-sharing-store.kernel.js";
 import type { ExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -24,18 +27,25 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { sessionChangeAffectsStoredRow } from "../sessions/session-row-facts.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import {
   resolveSessionStoreIdentity,
   resolveStoredSessionKeyForAgentStore,
-  selectStoredSessionLineage,
 } from "./session-store-key.js";
+import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import {
   loadGatewaySessionStoreReads,
   readGatewaySessionStore,
   type GatewaySessionStoreRead,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-read.js";
+import {
+  captureGatewaySessionReadSource,
+  withIncognitoGatewaySessionStoreTarget,
+} from "./session-utils-store-retained.js";
+import { buildGatewaySessionStoreScanTargets } from "./session-utils-store-scan.js";
 import {
   resolveGatewaySessionStoreReadResults,
   type GatewaySessionStoreLookup,
@@ -45,29 +55,6 @@ import type {
   GatewaySessionStoreTargetWithStore,
 } from "./session-utils-store.types.js";
 export type { GatewaySessionStoreCache } from "./session-utils-store-read.js";
-
-function buildGatewaySessionStoreScanTargets(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  canonicalKey: string;
-  agentId: string;
-}): string[] {
-  const targets = new Set<string>();
-  if (params.canonicalKey) {
-    targets.add(params.canonicalKey);
-  }
-  if (params.key && params.key !== params.canonicalKey) {
-    targets.add(params.key);
-  }
-  if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
-    return [...targets];
-  }
-  const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
-  if (params.canonicalKey === agentMainKey) {
-    targets.add(`agent:${params.agentId}:main`);
-  }
-  return [...targets];
-}
 
 type GatewaySessionStoreDiscovery = {
   existing: SessionStoreTarget[];
@@ -386,6 +373,123 @@ export function resolveGatewaySessionStoreTargetWithStore(
   );
 }
 
+/** Retain exact worker rows through the synchronous selection and authority consumer. */
+export async function withGatewaySessionStoreTarget<T>(
+  params: Pick<
+    GatewaySessionStoreLookupParams,
+    "cfg" | "key" | "agentId" | "env" | "projection"
+  > & { includeMembership?: boolean },
+  consume: (
+    target: GatewaySessionStoreTargetWithStore,
+    membership: ReadonlyMap<string, readonly SessionMember[]>,
+    assertCurrent: () => void,
+  ) => T,
+): Promise<T> {
+  const normalized = {
+    ...params,
+    key: normalizeOptionalString(params.key) ?? "",
+    exactRead: true,
+    readOnly: true,
+  };
+  const identity = resolveSessionStoreIdentity({
+    cfg: params.cfg,
+    sessionKey: normalized.key,
+    agentId: params.agentId,
+  });
+  if (isIncognitoSessionKey(identity.canonicalKey)) {
+    return withIncognitoGatewaySessionStoreTarget({
+      ...params,
+      key: normalized.key,
+      identity,
+      resolve: () => resolveGatewaySessionStoreTargetWithStore(normalized),
+      consume,
+    });
+  }
+  const legacy = prepareExplicitDeletedLegacyMainStoreTarget(normalized);
+  let normal: ReturnType<typeof prepareGatewaySessionStoreTarget> | undefined;
+  let normalError: unknown;
+  try {
+    normal = prepareGatewaySessionStoreTarget(normalized);
+  } catch (error) {
+    normalError = error;
+  }
+  const reads = [...(legacy?.reads ?? []), ...(normal?.reads ?? [])];
+  let changed = false;
+  const stop = sessionChanges.subscribeFacts((change) => {
+    if (
+      reads.some((read) =>
+        sessionChangeAffectsStoredRow(change, {
+          agentId: read.agentId,
+          sessionKeys: read.options.exactKeys ?? [],
+        }),
+      )
+    ) {
+      changed = true;
+    }
+  });
+  try {
+    return await withSessionEntriesFromStoresInWorker(
+      reads.map((read) => ({
+        agentId: read.agentId ?? DEFAULT_AGENT_ID,
+        storePath: read.storePath,
+        sessionKeys: read.options.exactKeys ?? [],
+        // The sharing projection carries identity IDs only. Admission retains full member
+        // facts, so request the full exact-row result when membership is required.
+        projection: params.projection === "list" && !params.includeMembership ? "sharing" : "full",
+        includeMembers: params.includeMembership,
+        includeAuthorization: true,
+        env: params.env,
+      })),
+      (prepared) => {
+        const assertCurrent = () => {
+          if (changed) {
+            throw new GatewaySessionFactsChangedDuringReadError();
+          }
+          for (const owner of prepared) {
+            owner.assertCurrent();
+          }
+        };
+        for (const [index, read] of reads.entries()) {
+          const owner = prepared[index]!;
+          read.result = ok(
+            Object.fromEntries(
+              owner.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+            ),
+          );
+          read.readSource = { agentId: owner.database.agentId, path: owner.database.path };
+          read.capturedReadSource = captureGatewaySessionReadSource(
+            read.readSource,
+            owner.result.databaseIdentity,
+          );
+        }
+        assertCurrent();
+        const target =
+          legacy?.resolve() ??
+          (normal
+            ? normal.resolve()
+            : (() => {
+                throw normalError;
+              })());
+        const memberships = new Map<string, readonly SessionMember[]>();
+        for (const owner of prepared) {
+          if (owner.database.path === target.readSource?.path) {
+            for (const [key, members] of Object.entries(owner.result.members ?? {})) {
+              memberships.set(key, members);
+            }
+          }
+        }
+        const result = consume(target, memberships, assertCurrent);
+        if (isPromiseLike(result)) {
+          throw new Error("Session entry consumers must remain synchronous");
+        }
+        return result;
+      },
+    );
+  } finally {
+    stop();
+  }
+}
+
 /** Worker readers fill the same ordered lookup plan before its synchronous selection. */
 export async function prepareGatewaySessionStoreTargetReadOnly(
   params: GatewaySessionStoreLookupParams & {
@@ -418,78 +522,24 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
   return await resolve(prepareGatewaySessionStoreTarget(normalized));
 }
 
-/** Stored-address joins share discovery without passing selected keys through request aliases. */
-export function createGatewaySessionLineageReader(cfg: OpenClawConfig) {
-  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  function readAlias(key: string, agentId: string) {
-    const target = resolveGatewaySessionStoreTargetWithStore({
-      cfg,
-      key,
-      ...(parseAgentSessionKey(key) ? {} : { agentId }),
+/** Read one already-stored lineage key without applying request-alias selection. */
+export function readGatewayStoredSessionEntry(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  key: string;
+  targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
+}): SessionEntry | undefined {
+  return prepareGatewaySessionStoreLookup(
+    {
+      ...params,
+      canonicalKey: params.key,
       readOnly: true,
       exactRead: true,
       clone: false,
       projection: "list",
-      targetDiscoveryCache,
-    });
-    return target.store[target.canonicalKey];
-  }
-  const readStored = (agentId: string, key: string): SessionEntry | undefined => {
-    // Every private join has one ephemeral owner, never the durable discovery candidates.
-    if (isIncognitoSessionKey(key)) {
-      return readAlias(key, agentId);
-    }
-    return prepareGatewaySessionStoreLookup(
-      {
-        cfg,
-        agentId,
-        key,
-        canonicalKey: key,
-        readOnly: true,
-        exactRead: true,
-        clone: false,
-        projection: "list",
-        targetDiscoveryCache,
-      },
-      [key],
-    ).resolve().store[key];
-  };
-  return { readStored, readAlias };
-}
-
-/** Exact row owners supply missing parent facts without expanding their selected store. */
-export function createGatewaySessionEntryReader(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  store: Record<string, SessionEntry>;
-  readSource?: SessionEntryReadSource;
-}): (key: string) => SessionEntry | undefined {
-  const reader = createGatewaySessionLineageReader(params.cfg);
-  return (key) => {
-    if (params.store[key]) {
-      return params.store[key];
-    }
-    if (key === "global" || key === "unknown") {
-      const readSource = params.readSource;
-      if (!readSource) {
-        return undefined;
-      }
-      // Raw lineage belongs to the selected physical store, not its child's logical agent.
-      return readGatewaySessionStore({
-        agentId: readSource.agentId,
-        storePath: readSource.path,
-        options: { readSource, readOnly: true, exactKeys: [key], projection: "list" },
-      })[key];
-    }
-    return selectStoredSessionLineage({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      sessionKey: key,
-      read: reader.readStored,
-      // Missing-literal lineage keeps the shipped request-alias/deleted-owner contract.
-      readAlias: () => reader.readAlias(key, params.agentId),
-    }).value;
-  };
+    },
+    [params.key],
+  ).resolve().store[params.key];
 }
 
 /** Resolve one synchronous set of logical metadata targets using exact grouped reads. */

@@ -84,6 +84,7 @@ import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
   createChatDirectiveSuiteResources,
   expectClaimOnlyTranscriptMedia,
+  persistChatDirectiveSessionEntry,
   readChatDirectiveConfig,
   seedChatDirectiveFileTranscript,
 } from "./chat.directive-tags.test-support.js";
@@ -1150,6 +1151,13 @@ async function runNonStreamingChatSend(params: {
   if (typeof params.deliver === "boolean") {
     sendParams.deliver = params.deliver;
   }
+  await persistChatDirectiveSessionEntry({
+    loadSessionEntry: (state, rawKey, opts) => suiteResources.loadSessionEntry(state, rawKey, opts),
+    rawSessionKey: sendParams.sessionKey,
+    requestedAgentId:
+      typeof params.requestParams?.agentId === "string" ? params.requestParams.agentId : undefined,
+    state: mockState,
+  });
   const handler = params.directExternal === false ? handleChatSend : handleDirectExternalChatSend;
   const handlerOptions = {
     params: {
@@ -3108,10 +3116,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.loadSessionEntryCalls[0]).toEqual({
-      rawKey: "agent:work:main",
-      opts: { agentId: "work" },
-    });
+    expect(mockState.lastDispatchCtx).toMatchObject({ SessionKey: "global", AgentId: "work" });
   });
 
   it("accepts selected-agent global main aliases before loading chat session state", async () => {
@@ -3129,10 +3134,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx).toMatchObject({
       SessionKey: "global",
       AgentId: "work",
-    });
-    expect(mockState.loadSessionEntryCalls[0]).toEqual({
-      rawKey: "main",
-      opts: { agentId: "work" },
     });
   });
 
@@ -5550,21 +5551,21 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("chat.send non-streaming final broadcasts and routes on the canonical session key", async () => {
     await createTranscriptFixture("openclaw-chat-send-canonical-key-");
     mockState.sessionEntry = {
-      canonicalKey: "agent:main:canon",
+      canonicalKey: "agent:main:main",
     };
     mockState.finalText = "hello";
     const { context, send } = createChatRequestFixture();
 
     const payload = await send({
       idempotencyKey: "idem-canonical-key",
-      sessionKey: "legacy-key",
+      sessionKey: "main",
     });
 
-    expect(payload?.sessionKey).toBe("agent:main:canon");
+    expect(payload?.sessionKey).toBe("agent:main:main");
     const nodeSend = lastNodeSendCall(context);
-    expect(nodeSend?.[0]).toBe("agent:main:canon");
+    expect(nodeSend?.[0]).toBe("agent:main:main");
     expect(nodeSend?.[1]).toBe("chat");
-    expect(nodeSend?.[2].sessionKey).toBe("agent:main:canon");
+    expect(nodeSend?.[2].sessionKey).toBe("agent:main:main");
   });
 
   it("chat.send broadcasts final replies for telegram-shaped session keys", async () => {
@@ -7329,10 +7330,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(getTotalPendingReplies()).toBe(0);
   });
 
-  it("persists a Gateway user turn under the durable owner when its loaded key is stale", async () => {
+  it("persists a Gateway user turn under the durable owner when loaded through an alias", async () => {
     createFixturePaths("openclaw-chat-send-stale-transcript-owner-");
-    const canonicalSessionKey = "agent:main:canonical-transcript-owner";
-    const staleSessionKey = "agent:main:stale-transcript-owner";
+    const canonicalSessionKey = "agent:main:main";
+    const staleSessionKey = "main";
     await replaceSessionEntry(
       {
         agentId: "main",
@@ -7364,17 +7365,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         }),
       }),
     );
-    expect(
-      loadSqliteSessionEntry({
-        agentId: "main",
-        sessionKey: staleSessionKey,
-        storePath: mockState.storePath,
-      }),
-    ).toBeUndefined();
     expect(findUserUpdate()?.target).toEqual({
       agentId: "main",
       sessionId: mockState.sessionId,
-      sessionKey: staleSessionKey,
+      sessionKey: canonicalSessionKey,
       storePath: mockState.storePath,
     });
   });
@@ -7531,9 +7525,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-user-transcript-success-runtime-persist-failed-",
     );
     mockState.triggerAgentRunStart = true;
-    mockState.runtimeUserMessagePersistencePending = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error("runtime prompt mirror failed")), 0);
-    });
+    const failedPersistence = Promise.reject(new Error("runtime prompt mirror failed"));
+    void failedPersistence.catch(() => {});
+    mockState.runtimeUserMessagePersistencePending = failedPersistence;
     mockState.finalPayload = { text: "agent still answered" };
     const { context, send } = createChatRequestFixture();
 
@@ -7683,11 +7677,6 @@ describe("chat.send local operator client sender context", () => {
     {
       name: "non-admin client",
       client: { internal: { isLocalClient: true }, scopes: ["operator.write"] },
-    },
-    {
-      name: "incognito session",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      sessionEntry: { incognito: true },
     },
     {
       name: "synthetic client",

@@ -2,10 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { isMainSessionRecoveryReconciliationCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
-import {
-  lookupSessionGoalOperation,
-  SessionGoalOperationError,
-} from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import {
@@ -43,6 +39,7 @@ import {
   assertExpectedLeafActive,
 } from "./chat-send-active-leaf.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import { inspectGoalChatSendRetry } from "./chat-send-reservation.js";
 import {
   captureAdmittedChatSendSessionSettings,
   SESSION_SETTINGS_CHANGED_ERROR_REASON,
@@ -117,6 +114,8 @@ export function respondChatSendAdmissionError(
 }
 
 export type ChatSendPreAdmissionParams = {
+  assertCurrentAsync?: () => Promise<void>;
+  withCurrent?: <T>(consume: () => T) => Promise<T>;
   request: NormalizedChatSendRequest;
   session: LoadedChatSendSession;
   respond: GatewayRequestHandlerOptions["respond"];
@@ -302,83 +301,10 @@ export function respondChatSendRetry(params: ChatSendRetryParams): boolean {
   return false;
 }
 
-/** Recheck synchronously at reservation: recovery lookups can yield to a competing request. */
-export function inspectGoalChatSendRetry({
-  request,
-  session,
-  respond,
-  context,
-  durableClaimAccepted,
-  assertCurrent,
-}: ChatSendPreAdmissionParams & { durableClaimAccepted?: boolean }) {
-  assertCurrent?.();
-  const { sessionKey, storePath, entry, clientRunId, pendingChatSendKey } = session;
-  if (!request.goalOperation) {
-    return { kind: "new" } as const;
-  }
-  try {
-    const receipt = lookupSessionGoalOperation({
-      sessionKey,
-      storePath,
-      agentId: session.agentId,
-      expectedSessionId: entry?.sessionId ?? session.backingSessionId ?? clientRunId,
-      operation: request.goalOperation,
-    });
-    if (receipt) {
-      return { kind: "replay", receipt } as const;
-    }
-    const pending = readPreRegisteredRun({
-      key: pendingChatSendKey,
-      entry: context.dedupe.get(pendingChatSendKey),
-      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
-    });
-    if (
-      pending?.payload.goalFingerprint === request.goalOperation.requestFingerprint ||
-      (!pending && !durableClaimAccepted && context.chatAbortControllers.has(clientRunId))
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "Goal is being admitted; retry the same request.", {
-          retryable: true,
-        }),
-      );
-      return { kind: "settled" } as const;
-    }
-    if (
-      pending ||
-      durableClaimAccepted ||
-      context.dedupe.has(`chat:${clientRunId}`) ||
-      context.chatRunState.hasAbortMarker(clientRunId) ||
-      context.chatAbortControllers.has(clientRunId) ||
-      context.chatQueuedTurns?.has(clientRunId)
-    ) {
-      throw new SessionGoalOperationError(
-        "operation-conflict",
-        "Goal operation ID is already used by another request.",
-      );
-    }
-    return { kind: "new" } as const;
-  } catch (error) {
-    if (!(error instanceof SessionGoalOperationError)) {
-      throw error;
-    }
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
-        details: { reason: `goal-${error.code}` },
-      }),
-    );
-    return { kind: "settled" } as const;
-  }
-}
-
 /** Settle stop/retry/dedupe cases before reserving lifecycle admission. */
 export async function runChatSendPreAdmission(
   params: ChatSendPreAdmissionParams,
 ): Promise<boolean> {
-  params.assertCurrent?.();
   const { request, session, respond, context, client } = params;
   const { stopCommand } = request;
   const {
@@ -395,27 +321,47 @@ export async function runChatSendPreAdmission(
     sessionRoutingChanged,
   } = session;
 
-  const sendPolicy = resolveSendPolicy({
-    cfg,
-    entry,
-    sessionKey,
-    channel: sessionDeliveryChannel(entry),
-    chatType: entry?.chatType,
-  });
-  if (sendPolicy === "deny") {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-    );
+  const inspectRetry = () => {
+    params.assertCurrent?.();
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry,
+      sessionKey,
+      channel: sessionDeliveryChannel(entry),
+      chatType: entry?.chatType,
+    });
+    if (sendPolicy === "deny") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+      );
+      return { kind: "settled" } as const;
+    }
+    if (request.goalOperation) {
+      return inspectGoalChatSendRetry(params);
+    }
+    return !stopCommand && respondChatSendRetry(params)
+      ? ({ kind: "settled" } as const)
+      : ({ kind: "new" } as const);
+  };
+  let retry: ReturnType<typeof inspectRetry>;
+  try {
+    if (!params.withCurrent && params.assertCurrentAsync) {
+      await params.assertCurrentAsync();
+    }
+    retry = params.withCurrent ? await params.withCurrent(inspectRetry) : inspectRetry();
+  } catch (error) {
+    if (!stopCommand || error instanceof SessionMutationAuthorizationChangedError) {
+      throw error;
+    }
+    respondChatSendAdmissionError(error, respond);
     return false;
   }
-
+  if (retry.kind === "settled") {
+    return false;
+  }
   if (request.goalOperation) {
-    const retry = inspectGoalChatSendRetry(params);
-    if (retry.kind === "settled") {
-      return false;
-    }
     if (retry.kind === "replay") {
       // Let the existing recovery owner wake an interrupted admission before replaying its
       // original result. A receipt never creates another Goal or another human turn.
@@ -430,20 +376,30 @@ export async function runChatSendPreAdmission(
         recoveryRuntime: context.recoveryRuntime,
         warn: (message) => context.logGateway.warn(message),
       });
-      params.assertCurrent?.();
-      if (claim.kind === "pending" || claim.kind === "rejected") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, claim.message, {
-            retryable: claim.kind === "pending",
-          }),
-        );
+      const respondGoalRetry = () => {
+        params.assertCurrent?.();
+        if (claim.kind === "pending" || claim.kind === "rejected") {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, claim.message, {
+              retryable: claim.kind === "pending",
+            }),
+          );
+        } else {
+          respond(true, { ...retry.receipt, replayed: true }, undefined, {
+            cached: true,
+            runId: clientRunId,
+          });
+        }
+      };
+      if (params.withCurrent) {
+        await params.withCurrent(respondGoalRetry);
       } else {
-        respond(true, { ...retry.receipt, replayed: true }, undefined, {
-          cached: true,
-          runId: clientRunId,
-        });
+        if (params.assertCurrentAsync) {
+          await params.assertCurrentAsync();
+        }
+        respondGoalRetry();
       }
       return false;
     }
@@ -554,10 +510,6 @@ export async function runChatSendPreAdmission(
     return false;
   }
 
-  if (respondChatSendRetry(params)) {
-    return false;
-  }
-
   // Same-ID retries must enter durable recovery after reconciliation, before admission
   // can mistake the restored claim for an already dispatched turn.
   let durableEntry = entry;
@@ -624,7 +576,7 @@ export async function runChatSendPreAdmission(
       respondChatSendAdmissionError(error, respond);
       return false;
     }
-    params.assertCurrent?.();
+    await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
   }
 
   const durableClaim = await resolveDurableChatClaim({
@@ -639,64 +591,73 @@ export async function runChatSendPreAdmission(
     warn: (message) =>
       context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`),
   });
-  params.assertCurrent?.();
-  const retrySession = {
-    ...session,
-    entry:
-      durableClaim.kind === "continue"
-        ? durableClaim.entry
-        : loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
-  };
-  if (respondChatSendRetry({ ...params, session: retrySession })) {
-    return false;
-  }
-  if (durableClaim.kind === "pending" || durableClaim.kind === "rejected") {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        durableClaim.kind === "pending" || durableClaim.unavailable
-          ? ErrorCodes.UNAVAILABLE
-          : ErrorCodes.INVALID_REQUEST,
-        durableClaim.message,
-        { retryable: durableClaim.kind === "pending" },
-      ),
-    );
-    return false;
-  }
-  if (durableClaim.kind === "accepted") {
-    if (request.goalOperation) {
-      const retry = inspectGoalChatSendRetry({ ...params, durableClaimAccepted: true });
-      if (retry.kind === "replay") {
-        respond(true, { ...retry.receipt, replayed: true }, undefined, {
-          cached: true,
-          runId: clientRunId,
-        });
-      }
+  const finishPreAdmission = () => {
+    params.assertCurrent?.();
+    const retrySession = {
+      ...session,
+      entry:
+        durableClaim.kind === "continue"
+          ? durableClaim.entry
+          : loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
+    };
+    if (respondChatSendRetry({ ...params, session: retrySession })) {
       return false;
     }
-    // An active source claim or terminal tombstone proves the durable turn
-    // was already accepted. Retire the outbox without dispatching twice.
-    respond(true, { runId: clientRunId, status: "ok" as const }, undefined, {
-      cached: true,
+    if (durableClaim.kind === "pending" || durableClaim.kind === "rejected") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          durableClaim.kind === "pending" || durableClaim.unavailable
+            ? ErrorCodes.UNAVAILABLE
+            : ErrorCodes.INVALID_REQUEST,
+          durableClaim.message,
+          { retryable: durableClaim.kind === "pending" },
+        ),
+      );
+      return false;
+    }
+    if (durableClaim.kind === "accepted") {
+      if (request.goalOperation) {
+        const goalRetry = inspectGoalChatSendRetry({ ...params, durableClaimAccepted: true });
+        if (goalRetry.kind === "replay") {
+          respond(true, { ...goalRetry.receipt, replayed: true }, undefined, {
+            cached: true,
+            runId: clientRunId,
+          });
+        }
+        return false;
+      }
+      // An active source claim or terminal tombstone proves the durable turn
+      // was already accepted. Retire the outbox without dispatching twice.
+      respond(true, { runId: clientRunId, status: "ok" as const }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return false;
+    }
+
+    // Cached/in-flight retries stay bound to their original target. Gate only a new dispatch.
+    if (sessionRoutingChanged(cfg)) {
+      respondChatSessionRoutingChanged(respond);
+      return false;
+    }
+    const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
+      allowPendingWorkspace: true,
+      providerReviewAcknowledgment: request.providerReviewAcknowledgment,
       runId: clientRunId,
     });
-    return false;
+    if (archivedSessionError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
+      return false;
+    }
+    return true;
+  };
+  if (params.withCurrent) {
+    return await params.withCurrent(finishPreAdmission);
   }
-
-  // Cached/in-flight retries stay bound to their original target. Gate only a new dispatch.
-  if (sessionRoutingChanged(cfg)) {
-    respondChatSessionRoutingChanged(respond);
-    return false;
+  if (params.assertCurrentAsync) {
+    await params.assertCurrentAsync();
   }
-  const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
-    allowPendingWorkspace: true,
-    providerReviewAcknowledgment: request.providerReviewAcknowledgment,
-    runId: clientRunId,
-  });
-  if (archivedSessionError) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
-    return false;
-  }
-  return true;
+  return finishPreAdmission();
 }

@@ -1,8 +1,14 @@
+import { err, ok } from "@openclaw/normalization-core/result";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
-import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  interruptReplyRunTarget,
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  replyRunRegistry,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import {
   isCompetingSessionWorkAdmissionActive,
+  interruptSessionWorkAdmissions,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { formatForLog } from "../ws-log.js";
@@ -27,6 +33,47 @@ export function releaseChatSendCallerAuthority(params: {
       params.session.releaseSessionTarget();
     }
   }
+}
+
+/** Observe started work before the retained read releases; consuming still rethrows its error. */
+export function observeChatSendWork<T>(work: Promise<T>): () => Promise<T> {
+  const outcome = work.then(ok<T, unknown>, err<T, unknown>);
+  return async () => {
+    const result = await outcome;
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
+  };
+}
+
+/** Interrupt the captured run, or competing admissions, without ever targeting this admission. */
+export function interruptChatSendWork(params: {
+  target: ReturnType<typeof replyRunRegistry.resolveCurrentInterruptTarget>;
+  signal: AbortSignal;
+  admission: Pick<SessionWorkAdmissionLease, "run">;
+  storePath: string;
+  identities: Array<string | undefined>;
+}) {
+  params.signal.throwIfAborted();
+  if (params.target) {
+    return interruptReplyRunTarget(params.target, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS).then(
+      ({ settled }) => ({ interrupted: true, settled }),
+    );
+  }
+  return params.admission.run(async () => {
+    if (!isCompetingSessionWorkAdmissionActive(params.storePath, params.identities)) {
+      return { interrupted: false, settled: true };
+    }
+    return {
+      interrupted: true,
+      settled: await interruptSessionWorkAdmissions({
+        scope: params.storePath,
+        identities: params.identities,
+        timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+      }),
+    };
+  });
 }
 
 /** Queued and collected turns share the original session and caller admission until settlement. */

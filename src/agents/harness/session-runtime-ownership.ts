@@ -18,6 +18,8 @@ export function readSessionRuntimeOwnership(params: {
     Pick<SessionEntry, "sessionId" | "agentHarnessId" | "modelSelectionLocked" | "pluginOwnerId">
   >;
   assertCurrent?: () => void;
+  /** Caller retains the fresh row through this synchronous ownership invocation. */
+  readPreparedPreviousSessionId?: () => string | undefined;
 }): AgentHarnessSessionRuntimeOwnership | undefined {
   const entry = params.sessionEntry;
   const sessionId = entry?.sessionId;
@@ -32,7 +34,9 @@ export function readSessionRuntimeOwnership(params: {
   const { config, agentId, sessionKey, storePath } = params;
   let active = true;
   const assertCurrent = () => {
-    params.assertCurrent?.();
+    if (active) {
+      params.assertCurrent?.();
+    }
     if (
       !active ||
       getRegisteredAgentHarness(harnessId)?.harness !== harness ||
@@ -55,6 +59,11 @@ export function readSessionRuntimeOwnership(params: {
       // Binding hits need no row read. A miss must observe lineage after any awaited metadata work.
       readPreviousSessionId: () => {
         assertCurrent();
+        if (params.readPreparedPreviousSessionId) {
+          const previousSessionId = params.readPreparedPreviousSessionId();
+          assertCurrent();
+          return previousSessionId;
+        }
         const key = sessionKey?.trim();
         if (!key) {
           return undefined;

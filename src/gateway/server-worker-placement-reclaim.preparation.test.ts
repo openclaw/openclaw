@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -309,6 +310,7 @@ async function cancellationLoadFixture(
     resolveCanonicalSessionEntryFromStoreKeys: () => entry,
   };
   lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };
+  await replaceSessionEntry({ ...target, sessionKey: REQUEST.sessionKey }, entry);
   const context = createWorkerStopChatContext();
   let delayCancellation = false;
   const loading = createDeferredCore();

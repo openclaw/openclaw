@@ -75,6 +75,7 @@ import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import {
   resolveDirectIncognitoTargets,
   resolveDirectSessionTargets,
@@ -311,7 +312,18 @@ export async function authorizeGatewayRequestPreDispatch(params: {
             }),
           authorizeSession,
         )
-      : withCanonicalSessionValidationDeferral(() => authorizeSession());
+      : params.method === "chat.send" && !sessionPolicy
+        ? {
+            kind: "complete" as const,
+            value: await resolveSessionMutationAuthorizationAsync({
+              client: params.client ?? null,
+              method: params.method,
+              requestParams: params.requestParams,
+              context: params.context,
+              sessionScope: scopeAuthorization.sessionScope,
+            }),
+          }
+        : withCanonicalSessionValidationDeferral(() => authorizeSession());
     if (preparedSessionMutation.kind === "pending") {
       const { certifySessionCanonicalValidationPending } =
         await import("../config/sessions/session-canonical-validation-readiness.js");

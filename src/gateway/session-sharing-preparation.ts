@@ -1,7 +1,11 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { ok } from "@openclaw/normalization-core/result";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../config/legacy.default-agent-owner.js";
 import {
   assertSessionEntryCreationPublication,
   isPreparedSessionSharingChange,
@@ -21,6 +25,7 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
+import { sessionChangeAffectsStoredRow } from "../sessions/session-row-facts.js";
 import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import {
@@ -57,17 +62,23 @@ export class SessionMutationFactsUnavailableError extends Error {
 function routeFacts(cfg: OpenClawConfig) {
   return {
     agents: listAgentIds(cfg),
+    storeOwner: resolveSessionStoreCompatibilityAgentId(cfg),
+    compatibilityOwner: tryResolveLegacyCompatibilityAgentId(cfg),
+    systemOwner: tryResolveAmbientOwnerAgentId(cfg),
     store: cfg.session?.store,
     mainKey: cfg.session?.mainKey,
     scope: cfg.session?.scope,
   };
 }
 
-export function captureSessionMutationRouting(cfg: OpenClawConfig) {
+export function captureSessionMutationRouting(
+  cfg: OpenClawConfig,
+  changed: () => Error = () => new SessionMutationFactsUnavailableError(),
+) {
   const route = routeFacts(cfg);
   return (current: OpenClawConfig) => {
     if (!isDeepStrictEqual(routeFacts(current), route)) {
-      throw new SessionMutationFactsUnavailableError();
+      throw changed();
     }
   };
 }
@@ -124,47 +135,20 @@ export async function prepareSessionMutationFacts(
     invalidated = true;
   };
   const changed = (change: SessionRowChange) => {
-    if ("all" in change) {
-      // RAM has its original handle/resource fence; durable discovery waits for writer promotion.
-      if (change.scope === "stores" && (beforeDiscovery || incognito)) {
-        return;
-      }
-      if (
-        typeof change.scope === "string" &&
-        [
-          "profiles",
-          "catalog",
-          "acp",
-          "agent-runs",
-          "subagent-runs",
-          "worker-placements",
-          "worker-environments",
-          "config",
-        ].includes(change.scope)
-      ) {
-        return;
-      }
-      if (
-        typeof change.scope === "object" &&
-        change.scope.agentId &&
-        change.scope.agentId !== agentId
-      ) {
-        return;
-      }
-      invalidate();
-      return;
-    }
     if (
-      change.scope === "automation" ||
-      (change.agentId && change.agentId !== agentId && !change.storePath) ||
-      ![params.sessionKey, canonicalKey, ...(facts?.target?.storeKeys ?? [])].includes(
-        change.sessionKey,
-      )
+      !sessionChangeAffectsStoredRow(change, {
+        agentId,
+        sessionKeys: [params.sessionKey, canonicalKey, ...(facts?.target?.storeKeys ?? [])],
+        // RAM has its handle/resource fence; durable discovery waits for writer promotion.
+        ignoreStoreTopology: beforeDiscovery || incognito,
+      })
     ) {
       return;
     }
-    // Placement and presentation observers do not change stored sharing facts.
-    // Entry/member writers name their physical store; identity changes have a separate owner.
+    if ("all" in change) {
+      invalidate();
+      return;
+    }
     if (!change.storePath) {
       return;
     }

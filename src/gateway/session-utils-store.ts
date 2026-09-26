@@ -34,6 +34,7 @@ import {
 } from "../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { SessionEntryListScope } from "../config/sessions/session-accessor.js";
+import type { QualifiedSessionEntryAccessTarget } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
@@ -41,16 +42,21 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { listAgentProvenance } from "../state/agent-provenance.js";
+import { AgentDatabaseRegistryChangedError } from "../state/openclaw-agent-db-registry-listing.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 import type { GatewayAgentOwnership } from "./agent-list.js";
 import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
+import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import {
+  withGatewaySessionStoreTarget,
   type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
+import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import type { GatewayAgentRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
@@ -205,6 +211,108 @@ export function loadGatewaySessionEntryReadOnly(
   cfg?: OpenClawConfig,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true, cfg);
+}
+
+/** Consume exact row facts synchronously while their physical worker owners remain retained. */
+export async function withGatewaySessionEntry<T>(
+  sessionKey: string,
+  opts:
+    | (Pick<SessionEntryListScope, "agentId" | "projection" | "env"> & {
+        includeMembership?: boolean;
+      })
+    | undefined,
+  consume: (
+    session: ReturnType<typeof loadGatewaySessionEntry>,
+    membership: ReadonlyMap<
+      string,
+      readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[]
+    >,
+    assertSourceCurrent: () => void,
+  ) => T,
+  cfg: OpenClawConfig = getRuntimeConfig(),
+  assertConfigCurrent?: () => void,
+): Promise<T> {
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertConfig = assertConfigCurrent ?? (() => assertRoutingCurrent(getRuntimeConfig()));
+  const read = () =>
+    withGatewaySessionStoreTarget(
+      { cfg, key: sessionKey, ...opts },
+      (target, membership, assertSourceCurrent) => {
+        for (const key of target.storeKeys) {
+          if (isInternalSessionEffectsKey(key)) {
+            delete target.store[key];
+          }
+        }
+        const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
+        return consume(
+          {
+            cfg,
+            ...target,
+            entry: canonicalMatch?.entry,
+            legacyKey:
+              canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined,
+          },
+          membership,
+          () => {
+            assertSourceCurrent();
+            assertConfig();
+          },
+        );
+      },
+    );
+  // One registration invalidates discovery at both begin and commit publication.
+  // Admit a fresh read after each bounded transition, never retry other failures.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      if (!(error instanceof AgentDatabaseRegistryChangedError) || attempt >= 2) {
+        throw error;
+      }
+    }
+  }
+}
+
+export async function withQualifiedGatewaySessionEntry<T>(params: {
+  cfg: OpenClawConfig;
+  target: QualifiedSessionEntryAccessTarget;
+  logicalStorePath: string;
+  env?: NodeJS.ProcessEnv;
+  includeMembership: boolean;
+  consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
+  assertConfigCurrent: () => void;
+}): Promise<T> {
+  const read = () =>
+    withQualifiedGatewaySessionStoreTarget({
+      ...params,
+      consume: (target, membership, assertSourceCurrent) => {
+        const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
+        return params.consume(
+          {
+            cfg: params.cfg,
+            ...target,
+            entry: canonicalMatch?.entry,
+            legacyKey:
+              canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined,
+          },
+          membership,
+          () => {
+            assertSourceCurrent();
+            params.assertConfigCurrent();
+          },
+        );
+      },
+    });
+  // Reopen the same qualified source after bounded stored-row publications.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      if (!(error instanceof GatewaySessionFactsChangedDuringReadError) || attempt >= 2) {
+        throw error;
+      }
+    }
+  }
 }
 
 export function resolveCanonicalSessionEntryFromStoreKeys(

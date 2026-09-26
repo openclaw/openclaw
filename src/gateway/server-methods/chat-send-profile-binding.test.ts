@@ -20,11 +20,15 @@ import {
   loadTranscriptEventsSync,
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { removeSessionMember as removeSessionMemberSync } from "../../config/sessions/session-sharing-store.native.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
@@ -35,6 +39,143 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("native profile-bound input admission", () => {
+  it.each([
+    { revokeInCallback: false, scoped: true },
+    { revokeInCallback: true, scoped: true },
+    { revokeInCallback: true, scoped: false },
+  ])(
+    "bounds authority reads and rejects callback revocation ($revokeInCallback, scoped $scoped)",
+    async ({ revokeInCallback, scoped }) => {
+      const fixture = await createBrowserFollowupFixture();
+      const request = normalizeChatSendRequest({ params: fixture.params, client: fixture.client });
+      if (!request.ok) {
+        throw new Error(request.error);
+      }
+      const prepared = await prepareChatSendSession({
+        request: request.value,
+        client: fixture.client,
+        context: fixture.context,
+      });
+      if (!prepared.ok) {
+        throw new Error("session preparation failed");
+      }
+      const session = qualifyChatSendSession(prepared.value);
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("caller revoked during admission");
+        }
+      };
+      let authorityReads = 0;
+      const withCurrent = async <T>(consume: () => T): Promise<T> => {
+        authorityReads += 1;
+        assertCurrent();
+        return consume();
+      };
+      try {
+        const admitting = admitChatSend({
+          request: request.value,
+          session,
+          client: fixture.client,
+          context: fixture.context,
+          respond: vi.fn(),
+          ...(scoped ? { assertCurrent, withCurrent } : {}),
+          assertCurrentAsync: async () => {
+            await withCurrent(assertCurrent);
+          },
+          ...(revokeInCallback
+            ? {
+                onAdmissionOwned: async () => {
+                  current = false;
+                  return true;
+                },
+              }
+            : {}),
+        });
+        if (revokeInCallback) {
+          await expect(admitting).rejects.toThrow("caller revoked during admission");
+          expect(fixture.context.chatAbortControllers.size).toBe(0);
+          expect(authorityReads).toBeLessThanOrEqual(4);
+        } else {
+          const admitted = await admitting;
+          expect(admitted.ok).toBe(true);
+          if (admitted.ok) {
+            admitted.value.cleanupAdmittedRun();
+          }
+          // Reservation, lifecycle admission completion, and operator retention.
+          // Empty interrupt/callback branches must not acquire extra worker reads.
+          expect(authorityReads).toBeLessThanOrEqual(3);
+        }
+      } finally {
+        session.releaseSessionTarget();
+        await fixture.cleanup();
+      }
+    },
+  );
+  it("rejects membership revoked inside retained chat admission before dispatch", async () => {
+    const fixture = await createBrowserFollowupFixture({
+      createdActor: { type: "human", source: "profile", id: "another-profile" },
+    });
+    const cfg = { ...rolePolicyConfig(), session: { store: fixture.scope.storePath } };
+    const member = roleClient("view", "chat-admission-member");
+    Object.assign(fixture.client, member, { connId: "chat-admission-member" });
+    fixture.context.getRuntimeConfig = () => cfg;
+    await patchSessionEntryCore(fixture.scope, (entry) => ({
+      ...entry,
+      visibility: "read-only",
+    }));
+    await addSessionMember(fixture.scope, {
+      identityId: member.authenticatedUserProfile!.profileId,
+      addedBy: "another-profile",
+    });
+    const normalized = normalizeChatSendRequest({ params: fixture.params, client: fixture.client });
+    if (!normalized.ok) {
+      throw new Error(normalized.error);
+    }
+    const prepared = await prepareChatSendSession({
+      request: normalized.value,
+      client: fixture.client,
+      context: fixture.context,
+    });
+    if (!prepared.ok) {
+      throw new Error("session preparation failed");
+    }
+    const session = qualifyChatSendSession(prepared.value);
+    const resolved = await resolveSessionMutationAuthorizationAsync({
+      client: fixture.client,
+      method: "chat.send",
+      requestParams: fixture.params,
+      context: fixture.context,
+    });
+    expect(resolved.error).toBeNull();
+    const authorization = resolved.authorization!;
+    const respond = vi.fn();
+    try {
+      await expect(
+        admitChatSend({
+          request: normalized.value,
+          session,
+          client: fixture.client,
+          context: fixture.context,
+          respond,
+          assertCurrent: authorization.assertCurrent,
+          withCurrent: authorization.withCurrent,
+          withPreparedCurrent: (facts, consume, assertSourceCurrent) => {
+            removeSessionMemberSync(fixture.scope, member.authenticatedUserProfile!.profileId);
+            return authorization.withPreparedCurrent!(facts, consume, assertSourceCurrent);
+          },
+        }),
+      ).resolves.toEqual({ ok: false });
+      expect(fixture.context.dedupe.size).toBe(0);
+      expect(fixture.context.chatAbortControllers.size).toBe(0);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(false, undefined, expect.anything());
+    } finally {
+      session.releaseSessionTarget();
+      await fixture.cleanup();
+    }
+  });
+
   it.each(["reservation", "writer", "approval"] as const)(
     "rejects a native account merge at %s without accepting or terminalizing input",
     async (boundary) => {
@@ -67,7 +208,7 @@ describe("native profile-bound input admission", () => {
           if (!normalized.ok) {
             throw new Error(normalized.error);
           }
-          const prepared = prepareChatSendSession({
+          const prepared = await prepareChatSendSession({
             request: normalized.value,
             client: fixture.client,
             context: fixture.context,

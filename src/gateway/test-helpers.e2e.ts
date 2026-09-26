@@ -56,6 +56,8 @@ export async function connectGatewayClient(params: {
   token?: string;
   deviceToken?: string;
   origin?: string;
+  edgeAuthHeaders?: Readonly<Record<string, string>>;
+  tlsFingerprint?: string;
   clientName?: GatewayClientName;
   modelCatalog?: ModelCatalogTarget;
   clientDisplayName?: string;
@@ -106,6 +108,8 @@ export async function connectGatewayClient(params: {
       token: params.token,
       deviceToken: params.deviceToken,
       origin: params.origin,
+      edgeAuthHeaders: params.edgeAuthHeaders,
+      tlsFingerprint: params.tlsFingerprint,
       ...(params.connectChallengeTimeoutMs !== undefined
         ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
         : {}),
@@ -292,7 +296,11 @@ export async function startGatewayWithClient(
   params: {
     cfg: unknown;
     configPath: string;
-    token: string;
+    token?: string;
+    auth?: GatewayServerOptions["auth"];
+    edgeAuthHeaders?: Readonly<Record<string, string>>;
+    secure?: boolean;
+    tlsFingerprint?: string;
     clientName?: GatewayClientName;
     modelCatalog?: ModelCatalogTarget;
     mode?: GatewayClientMode;
@@ -321,15 +329,17 @@ export async function startGatewayWithClient(
     const start = () =>
       startGatewayServer(port, {
         bind: "loopback",
-        auth: { mode: "token", token: params.token },
+        auth: params.auth ?? { mode: "token", token: params.token },
         controlUiEnabled: false,
         hotReloadRecovery: params.hotReloadRecovery,
       });
     const startedServer = await (listener ? listener.start(start) : start());
     server = startedServer;
     const client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
+      url: `${params.secure ? "wss" : "ws"}://127.0.0.1:${port}`,
       token: params.token,
+      edgeAuthHeaders: params.edgeAuthHeaders,
+      tlsFingerprint: params.tlsFingerprint,
       clientName: params.clientName,
       modelCatalog: params.modelCatalog,
       mode: params.mode,

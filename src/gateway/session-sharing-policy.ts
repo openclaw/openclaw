@@ -14,6 +14,7 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { AgentDatabaseRegistryChangedError } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   authorizeGatewaySessionCreation,
   operatorSessionCap,
@@ -26,7 +27,9 @@ import {
 } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
+import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import {
+  withGatewaySessionStoreTarget,
   prepareGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
@@ -114,6 +117,51 @@ export function resolveSessionSharingTarget(params: {
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
   return toSessionSharingTarget(target);
+}
+
+/** Fresh entry and membership consumed under the existing physical reader owner. */
+export async function withSessionSharingTarget<T>(
+  params: { cfg: OpenClawConfig; sessionKey: string; agentId?: string },
+  consume: (facts: {
+    target: SessionSharingTarget | null;
+    members: readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[];
+    assertCurrent: () => void;
+  }) => T,
+): Promise<T> {
+  const read = () =>
+    withGatewaySessionStoreTarget(
+      {
+        cfg: params.cfg,
+        key: params.sessionKey,
+        agentId: params.agentId,
+        projection: "list",
+        includeMembership: true,
+      },
+      (selected, membership, assertCurrent) => {
+        const target = toSessionSharingTarget(selected);
+        return consume({
+          target,
+          members: target ? (membership.get(target.storeKey) ?? []) : [],
+          assertCurrent,
+        });
+      },
+    );
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      if (
+        !(error instanceof GatewaySessionFactsChangedDuringReadError) &&
+        !(error instanceof AgentDatabaseRegistryChangedError)
+      ) {
+        throw error;
+      }
+      // Creation can publish both the session row and its admitted run.
+      if (attempt >= 2) {
+        throw error;
+      }
+    }
+  }
 }
 
 /** Fresh metadata for one synchronous batch; no authorization decisions are retained. */

@@ -11,10 +11,8 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { resolveSessionSelectedModelRef } from "../session-utils-model-selection.js";
-import {
-  createGatewaySessionEntryReader,
-  resolveGatewaySessionStoreTargetWithStore,
-} from "../session-utils-store-lookup.js";
+import { createGatewaySessionEntryReader } from "../session-utils-store-lineage.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
 import { resolveWorkerPlacementCapabilities } from "./placement-capabilities.js";
 import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 

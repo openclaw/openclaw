@@ -8,7 +8,7 @@ import {
 } from "../../gateway/session-row-projection.js";
 import { resolveSessionStoreKey } from "../../gateway/session-store-key.js";
 import { listProjectedSessions } from "../../gateway/session-utils-list.js";
-import { createGatewaySessionEntryReader } from "../../gateway/session-utils-store-lookup.js";
+import { createGatewaySessionEntryReader } from "../../gateway/session-utils-store-lineage.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   inspectAgentDatabaseAdmission,

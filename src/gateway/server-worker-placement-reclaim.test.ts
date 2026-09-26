@@ -81,12 +81,10 @@ async function scenario(
     store: { [REQUEST.sessionKey]: entry },
   };
   lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };
-  if (pendingMove) {
-    await replaceSessionEntry(
-      { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
-      entry,
-    );
-  }
+  await replaceSessionEntry(
+    { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
+    entry,
+  );
   const barrierEntered = createDeferred();
   const releaseBarrier = createDeferred();
   const context = createWorkerStopChatContext();

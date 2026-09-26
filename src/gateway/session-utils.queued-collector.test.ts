@@ -566,10 +566,6 @@ describe("queued collector session projection", () => {
             if (scenario === "session access revoked") {
               revoked = true;
             }
-            if (scenario === "parent replaced") {
-              const parent = context.chatAbortControllers.get("parent-turn")!;
-              context.chatAbortControllers.set("parent-turn", { ...parent });
-            }
           });
         }
         if (revoked) {
@@ -577,21 +573,34 @@ describe("queued collector session projection", () => {
         }
       };
       const respond = vi.fn();
-      await handleChatSend({
-        req: { type: "req", id: "typed-queued-stop", method: "chat.send" },
-        params: {
-          sessionKey: entry.childSessionKey,
-          message: "/stop",
-          idempotencyKey: "typed-stop",
-        },
-        client: operatorClient(
-          scenario === "foreign requester" ? "other-requester" : "parent-requester",
-        ),
-        context,
-        respond,
-        isWebchatConnect: () => false,
-        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
-      });
+      const kill = subagentKill.killSubagentRunAdmin;
+      const replacement =
+        scenario === "parent replaced"
+          ? vi.spyOn(subagentKill, "killSubagentRunAdmin").mockImplementation(async (...args) => {
+              const parent = context.chatAbortControllers.get("parent-turn")!;
+              context.chatAbortControllers.set("parent-turn", { ...parent });
+              return kill(...args);
+            })
+          : undefined;
+      try {
+        await handleChatSend({
+          req: { type: "req", id: "typed-queued-stop", method: "chat.send" },
+          params: {
+            sessionKey: entry.childSessionKey,
+            message: "/stop",
+            idempotencyKey: "typed-stop",
+          },
+          client: operatorClient(
+            scenario === "foreign requester" ? "other-requester" : "parent-requester",
+          ),
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
+        });
+      } finally {
+        replacement?.mockRestore();
+      }
       if (scenario === "parent requester") {
         expect(respond).toHaveBeenCalledWith(true, {
           ok: true,

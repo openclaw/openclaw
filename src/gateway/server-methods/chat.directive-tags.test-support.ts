@@ -5,12 +5,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect } from "vitest";
 import {
+  deleteSessionEntryLifecycle,
   loadExactSessionEntryCandidates,
   replaceSessionEntry,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-accessor.types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
@@ -20,7 +23,7 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-stat
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 
-type ChatDirectiveSessionState = {
+export type ChatDirectiveSessionState = {
   config: Record<string, unknown>;
   mainSessionKey: string;
   sessionEntry: Record<string, unknown>;
@@ -31,14 +34,69 @@ type ChatDirectiveSessionState = {
   transcriptPath: string;
 };
 
+type LoadedChatDirectiveSession = {
+  agentId: string;
+  canonicalKey: string;
+  persistedEntry?: SessionEntry;
+  storePath: string;
+};
+
+export async function persistChatDirectiveSessionEntry(params: {
+  loadSessionEntry: (
+    state: ChatDirectiveSessionState,
+    rawKey: string,
+    opts: { agentId: string },
+  ) => LoadedChatDirectiveSession;
+  rawSessionKey: string;
+  requestedAgentId?: string;
+  state: ChatDirectiveSessionState;
+}) {
+  if (Object.keys(params.state.sessionEntry).length === 0) {
+    return;
+  }
+  const requestedAgentId =
+    params.requestedAgentId ?? parseAgentSessionKey(params.rawSessionKey)?.agentId ?? "main";
+  const persisted = params.loadSessionEntry(params.state, params.rawSessionKey, {
+    agentId: requestedAgentId,
+  });
+  if (!persisted.persistedEntry) {
+    return;
+  }
+  if (
+    params.state.mainSessionKey !== "main" &&
+    params.rawSessionKey === `agent:${requestedAgentId}:${params.state.mainSessionKey}`
+  ) {
+    const legacyMainKey = `agent:${requestedAgentId}:main`;
+    await deleteSessionEntryLifecycle({
+      agentId: requestedAgentId,
+      archiveTranscript: false,
+      storePath: persisted.storePath,
+      target: { canonicalKey: legacyMainKey, storeKeys: [legacyMainKey] },
+    });
+  }
+  const persistedSessionKey =
+    params.rawSessionKey === "main" && params.state.mainSessionKey !== "main"
+      ? `agent:${requestedAgentId}:main`
+      : persisted.canonicalKey;
+  await replaceSessionEntry(
+    {
+      agentId: persisted.agentId,
+      sessionKey: persistedSessionKey,
+      storePath: persisted.storePath,
+    },
+    persisted.persistedEntry,
+  );
+}
+
 export function readChatDirectiveConfig(
-  state: Pick<ChatDirectiveSessionState, "config" | "mainSessionKey">,
+  state: Pick<ChatDirectiveSessionState, "config" | "mainSessionKey" | "storePath">,
 ): OpenClawConfig {
   return {
     ...state.config,
     session: {
       ...(state.config.session as Record<string, unknown> | undefined),
       mainKey: state.mainSessionKey,
+      store: state.storePath,
     },
   };
 }
@@ -66,13 +124,17 @@ export function createChatDirectiveSuiteResources() {
           : rawKey === "main"
             ? `agent:${opts?.agentId ?? "main"}:${state.mainSessionKey}`
             : rawKey || `agent:${opts?.agentId ?? "main"}:${state.mainSessionKey}`;
-      const entry = state.sessionMissing
+      const { canonicalKey: _canonicalKey, ...sessionEntry } = state.sessionEntry;
+      const persistedEntry = state.sessionMissing
         ? undefined
         : {
+            ...sessionEntry,
             sessionId: state.sessionIdsByKey.get(rawKey) ?? state.sessionId,
-            sessionFile: state.transcriptPath,
-            ...state.sessionEntry,
+            updatedAt: typeof sessionEntry.updatedAt === "number" ? sessionEntry.updatedAt : 1,
           };
+      const entry = persistedEntry
+        ? { ...persistedEntry, sessionFile: state.transcriptPath }
+        : undefined;
       const cfg = readChatDirectiveConfig(state);
       let captured: CapturedSessionEntryReadSource | undefined;
       loadExactSessionEntryCandidates({
@@ -99,6 +161,7 @@ export function createChatDirectiveSuiteResources() {
         entry,
         canonicalKey,
         storeKeys: [canonicalKey],
+        persistedEntry,
         readSource: { agentId: capturedReadSource.agentId, path: capturedReadSource.path },
         capturedReadSource,
         capturedReadSources: [capturedReadSource],
