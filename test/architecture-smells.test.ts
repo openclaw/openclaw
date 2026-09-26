@@ -120,6 +120,11 @@ describe("architecture boundary module reference scanner", () => {
       source: 'type PrivateModule = typeof import("../../src/private.js")',
       kind: "dynamic-import",
     },
+    {
+      name: "escaped module specifier",
+      source: 'import "../../src/priv\\u0061te.js"',
+      kind: "import",
+    },
   ])("detects $name", ({ source, kind }) => {
     expect(
       collectModuleReferencesFromSource(parser.parseSourceFile("fixture.ts", source), {

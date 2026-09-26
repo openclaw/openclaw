@@ -4,8 +4,28 @@ import {
   isCommandsLightTarget,
   resolveCommandsLightIncludePattern,
 } from "./vitest/vitest.commands-light-paths.mjs";
+import {
+  isPluginSdkLightTarget,
+  resolvePluginSdkLightIncludePattern,
+} from "./vitest/vitest.plugin-sdk-paths.mjs";
 
 describe("light vitest path routing", () => {
+  it("maps plugin-sdk allowlist source and test files to sibling light tests", () => {
+    expect(isPluginSdkLightTarget("src/plugin-sdk/lazy-value.ts")).toBe(true);
+    expect(isPluginSdkLightTarget("src/plugin-sdk/lazy-value.test.ts")).toBe(true);
+    expect(resolvePluginSdkLightIncludePattern("src/plugin-sdk/lazy-value.ts")).toBe(
+      "src/plugin-sdk/lazy-value.test.ts",
+    );
+    expect(resolvePluginSdkLightIncludePattern("src/plugin-sdk/lazy-value.test.ts")).toBe(
+      "src/plugin-sdk/lazy-value.test.ts",
+    );
+  });
+
+  it("keeps non-allowlisted plugin-sdk files off the light lane", () => {
+    expect(isPluginSdkLightTarget("src/plugin-sdk/facade-runtime.ts")).toBe(false);
+    expect(resolvePluginSdkLightIncludePattern("src/plugin-sdk/facade-runtime.ts")).toBeNull();
+  });
+
   it("maps commands allowlist source and test files to sibling light tests", () => {
     expect(isCommandsLightTarget("src/commands/text-format.ts")).toBe(true);
     expect(isCommandsLightTarget("src/commands/text-format.test.ts")).toBe(true);
