@@ -32,8 +32,8 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
     let value = input;
     if (types.isNumberObject(value)) {
       // JSON's ToNumber rejects BigInt from custom coercion; Number() would accept it.
-      // SAFETY: Math.max applies that same ToNumber at runtime and returns the value unchanged.
-      value = Math.max(value as unknown as number);
+      // Math.max applies that same ToNumber; reflective invocation keeps the boxed input intact.
+      value = Reflect.apply(Math.max, undefined, [value]);
     } else if (types.isStringObject(value)) {
       value = String(value);
     } else if (types.isBooleanObject(value)) {
