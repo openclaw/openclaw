@@ -41,7 +41,6 @@ import {
 } from "./detached-task-runtime.js";
 import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
 import {
-  deleteTaskRecordById,
   ensureTaskRegistryReady,
   getTaskById,
   hasActiveTaskForChildSessionKey,
@@ -50,7 +49,6 @@ import {
   markTaskTerminalById,
   maybeDeliverTaskTerminalUpdate,
   resolveTaskForLookupToken,
-  setTaskCleanupAfterById,
 } from "./runtime-internal.js";
 import { readTaskBackingInstance } from "./task-backing-authority.js";
 import { runTaskFlowRegistryMaintenance } from "./task-flow-registry.maintenance.js";
@@ -61,10 +59,7 @@ import {
   type CloseAcpSession,
   type TaskRegistryAcpMaintenanceRuntime,
 } from "./task-registry-acp-cleanup.js";
-import {
-  applyTaskRegistryMaintenanceRetention,
-  shouldStampCleanupAfter,
-} from "./task-registry-maintenance-retention.js";
+import { applyTaskRegistryMaintenanceRetention } from "./task-registry-maintenance-retention.js";
 import { createTaskMaintenanceScheduler } from "./task-registry-maintenance-scheduler.js";
 import {
   createBackingSessionLookupContext,
@@ -102,7 +97,11 @@ import {
 } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
 import type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
-import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./task-retention.js";
+import {
+  resolveEffectiveTaskCleanupAfter,
+  resolveTaskCleanupAfter,
+  shouldStampCleanupAfter,
+} from "./task-retention.js";
 export { CRON_HISTORY_KEEP_PER_JOB } from "./cron-history-retention.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
@@ -923,11 +922,11 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
           shouldPruneTerminalTask(current, now, cronHistoryOverflowTaskIds) ||
           shouldStampCleanupAfter(current)
         ) {
-          const result = applyTaskRegistryMaintenanceRetention(
-            current.taskId,
+          const result = await applyTaskRegistryMaintenanceRetention(
+            current,
             now,
             cronHistoryOverflowTaskIds,
-            { getTaskById, deleteTaskRecordById, setTaskCleanupAfterById },
+            assertOwnerCurrent,
           );
           if (result === "pruned") {
             pruned += 1;

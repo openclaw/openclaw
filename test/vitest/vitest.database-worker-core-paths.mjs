@@ -484,6 +484,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/tasks/task-registry-projection-read.test.ts",
   "src/tasks/task-registry-snapshot-read.test.ts",
   "src/tasks/task-registry.maintenance-projection.test.ts",
+  "src/tasks/task-registry.maintenance-retention.test.ts",
   "src/tasks/task-flow-registry.maintenance.test.ts",
   "src/tasks/task-registry.maintenance-scheduling.test.ts",
   "src/tasks/task-registry.maintenance-acp-authority.test.ts",

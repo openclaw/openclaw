@@ -2425,7 +2425,6 @@ src/daemon/schtasks-control.ts	5
 src/daemon/schtasks-install.ts	2
 src/daemon/schtasks-process.ts	1
 src/daemon/schtasks-runtime.ts	4
-src/daemon/service.ts	1
 src/daemon/systemd-exec.ts	2
 src/daemon/systemd-install.ts	2
 src/daemon/systemd-lifecycle.ts	2
@@ -3354,15 +3353,12 @@ ui/src/components/browser/browser-panel-render.ts	4
 ui/src/components/browser/browser-panel.ts	1
 ui/src/components/config-form-collection-draft.ts	5
 ui/src/components/config-form-copy-on-write.ts	1
-ui/src/components/config-form-structured-draft.ts	3
+ui/src/components/config-form-structured-draft.ts	2
 ui/src/components/config-form.analyze.ts	1
-ui/src/components/config-form.node.collection.ts	2
 ui/src/components/config-form.node.scalar.ts	4
 ui/src/components/config-form.node.shared.ts	2
 ui/src/components/config-form.node.ts	1
 ui/src/components/config-form.render.ts	1
-ui/src/components/config-form.search.ts	1
-ui/src/components/config-form.tiers.ts	1
 ui/src/components/confirm-dialog.ts	1
 ui/src/components/connect-command.ts	2
 ui/src/components/copy-button.ts	1
@@ -3416,7 +3412,7 @@ ui/src/lib/chat/tool-cards.ts	2
 ui/src/lib/chat/tool-display.ts	1
 ui/src/lib/config-form-utils.ts	7
 ui/src/lib/config/config-draft-model.ts	3
-ui/src/lib/cron/index.ts	9
+ui/src/lib/cron/index.ts	2
 ui/src/lib/gateway-diagnostics.ts	2
 ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1

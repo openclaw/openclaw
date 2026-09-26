@@ -66,6 +66,7 @@ function isTaskRegistryReadScopeCurrent(
       tasks.get(scope.taskId),
       ...(pending?.published.values() ?? []),
       ...(pending?.publication?.records.values() ?? []),
+      ...(pending?.publication?.deletions.values() ?? []),
       pending?.readEventTarget?.(),
     ];
     return (
@@ -111,7 +112,11 @@ function isTaskRegistryReadCurrent(taskId: string, mode: "identity" | "settled")
       : pending.scope.taskId === taskId ||
         pending.published.has(taskId) ||
         (task && matchesScope(task, pending.scope));
-    if (changesIdentity || pending.publication?.records.has(taskId)) {
+    if (
+      changesIdentity ||
+      pending.publication?.records.has(taskId) ||
+      pending.publication?.deletions.has(taskId)
+    ) {
       return false;
     }
     if (creation) {
@@ -322,6 +327,7 @@ export async function prepareTaskRegistryRead(
           ...records,
           ...[...(pending?.published.values() ?? [])].flatMap((task) => (task ? [task] : [])),
           ...(pending?.publication?.records.values() ?? []),
+          ...(pending?.publication?.deletions.values() ?? []),
         ];
         if (scope.flowId === flowId || facts.some((task) => task.parentFlowId?.trim() === flowId)) {
           return true;
@@ -347,6 +353,7 @@ export async function prepareTaskRegistryRead(
           ...[...projection.pending].flatMap((pending) => [
             pending.published.get(taskId),
             pending.publication?.records.get(taskId),
+            pending.publication?.deletions.get(taskId),
           ]),
         ].filter((task) => task !== undefined);
         if (facts.length === 0 || facts.some((task) => task.parentFlowId?.trim() === flowId)) {

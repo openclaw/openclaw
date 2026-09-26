@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { assertClawHubArtifactMetadata } from "../clawhub-artifact-assertions.mjs";
+import {
+  assertClawHubArtifactMetadata,
+  assertClawHubExternalInstallContract,
+} from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
@@ -386,26 +389,6 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   }
 }
 
-function assertClawHubExternalInstallContract(installPath) {
-  const openclawPeerPath = path.join(installPath, "node_modules", "openclaw");
-  if (!fs.existsSync(openclawPeerPath)) {
-    throw new Error(`missing kitchen-sink openclaw peer symlink: ${openclawPeerPath}`);
-  }
-  if (!fs.lstatSync(openclawPeerPath).isSymbolicLink()) {
-    throw new Error(`kitchen-sink openclaw peer is not a symlink: ${openclawPeerPath}`);
-  }
-  const hostRoot = fs.realpathSync(process.cwd());
-  const linkedHostRoot = fs.realpathSync(openclawPeerPath);
-  if (linkedHostRoot !== hostRoot) {
-    throw new Error(`expected kitchen-sink openclaw peer ${linkedHostRoot} to target ${hostRoot}`);
-  }
-
-  const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
-  if (fs.existsSync(dependencyPackagePath)) {
-    assertRealPathInside(installPath, dependencyPackagePath, "kitchen-sink isolated dependency");
-  }
-}
-
 function inferInstallSource(spec) {
   if (spec?.startsWith("npm:")) {
     return "npm";
@@ -653,7 +636,7 @@ async function assertInstalled() {
     assertRealPathInside(extensionsRoot, installPath, "kitchen-sink ClawHub install path");
   }
   if (source === "clawhub" && record.artifactKind === "npm-pack") {
-    assertClawHubExternalInstallContract(installPath);
+    assertClawHubExternalInstallContract(installPath, "kitchen-sink");
   }
   fs.writeFileSync(scratchFile(`kitchen-sink-${label}-install-path.txt`), installPath, "utf8");
 }

@@ -460,6 +460,9 @@ suite.define(() => {
     await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(0);
 
     await pauseVirtualClock(currentPage);
+    await currentPage.evaluate(() => {
+      Math.random = () => 0;
+    });
     const rosterMatch = { includeGlobal: true };
     const initialRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
     await gateway.setMethodResponse("sessions.list", sessionsList(["profile-ada", "profile-bob"]));
