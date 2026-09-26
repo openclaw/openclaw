@@ -17,6 +17,11 @@ import {
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
+import {
+  isCronRunSessionKey,
+  parseAgentSessionKey,
+  parseCronRunScopeSuffix,
+} from "../sessions/session-key-utils.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
@@ -51,6 +56,26 @@ export type HumanMentionWebPush = {
   sessionTitle?: string;
   isCurrent: () => boolean;
 };
+
+/**
+ * Cron run aliases are deleted after successful completion, so completion pushes
+ * must keep historical identity via the durable automations job+run route.
+ */
+function resolveAgentFinishedAutomationPath(sessionKey: string | undefined): string | undefined {
+  if (!sessionKey || !isCronRunSessionKey(sessionKey)) {
+    return undefined;
+  }
+  const { runId } = parseCronRunScopeSuffix(sessionKey);
+  if (!runId) {
+    return undefined;
+  }
+  const jobId = parseAgentSessionKey(sessionKey)?.rest.match(/^cron:([^:]+):run:[^:]+$/u)?.[1];
+  if (!jobId) {
+    return undefined;
+  }
+  const query = new URLSearchParams({ job: jobId, run: runId });
+  return `automations?${query}`;
+}
 
 function resolveEventWebPushNotification(
   event: string,
@@ -165,6 +190,10 @@ export function createEventWebPushDelivery(params: {
             return undefined;
           }
           const sessionKey = mention?.sessionKey ?? sessionKeys[0];
+          const automationPath =
+            notification.category === "agent-finished"
+              ? resolveAgentFinishedAutomationPath(sessionKey)
+              : undefined;
           const sessionPath = sessionKey
             ? buildControlUiSessionPath({
                 namespace: "chat",
@@ -179,6 +208,7 @@ export function createEventWebPushDelivery(params: {
           }
           const path =
             notification.path ??
+            automationPath ??
             sessionPath?.slice(1) ??
             (notification.category === "background-task-failed" ? "tasks" : "sessions");
           const url = resolveControlUiWebPushUrl(cfg, path);

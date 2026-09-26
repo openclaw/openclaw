@@ -284,6 +284,37 @@ describe("event Web Push classification", () => {
     },
   );
 
+  it("routes automation completion pushes to durable job+run links", async () => {
+    listDevicePairingMock.mockReturnValue({
+      paired: [pairedOperator("browser-device", ["operator.read", "operator.questions"])],
+    });
+    const delivery = createEventWebPushDelivery({
+      getRuntimeConfig: () => ({
+        gateway: {
+          publicOrigin: "https://gateway.example.test",
+          controlUi: { basePath: "/operator" },
+        },
+      }),
+    });
+    const sessionKey = "agent:research:cron:nightly:run:run-1234";
+
+    delivery.handleEvent(
+      "chat",
+      { state: "final", runId: "run-1234", sessionKey },
+      { sessionKeys: [sessionKey], agentId: "research" },
+    );
+
+    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          tag: "openclaw-agent-finished-run-1234",
+          url: "automations?job=nightly&run=run-1234#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator",
+        }),
+      }),
+    );
+  });
+
   it("uses the session hub when the event has no prepared session scope", async () => {
     const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
     delivery.handleEvent("chat", {
