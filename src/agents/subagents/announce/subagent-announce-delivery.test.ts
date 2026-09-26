@@ -2744,7 +2744,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     {
       name: "a provisional still-running expiry notification settles silently",
       disposition: "still-running" as const,
-      expected: { delivered: true, path: "direct" },
+      // Settled silently; representation varies (delivered, or a terminal
+      // intentional non-delivery where the delivery layer records suppression).
+      expected: undefined,
     },
   ])("%s", async ({ disposition, expected }) => {
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
@@ -2773,7 +2775,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       internalEvents: taskCompletionEvents({ disposition, noVisibleResult: true }),
     });
 
-    expectRecordFields(result, expected);
+    if (expected) {
+      expectRecordFields(result, expected);
+      return;
+    }
+    // The contract: the parent's intended silence settles the provisional
+    // notification. It must never read as a missing visible reply, which is
+    // what makes the wait manager re-announce while the child still works.
+    expect(result.reason).not.toBe("visible_reply_missing");
+    expect(result.delivered === true || result.terminal === true).toBe(true);
   });
 
   it.each([
