@@ -388,4 +388,138 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(laterParentTurn).toContain("run-later-parent-turn");
     expect(laterParentTurn).toContain('taskName_json="summarize_inbox"');
   });
+
+  // Regression for the give-up terminal `failed` delivery leak: a subagent
+  // whose required delivery exhausted retries lands at delivery.status="failed"
+  // with cleanupCompletedAt stamped (finalizeResumedAnnounceGiveUp ->
+  // completeCleanupBookkeeping). resumeSubagentRun hard-stops that row, so it is
+  // never delivered again, yet it used to re-render into "## Child results
+  // awaiting delivery" on every later requester turn and survive restarts.
+  it("drops a give-up terminal failed delivery from awaiting-delivery context", () => {
+    const endedAt = Date.now() - 20_000;
+    addSubagentRunForTests({
+      runId: "run-giveup-failed",
+      childSessionKey: "agent:main:subagent:giveup-failed",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver the report",
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt },
+      completion: { required: true, resultText: "dead give-up result" },
+      // Give-up terminal marker set by completeCleanupBookkeeping after
+      // finalizeResumedAnnounceGiveUp writes delivery.status="failed".
+      cleanupCompletedAt: endedAt + 1_000,
+      delivery: { status: "failed", lastError: "delivery retries exhausted" },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    // The unbounded leak was the per-turn re-render of the drained result into
+    // the awaiting-delivery block; that block (and the dead result text it
+    // carries) must be gone. The row may still surface as bounded, time-windowed
+    // recovery evidence under "## Recently Completed Subagents".
+    expect(prompt).not.toContain("## Child results awaiting delivery");
+    expect(prompt).not.toContain("dead give-up result");
+  });
+
+  it("keeps a still-retrying failed delivery (no cleanupCompletedAt) awaiting delivery", () => {
+    const endedAt = Date.now() - 20_000;
+    addSubagentRunForTests({
+      runId: "run-retrying-failed",
+      childSessionKey: "agent:main:subagent:retrying-failed",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver the retryable report",
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt },
+      completion: { required: true, resultText: "still-retrying result" },
+      // A transient failure between retries has not finished cleanup bookkeeping,
+      // so the requester must still see it as awaiting delivery.
+      delivery: { status: "failed", lastError: "transient send error" },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).toContain("## Child results awaiting delivery");
+    expect(prompt).toContain("still-retrying result");
+    expect(prompt).toContain("delivery=failed");
+  });
+
+  it.each([
+    { label: "pending", delivery: { status: "pending" as const }, result: "pending result" },
+    {
+      label: "in_progress",
+      delivery: { status: "in_progress" as const },
+      result: "in-progress result",
+    },
+    {
+      label: "suspended",
+      delivery: { status: "suspended" as const, suspendedAt: Date.now() },
+      result: "suspended result",
+    },
+  ])(
+    "keeps a genuinely undelivered $label child awaiting delivery even after cleanup",
+    ({ delivery, result }) => {
+      const endedAt = Date.now() - 20_000;
+      addSubagentRunForTests({
+        runId: `run-undelivered-${delivery.status}`,
+        childSessionKey: `agent:main:subagent:undelivered-${delivery.status}`,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "deliver the pending report",
+        expectsCompletionMessage: true,
+        execution: { status: "terminal", endedAt },
+        completion: { required: true, resultText: result },
+        // cleanupCompletedAt must only drain `failed`; other undelivered
+        // statuses stay outstanding regardless of cleanup bookkeeping.
+        cleanupCompletedAt: endedAt + 1_000,
+        delivery,
+      } satisfies SubagentRunRecordOverrides);
+
+      const prompt = buildActiveSubagentRuntimeContext({
+        cfg: {} as OpenClawConfig,
+        controllerSessionKey: "agent:main:main",
+      });
+
+      expect(prompt).toContain("## Child results awaiting delivery");
+      expect(prompt).toContain(result);
+    },
+  );
+
+  it("keeps a settle-wake-owned failed delivery awaiting delivery despite cleanup", () => {
+    const endedAt = Date.now() - 20_000;
+    addSubagentRunForTests({
+      runId: "run-settlewake-failed",
+      childSessionKey: "agent:main:subagent:settlewake-failed",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver via settle wake",
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt },
+      completion: { required: true, resultText: "settle-wake result" },
+      cleanupCompletedAt: endedAt + 1_000,
+      // A pending requester settle wake still owns delivery; it short-circuits
+      // before the give-up drain and must remain outstanding.
+      requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+      delivery: { status: "failed", lastError: "awaiting requester turn" },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).toContain("## Child results awaiting delivery");
+    expect(prompt).toContain("settle-wake result");
+  });
 });

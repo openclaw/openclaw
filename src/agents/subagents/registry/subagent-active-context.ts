@@ -46,10 +46,23 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (entry.requesterSettleWake) {
     return true;
   }
+  const deliveryStatus = entry.delivery?.status ?? "pending";
+  // A `failed` delivery that has already finished its cleanup bookkeeping is a
+  // give-up terminal row: `finalizeResumedAnnounceGiveUp` marks it failed and
+  // then `completeCleanupBookkeeping` stamps `cleanupCompletedAt`, after which
+  // `resumeSubagentRun` hard-stops it (never redriven, announced, or delivered
+  // again). Counting that drained row as outstanding re-renders the same dead
+  // result into "## Child results awaiting delivery" on every later requester
+  // turn and survives gateway restarts. Delivery still owned by a pending
+  // requester settle wake short-circuits above, and a `failed` row that is
+  // still retrying has no `cleanupCompletedAt` yet, so both stay outstanding.
+  if (deliveryStatus === "failed" && typeof entry.cleanupCompletedAt === "number") {
+    return false;
+  }
   return (
     entry.completion?.required === true &&
     entry.delivery?.disposition !== "intentional_non_delivery" &&
-    ["pending", "in_progress", "failed", "suspended"].includes(entry.delivery?.status ?? "pending")
+    ["pending", "in_progress", "failed", "suspended"].includes(deliveryStatus)
   );
 }
 
