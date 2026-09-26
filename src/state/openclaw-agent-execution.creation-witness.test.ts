@@ -7,14 +7,17 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { unregisterOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
+  listOpenClawRegisteredAgentDatabases,
+  openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -152,6 +155,59 @@ it.each(["missing", "schema-missing"] as const)(
     } finally {
       await execution.release();
     }
+  },
+);
+
+it.each(["fresh root", "existing root", "existing agent"] as const)(
+  "preserves a relative registration through native opening, relocation, and removal (%s alias)",
+  async (layout) => {
+    const options = fixture();
+    const alias = path.join(tempDirs.make("agent-registry-alias-"), "state");
+    fs.symlinkSync(
+      options.env.OPENCLAW_STATE_DIR,
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const relative = path.join("agents", "main", "agent", "openclaw-agent.sqlite");
+    const aliased =
+      layout === "existing agent"
+        ? options
+        : {
+            ...options,
+            env: { OPENCLAW_STATE_DIR: alias },
+            path: path.join(alias, relative),
+          };
+    if (layout === "existing agent") {
+      fs.mkdirSync(path.dirname(path.dirname(options.path)), { recursive: true });
+      fs.symlinkSync(
+        tempDirs.make("agent-registry-external-"),
+        path.dirname(options.path),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+    if (layout !== "fresh root") {
+      openOpenClawAgentDatabase(aliased);
+      await closeOpenClawAgentDatabasesAsync();
+    }
+    const state = openOpenClawStateDatabase({ env: aliased.env });
+    const registrations = () => state.db.prepare("SELECT path FROM agent_databases").all();
+    expect(registrations()).toEqual(layout === "fresh root" ? [] : [{ path: relative }]);
+    const execution = captureOpenClawAgentDatabaseExecution(aliased);
+    try {
+      await execution.prepare(source());
+      expect(registrations()).toEqual([{ path: relative }]);
+    } finally {
+      await execution.release();
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+    }
+    const relocated = fs.realpathSync(tempDirs.make("agent-registry-relocated-"));
+    fs.cpSync(options.env.OPENCLAW_STATE_DIR, relocated, { recursive: true });
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env: { OPENCLAW_STATE_DIR: relocated } }),
+    ).toEqual([expect.objectContaining({ agentId: "main", path: path.join(relocated, relative) })]);
+    unregisterOpenClawAgentDatabase({ ...aliased, path: fs.realpathSync(aliased.path) });
+    expect(listOpenClawRegisteredAgentDatabases({ env: aliased.env })).toEqual([]);
   },
 );
 

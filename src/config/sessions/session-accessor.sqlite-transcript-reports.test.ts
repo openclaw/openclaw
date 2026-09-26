@@ -1,3 +1,5 @@
+import { symlink } from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
@@ -322,12 +324,15 @@ describe("SQLite report payload selection", () => {
     },
   );
 
-  it("reselects after another connection changes the report branch before commit", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("reselects through an alias after another connection changes the report branch before commit", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const db = await seedReports();
       const hostTransactions = vi.spyOn(db, "exec");
-      const { path } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-      const other = new DatabaseSync(path);
+      const { path: databasePath } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const alias = state.path("report-alias");
+      await symlink(path.dirname(databasePath), alias, "junction");
+      const aliasedScope = { ...scope, storePath: path.join(alias, path.basename(databasePath)) };
+      const other = new DatabaseSync(databasePath);
       const competitor = {
         customType: "status",
         content: "concurrent report",
@@ -355,7 +360,7 @@ describe("SQLite report payload selection", () => {
       });
       try {
         await expect(
-          appendSessionTranscriptReport(scope, {
+          appendSessionTranscriptReport(aliasedScope, {
             kind: "custom",
             customTypes: ["status"],
             selectReport,

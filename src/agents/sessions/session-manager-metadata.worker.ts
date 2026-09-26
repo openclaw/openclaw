@@ -41,9 +41,13 @@ import type {
   SqliteWorkerBackend,
   SqliteWorkerCommand,
 } from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import {
   encodeOpenClawStateWorkerError,
   type OpenClawStateWorkerErrorPayload,
@@ -210,9 +214,15 @@ export function bindSqliteWorkerBackend(
     const scope = { ...command.input.scope, env: getSqliteWorkerStateContext().environment };
     const resolved = resolveSqliteTranscriptScope(scope);
     const options = toDatabaseOptions(resolved);
-    if (options.path !== context.databasePath) {
+    if (
+      readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(options)).canonicalPath !==
+      context.databasePath
+    ) {
       throw new Error("Session metadata target changed its database owner");
     }
+    scope.storePath = context.databasePath;
+    resolved.path = context.databasePath;
+    options.path = context.databasePath;
     if (command.type === "session.metadata.mutation") {
       return { ok: true, value: readTranscriptMutationAtSync(scope) };
     }

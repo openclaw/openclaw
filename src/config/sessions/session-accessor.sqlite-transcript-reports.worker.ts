@@ -6,9 +6,11 @@ import {
   runSqliteDeferredTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
+  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -89,6 +91,14 @@ export function bindSqliteWorkerBackend(
   const { fence } = target;
   const resolved = { ...target.resolved, env: getSqliteWorkerStateContext().environment };
   const options = toDatabaseOptions(resolved);
+  if (
+    readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(options)).canonicalPath !==
+    context.databasePath
+  ) {
+    throw new Error("Transcript report target changed its database owner");
+  }
+  resolved.path = context.databasePath;
+  options.path = context.databasePath;
   const database = getOpenClawAgentDatabaseIfOpen(options);
   if (!database || database.db !== context.database || database.path !== context.databasePath) {
     throw new Error("Transcript report lost its canonical database owner");
