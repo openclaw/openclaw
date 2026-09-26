@@ -66,12 +66,13 @@ openclaw tui --local
   - If you type `/session agent:other:main`, you switch to that agent session explicitly.
 - Session scope:
   - `per-sender` (default): each agent has many sessions.
-  - `global`: the TUI always uses the `global` session (the picker may be empty).
+  - `global`: the default and `main` selections use the `global` session (the picker may be empty).
 - The current agent + session are always visible in the footer.
 - If the session has a [goal](/tools/goal), the footer shows its compact state:
   `Pursuing goal`, `Goal paused (/goal resume)`, `Goal blocked (/goal resume)`, or `Goal achieved`.
 - When started without `--session`, gateway-mode TUI resumes the last selected session. The gateway, agent, and session scope must match, and that session must still exist. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
 - Session details and remembered-session restoration keep the selected agent and exact conversation, even when another agent has the same session name. After reconnecting, metadata from the previous connection is discarded.
+- An explicit `agent:<id>:global` selects that stored conversation when it exists. If an exact history read confirms it is absent, the TUI retains the legacy alias for that agent's bare `global` session. History errors never select a fallback conversation.
 
 ## Sending + delivery
 
