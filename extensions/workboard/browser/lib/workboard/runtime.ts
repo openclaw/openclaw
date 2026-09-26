@@ -115,28 +115,30 @@ export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   }
 }
 
-type LifecycleTimer =
-  | "lifecycleTaskPreparedTimer"
-  | "lifecycleTaskRetryTimer"
-  | "lifecycleTaskContinuationTimer";
-
-function scheduleLifecycleUpdate(
-  host: WorkboardHost,
-  key: LifecycleTimer,
-  delayMs = 0,
-  requestUpdate?: () => void,
-) {
+function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
-  const timer = runtime[key];
+  const timer = runtime.lifecycleTaskPreparedTimer;
   if (timer) {
     clearTimeout(timer);
-    delete runtime[key];
+    delete runtime.lifecycleTaskPreparedTimer;
   }
-  if (requestUpdate) {
-    runtime[key] = setTimeout(() => {
-      delete runtime[key];
-      requestUpdate();
-    }, delayMs);
+}
+
+function clearWorkboardLifecycleTaskRetryTimer(host: WorkboardHost) {
+  const runtime = getWorkboardRuntime(host);
+  const timer = runtime.lifecycleTaskRetryTimer;
+  if (timer) {
+    clearTimeout(timer);
+    delete runtime.lifecycleTaskRetryTimer;
+  }
+}
+
+function clearWorkboardLifecycleTaskContinuationTimer(host: WorkboardHost) {
+  const runtime = getWorkboardRuntime(host);
+  const timer = runtime.lifecycleTaskContinuationTimer;
+  if (timer) {
+    clearTimeout(timer);
+    delete runtime.lifecycleTaskContinuationTimer;
   }
 }
 
@@ -151,9 +153,9 @@ export function resetWorkboardLifecycleTaskConfirmations(
 
 export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
-  scheduleLifecycleUpdate(host, "lifecycleTaskPreparedTimer");
-  scheduleLifecycleUpdate(host, "lifecycleTaskRetryTimer");
-  scheduleLifecycleUpdate(host, "lifecycleTaskContinuationTimer");
+  clearWorkboardLifecycleTaskPreparedTimer(host);
+  clearWorkboardLifecycleTaskRetryTimer(host);
+  clearWorkboardLifecycleTaskContinuationTimer(host);
   delete runtime.lifecycleTaskRefreshPromise;
   const state = runtime.state;
   if (state) {
@@ -194,12 +196,18 @@ export function setWorkboardLifecycleTasksPrepared(
   if (!host) {
     return;
   }
-  scheduleLifecycleUpdate(
-    host,
-    "lifecycleTaskPreparedTimer",
+  clearWorkboardLifecycleTaskPreparedTimer(host);
+  if (!prepared || !options.requestUpdate || !shouldRefreshWorkboardTasksForLifecycle(state)) {
+    return;
+  }
+  const nextTimer = setTimeout(
+    () => {
+      delete getWorkboardRuntime(host).lifecycleTaskPreparedTimer;
+      options.requestUpdate?.();
+    },
     Math.max(0, preparedAt + WORKBOARD_LIFECYCLE_TASK_RECONCILE_MS - Date.now()),
-    prepared && shouldRefreshWorkboardTasksForLifecycle(state) ? options.requestUpdate : undefined,
   );
+  getWorkboardRuntime(host).lifecycleTaskPreparedTimer = nextTimer;
 }
 
 export function workboardLifecycleTasksPreparedAt(state: WorkboardUiState, now = Date.now()) {
@@ -228,12 +236,15 @@ export function setWorkboardLifecycleTaskRefreshFailed(
   if (!host) {
     return;
   }
-  scheduleLifecycleUpdate(
-    host,
-    "lifecycleTaskRetryTimer",
-    retryDelayMs,
-    failed ? options.requestUpdate : undefined,
-  );
+  clearWorkboardLifecycleTaskRetryTimer(host);
+  if (!failed || !options.requestUpdate) {
+    return;
+  }
+  const nextTimer = setTimeout(() => {
+    delete getWorkboardRuntime(host).lifecycleTaskRetryTimer;
+    options.requestUpdate?.();
+  }, retryDelayMs);
+  getWorkboardRuntime(host).lifecycleTaskRetryTimer = nextTimer;
 }
 
 export function setWorkboardLifecycleTaskRefreshContinuation(
@@ -251,13 +262,16 @@ export function setWorkboardLifecycleTaskRefreshContinuation(
   if (!host) {
     return;
   }
+  clearWorkboardLifecycleTaskContinuationTimer(host);
+  if (!pending || !options.requestUpdate) {
+    return;
+  }
   // Continue bounded exact-confirmation independently from live card invalidation.
-  scheduleLifecycleUpdate(
-    host,
-    "lifecycleTaskContinuationTimer",
-    WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS,
-    pending ? options.requestUpdate : undefined,
-  );
+  const nextTimer = setTimeout(() => {
+    delete getWorkboardRuntime(host).lifecycleTaskContinuationTimer;
+    options.requestUpdate?.();
+  }, WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS);
+  getWorkboardRuntime(host).lifecycleTaskContinuationTimer = nextTimer;
 }
 
 export function workboardLifecycleTaskRefreshRetryPending(
@@ -378,6 +392,10 @@ export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
   );
 }
 
+function workboardHasActiveLoad(host: WorkboardHost): boolean {
+  return Boolean(getWorkboardRuntime(host).loadPromise);
+}
+
 export function workboardLifecycleSyncBlocked(
   host: WorkboardHost,
   state: WorkboardUiState,
@@ -388,18 +406,21 @@ export function workboardLifecycleSyncBlocked(
     state.draggedCardId ||
     state.dispatching ||
     workboardHasActiveWrites(state) ||
-    getWorkboardRuntime(host).loadPromise,
+    workboardHasActiveLoad(host),
   );
 }
 
 export function workboardLifecycleRequiresTaskRefresh(state: WorkboardTaskLinkState): boolean {
-  return state.cards.some((card) => {
-    if (!isActiveWorkboardCard(card)) {
-      return false;
-    }
-    const taskId = normalizeString(card.taskId);
-    return state.tasksByCardId.has(card.id) || Boolean(taskId && !state.missingTaskIds.has(taskId));
-  });
+  return (
+    state.cards.some((card) => isActiveWorkboardCard(card) && state.tasksByCardId.has(card.id)) ||
+    state.cards.some((card) => {
+      if (!isActiveWorkboardCard(card)) {
+        return false;
+      }
+      const taskId = normalizeString(card.taskId);
+      return Boolean(taskId && !state.missingTaskIds.has(taskId));
+    })
+  );
 }
 
 export function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardTaskLinkState): boolean {

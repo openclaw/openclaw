@@ -127,6 +127,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
     value: option.id,
     label: option.label,
     description: option.description,
+    icon: option.id === "all" ? "users" : option.id === "default" ? "bot" : undefined,
   }));
   const activeFilters: ActiveFilter[] = [];
   if (state.query.trim()) {

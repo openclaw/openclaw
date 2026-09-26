@@ -1,5 +1,6 @@
+import "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { matchesBoardFilter, workboardCardBoardId } from "./board-filter.ts";
+import { matchesBoardFilter } from "./board-filter.ts";
 import type {
   WorkboardCard,
   WorkboardDependencyState,
@@ -22,13 +23,13 @@ export function nextWorkboardCardPosition(
   card: WorkboardCard,
   status: WorkboardStatus,
 ): number {
-  const boardId = workboardCardBoardId(card);
+  const boardId = card.metadata?.automation?.boardId?.trim() || "default";
   const positions = cards
     .filter(
       (candidate) =>
         candidate.id !== card.id &&
         candidate.status === status &&
-        workboardCardBoardId(candidate) === boardId,
+        (candidate.metadata?.automation?.boardId?.trim() || "default") === boardId,
     )
     .map((candidate) => candidate.position);
   // Archived cards still own their persisted positions in the canonical store.

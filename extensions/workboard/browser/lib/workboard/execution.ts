@@ -1,10 +1,7 @@
-import type { BoardGetParams, SessionsCreateResult } from "@openclaw/gateway-protocol";
-import {
-  isRecord,
-  normalizeOptionalString,
-  truncateUtf16Safe,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
+import { isRecord, truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { requestSessionCreate } from "../sessions/index.ts";
 import { normalizeTaskSummary } from "../tasks/task-summary.ts";
 import {
   normalizeString,
@@ -256,17 +253,13 @@ export async function startWorkboardCard(params: {
     const shouldClearManualSchedule = params.card.metadata?.automation?.scheduledAt !== undefined;
     const shouldUnscheduleManual = params.card.status === "scheduled";
     const nextCardStatus = shouldUnscheduleManual ? "todo" : params.card.status;
-    const created = await params.client.request<SessionsCreateResult>("sessions.create", {
+    const created = await requestSessionCreate(params.client, {
       ...(params.card.agentId ? { agentId: params.card.agentId } : {}),
       label: buildCardSessionLabel(params.card),
       ...(model ? { model } : {}),
     });
-    const createdKey = normalizeOptionalString(created?.key);
-    if (!createdKey) {
-      throw new Error("sessions.create returned no key");
-    }
     assertCurrentCard(state, params.card);
-    const sessionKey = createdKey;
+    const sessionKey = created.key.trim() || null;
     const payload = await params.client.request("workboard.cards.update", {
       id: params.card.id,
       expectedUpdatedAt: params.card.updatedAt,

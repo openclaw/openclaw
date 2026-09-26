@@ -2,17 +2,13 @@ import { html, LitElement, nothing, type PropertyValues } from "lit";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import { getCardStaleAgeMs } from "../../lib/workboard/card-alerts.ts";
-import {
-  getCardSessionState,
-  taskMatchesLifecycle,
-  type CardSessionState,
-} from "../../lib/workboard/session-state.ts";
+import { getCardSessionState, type CardSessionState } from "../../lib/workboard/session-state.ts";
 import type {
   WorkboardCard,
   WorkboardLifecycle,
   WorkboardTaskSummary,
 } from "../../lib/workboard/types.ts";
-import { formatLifecycle } from "./view-helpers.ts";
+import { formatLifecycle, taskMatchesLifecycle } from "./view-helpers.ts";
 
 export type SessionStatusPresentation = {
   state: CardSessionState;
@@ -109,9 +105,14 @@ class WorkboardSessionStatus extends LitElement {
     super.disconnectedCallback();
   }
 
-  protected override willUpdate(changed: PropertyValues<this>) {
-    const previous = changed.get("context");
-    if (previous && previous.id !== this.context.id) {
+  protected override willUpdate(changed: PropertyValues) {
+    const previous: unknown = changed.get("context");
+    if (
+      previous &&
+      typeof previous === "object" &&
+      "id" in previous &&
+      previous.id !== this.context.id
+    ) {
       this.dismiss();
     }
     if (!this.presentation.visible) {

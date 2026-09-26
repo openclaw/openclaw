@@ -11,7 +11,7 @@ import {
   type WorkboardStatus,
 } from "../lib/workboard/types.ts";
 import { renderColumn } from "../pages/workboard/view-card.ts";
-import { formatPriorityLabel, type WorkboardProps } from "../pages/workboard/view-helpers.ts";
+import type { WorkboardProps } from "../pages/workboard/view-helpers.ts";
 import { workboardPageTarget } from "../pages/workboard/workboard-page.ts";
 import type { WorkboardWidgetModel } from "./runtime.ts";
 
@@ -113,6 +113,7 @@ export function renderWorkboardCardWidget(model: WorkboardWidgetModel): Template
   const statuses = model.statuses.includes(card.status)
     ? model.statuses
     : [card.status, ...model.statuses];
+  const priority = card.priority.charAt(0).toUpperCase() + card.priority.slice(1);
   return html`
     <article class="workboard-widget-card" data-test-id="workboard-card-widget">
       <div class="workboard-widget-card__heading">
@@ -124,7 +125,7 @@ export function renderWorkboardCardWidget(model: WorkboardWidgetModel): Template
       <dl class="workboard-widget-card__meta">
         <div>
           <dt>${t("workboard.fieldPriority")}</dt>
-          <dd>${formatPriorityLabel(card.priority)}</dd>
+          <dd>${priority}</dd>
         </div>
         <div>
           <dt>${t("workboard.fieldAgent")}</dt>
@@ -192,7 +193,7 @@ export function renderWorkboardBoardWidget(model: WorkboardWidgetModel): Templat
     agentsList: null,
     sessions: [],
     onOpenSession: model.host.sessions.open,
-    onRequestUpdate: () => model.runtime.notify(),
+    onRequestUpdate: () => model.syncFromHost(),
   };
   const workboardPath = model.host.navigation.pageHref(workboardPageTarget(boardId));
 

@@ -1,6 +1,19 @@
 import type { WorkboardLifecycle, WorkboardTaskSummary } from "./types.ts";
 
-export type CardSessionState = WorkboardLifecycle["state"] | "timed_out" | "cancelled" | "stopped";
+export type CardSessionState =
+  | "unlinked"
+  | "unknown"
+  | "unavailable"
+  | "ambiguous"
+  | "idle"
+  | "queued"
+  | "running"
+  | "stale"
+  | "succeeded"
+  | "failed"
+  | "timed_out"
+  | "cancelled"
+  | "stopped";
 
 export function taskMatchesLifecycle(
   task: WorkboardTaskSummary,

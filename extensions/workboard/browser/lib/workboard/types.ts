@@ -9,6 +9,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { TaskSummary } from "../tasks/task-summary.ts";
 
 export * from "@openclaw/workboard-contract";
+export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
 
 type WorkboardLifecycleState =
   | "unlinked"

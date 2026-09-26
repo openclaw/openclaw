@@ -50,6 +50,19 @@ function compareSessionCards(left: WorkboardCard, right: WorkboardCard): number 
   );
 }
 
+function indexWorkboardSessionCards(cards: readonly WorkboardCard[]): Map<string, WorkboardCard> {
+  const index = new Map<string, WorkboardCard>();
+  for (const card of cards) {
+    for (const key of cardSessionKeys(card)) {
+      const previous = index.get(key);
+      if (!previous || compareSessionCards(card, previous) < 0) {
+        index.set(key, card);
+      }
+    }
+  }
+  return index;
+}
+
 export function findWorkboardSessionCard(
   cards: readonly WorkboardCard[],
   sessionKey: string,
@@ -60,14 +73,5 @@ export function findWorkboardSessionCard(
   // A local session tail cannot establish its agent owner. Provisional link
   // resolution belongs to session-resolution; this lookup needs recorded identity.
   const key = normalizeSessionKeyForUiComparison(sessionKey);
-  let selected: WorkboardCard | null = null;
-  for (const card of cards) {
-    if (
-      cardSessionKeys(card).includes(key) &&
-      (!selected || compareSessionCards(card, selected) < 0)
-    ) {
-      selected = card;
-    }
-  }
-  return selected;
+  return indexWorkboardSessionCards(cards).get(key) ?? null;
 }

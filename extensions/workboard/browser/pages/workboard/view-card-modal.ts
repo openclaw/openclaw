@@ -140,6 +140,18 @@ export function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftCommentBody = "";
 }
 
+function applyTemplate(state: WorkboardUiState, templateId: WorkboardTemplateId) {
+  const template = workboardTemplates.find((entry) => entry.id === templateId);
+  if (!template) {
+    return;
+  }
+  state.draftTemplateId = template.id;
+  state.draftTitle = t(`workboard.templateDraft.${template.draftKey}Title`);
+  state.draftNotes = t(`workboard.templateDraft.${template.draftKey}Notes`);
+  state.draftLabels = template.labels;
+  state.draftPriority = template.priority;
+}
+
 function renderDraftChoices<Value extends string>(params: {
   name: "status" | "priority";
   label: string;
@@ -347,15 +359,7 @@ export function renderCardModal(props: WorkboardProps) {
                             type="button"
                             ?disabled=${draftActionsBusy}
                             @click=${() => {
-                              state.draftTemplateId = template.id;
-                              state.draftTitle = t(
-                                `workboard.templateDraft.${template.draftKey}Title`,
-                              );
-                              state.draftNotes = t(
-                                `workboard.templateDraft.${template.draftKey}Notes`,
-                              );
-                              state.draftLabels = template.labels;
-                              state.draftPriority = template.priority;
+                              applyTemplate(state, template.id);
                               props.onRequestUpdate?.();
                             }}
                           >

@@ -35,6 +35,7 @@ export function cardAgentLabel(
 
 export function matchesAgentFilter(
   card: WorkboardCard,
+  agentsList: WorkboardAgentsList | null,
   filter: WorkboardUiState["agentFilter"],
 ): boolean {
   if (filter === "all") {
@@ -44,6 +45,7 @@ export function matchesAgentFilter(
   if (filter === "default") {
     return !explicitAgentId;
   }
+  void agentsList;
   return explicitAgentId === filter;
 }
 

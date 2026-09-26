@@ -159,15 +159,20 @@ export function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
 function renderCardActionButton(params: {
   label: string;
   icon: TemplateResult;
+  iconOnly?: boolean;
   className?: string;
   disabled?: boolean;
   ariaHaspopup?: "dialog";
   onClick: (event: MouseEvent) => void;
   requestAction?: (action: () => void) => void;
 }) {
-  return html`
+  const button = html`
     <button
-      class=${`btn ${params.className ?? ""}`}
+      class=${
+        params.iconOnly
+          ? `btn btn--icon workboard-card__icon ${params.className ?? ""}`
+          : `btn ${params.className ?? ""}`
+      }
       type="button"
       aria-label=${params.label}
       aria-haspopup=${params.ariaHaspopup ?? nothing}
@@ -180,20 +185,22 @@ function renderCardActionButton(params: {
         }
       }}
     >
-      ${params.icon}<span>${params.label}</span>
+      ${params.icon}${params.iconOnly ? nothing : html`<span>${params.label}</span>`}
     </button>
   `;
+  return params.iconOnly ? html`<span title=${params.label}>${button}</span>` : button;
 }
 
 export function renderEditCardAction(
   props: WorkboardProps,
   card: WorkboardCard,
-  options: { requestAction?: (action: () => void) => void } = {},
+  options: { iconOnly?: boolean; requestAction?: (action: () => void) => void } = {},
 ) {
   const state = getWorkboardState(props.host);
   return renderCardActionButton({
     label: t("workboard.editCard"),
     icon: icons.edit,
+    iconOnly: options.iconOnly,
     requestAction: options.requestAction,
     ariaHaspopup: "dialog",
     disabled: state.dispatching,
@@ -209,12 +216,13 @@ export function renderArchiveCardAction(
   card: WorkboardCard,
   busy: boolean,
   archived: boolean,
-  options: { requestAction?: (action: () => void) => void } = {},
+  options: { iconOnly?: boolean; requestAction?: (action: () => void) => void } = {},
 ) {
   const label = archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard");
   return renderCardActionButton({
     label,
     icon: archived ? icons.archiveRestore : icons.archive,
+    iconOnly: options.iconOnly,
     requestAction: options.requestAction,
     disabled: busy,
     onClick: () => {
@@ -232,7 +240,7 @@ export function renderArchiveCardAction(
 export function renderOpenSessionCardAction(
   props: WorkboardProps,
   session: BoardGetParams | undefined,
-  options: { quiet?: boolean } = {},
+  options: { iconOnly?: boolean; quiet?: boolean } = {},
 ) {
   if (!session) {
     return nothing;
@@ -249,14 +257,21 @@ export function renderOpenSessionCardAction(
   return renderCardActionButton({
     label: t("workboard.openSession"),
     icon: icons.messageSquare,
+    iconOnly: options.iconOnly,
     onClick: () => props.onOpenSession(session),
   });
 }
 
-export function renderStopCardAction(props: WorkboardProps, card: WorkboardCard, busy: boolean) {
+export function renderStopCardAction(
+  props: WorkboardProps,
+  card: WorkboardCard,
+  busy: boolean,
+  options: { iconOnly?: boolean } = {},
+) {
   return renderCardActionButton({
     label: t("workboard.stopSession"),
     icon: icons.stop,
+    iconOnly: options.iconOnly,
     disabled: busy || !props.connected,
     onClick: () => {
       void stopWorkboardCard({
@@ -274,11 +289,12 @@ export function renderDeleteCardAction(
   props: WorkboardProps,
   card: WorkboardCard,
   busy: boolean,
-  options: { requestAction?: (action: () => void) => void } = {},
+  options: { iconOnly?: boolean; requestAction?: (action: () => void) => void } = {},
 ) {
   return renderCardActionButton({
     label: t("workboard.deleteCard"),
     icon: icons.trash,
+    iconOnly: options.iconOnly,
     requestAction: options.requestAction,
     className: "workboard-card__delete",
     disabled: busy,
@@ -293,11 +309,20 @@ export function renderDeleteCardAction(
   });
 }
 
+function renderEngineMark(engine: WorkboardExecutionEngine) {
+  return html`
+    <span class="workboard-engine-mark workboard-engine-mark--${engine}" aria-hidden="true">
+      ${engine === "codex" ? "OpenAI" : "Claude"}
+    </span>
+  `;
+}
+
 export function renderStartExecutionButton(
   props: WorkboardProps,
   card: WorkboardCard,
   engine: WorkboardExecutionEngine | null,
   mode: WorkboardExecutionMode,
+  options: { iconOnly?: boolean; engineLabelOnly?: boolean } = {},
 ) {
   const state = getWorkboardState(props.host);
   const busy = state.busyCardIds.has(card.id) || state.dispatching;
@@ -312,11 +337,11 @@ export function renderStartExecutionButton(
         ? t("workboard.runEngine", { engine: engineName })
         : t("workboard.openEngine", { engine: engineName })
       : t("workboard.runDefaultAgent");
-  return html`
+  const button = html`
     <button
       class="btn btn--xs workboard-card__start workboard-card__start--${mode} ${
-        engine ? "" : "workboard-card__start--default"
-      }"
+        options.iconOnly ? "workboard-card__start--icon" : ""
+      } ${engine ? "" : "workboard-card__start--default"}"
       type="button"
       aria-label=${title}
       ?disabled=${disabled}
@@ -336,11 +361,20 @@ export function renderStartExecutionButton(
     >
       ${
         engine
-          ? html`<span>${engineName}</span>`
-          : html`${mode === "autonomous" ? icons.play : icons.penLine}<span
-                >${t("workboard.start")}</span
-              >`
+          ? options.engineLabelOnly
+            ? html`<span>${engineName}</span>`
+            : html`${renderEngineMark(engine)}${
+                options.iconOnly
+                  ? nothing
+                  : html`<span
+                      >${mode === "autonomous" ? t("workboard.run") : t("workboard.open")}</span
+                    >`
+              }`
+          : html`${mode === "autonomous" ? icons.play : icons.penLine}${
+              options.iconOnly ? nothing : html`<span>${t("workboard.start")}</span>`
+            }`
       }
     </button>
   `;
+  return options.iconOnly ? html`<span title=${title}>${button}</span>` : button;
 }

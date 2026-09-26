@@ -68,6 +68,9 @@ export function buildBoardFilterOptions(
       value: board.id,
       label: workboardBoardLabel(board),
       description: boardDescription(board),
+      boardId: board.id,
+      icon: board.icon,
+      color: board.color,
     })),
   ];
 }

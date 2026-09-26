@@ -213,6 +213,9 @@ export class WorkboardWidgetModel {
       void this.runtime.refresh();
     }
   }
+  syncFromHost() {
+    this.runtime.notify();
+  }
   async moveCard(card: WorkboardCard, status: WorkboardStatus) {
     const client = this.workboardClient;
     if (!client || !isActiveWorkboardCard(card) || card.status === status) {
