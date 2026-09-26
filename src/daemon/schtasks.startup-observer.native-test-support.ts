@@ -7,6 +7,8 @@ import { z } from "zod";
 import { spawnWindowsJobChild } from "../../scripts/lib/managed-windows-job.mts";
 import type { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { buildTaskScript, encodeWindowsLauncherScript } from "./schtasks-layout.js";
+import { startupArgvCaptureSource } from "./schtasks.startup-observer-fixtures.test-support.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
 const OUTPUT_LIMIT = 16 * 1024;
@@ -56,8 +58,16 @@ export async function runObservedStartupLaunch(params: {
       | "parent-retained-diagnostic"
       | "exit-tag-pathological-diagnostic"
       | "exit-tag-ascii-path-diagnostic"
-      | "exit-tag-code-page-header-diagnostic",
+      | "exit-tag-code-page-header-diagnostic"
+      | "exit-tag-argv-capture-diagnostic",
     scriptPath = params.scriptPath,
+    argvCapture?: {
+      helperPath: string;
+      helperSha256: string;
+      resultPath: string;
+      expectedArguments: string[];
+      originalScriptSha256: string;
+    },
   ) {
     const expectedExitTag = variant.startsWith("exit-tag-") ? 42 : undefined;
     const bytes = await fs.readFile(scriptPath);
@@ -77,6 +87,7 @@ export async function runObservedStartupLaunch(params: {
         variant,
         scriptPath,
         expectedExitTag,
+        argvCapture,
         invocationPath: `${prefix}.invocation.json`,
         stdoutPath: `${prefix}.stdout.log`,
         stderrPath: `${prefix}.stderr.log`,
@@ -94,7 +105,9 @@ export async function runObservedStartupLaunch(params: {
     params.signal.throwIfAborted();
     const launched = spawnWindowsJobChild(process.execPath, [params.observerPath, specPath], {
       cwd: process.cwd(),
-      env: process.env,
+      env: argvCapture
+        ? { ...process.env, OPENCLAW_STARTUP_ARGV_RESULT: argvCapture.resultPath }
+        : process.env,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
       windowsHide: true,
     });
@@ -149,7 +162,10 @@ export async function runObservedStartupLaunch(params: {
           : "none; observe CMD exit",
       scriptPath,
       scriptEncoding:
-        expectedExitTag === undefined ? "encodeWindowsLauncherScript(cmd)" : "ASCII CRLF",
+        expectedExitTag === undefined || argvCapture
+          ? "encodeWindowsLauncherScript(cmd)"
+          : "ASCII CRLF",
+      ...(argvCapture ? { argvCapture } : {}),
       scriptBase64: bytes.toString("base64"),
       scriptSha256: createHash("sha256").update(bytes).digest("hex"),
       ...(expectedExitTag === undefined ? {} : { expectedExitTag, lifecycleQualification: false }),
@@ -271,6 +287,78 @@ export async function runObservedStartupLaunch(params: {
       }
     }
   }
+  async function diagnoseArgvCapture(original: Buffer) {
+    const variant = "exit-tag-argv-capture-diagnostic";
+    const file = path.join(params.proofRoot, `${params.mode}-${variant}.observation.json`);
+    const notRun = (reason: string) =>
+      fs.writeFile(
+        file,
+        JSON.stringify({
+          mode: params.mode,
+          variant,
+          event: "not-run",
+          lifecycleQualification: false,
+          scriptPath: params.scriptPath,
+          reason,
+        }),
+      );
+    let root: string;
+    let canonicalRoot: string;
+    try {
+      root = params.lifetime.createTempDir("openclaw-startup-argv-");
+      canonicalRoot = await fs.realpath(root);
+    } catch (error) {
+      await notRun(
+        `The isolated argv helper directory is unavailable: ${String(error).slice(0, 512)}`,
+      );
+      return;
+    }
+    const helperPath = path.join(canonicalRoot, "argv-capture.cjs");
+    const resultPath = path.join(canonicalRoot, "argv-result.json");
+    const asciiPath = (value: string) =>
+      /^[\x20-\x7e]+$/u.test(value) && !/[&|<>^%!"()]/u.test(value);
+    if (![path.resolve(root), helperPath, resultPath].every(asciiPath)) {
+      await notRun("The argv helper's complete isolated path is not ASCII and syntax-neutral");
+      return;
+    }
+    const expectedArguments = [params.probePath, params.markerPath, params.parentPidPath];
+    const render = (args: string[]) =>
+      encodeWindowsLauncherScript({
+        format: "cmd",
+        content: buildTaskScript({ programArguments: [process.execPath, ...args] }),
+      });
+    if (!render(expectedArguments).equals(original)) {
+      await notRun(
+        "Current production encoding does not reproduce the saved original script bytes",
+      );
+      return;
+    }
+    const captureScript = render([helperPath, ...expectedArguments]);
+    const preamble = /^@chcp [0-9]+ >nul\r\n@rem openclaw-launcher-encoding=\S+\r\n/u.exec(
+      original.toString("latin1"),
+    )?.[0];
+    if (
+      !preamble ||
+      !captureScript.subarray(0, preamble.length).equals(original.subarray(0, preamble.length))
+    ) {
+      await notRun("The argv capture script does not retain the exact original code-page preamble");
+      return;
+    }
+    await fs.writeFile(helperPath, startupArgvCaptureSource, { flag: "wx" });
+    await fs.writeFile(params.scriptPath, captureScript);
+    await run(variant, params.scriptPath, {
+      helperPath,
+      helperSha256: createHash("sha256").update(startupArgvCaptureSource).digest("hex"),
+      resultPath,
+      expectedArguments,
+      originalScriptSha256: createHash("sha256").update(original).digest("hex"),
+    });
+    assert.deepEqual(
+      await fs.readFile(helperPath),
+      Buffer.from(startupArgvCaptureSource),
+      "ASCII argv helper bytes changed during observation",
+    );
+  }
   async function diagnoseExitTag() {
     const original = await fs.readFile(params.scriptPath);
     const tagged = Buffer.from("@exit /b 42\r\n", "ascii");
@@ -278,6 +366,7 @@ export async function runObservedStartupLaunch(params: {
       "exit-tag-pathological-diagnostic",
       "exit-tag-ascii-path-diagnostic",
       "exit-tag-code-page-header-diagnostic",
+      "exit-tag-argv-capture-diagnostic",
     ] as const;
     try {
       await fs.writeFile(params.scriptPath, tagged);
@@ -294,7 +383,10 @@ export async function runObservedStartupLaunch(params: {
               tagged,
             ]),
           );
-          await run(variants[2]);
+          const headerResult = await run(variants[2]);
+          if (headerResult.exitTagMatched === true && !params.signal.aborted) {
+            await diagnoseArgvCapture(original);
+          }
         } else {
           await fs.writeFile(
             path.join(params.proofRoot, `${params.mode}-${variants[2]}.observation.json`),

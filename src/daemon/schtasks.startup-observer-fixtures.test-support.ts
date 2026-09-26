@@ -37,6 +37,29 @@ function waitForRelease() {
 waitForLauncherExit();
 `;
 
+// This helper records only the arguments that reached Node; it never runs the original probe.
+export const startupArgvCaptureSource = String.raw`
+const fs = require("node:fs");
+const result = {
+  event: "argv-captured", pid: process.pid, ppid: process.ppid,
+  execPath: process.execPath, argv: process.argv, observedAt: Date.now(), error: null,
+};
+try { result.cwd = process.cwd(); }
+catch (error) { result.error = { code: error.code ?? null, message: String(error.message).slice(0, 512) }; }
+let text = JSON.stringify(result);
+let complete = result.error === null;
+if (Buffer.byteLength(text) > 8 * 1024) {
+  complete = false;
+  text = JSON.stringify({ event: "argv-capture-overflow", pid: process.pid, ppid: process.ppid,
+    argvCount: process.argv.length, evidenceBytes: Buffer.byteLength(text) });
+}
+const resultPath = process.env.OPENCLAW_STARTUP_ARGV_RESULT;
+if (!resultPath) throw new Error("Argv capture result path was not inherited");
+fs.writeFileSync(resultPath + ".tmp", text, { flag: "wx" });
+fs.renameSync(resultPath + ".tmp", resultPath);
+process.exitCode = complete ? 42 : 44;
+`;
+
 const harnessSource = String.raw`
 import cp from "node:child_process";
 import fs from "node:fs";
@@ -153,12 +176,19 @@ for (const name of ["stdout", "stderr"]) {
     }
   });
 }
+function readArgvCapture() {
+  if (!spec.argvCapture) return undefined;
+  try { return { result: read(spec.argvCapture.resultPath), error: null }; }
+  catch (error) { return { result: null,
+    error: { code: error.code ?? null, message: String(error.message).slice(0, 512) } }; }
+}
 function report(event, extra = {}) {
   const record = {
     event, observerPid: process.pid, launcherPid: parent.pid, parentExit, ...output,
     invocation: read(spec.invocationPath), started: read(spec.markerPath + ".started.json"),
     survived: read(spec.markerPath + ".survived.json"),
     diagnosticStdout: readOutput(spec.stdoutPath), diagnosticStderr: readOutput(spec.stderrPath),
+    ...(spec.argvCapture ? { argvCapture: readArgvCapture() } : {}),
     ...extra,
   };
   process.send(record);
