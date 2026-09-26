@@ -14,13 +14,13 @@ afterEach(() => {
   }
 });
 
-function fixture(bytes: Buffer) {
+function fixture(bytes: Buffer, basename = "fixture.bin") {
   const root = fs.realpathSync(temp.make("plugin-streaming-capture-"));
   const source = path.join(root, "source");
   const captures = path.join(root, "captures");
   fs.mkdirSync(source);
   fs.mkdirSync(captures);
-  const filename = path.join(source, "fixture.bin");
+  const filename = path.join(source, basename);
   fs.writeFileSync(filename, bytes, { mode: 0o755 });
   return {
     filename,
@@ -84,8 +84,8 @@ it("captures and verifies a native artifact without whole-file Buffer reads", ()
   expect(fs.readFileSync(artifact.resolve(source.filename)).equals(bytes)).toBe(true);
 });
 
-it("rejects changed bytes even when source metadata retains its captured identity", () => {
-  const source = fixture(Buffer.from("before"));
+it("rehashes source code even when metadata retains its captured identity", () => {
+  const source = fixture(Buffer.from("before"), "fixture.js");
   const before = fs.statSync(source.filename, { bigint: true });
   const artifact = source.capture();
   const statSync = fs.statSync;
@@ -107,7 +107,7 @@ it("rejects changed bytes even when source metadata retains its captured identit
 });
 
 it("bounds fresh verification when a source keeps growing during reads", () => {
-  const source = fixture(Buffer.from("before"));
+  const source = fixture(Buffer.from("before"), "fixture.js");
   const artifact = source.capture();
   const original = fs.statSync(source.filename);
   const readSync = fs.readSync;

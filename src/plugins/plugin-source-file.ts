@@ -8,6 +8,15 @@ import { hasErrnoCode } from "../infra/errno.js";
 // Capture and native module hooks are synchronous; no read retains this scratch buffer.
 const scratch = Buffer.allocUnsafe(64 * 1024);
 
+export const pluginSourceStatIdentity = (stat: fs.BigIntStats): string =>
+  `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+
+export const pluginSourceIdentityChangedOnlyByCtime = (
+  previous: string,
+  current: string,
+): boolean =>
+  previous.slice(0, previous.lastIndexOf(":")) === current.slice(0, current.lastIndexOf(":"));
+
 function withPluginSourceFile<T>(source: string, boundary: string, read: (fd: number) => T): T {
   const opened = openRootFileSync({
     absolutePath: source,
@@ -23,6 +32,27 @@ function withPluginSourceFile<T>(source: string, boundary: string, read: (fd: nu
   } finally {
     fs.closeSync(opened.fd);
   }
+}
+
+export function pluginSourceFileIdentity(source: string, boundary: string): string {
+  return withPluginSourceFile(source, boundary, (fd) =>
+    pluginSourceStatIdentity(fs.fstatSync(fd, { bigint: true })),
+  );
+}
+
+export function isPluginNativeExecutable(source: string, boundary: string): boolean {
+  return withPluginSourceFile(source, boundary, (fd) => {
+    if (fs.readSync(fd, scratch, 0, 4, 0) !== 4) {
+      return false;
+    }
+    const magic = scratch.readUInt32BE(0);
+    return (
+      scratch.readUInt16BE(0) === 0x4d5a ||
+      [0x7f454c46, 0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca].includes(
+        magic,
+      )
+    );
+  });
 }
 
 export function copyPluginSourceFile(source: string, boundary: string, target: string): void {
@@ -53,6 +83,17 @@ export function copyPluginSourceFile(source: string, boundary: string, target: s
       throw error;
     } finally {
       fs.closeSync(output);
+    }
+  });
+}
+
+export function linkPluginSourceFile(source: string, boundary: string, target: string): void {
+  withPluginSourceFile(source, boundary, (fd) => {
+    const admitted = fs.fstatSync(fd, { bigint: true });
+    fs.linkSync(source, target);
+    const linked = fs.statSync(target, { bigint: true });
+    if (linked.dev !== admitted.dev || linked.ino !== admitted.ino) {
+      throw new Error("Native plugin artifact changed during admission");
     }
   });
 }
