@@ -22,7 +22,6 @@ import {
   iterateVisibleMessageRange,
   resolveVisibleMessagePositions,
 } from "../config/sessions/session-accessor.sqlite-reset-window.js";
-import type { ReadSessionMessageByIdResult } from "../config/sessions/session-history-types.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import type {
   TranscriptRecentReadLimits,
@@ -68,6 +67,14 @@ export type ReadRecentSessionMessagesResult = {
 export type ReadSessionMessagesResult = {
   messages: unknown[];
   transcriptPath?: string;
+};
+
+export type ReadSessionMessageByIdResult = {
+  message?: unknown;
+  seq?: number;
+  oversized: boolean;
+  found: boolean;
+  serializedBytes?: number;
 };
 
 type SessionTranscriptReadOptions = {

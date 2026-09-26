@@ -3,6 +3,7 @@ import type { SessionArtifactReadResult } from "../../gateway/session-artifact-r
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type {
   ReadRecentSessionMessagesResult,
+  ReadSessionMessageByIdResult,
   ReadSessionMessagesAroundIdResult,
   ReadSessionMessagesResult,
 } from "../../gateway/session-transcript-read-kernel.js";
@@ -28,7 +29,6 @@ import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.trans
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type {
   ChatHistoryPage,
-  ReadSessionMessageByIdResult,
   SessionHistoryDelta,
   SessionHistoryTranscriptBinding,
   SessionHistorySnapshot,
