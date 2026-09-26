@@ -1,5 +1,6 @@
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -20,6 +21,16 @@ vi.mock("./send.js", async () => {
 });
 
 const { deliverReplies } = await import("./monitor.js");
+
+const targetTable = {
+  type: "table",
+  caption: "Targets",
+  headers: ["Host", "State"],
+  rows: [
+    ["alpha", "ready"],
+    ["omega", "waiting"],
+  ],
+} satisfies MessagePresentation["blocks"][number];
 
 const botAccount = "+15550009999";
 const approver = "+15551230000";
@@ -111,17 +122,7 @@ describe("Signal monitor reply delivery", () => {
   it("materializes table-only presentation replies", async () => {
     await deliverReplyPayload({
       presentation: {
-        blocks: [
-          {
-            type: "table",
-            caption: "Targets",
-            headers: ["Host", "State"],
-            rows: [
-              ["alpha", "ready"],
-              ["omega", "waiting"],
-            ],
-          },
-        ],
+        blocks: [targetTable],
       },
     });
 
@@ -135,17 +136,7 @@ describe("Signal monitor reply delivery", () => {
     await deliverReplyPayload({
       text: "Deployment summary",
       presentation: {
-        blocks: [
-          {
-            type: "table",
-            caption: "Targets",
-            headers: ["Host", "State"],
-            rows: [
-              ["alpha", "ready"],
-              ["omega", "waiting"],
-            ],
-          },
-        ],
+        blocks: [targetTable],
       },
     });
 
@@ -192,15 +183,7 @@ describe("Signal monitor reply delivery", () => {
       ...payload.presentation!,
       blocks: [
         { type: "context", text: "Deployment audit context" },
-        {
-          type: "table",
-          caption: "Targets",
-          headers: ["Host", "State"],
-          rows: [
-            ["alpha", "ready"],
-            ["omega", "waiting"],
-          ],
-        },
+        targetTable,
         ...payload.presentation!.blocks,
       ],
     };

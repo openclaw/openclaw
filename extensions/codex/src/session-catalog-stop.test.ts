@@ -26,7 +26,9 @@ it("retires the resident refresh loop when its catalog owner stops", async () =>
     await control.initialize();
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(15 * 60_000);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+    await control.listPage({ limit: 1 });
+    await vi.waitFor(() => expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2));
 
     await factory.stop();
     await vi.advanceTimersByTimeAsync(30 * 60_000);

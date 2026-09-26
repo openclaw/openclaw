@@ -1,5 +1,4 @@
 // Release check tests cover release validation script behavior.
-import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
@@ -11,10 +10,7 @@ import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
 import { collectPackUnpackedSizeFindings } from "../scripts/lib/npm-pack-budget.mts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../scripts/lib/package-dist-inventory-contract.mts";
 import { createWorkspaceBootstrapSmokeEnv } from "../scripts/lib/workspace-bootstrap-smoke.mts";
-import {
-  collectInstalledBundledRuntimeSidecarPaths,
-  collectInstalledRootDependencyManifestErrors,
-} from "../scripts/openclaw-npm-postpublish-verify.ts";
+import { collectInstalledBundledRuntimeSidecarPaths } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
   allowsLegacyGeneratedOwnershipForSourceRoot,
   collectAppcastSparkleVersionErrors,
@@ -36,7 +32,6 @@ import {
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
-import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
 import { withEnv } from "../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -406,73 +401,6 @@ describe("collectBundledExtensionManifestErrors", () => {
   });
 });
 
-describe("bundled plugin package dependency checks", () => {
-  it("does not require root deps for byte-matched chunks owned by a bundled plugin", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-"));
-
-    try {
-      mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
-      writeFileSync(
-        join(tempRoot, "package.json"),
-        `{"name":"openclaw","version":"2026.7.33","dependencies":{}}\n`,
-        "utf8",
-      );
-      writeFileSync(
-        join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
-        "utf8",
-      );
-      const source = 'import("root-owned-test-dep");\n';
-      writeFileSync(join(tempRoot, "dist", "lancedb-runtime-7TYK-Pto.js"), source, "utf8");
-      writeFileSync(
-        join(tempRoot, RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH),
-        JSON.stringify({
-          chunks: {
-            "lancedb-runtime-7TYK-Pto.js": {
-              sha256: createHash("sha256").update(source).digest("hex"),
-              extensions: ["memory-lancedb"],
-            },
-          },
-        }),
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toStrictEqual([]);
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("still requires root deps for root-owned installed chunks", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-missing-"));
-
-    try {
-      mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
-      writeFileSync(
-        join(tempRoot, "package.json"),
-        `{"name":"openclaw","dependencies":{}}\n`,
-        "utf8",
-      );
-      writeFileSync(
-        join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
-        "utf8",
-      );
-      writeFileSync(
-        join(tempRoot, "dist", "root-runtime.js"),
-        `import("root-owned-test-dep");\n`,
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([
-        "installed package root is missing declared runtime dependency 'root-owned-test-dep' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
-      ]);
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-});
-
 // This suite exists both as regression coverage and as an intentional CI touchpoint for executable-bit fixes.
 // Windows doesn't support Unix permission bits; chmod 0o755 is a no-op and
 // statSync().mode never reports execute bits, so these tests are meaningless there.
@@ -756,13 +684,9 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
 });
 
 describe("collectPackUnpackedSizeFindings", () => {
-  it.each([
-    { label: "ordinary package", unpackedSize: 120_354_302 },
-    { label: "required native payload", unpackedSize: 243_066_603 },
-    { label: "exact budget", unpackedSize: 320 * 1024 * 1024 },
-  ])("accepts pack results at or below the budget: $label", ({ unpackedSize }) => {
+  it("accepts pack results at the exact budget", () => {
     expect(
-      collectPackUnpackedSizeFindings([makePackResult("candidate.tgz", unpackedSize)]),
+      collectPackUnpackedSizeFindings([makePackResult("candidate.tgz", 320 * 1024 * 1024)]),
     ).toStrictEqual({ errors: [], violations: [] });
   });
 

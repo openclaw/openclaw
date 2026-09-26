@@ -173,7 +173,7 @@ export function createPluginCliLoadSession(
           env: preparedEnv,
           workspaceDir,
           metadataSnapshot,
-          logger: params.logger ?? createPluginCliLogger(),
+          logger: params.logger ?? createPluginRuntimeLoaderLogger(),
         });
         const captured = revision;
         const prepared: PreparedPluginCliLoad = {
@@ -206,11 +206,6 @@ export function createPluginCliLoadSession(
 
 function resolvePreparedPluginCliLoad(params: PluginCliPublicLoadParams): PreparedPluginCliLoad {
   return (params.session ?? createPluginCliLoadSession()).resolve(params);
-}
-
-/** Creates the default plugin CLI logger shared with runtime loading. */
-export function createPluginCliLogger(): PluginLogger {
-  return createPluginRuntimeLoaderLogger();
 }
 
 function resolvePrimaryCommandManifestPluginIds(

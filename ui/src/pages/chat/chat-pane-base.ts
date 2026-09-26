@@ -89,7 +89,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
-    const liveDraft = getChatComposerState(this.paneId).composerTextarea?.value;
+    const liveDraft = getChatComposerState(this.presentationId).composerTextarea?.value;
     const draftChanged = liveDraft !== undefined && liveDraft !== state.chatMessage;
     if (draftChanged) {
       // Page suspension can interrupt IME before compositionend; commit the

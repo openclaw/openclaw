@@ -321,7 +321,11 @@ function escapeCompactFallbackCell(value: string): string {
     .replaceAll("\n", "\\n");
 }
 
-function renderSlackBasicTableRows(value: unknown, mrkdwnSafe: boolean): string | undefined {
+/** Render Slack's inbound `table` block as ordered, delimiter-safe TSV. */
+export function renderSlackTableFallbackText(
+  value: unknown,
+  mrkdwnSafe = false,
+): string | undefined {
   const rows = parseSlackBasicTableRows(value);
   return rows
     ?.map((row) =>
@@ -330,14 +334,6 @@ function renderSlackBasicTableRows(value: unknown, mrkdwnSafe: boolean): string 
         .join("\t"),
     )
     .join("\n");
-}
-
-/** Render Slack's inbound `table` block as ordered, delimiter-safe TSV. */
-export function renderSlackTableFallbackText(
-  value: unknown,
-  mrkdwnSafe = false,
-): string | undefined {
-  return renderSlackBasicTableRows(value, mrkdwnSafe);
 }
 
 /** Render each native table cell once for bounded, formatting-disabled delivery. */

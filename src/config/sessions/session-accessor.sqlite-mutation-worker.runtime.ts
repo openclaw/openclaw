@@ -33,6 +33,7 @@ import type { CanonicalSessionValidationResult } from "./session-accessor.sqlite
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   markSqliteReclamationSettled,
+  SqliteReclamationRequestRefusedError,
   waitForSqliteReclamationCommit,
 } from "./session-accessor.sqlite-reclamation-commit.js";
 import type {
@@ -284,6 +285,17 @@ export async function runReclamationWorkerPort(
                 prepared = opened.value;
               }
             }
+            const maintenanceOwner =
+              request.type === "reclaim" && request.plan.kind === "maintenance-plan"
+                ? await import("./session-accessor.sqlite-maintenance-transaction.js")
+                : undefined;
+            const maintenance =
+              request.type === "reclaim" && request.plan.kind === "maintenance-plan"
+                ? maintenanceOwner?.prepareSessionMaintenanceInWorker({
+                    ...request.plan,
+                    databaseOptions: options,
+                  })
+                : undefined;
             let validation: OpenClawAgentDatabaseValidation | undefined;
             const result = await withWorkerWriteAdmission(
               port,
@@ -367,14 +379,23 @@ export async function runReclamationWorkerPort(
                           options,
                           { operationLabel: "session.canonical-validation.certify" },
                         )
-                      : reclaimSqliteSessionInTransaction(
-                          { ...request.plan, databaseOptions: options },
-                          {
-                            beforeMutation: currentClaim.assertCurrent,
-                            onCommit: authorizeCommit,
-                            afterCommit: () => markSqliteReclamationSettled(request.commitGate),
-                          },
-                        );
+                      : request.plan.kind === "maintenance-plan" && maintenanceOwner
+                        ? maintenanceOwner.reclaimSessionMaintenanceInTransaction(
+                            { ...request.plan, databaseOptions: options },
+                            {
+                              beforeMutation: currentClaim.assertCurrent,
+                              onCommit: authorizeCommit,
+                            },
+                            maintenance,
+                          )
+                        : reclaimSqliteSessionInTransaction(
+                            { ...request.plan, databaseOptions: options },
+                            {
+                              beforeMutation: currentClaim.assertCurrent,
+                              onCommit: authorizeCommit,
+                              afterCommit: () => markSqliteReclamationSettled(request.commitGate),
+                            },
+                          );
                   // Warm results must not revive proof invalidated by the parent between requests.
                   if (openedForRequest) {
                     validation = getOpenClawAgentDatabaseValidation(database);
@@ -388,7 +409,7 @@ export async function runReclamationWorkerPort(
                   clearNodeSqliteKyselyCacheForDatabase(database.db);
                 }
               },
-            );
+            ).finally(() => maintenance?.release());
             return {
               type: "reclaimed",
               operationId,
@@ -397,6 +418,22 @@ export async function runReclamationWorkerPort(
               validation,
             } satisfies SqliteMutationWorkerMessage<typeof result>;
           } catch (error) {
+            // Canonical validation retains its scoped native-failure/drain contract.
+            if (
+              request.type === "reclaim" &&
+              !pooledTask &&
+              error instanceof SqliteReclamationRequestRefusedError &&
+              claim?.isCurrent() &&
+              retainedDatabase?.isOpen &&
+              !retainedDatabase.isTransaction
+            ) {
+              markSqliteReclamationSettled(commitGate);
+              return {
+                type: "refused",
+                operationId,
+                settled: true,
+              } satisfies SqliteReclamationWorkerMessage;
+            }
             failureCleanup = await closeDatabase();
             if (failureCleanup.settled) {
               markSqliteReclamationSettled(commitGate);

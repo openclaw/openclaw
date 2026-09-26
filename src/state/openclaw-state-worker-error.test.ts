@@ -571,14 +571,23 @@ describe("shared-state worker error transport", () => {
 
   it.each([
     new SqliteCoordinatorError("admission refused", new Error("native cause")),
-    ...(["gateway-lifecycle", "state-lifecycle", "state-handles"] as const).map(
-      (family) => new StateDatabaseCoordinatorContentionError(family),
-    ),
+    ...(["gateway-lifecycle", "state-lifecycle", "state-handles"] as const).flatMap((family) => [
+      new StateDatabaseCoordinatorContentionError(family),
+      new StateDatabaseCoordinatorContentionError(family, {
+        pid: 1234,
+        startTime: 5678,
+        command: "synthetic-coordinator-holder",
+        family,
+      }),
+    ]),
   ])("preserves coordinator classification for %s", (original) => {
     const decoded = roundTrip(original);
     expect(decoded).toBeInstanceOf(SqliteCoordinatorError);
     if (original instanceof StateDatabaseCoordinatorContentionError) {
-      expect(decoded).toMatchObject({ family: original.family });
+      expect(decoded).toMatchObject({
+        family: original.family,
+        blockingOwner: original.blockingOwner,
+      });
     } else {
       expect(decoded.cause).toBeInstanceOf(Error);
       expect(decoded.cause).toMatchObject({ message: "native cause" });
@@ -607,6 +616,13 @@ describe("shared-state worker error transport", () => {
       { ...validNode, errcode: 0.5 },
       { ...validNode, errcode: 2 ** 31 },
       { type: "coordinator-contention", name: "Error", message: "invalid", family: "other" },
+      {
+        type: "coordinator-contention",
+        name: "Error",
+        message: "invalid owner",
+        family: "state-lifecycle",
+        blockingOwner: { pid: 1234, startTime: 5678, command: "synthetic", family: "other" },
+      },
       {
         type: "state-lease",
         leaseCode: "OPENCLAW_STATE_LEASE_LOST",

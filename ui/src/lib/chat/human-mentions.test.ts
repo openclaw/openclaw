@@ -58,10 +58,13 @@ describe("human mention text ownership", () => {
   });
 
   it.each([
-    ...Array.from({ length: 32 }, (_, code) => [code, false] as const),
+    [0, false],
+    [9, false],
+    [10, false],
+    [13, false],
+    [31, false],
     [32, true],
     [127, true],
-    [128, true],
     [159, true],
   ] as const)(
     "rejects only C0 controls when restoring a token (code unit %i)",

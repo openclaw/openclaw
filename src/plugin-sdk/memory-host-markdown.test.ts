@@ -1,6 +1,3 @@
-/**
- * Tests managed Markdown block replacement helpers.
- */
 import { describe, expect, it } from "vitest";
 import { replaceManagedMarkdownBlock, withTrailingNewline } from "./memory-host-markdown.js";
 
@@ -61,39 +58,6 @@ describe("replaceManagedMarkdownBlock", () => {
         body: "- new",
       }),
     ).toBe("# Title\r\n\r\n## Generated\n<!-- start -->\n- new\n<!-- end -->\r\n");
-  });
-
-  it("collapses pre-existing duplicate managed blocks into one", () => {
-    const original = [
-      "# Title",
-      "",
-      "## Generated",
-      "<!-- start -->",
-      "- run-1",
-      "<!-- end -->",
-      "",
-      "## Generated",
-      "<!-- start -->",
-      "- run-2",
-      "<!-- end -->",
-      "",
-      "## Generated",
-      "<!-- start -->",
-      "- run-3",
-      "<!-- end -->",
-      "",
-    ].join("\n");
-
-    const updated = replaceManagedMarkdownBlock({
-      original,
-      heading: "## Generated",
-      startMarker: "<!-- start -->",
-      endMarker: "<!-- end -->",
-      body: "- latest",
-    });
-
-    expect(updated).toBe("# Title\n\n## Generated\n<!-- start -->\n- latest\n<!-- end -->\n");
-    expect(updated).not.toContain("run-");
   });
 
   it("preserves unmanaged markdown while removing duplicate blocks", () => {

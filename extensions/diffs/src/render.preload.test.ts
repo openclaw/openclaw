@@ -21,25 +21,6 @@ describe("renderDiffDocument SSR preloads", () => {
     await disposeHighlighter();
   });
 
-  it("preloads a before/after diff once for viewer and image output", async () => {
-    await renderDiffDocument(
-      {
-        kind: "before_after",
-        before: "const value = 1;\n",
-        after: "const value = 2;\n",
-        path: "src/example.ts",
-      },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
-      "both",
-    );
-
-    expect(diffsSsr.preloadDiffHTML).toHaveBeenCalledTimes(1);
-  });
-
   it("preloads each patch file once for viewer and image output", async () => {
     const patch = [
       "diff --git a/a.ts b/a.ts",

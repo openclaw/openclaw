@@ -2,9 +2,25 @@ import type { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { assertTransactionUsable } from "./sqlite-transaction.js";
+import type {
+  SqliteWalCheckpointMode,
+  SqliteWalCheckpointSnapshot,
+} from "./sqlite-wal-checkpoint.js";
+
+export type SqliteWalPeriodicRequest = {
+  maxPages: number;
+  checkpointMode: SqliteWalCheckpointMode;
+  checkpoint?: SqliteWalCheckpointSnapshot;
+};
+
+export type SqliteWalPeriodicResult = {
+  reclaimedPages: number;
+  checkpoint?: SqliteWalCheckpointSnapshot;
+};
 
 type MaintenanceAdmission = {
-  admit: (operation: () => void) => Promise<void>;
+  admit?: (operation: () => void) => Promise<void>;
+  execute?: (request: SqliteWalPeriodicRequest) => Promise<SqliteWalPeriodicResult | undefined>;
   flush?: (assertCurrent: () => void) => void;
   cancel?: () => void;
 };
@@ -14,12 +30,12 @@ const admissions = resolveGlobalSingleton(
   () => new WeakMap<DatabaseSync, MaintenanceAdmission>(),
 );
 
-export function registerSqliteWalWriteAdmission(
+export function registerSqliteWalWorkerMaintenance(
   database: DatabaseSync,
-  admit: MaintenanceAdmission["admit"],
+  execute: NonNullable<MaintenanceAdmission["execute"]>,
   cancel?: MaintenanceAdmission["cancel"],
 ): void {
-  admissions.set(database, { admit, cancel });
+  admissions.set(database, { execute, cancel });
 }
 
 export function cancelSqliteWalWriteAdmission(database: DatabaseSync): void {
@@ -28,7 +44,9 @@ export function cancelSqliteWalWriteAdmission(database: DatabaseSync): void {
 
 export function createSqliteWalMaintenanceScheduler(
   database: DatabaseSync,
-  operation: (maxPages: number) => number,
+  operation: (request: SqliteWalPeriodicRequest) => SqliteWalPeriodicResult,
+  prepare: (maxPages: number) => SqliteWalPeriodicRequest | undefined,
+  observe: (snapshot: SqliteWalCheckpointSnapshot) => void,
   onError: (error: unknown) => void,
   pageBudget: number,
 ): () => Promise<void> {
@@ -38,16 +56,31 @@ export function createSqliteWalMaintenanceScheduler(
       const run = async () => {
         let remaining = pageBudget;
         while (remaining > 0) {
-          let reclaimed = 0;
+          const request = prepare(remaining);
+          if (!request) {
+            return;
+          }
+          let result: SqliteWalPeriodicResult | undefined;
           const admitted = () => {
-            reclaimed = operation(remaining);
+            if (prepare(remaining)) {
+              result = operation(request);
+            }
           };
           const admission = admissions.get(database);
-          if (admission) {
+          if (admission?.execute) {
+            result = await admission.execute(request);
+            if (!prepare(remaining)) {
+              return;
+            }
+            if (result?.checkpoint) {
+              observe(result.checkpoint);
+            }
+          } else if (admission?.admit) {
             await admission.admit(admitted);
           } else {
             admitted();
           }
+          const reclaimed = result?.reclaimedPages ?? 0;
           remaining -= reclaimed;
           if (reclaimed <= 0 || remaining <= 0) {
             return;
@@ -57,7 +90,11 @@ export function createSqliteWalMaintenanceScheduler(
         }
       };
       pending = run()
-        .catch(onError)
+        .catch((error: unknown) => {
+          if (prepare(pageBudget)) {
+            onError(error);
+          }
+        })
         .finally(() => {
           pending = undefined;
         });

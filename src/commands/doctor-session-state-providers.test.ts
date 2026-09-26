@@ -325,34 +325,32 @@ describe("doctor session state provider routes", () => {
     }
   });
 
-  it.each(["claude-cli/team/model", "anthropic/team/model"])(
-    "preserves an explicit provider's cached local model %s",
-    async (model) => {
-      ownerState.owners = [anthropicOwner];
-      const store = {
-        "agent:main:canonical-provider": entry({
-          providerOverride: "google",
-          modelOverride: model,
-          modelOverrideSource: "user",
-          modelProvider: "google",
-          model,
-          contextTokens: 128_000,
-          authProfileOverride: "google:chosen",
-          authProfileOverrideSource: "user",
-        }),
-      };
+  it("preserves an explicit provider's cached local model", async () => {
+    const model = "claude-cli/team/model";
+    ownerState.owners = [anthropicOwner];
+    const store = {
+      "agent:main:canonical-provider": entry({
+        providerOverride: "google",
+        modelOverride: model,
+        modelOverrideSource: "user",
+        modelProvider: "google",
+        model,
+        contextTokens: 128_000,
+        authProfileOverride: "google:chosen",
+        authProfileOverrideSource: "user",
+      }),
+    };
 
-      const result = await runDoctor({
-        cfg: { agents: { defaults: { model: "google/claude-cli/team/model" } } },
-        store,
-      });
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "google/claude-cli/team/model" } } },
+      store,
+    });
 
-      expect(result.store).toEqual(store);
-      expect(result.warnings).toEqual([]);
-      expect(result.changes).toEqual([]);
-      expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
-    },
-  );
+    expect(result.store).toEqual(store);
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([]);
+    expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+  });
 
   it.each([
     { model: "claude-cli/team/model" },

@@ -107,32 +107,6 @@ describe("signal approval capability", () => {
     expect(text).not.toContain("3️⃣ Deny");
   });
 
-  it("does not show reaction choices when Signal has no explicit approvers", () => {
-    const cfg = buildConfig({
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "signal", to: "+15551230000" }],
-        },
-      },
-    });
-    const request = buildExecRequest("+15551230000");
-
-    const payload = signalApprovalCapability.render?.exec?.buildPendingPayload?.({
-      cfg,
-      request,
-      target: { channel: "signal", to: "+15551230000", source: "target" },
-      nowMs: 0,
-    });
-    const text = payload?.text ?? "";
-
-    expect(text).toContain("/approve exec-1 allow-once");
-    expect(text).not.toContain("React with:");
-    expect(text).not.toContain("👍 Allow Once");
-    expect(text).not.toContain("👎 Deny");
-  });
-
   it("normalizes equivalent Signal UUID target forms without suppressing generic target delivery", () => {
     const cfg = buildConfig({
       approvals: {

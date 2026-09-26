@@ -26,6 +26,17 @@ function hasLifecycleEndEvent(calls: Array<unknown[]>): boolean {
   });
 }
 
+function emitAgentEnd(
+  emit: ReturnType<typeof createSubscribedSessionHarness>["emit"],
+  text: string,
+) {
+  emit({
+    type: "agent_end",
+    messages: [{ role: "assistant", content: [{ type: "text", text }], stopReason: "stop" }],
+    willRetry: false,
+  });
+}
+
 describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
   it("streams commentary before tools while retaining the revisable final reply gate", async () => {
     const onAgentEvent = vi.fn();
@@ -78,17 +89,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     emitAssistantTextDeltaAndEnd({ emit, text: "Visible final answer." });
     expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
 
-    emit({
-      type: "agent_end",
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Visible final answer." }],
-          stopReason: "stop",
-        },
-      ],
-      willRetry: false,
-    });
+    emitAgentEnd(emit, "Visible final answer.");
 
     await subscription.waitForPendingEvents();
     expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
@@ -115,17 +116,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
 
-    emit({
-      type: "agent_end",
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "First answer." }],
-          stopReason: "stop",
-        },
-      ],
-      willRetry: false,
-    });
+    emitAgentEnd(emit, "First answer.");
 
     await vi.waitFor(() => expect(onBeforeTerminalDelivery).toHaveBeenCalledTimes(1));
     expect(onBeforeTerminalDelivery).toHaveBeenCalledWith(
@@ -163,17 +154,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       emit,
       text: "Slow revise answer.",
     });
-    emit({
-      type: "agent_end",
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Slow revise answer." }],
-          stopReason: "stop",
-        },
-      ],
-      willRetry: false,
-    });
+    emitAgentEnd(emit, "Slow revise answer.");
 
     await vi.waitFor(() => expect(onBeforeTerminalDelivery).toHaveBeenCalledTimes(1));
     let drained = false;
@@ -210,17 +191,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
     expect(onPartialReply).not.toHaveBeenCalled();
 
-    emit({
-      type: "agent_end",
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Visible stream." }],
-          stopReason: "stop",
-        },
-      ],
-      willRetry: false,
-    });
+    emitAgentEnd(emit, "Visible stream.");
 
     await subscription.waitForPendingEvents();
     const assistantEvents = onAgentEvent.mock.calls.filter(
@@ -251,17 +222,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       emit,
       text: "Final only.",
     });
-    emit({
-      type: "agent_end",
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Final only." }],
-          stopReason: "stop",
-        },
-      ],
-      willRetry: false,
-    });
+    emitAgentEnd(emit, "Final only.");
 
     await subscription.waitForPendingEvents();
     expect(onPartialReply).not.toHaveBeenCalled();
@@ -285,17 +246,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       emit,
       text: "Fallback answer.",
     });
-    emit({
-      type: "agent_end",
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Fallback answer." }],
-          stopReason: "stop",
-        },
-      ],
-      willRetry: false,
-    });
+    emitAgentEnd(emit, "Fallback answer.");
 
     await subscription.waitForPendingEvents();
     expect(onBlockReply).toHaveBeenCalledWith(
@@ -303,41 +254,6 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       { assistantMessageIndex: 1 },
     );
     expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(true);
-  });
-
-  it("flushes deferred block replies when the terminal gate continues", async () => {
-    const onBlockReply = vi.fn();
-    const onBeforeTerminalDelivery = vi.fn(async () => undefined);
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run-before-terminal-continue",
-      onBlockReply,
-      onBeforeTerminalDelivery,
-      blockReplyBreak: "message_end",
-    });
-
-    emitMessageStartAndEndForAssistantText({
-      emit,
-      text: "Accepted answer.",
-    });
-    expect(onBlockReply).not.toHaveBeenCalled();
-
-    emit({
-      type: "agent_end",
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Accepted answer." }],
-          stopReason: "stop",
-        },
-      ],
-      willRetry: false,
-    });
-
-    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Accepted answer." }),
-      { assistantMessageIndex: 1 },
-    );
   });
 
   it("preserves original transcript media references on deferred block replies", async () => {
@@ -351,6 +267,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     const text = "MEDIA:/tmp/generated.png\nAttached image";
 
     emitMessageStartAndEndForAssistantText({ emit, text });
+    expect(onBlockReply).not.toHaveBeenCalled();
     emit({
       type: "agent_end",
       messages: [{ role: "assistant", content: [{ type: "text", text }], stopReason: "stop" }],
@@ -358,6 +275,9 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     });
 
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "Attached image" }), {
+      assistantMessageIndex: 1,
+    });
     const payload = onBlockReply.mock.calls[0]?.[0] as object;
     expect(getReplyPayloadMetadata(payload)).toMatchObject({
       assistantMessageIndex: 1,

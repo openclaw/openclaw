@@ -154,7 +154,6 @@ async function runLoop(
   const toolLoopRecoveryState = initialConfig.toolLoopRecoveryState ?? {
     criticalToolLoopSeen: false,
   };
-  // Check for steering messages at start (user may have typed while waiting)
   const initialSteering = getSteeringAtCheckpoint(config);
   let pendingMessages: AgentMessage[] = Array.isArray(initialSteering)
     ? initialSteering
@@ -212,11 +211,9 @@ async function runLoop(
     return injectedMessage;
   };
 
-  // Outer loop: continues when queued follow-up messages arrive after agent would stop
   while (true) {
     let hasMoreToolCalls = true;
 
-    // Inner loop: process tool calls and steering messages
     while (hasMoreToolCalls || pendingMessages.length > 0) {
       if (await stopIfAborted()) {
         return newMessages;
@@ -229,7 +226,6 @@ async function runLoop(
         firstTurn = false;
       }
 
-      // Process pending messages (inject before next assistant response)
       if (pendingMessages.length > 0) {
         const injectedMessage = await commitPendingMessages();
         if (!injectedMessage && !hasMoreToolCalls) {
@@ -243,7 +239,6 @@ async function runLoop(
         return newMessages;
       }
 
-      // Stream assistant response
       let streamedSteering: AgentMessage[] = [];
       const streamedConfig: AgentLoopConfig = {
         ...config,
@@ -445,9 +440,6 @@ async function runLoop(
   return newMessages;
 }
 
-/**
- * Execute tool calls from an assistant message.
- */
 async function executeToolCalls(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
@@ -802,13 +794,7 @@ async function prepareToolCallEntry(
     toolCall,
     batch.resolved,
   );
-  await batch.emit({
-    type: "tool_execution_start",
-    toolCallId: toolCall.id,
-    toolName: toolCall.name,
-    args: toolCall.arguments,
-    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-  });
+  await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
   const preparation = await prepareToolCall(batch, toolCall);
   if (preparation.kind === "immediate") {
     return await finalizeToolCallOutcome(
@@ -982,11 +968,7 @@ async function prepareToolCall(
   if (batch.signal?.aborted && !cachedValidation) {
     // Execution cannot start after cancellation, so never begin validation
     // work (including deferred tool resolvers) for an uncached call.
-    return {
-      kind: "immediate",
-      result: createErrorToolResult("Operation aborted"),
-      isError: true,
-    };
+    return immediateToolCallError("Operation aborted");
   }
   const validation = cachedValidation ?? (await validateToolCallForBatchAdmission(batch, toolCall));
   if (validation.kind === "immediate") {
@@ -1006,34 +988,18 @@ async function prepareToolCall(
         batch.signal,
       );
       if (batch.signal?.aborted) {
-        return {
-          kind: "immediate",
-          result: createErrorToolResult("Operation aborted"),
-          isError: true,
-        };
+        return immediateToolCallError("Operation aborted");
       }
       if (beforeResult?.block) {
-        return {
-          kind: "immediate",
-          result: createErrorToolResult(beforeResult.reason || "Tool execution was blocked"),
-          isError: true,
-        };
+        return immediateToolCallError(beforeResult.reason || "Tool execution was blocked");
       }
     }
     if (batch.signal?.aborted) {
-      return {
-        kind: "immediate",
-        result: createErrorToolResult("Operation aborted"),
-        isError: true,
-      };
+      return immediateToolCallError("Operation aborted");
     }
     return validation;
   } catch (error) {
-    return {
-      kind: "immediate",
-      result: createErrorToolResult(coerceErrorMessage(error)),
-      isError: true,
-    };
+    return immediateToolCallError(coerceErrorMessage(error));
   }
 }
 
@@ -1043,32 +1009,20 @@ async function validateToolCallForBatchAdmission(
 ): Promise<ValidatedToolCallOutcome> {
   const resolution = await resolveToolCallTool(batch, toolCall);
   if (resolution.kind === "error") {
-    return {
-      kind: "immediate",
-      result: createErrorToolResult(
-        batch.signal?.aborted ? "Operation aborted" : coerceErrorMessage(resolution.error),
-      ),
-      isError: true,
-    };
+    return immediateToolCallError(
+      batch.signal?.aborted ? "Operation aborted" : coerceErrorMessage(resolution.error),
+    );
   }
   const tool = resolution.tool;
   if (!tool) {
-    return {
-      kind: "immediate",
-      result: createErrorToolResult(`Tool ${toolCall.name} not found`),
-      isError: true,
-    };
+    return immediateToolCallError(`Tool ${toolCall.name} not found`);
   }
 
   let preparedToolCall: AgentToolCall;
   try {
     preparedToolCall = prepareToolCallArguments(tool, toolCall);
   } catch (error) {
-    return {
-      kind: "immediate",
-      result: createErrorToolResult(coerceErrorMessage(error)),
-      isError: true,
-    };
+    return immediateToolCallError(coerceErrorMessage(error));
   }
 
   let validatedArgs: unknown;
@@ -1076,9 +1030,7 @@ async function validateToolCallForBatchAdmission(
     validatedArgs = validateToolArguments(tool, preparedToolCall);
   } catch (error) {
     return {
-      kind: "immediate",
-      result: createErrorToolResult(coerceErrorMessage(error)),
-      isError: true,
+      ...immediateToolCallError(coerceErrorMessage(error)),
       errorKind: "argument-validation",
     };
   }
@@ -1384,13 +1336,7 @@ async function completeToolLoopInterventionBatch(
       toolCall,
       batch.resolved,
     );
-    await batch.emit({
-      type: "tool_execution_start",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      args: toolCall.arguments,
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    });
+    await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
     const isTrigger = toolCall.id === params.intervention.toolCallId;
     const text = params.terminal
       ? isTrigger
@@ -1453,13 +1399,7 @@ async function completeUnstartedToolCall(
     batch.resolved,
   );
   if (!options.startEmitted) {
-    await batch.emit({
-      type: "tool_execution_start",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      args: toolCall.arguments,
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    });
+    await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
   }
   const finalized = await finalizeToolCallOutcome(
     batch,
@@ -1494,11 +1434,29 @@ function createToolExecutionErrorResult(error: unknown): AgentToolResult<unknown
     : result;
 }
 
+function immediateToolCallError(message: string): ImmediateToolCallOutcome {
+  return { kind: "immediate", result: createErrorToolResult(message), isError: true };
+}
+
 function createErrorToolResult(message: string, details: unknown = {}): AgentToolResult<unknown> {
   return {
     content: [{ type: "text", text: message }],
     details,
   };
+}
+
+function emitToolExecutionStart(
+  batch: ToolBatchContext,
+  toolCall: AgentToolCall,
+  hideFromChannelProgress: boolean,
+): ReturnType<AgentEventSink> {
+  return batch.emit({
+    type: "tool_execution_start",
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    args: toolCall.arguments,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  });
 }
 
 async function emitToolExecutionEnd(

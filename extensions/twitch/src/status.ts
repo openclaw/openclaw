@@ -1,32 +1,9 @@
-/**
- * Twitch status issues collector.
- *
- * Detects and reports configuration issues for Twitch accounts.
- */
-
 import type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
 import { getAccountConfig } from "./config.js";
 import { resolveTwitchToken } from "./token.js";
 import type { ChannelAccountSnapshot } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
-/**
- * Collect status issues for Twitch accounts.
- *
- * Analyzes account snapshots and detects configuration problems,
- * authentication issues, and other potential problems.
- *
- * @param accounts - Array of account snapshots to analyze
- * @param getCfg - Optional function to get full config for additional checks
- * @returns Array of detected status issues
- *
- * @example
- * const issues = collectTwitchStatusIssues(accountSnapshots);
- * if (issues.length > 0) {
- *   console.warn("Twitch configuration issues detected:");
- *   issues.forEach(issue => console.warn(`- ${issue.message}`));
- * }
- */
 export function collectTwitchStatusIssues(
   accounts: ChannelAccountSnapshot[],
   getCfg?: () => unknown,

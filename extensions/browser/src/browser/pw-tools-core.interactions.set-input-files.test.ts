@@ -6,6 +6,13 @@ const readFile = vi.fn();
 const stat = vi.fn();
 const detectMime = vi.fn();
 
+const uploadPayload = {
+  name: "ok.txt",
+  mimeType: "text/plain",
+  buffer: Buffer.from("upload contents"),
+  lastModifiedMs: 1700000000000,
+};
+
 let page: Record<string, unknown> | null = null;
 let locator: Record<string, unknown> | null = null;
 
@@ -96,6 +103,19 @@ function seedSingleLocatorPage(): {
   return { setInputFiles, elementHandle };
 }
 
+beforeEach(() => {
+  readFile.mockResolvedValue(uploadPayload.buffer);
+  stat.mockResolvedValue({
+    size: uploadPayload.buffer.byteLength,
+    mtimeMs: uploadPayload.lastModifiedMs,
+  });
+  detectMime.mockResolvedValue(uploadPayload.mimeType);
+  resolveStrictExistingUploadPaths.mockResolvedValue({
+    ok: true,
+    paths: ["/private/tmp/openclaw/uploads/ok.txt"],
+  });
+});
+
 describe("setFileChooserFilesViaPlaywright", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -103,13 +123,6 @@ describe("setFileChooserFilesViaPlaywright", () => {
       url: vi.fn(() => "https://allowed.example/form"),
     };
     locator = null;
-    readFile.mockResolvedValue(Buffer.from("upload contents"));
-    stat.mockResolvedValue({ size: Buffer.byteLength("upload contents"), mtimeMs: 1700000000000 });
-    detectMime.mockResolvedValue("text/plain");
-    resolveStrictExistingUploadPaths.mockResolvedValue({
-      ok: true,
-      paths: ["/private/tmp/openclaw/uploads/ok.txt"],
-    });
   });
 
   it("keeps chooser path handoff for unguarded local sessions", async () => {
@@ -150,17 +163,10 @@ describe("setFileChooserFilesViaPlaywright", () => {
 
     expect(stat).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
     expect(readFile).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
-    expect(fileChooser.setFiles).toHaveBeenCalledWith(
-      [
-        {
-          name: "ok.txt",
-          mimeType: "text/plain",
-          buffer: Buffer.from("upload contents"),
-          lastModifiedMs: 1700000000000,
-        },
-      ],
-      { timeout: 250, signal: expect.any(AbortSignal) },
-    );
+    expect(fileChooser.setFiles).toHaveBeenCalledWith([uploadPayload], {
+      timeout: 250,
+      signal: expect.any(AbortSignal),
+    });
   });
 });
 
@@ -169,13 +175,6 @@ describe("setInputFilesViaPlaywright", () => {
     vi.clearAllMocks();
     page = null;
     locator = null;
-    readFile.mockResolvedValue(Buffer.from("upload contents"));
-    stat.mockResolvedValue({ size: Buffer.byteLength("upload contents"), mtimeMs: 1700000000000 });
-    detectMime.mockResolvedValue("text/plain");
-    resolveStrictExistingUploadPaths.mockResolvedValue({
-      ok: true,
-      paths: ["/private/tmp/openclaw/uploads/ok.txt"],
-    });
   });
 
   it("sets resolved files once and leaves browser events to Playwright", async () => {
@@ -203,7 +202,8 @@ describe("setInputFilesViaPlaywright", () => {
     expect(elementHandle).not.toHaveBeenCalled();
   });
 
-  it("converts guarded remote uploads to payloads before Playwright path handoff", async () => {
+  it("converts a guarded remote upload just below the payload cap before Playwright handoff", async () => {
+    stat.mockResolvedValueOnce({ size: 50 * 1024 * 1024 - 1, mtimeMs: 1700000000000 });
     const { setInputFiles, elementHandle } = seedSingleLocatorPage();
 
     await setInputFilesViaPlaywright({
@@ -220,17 +220,10 @@ describe("setInputFilesViaPlaywright", () => {
       buffer: Buffer.from("upload contents"),
       filePath: "/private/tmp/openclaw/uploads/ok.txt",
     });
-    expect(setInputFiles).toHaveBeenCalledWith(
-      [
-        {
-          name: "ok.txt",
-          mimeType: "text/plain",
-          buffer: Buffer.from("upload contents"),
-          lastModifiedMs: 1700000000000,
-        },
-      ],
-      { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
-    );
+    expect(setInputFiles).toHaveBeenCalledWith([uploadPayload], {
+      timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
+      signal: expect.any(AbortSignal),
+    });
     expect(setInputFiles).toHaveBeenCalledTimes(1);
     expect(elementHandle).not.toHaveBeenCalled();
   });
@@ -248,14 +241,7 @@ describe("setInputFilesViaPlaywright", () => {
     });
 
     expect(setInputFiles).toHaveBeenCalledWith(
-      [
-        {
-          name: "ok.txt",
-          mimeType: "application/octet-stream",
-          buffer: Buffer.from("upload contents"),
-          lastModifiedMs: 1700000000000,
-        },
-      ],
+      [{ ...uploadPayload, mimeType: "application/octet-stream" }],
       { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
     );
   });
@@ -276,32 +262,6 @@ describe("setInputFilesViaPlaywright", () => {
 
     expect(readFile).not.toHaveBeenCalled();
     expect(setInputFiles).not.toHaveBeenCalled();
-  });
-
-  it("allows a guarded remote upload below the aggregate payload cap", async () => {
-    stat.mockResolvedValueOnce({ size: 50 * 1024 * 1024 - 1, mtimeMs: 1700000000000 });
-    const { setInputFiles } = seedSingleLocatorPage();
-
-    await setInputFilesViaPlaywright({
-      cdpUrl: "https://browser.example/cdp",
-      targetId: "T1",
-      inputRef: "e7",
-      paths: ["/tmp/openclaw/uploads/limit.bin"],
-      ssrfPolicy: {},
-    });
-
-    expect(readFile).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
-    expect(setInputFiles).toHaveBeenCalledWith(
-      [
-        {
-          name: "ok.txt",
-          mimeType: "text/plain",
-          buffer: Buffer.from("upload contents"),
-          lastModifiedMs: 1700000000000,
-        },
-      ],
-      { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
-    );
   });
 
   it("checks the aggregate cap across multiple guarded remote upload payloads", async () => {
@@ -370,17 +330,10 @@ describe("setInputFilesViaPlaywright", () => {
       buffer: Buffer.from("upload contents"),
       filePath: "/private/tmp/openclaw/uploads/ok.txt",
     });
-    expect(setInputFiles).toHaveBeenCalledWith(
-      [
-        {
-          name: "ok.txt",
-          mimeType: "text/plain",
-          buffer: Buffer.from("upload contents"),
-          lastModifiedMs: 1700000000000,
-        },
-      ],
-      { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
-    );
+    expect(setInputFiles).toHaveBeenCalledWith([uploadPayload], {
+      timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
+      signal: expect.any(AbortSignal),
+    });
     expect(withPageNavigationRequestGuard).toHaveBeenCalledTimes(1);
     expect(setInputFiles).toHaveBeenCalledTimes(1);
     expect(elementHandle).not.toHaveBeenCalled();

@@ -225,21 +225,6 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     expect(await fs.readdir(root)).toEqual(["gateway.mjs"]);
   });
 
-  it("retains the startup error and confirms teardown after listening fails", async () => {
-    const { params, pids } = await fixture();
-    const failure = new Error("listening callback failed");
-    const owner = own({
-      ...params,
-      onListening: () => {
-        pids();
-        throw failure;
-      },
-    });
-    await expect(owner.start()).rejects.toMatchObject({ cause: failure });
-    await expect(owner.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
-    expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
-  });
-
   it.each([
     { failedWork: false, label: "successful" },
     { failedWork: true, label: "failed" },
@@ -325,32 +310,24 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     expect(groups.every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
   });
 
-  it("settles a failed replacement, not only its stopped predecessor", async () => {
-    const { params, pids } = await fixture(true);
-    const owner = own(params);
-    const gateway = await owner.start();
-    pids();
-    await expect(gateway.restartAfterStateMutation(async () => {})).rejects.toThrow("exitCode=17");
-    await expect(owner.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
-    expect(pids()).toHaveLength(2);
-    expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
-  });
-
   it.each(["startup", "replacement"] as const)(
     "preserves sanitized log evidence when explicit stop follows %s failure",
     async (phase) => {
       const { params, pids } = await fixture(phase === "replacement");
+      const failure = new Error("fixture listening failed");
       const owner = own({
         ...params,
         onListening: () => {
           pids();
           if (phase === "startup") {
-            throw new Error("fixture listening failed");
+            throw failure;
           }
         },
       });
       if (phase === "startup") {
-        await expect(owner.start()).rejects.toThrow("fixture listening failed");
+        const started = owner.start();
+        await expect(started).rejects.toThrow("fixture listening failed");
+        await expect(started).rejects.toMatchObject({ cause: failure });
       } else {
         const gateway = await owner.start();
         await expect(gateway.restartAfterStateMutation(async () => {})).rejects.toThrow(
@@ -369,6 +346,7 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
         expect(log).toContain(`QA_GATEWAY_ATTEMPT_${phase === "startup" ? 1 : 2}`);
         expect(log).toContain("apiKey=<redacted>");
         expect(log).not.toContain("synthetic-fixture-secret");
+        expect(pids()).toHaveLength(phase === "startup" ? 1 : 2);
         expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
       } finally {
         await fs.rm(preserveToDir, { recursive: true, force: true });

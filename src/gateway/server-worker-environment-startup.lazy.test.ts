@@ -5,6 +5,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
 import type {
@@ -68,6 +69,7 @@ describe("gateway worker session-tool startup", () => {
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const registry = createEmptyPluginRegistry();
       await createGatewayWorkerEnvironmentRuntime({
+        scheduler: createTestGatewayScheduler(),
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,

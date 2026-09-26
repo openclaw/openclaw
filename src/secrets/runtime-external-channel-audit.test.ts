@@ -54,7 +54,6 @@ const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks()
 const EXTERNALIZED_CHANNEL_IDS = [
   "discord",
   "feishu",
-  "googlechat",
   "msteams",
   "nextcloud-talk",
   "qqbot",
@@ -116,110 +115,11 @@ function externalChannelOrigins(records: readonly PluginManifestRecord[]) {
   return new Map(records.map((record) => [record.id, record.origin] as const));
 }
 
-function mockBundledPublicArtifactMiss() {
-  loadBundledPublicArtifactMock.mockImplementation(
-    (params: { dirName: string; artifactCandidates: string[] }) => {
-      if (
-        params.dirName === "googlechat" &&
-        params.artifactCandidates[0] === "secret-contract-api.js"
-      ) {
-        return createGoogleChatSecretContractApi();
-      }
-      return null;
-    },
-  );
-}
-
-function createGoogleChatSecretContractApi() {
-  const secretTargetRegistryEntries = [
-    {
-      id: "channels.googlechat.accounts.*.serviceAccount",
-      targetType: "channels.googlechat.serviceAccount",
-      targetTypeAliases: ["channels.googlechat.accounts.*.serviceAccount"],
-      configFile: "openclaw.json",
-      pathPattern: "channels.googlechat.accounts.*.serviceAccount",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string-or-object",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-      accountIdPathSegmentIndex: 3,
-    },
-    {
-      id: "channels.googlechat.serviceAccount",
-      targetType: "channels.googlechat.serviceAccount",
-      configFile: "openclaw.json",
-      pathPattern: "channels.googlechat.serviceAccount",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string-or-object",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-  ];
-  const collectRuntimeConfigAssignments = (params: {
-    config: { channels?: { googlechat?: Record<string, unknown> } };
-    context: {
-      assignments: Array<{
-        ref: unknown;
-        path: string;
-        expected: "string-or-object";
-        apply: (value: unknown) => void;
-      }>;
-      warnings: Array<{ code: string; path: string; message: string }>;
-    };
-  }) => {
-    const googlechat = params.config.channels?.googlechat;
-    if (!googlechat) {
-      return;
-    }
-    const collect = (target: Record<string, unknown>, pathKey: string, active: boolean) => {
-      const refValue = target.serviceAccount;
-      if (!refValue) {
-        return;
-      }
-      const pathLocal = `${pathKey}.serviceAccount`;
-      if (!active) {
-        params.context.warnings.push({
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: pathLocal,
-          message: `${pathLocal}: Google Chat account is disabled.`,
-        });
-        return;
-      }
-      params.context.assignments.push({
-        ref: refValue,
-        path: pathLocal,
-        expected: "string-or-object",
-        apply: (value) => {
-          target.serviceAccount = value;
-        },
-      });
-    };
-
-    collect(googlechat, "channels.googlechat", googlechat.enabled !== false);
-    const accounts = googlechat.accounts as Record<string, Record<string, unknown>> | undefined;
-    for (const [accountId, account] of Object.entries(accounts ?? {})) {
-      collect(account, `channels.googlechat.accounts.${accountId}`, account.enabled !== false);
-    }
-  };
-  return {
-    channelSecrets: {
-      secretTargetRegistryEntries,
-      collectRuntimeConfigAssignments,
-    },
-    secretTargetRegistryEntries,
-    collectRuntimeConfigAssignments,
-  };
-}
-
 function expectMetadataBackedContractsWereUsed(
   channelIds: readonly ExternalizedChannelId[] = EXTERNALIZED_CHANNEL_IDS,
 ) {
   expect(getBootstrapChannelSecretsMock).not.toHaveBeenCalled();
-  if (channelIds.some((channelId) => channelId !== "googlechat")) {
-    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
-  }
+  expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
   for (const channelId of channelIds) {
     expect(loadBundledPublicArtifactMock).toHaveBeenCalledWith({
       dirName: channelId,
@@ -243,7 +143,7 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     getBootstrapChannelSecretsMock.mockReset();
     getBootstrapChannelSecretsMock.mockReturnValue(undefined);
     loadBundledPublicArtifactMock.mockReset();
-    mockBundledPublicArtifactMiss();
+    loadBundledPublicArtifactMock.mockReturnValue(null);
     loadPluginMetadataSnapshotMock.mockReset();
   });
 
@@ -318,18 +218,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
               },
             },
           },
-          googlechat: {
-            serviceAccount: ref("GOOGLECHAT_SERVICE_ACCOUNT"),
-            accounts: {
-              inherited: {
-                enabled: true,
-              },
-              work: {
-                enabled: true,
-                serviceAccount: ref("GOOGLECHAT_WORK_SERVICE_ACCOUNT"),
-              },
-            },
-          },
           msteams: {
             appPassword: ref("MSTEAMS_APP_PASSWORD"),
           },
@@ -397,8 +285,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
           FEISHU_WORK_APP_SECRET: "feishu-work-app-secret",
           FEISHU_WORK_ENCRYPT_KEY: "feishu-work-encrypt-key",
           FEISHU_WORK_VERIFICATION_TOKEN: "feishu-work-verification-token",
-          GOOGLECHAT_SERVICE_ACCOUNT: "googlechat-service-account",
-          GOOGLECHAT_WORK_SERVICE_ACCOUNT: "googlechat-work-service-account",
           MSTEAMS_APP_PASSWORD: "msteams-app-password",
           NEXTCLOUD_TALK_BOT_SECRET: "nextcloud-talk-bot-secret",
           NEXTCLOUD_TALK_API_PASSWORD: "nextcloud-talk-api-password",
@@ -432,8 +318,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
         "channels.feishu.accounts.work.appSecret": "feishu-work-app-secret",
         "channels.feishu.accounts.work.encryptKey": "feishu-work-encrypt-key",
         "channels.feishu.accounts.work.verificationToken": "feishu-work-verification-token",
-        "channels.googlechat.serviceAccount": "googlechat-service-account",
-        "channels.googlechat.accounts.work.serviceAccount": "googlechat-work-service-account",
         "channels.msteams.appPassword": "msteams-app-password",
         "channels.nextcloud-talk.botSecret": "nextcloud-talk-bot-secret",
         "channels.nextcloud-talk.apiPassword": "nextcloud-talk-api-password",
@@ -517,16 +401,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
             },
           },
         },
-        googlechat: {
-          enabled: false,
-          serviceAccount: inactiveExecRef("GOOGLECHAT_DISABLED_SERVICE_ACCOUNT"),
-          accounts: {
-            disabled: {
-              enabled: false,
-              serviceAccount: inactiveExecRef("GOOGLECHAT_DISABLED_ACCOUNT_SERVICE_ACCOUNT"),
-            },
-          },
-        },
         msteams: {
           enabled: false,
           appPassword: inactiveExecRef("MSTEAMS_DISABLED_APP_PASSWORD"),
@@ -599,8 +473,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
       "channels.feishu.accounts.disabled.encryptKey",
       "channels.feishu.verificationToken",
       "channels.feishu.accounts.disabled.verificationToken",
-      "channels.googlechat.serviceAccount",
-      "channels.googlechat.accounts.disabled.serviceAccount",
       "channels.msteams.appPassword",
       "channels.nextcloud-talk.botSecret",
       "channels.nextcloud-talk.accounts.disabled.botSecret",

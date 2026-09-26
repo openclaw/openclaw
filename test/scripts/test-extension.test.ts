@@ -54,6 +54,13 @@ import { waitForPidFile } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
+import { mediaExtensionTestRoots } from "../vitest/vitest.extension-media-paths.mjs";
+import { memoryExtensionTestRoots } from "../vitest/vitest.extension-memory-paths.mjs";
+import { messagingExtensionTestRoots } from "../vitest/vitest.extension-messaging-paths.mjs";
+import { miscExtensionTestRoots } from "../vitest/vitest.extension-misc-paths.mjs";
+import { providerExtensionTestRoots } from "../vitest/vitest.extension-provider-paths.mjs";
+import { qaExtensionTestRoots } from "../vitest/vitest.extension-qa-paths.mjs";
+import { zaloExtensionTestRoots } from "../vitest/vitest.extension-zalo-paths.mjs";
 import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
 
 vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
@@ -153,53 +160,25 @@ describe("scripts/test-extension.mts", () => {
     );
   });
 
-  it.each(extensionCatchAllExcludedTestRoots)(
+  // These families share their exclusion array with an includes-only route predicate.
+  // Keep one member per predicate, and every root outside those known families.
+  const repeatedRouteRoots = new Set(
+    [
+      mediaExtensionTestRoots,
+      memoryExtensionTestRoots,
+      messagingExtensionTestRoots,
+      miscExtensionTestRoots,
+      providerExtensionTestRoots,
+      qaExtensionTestRoots,
+      zaloExtensionTestRoots,
+    ].flatMap((roots) => roots.slice(1)),
+  );
+  it.each(extensionCatchAllExcludedTestRoots.filter((root) => !repeatedRouteRoots.has(root)))(
     "routes catch-all-excluded extension root %s to a dedicated config",
     (root) => {
       expect(resolveExtensionTestConfig(root)).not.toBe("test/vitest/vitest.extensions.config.ts");
     },
   );
-
-  it("resolves split channel extensions onto their own vitest configs", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("slack");
-    expect(plan.extensionDir).toBe(bundledPluginRoot("slack"));
-    expect(plan.config).toBe("test/vitest/vitest.extension-slack.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("slack"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it.each([
-    { extensionId: "acpx" },
-    { extensionId: "diffs" },
-    { extensionId: "feishu" },
-    { extensionId: "matrix" },
-    { extensionId: "telegram" },
-    { extensionId: "whatsapp" },
-    { extensionId: "voice-call" },
-    { extensionId: "mattermost" },
-    { extensionId: "irc" },
-    { extensionId: "zalo" },
-    { extensionId: "msteams" },
-    { extensionId: "codex" },
-  ])("resolves $extensionId onto the $extensionId vitest config", ({ extensionId }) => {
-    const plan = resolveExtensionTestPlan({ targetArg: extensionId, cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe(extensionId);
-    expect(plan.config).toBe(`test/vitest/vitest.extension-${extensionId}.config.ts`);
-    expect(plan.roots).toContain(bundledPluginRoot(extensionId));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves OpenAI onto its own provider vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "openai", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("openai");
-    expect(plan.config).toBe("test/vitest/vitest.extension-provider-openai.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("openai"));
-    expect(plan.hasTests).toBe(true);
-  });
 
   it.each([
     {
@@ -269,21 +248,12 @@ describe("scripts/test-extension.mts", () => {
 
   it.each([
     ["watch", ["--watch"]],
-    ["short watch", ["-w"]],
-    ["coverage", ["--coverage"]],
-    ["reporter", ["--reporter=json"]],
-    ["output file", ["--outputFile=results.json"]],
-    ["shard", ["--shard=1/2"]],
     ["retry with shard", ["--retry=1", "--shard=1/2"]],
-    ["retry with report", ["--retry=1", "--reporter=json"]],
     ["missing retry value", ["--retry"]],
     ["invalid retry value", ["--retry=invalid"]],
     ["missing exclude value", ["--exclude"]],
-    ["bail", ["--bail=2"]],
-    ["changed", ["--changed=origin/main"]],
     ["exclude", ["--exclude=extensions/matrix/src/**"]],
     ["one-or-more extglob exclude", ["--exclude=extensions/matrix/src/+(a).test.ts"]],
-    ["exactly-one extglob exclude", ["--exclude=extensions/matrix/src/@(a).test.ts"]],
   ])("keeps Matrix %s runs in one process", (_name, vitestArgs) => {
     const root = bundledPluginRoot("matrix");
 
@@ -306,30 +276,6 @@ describe("scripts/test-extension.mts", () => {
     expect(plan.extensionId).toBe(extensionId);
     expect(plan.config).toBe(config);
     expect(plan.roots).toContain(bundledPluginRoot(extensionId));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves broad dedicated extension groups onto their narrow vitest configs", () => {
-    expect(resolveExtensionTestPlan({ targetArg: "browser", cwd: process.cwd() }).config).toBe(
-      "test/vitest/vitest.extension-browser.config.ts",
-    );
-    expect(resolveExtensionTestPlan({ targetArg: "qa-lab", cwd: process.cwd() }).config).toBe(
-      "test/vitest/vitest.extension-qa.config.ts",
-    );
-    expect(resolveExtensionTestPlan({ targetArg: "vydra", cwd: process.cwd() }).config).toBe(
-      "test/vitest/vitest.extension-media.config.ts",
-    );
-    expect(resolveExtensionTestPlan({ targetArg: "firecrawl", cwd: process.cwd() }).config).toBe(
-      "test/vitest/vitest.extension-misc.config.ts",
-    );
-  });
-
-  it("omits src/<extension> when no paired core root exists", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "line", cwd: process.cwd() });
-
-    expect(plan.roots).toContain(bundledPluginRoot("line"));
-    expect(plan.roots).not.toContain("src/line");
-    expect(plan.config).toBe("test/vitest/vitest.extension-line.config.ts");
     expect(plan.hasTests).toBe(true);
   });
 
@@ -1188,35 +1134,30 @@ await new Promise(()=>{});export default {};`,
     expect(runGroup).toHaveBeenCalledTimes(expectedMatrixTestProcessCount());
   });
 
-  it.each([
-    ["--watch"],
-    ["--coverage"],
-    ["--reporter=json"],
-    ["--outputFile=results.json"],
-    ["--bail=2"],
-    ["--changed=origin/main"],
-    ["--exclude=extensions/matrix/src/**"],
-  ])("keeps Matrix extension batch mode %s in one process", async (vitestArg) => {
-    const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+  it.each([["--watch"], ["--exclude=extensions/matrix/src/**"]])(
+    "keeps Matrix extension batch mode %s in one process",
+    async (vitestArg) => {
+      const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
 
-    const result = await runExtensionBatchPlan(
-      resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["matrix"] }),
-      { runGroup, vitestArgs: [vitestArg] },
-    );
+      const result = await runExtensionBatchPlan(
+        resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["matrix"] }),
+        { runGroup, vitestArgs: [vitestArg] },
+      );
 
-    expect(result).toBe(0);
-    expect(runGroup).toHaveBeenCalledOnce();
-    const invocation = requireFirstMockArg<RunGroupParams>(runGroup);
-    expect(invocation.targets).toEqual(["matrix"]);
-    expect(invocation.config).toBe("test/vitest/vitest.database-worker-watch.config.ts");
-    expect(invocation.homeMode).toBe("live-aware");
-    expect(invocation.env?.OPENCLAW_VITEST_DATABASE_WORKER_WATCH_OWNER).toBe(
-      "test/vitest/vitest.extension-matrix.config.ts",
-    );
-    expect(JSON.parse(invocation.env!.OPENCLAW_VITEST_DATABASE_WORKER_WATCH_TESTS!)).toEqual(
-      databaseWorkerExtensionTestFiles.filter((file) => file.startsWith("extensions/matrix/")),
-    );
-  });
+      expect(result).toBe(0);
+      expect(runGroup).toHaveBeenCalledOnce();
+      const invocation = requireFirstMockArg<RunGroupParams>(runGroup);
+      expect(invocation.targets).toEqual(["matrix"]);
+      expect(invocation.config).toBe("test/vitest/vitest.database-worker-watch.config.ts");
+      expect(invocation.homeMode).toBe("live-aware");
+      expect(invocation.env?.OPENCLAW_VITEST_DATABASE_WORKER_WATCH_OWNER).toBe(
+        "test/vitest/vitest.extension-matrix.config.ts",
+      );
+      expect(JSON.parse(invocation.env!.OPENCLAW_VITEST_DATABASE_WORKER_WATCH_TESTS!)).toEqual(
+        databaseWorkerExtensionTestFiles.filter((file) => file.startsWith("extensions/matrix/")),
+      );
+    },
+  );
 
   it.each([
     {

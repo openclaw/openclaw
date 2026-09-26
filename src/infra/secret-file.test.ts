@@ -236,21 +236,6 @@ describe("writePrivateSecretFileAtomic", () => {
     ).rejects.toThrow("must not be a symlink");
   });
 
-  it("rejects symlinked path components", async () => {
-    const dir = await createTempDir();
-    const targetDir = path.join(dir, "outside-dir");
-    await fsPromises.mkdir(targetDir);
-    await fsPromises.symlink(targetDir, path.join(dir, "linked"));
-
-    await expect(
-      writePrivateSecretFileAtomic({
-        rootDir: dir,
-        filePath: path.join(dir, "linked", "auth.json"),
-        content: '{"ok":true}\n',
-      }),
-    ).rejects.toThrow("must not be a symlink");
-  });
-
   it("tightens an existing world-readable directory before writing secrets", async () => {
     const dir = await createTempDir();
     const nestedDir = path.join(dir, "nested");

@@ -708,7 +708,27 @@ function assertLegacyOperatorCronTranscript(stage, index, entry, marker) {
           .map((part) => part.text)
           .join("");
   assert.equal(latest.role, "assistant");
-  assert.equal(previous.role, "user");
+  // Display history attributes the scheduled prompt to Cron as an assistant message.
+  assert.equal(previous.role, "assistant");
+  assert.deepEqual(
+    {
+      kind: previous.provenance?.kind,
+      sourceTool: previous.provenance?.sourceTool,
+      jobId: previous.provenance?.jobId,
+      runId: previous.provenance?.runId,
+      sourceSessionKey: previous.provenance?.sourceSessionKey,
+    },
+    {
+      kind: "internal_system",
+      sourceTool: "cron",
+      jobId: entry.jobId,
+      runId: entry.sessionId,
+      sourceSessionKey: entry.sessionKey,
+    },
+    "Cron transcript selected another run's scheduled prompt",
+  );
+  assert.equal(previous.senderSession?.sessionKey, entry.sessionKey);
+  assert.equal(previous["__openclaw"]?.turnBoundary, true);
   assert(text(latest).includes(marker), "Cron transcript selected another run's reply");
   assert(
     text(previous).includes(`Reply with exactly ${marker}.`),

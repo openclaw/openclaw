@@ -10762,6 +10762,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
     public let trending: Bool?
     public let featuredrank: Int?
     public let trendingrank: Int?
+    public let categoryranks: [String: AnyCodable]?
     public let publishedtoclawhub: Bool?
 
     public init(
@@ -10782,6 +10783,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         trending: Bool? = nil,
         featuredrank: Int? = nil,
         trendingrank: Int? = nil,
+        categoryranks: [String: AnyCodable]? = nil,
         publishedtoclawhub: Bool? = nil)
     {
         self.name = name
@@ -10801,6 +10803,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         self.trending = trending
         self.featuredrank = featuredrank
         self.trendingrank = trendingrank
+        self.categoryranks = categoryranks
         self.publishedtoclawhub = publishedtoclawhub
     }
 
@@ -10822,6 +10825,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         case trending
         case featuredrank = "featuredRank"
         case trendingrank = "trendingRank"
+        case categoryranks = "categoryRanks"
         case publishedtoclawhub = "publishedToClawHub"
     }
 }
@@ -10832,19 +10836,31 @@ public struct PluginDiscoveryCategory: Codable, Sendable {
     public let description: String
     public let icon: String
     public let order: Int
+    public let pinnedpackages: [String]?
 
     public init(
         slug: String,
         label: String,
         description: String,
         icon: String,
-        order: Int)
+        order: Int,
+        pinnedpackages: [String]? = nil)
     {
         self.slug = slug
         self.label = label
         self.description = description
         self.icon = icon
         self.order = order
+        self.pinnedpackages = pinnedpackages
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case slug
+        case label
+        case description
+        case icon
+        case order
+        case pinnedpackages = "pinnedPackages"
     }
 }
 
@@ -11531,18 +11547,22 @@ public struct PluginsRefreshResult: Codable, Sendable {
 
 public struct PluginsReloadParams: Codable, Sendable {
     public let plugins: [PluginReloadTarget]
+    public let waitfordrain: Bool?
     public let acknowledgecapabilities: [String: AnyCodable]?
 
     public init(
         plugins: [PluginReloadTarget],
+        waitfordrain: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil)
     {
         self.plugins = plugins
+        self.waitfordrain = waitfordrain
         self.acknowledgecapabilities = acknowledgecapabilities
     }
 
     private enum CodingKeys: String, CodingKey {
         case plugins
+        case waitfordrain = "waitForDrain"
         case acknowledgecapabilities = "acknowledgeCapabilities"
     }
 }
@@ -26581,6 +26601,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
     public let terminalatms: Int?
     public let recoveryerror: String
     public let recoveryaction: String?
+    public let retryonsend: Bool?
 
     public init(
         state: String,
@@ -26602,7 +26623,8 @@ public struct FailedSessionPlacement: Codable, Sendable {
         terminalreason: String? = nil,
         terminalatms: Int? = nil,
         recoveryerror: String,
-        recoveryaction: String? = nil)
+        recoveryaction: String? = nil,
+        retryonsend: Bool? = nil)
     {
         self.state = state
         self.generation = generation
@@ -26624,6 +26646,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
         self.terminalatms = terminalatms
         self.recoveryerror = recoveryerror
         self.recoveryaction = recoveryaction
+        self.retryonsend = retryonsend
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -26647,6 +26670,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
         case terminalatms = "terminalAtMs"
         case recoveryerror = "recoveryError"
         case recoveryaction = "recoveryAction"
+        case retryonsend = "retryOnSend"
     }
 }
 

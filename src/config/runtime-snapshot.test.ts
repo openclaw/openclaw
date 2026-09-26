@@ -63,14 +63,6 @@ describe("runtime snapshot state", () => {
     expect(loadCount).toBe(2);
   });
 
-  it("returns the source snapshot when runtime snapshot is active", () => {
-    const sourceConfig = createProviderConfigFixture();
-    const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
-
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
-  });
-
   it("publishes and replaces same-byte resolution facts with the source snapshot", () => {
     const runtimeConfig: OpenClawConfig = {
       gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },

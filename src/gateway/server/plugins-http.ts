@@ -7,7 +7,15 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runPluginHttpRoute } from "../../plugins/http-route-owner.js";
+import {
+  getWebhookLegacyListener,
+  isLegacyPluginRouteHandoff,
+  permitsLegacyPluginRoute,
+} from "../../plugins/http-legacy-listener.js";
+import {
+  respondPluginHttpRouteHandoff,
+  runPluginHttpRoute,
+} from "../../plugins/http-route-owner.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
@@ -239,8 +247,23 @@ export function createGatewayPluginRequestHandler(params: {
       return false;
     }
 
-    const pathContext = resolvePluginRoutePathContextForRequest(req, providedPathContext);
-    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+    const legacyRequest = getWebhookLegacyListener(req) !== undefined;
+    const pathContext = legacyRequest
+      ? resolvePluginRoutePathContext(
+          URL.parse(req.url ?? "/", "http://localhost")?.pathname ?? "/",
+        )
+      : resolvePluginRoutePathContextForRequest(req, providedPathContext);
+    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext).filter((route) =>
+      permitsLegacyPluginRoute(req, route),
+    );
+    if (legacyRequest) {
+      // The original listener's handler owns unmatched paths too (including auth/parser errors).
+      for (const route of routes) {
+        if (permitsLegacyPluginRoute(req, route) && !matchedRoutes.includes(route)) {
+          matchedRoutes.push(route);
+        }
+      }
+    }
     if (matchedRoutes.length === 0) {
       return false;
     }
@@ -311,21 +334,27 @@ export function createGatewayPluginRequestHandler(params: {
         continue;
       }
       try {
-        const runRoute = async () =>
-          (await withPluginRouteRuntimeScope(
-            createPluginRouteRuntimeScope({
-              registry,
-              route,
-              req,
-              res,
-              gatewayRequestContext,
-              gatewayRequestAuth,
-              gatewayRequestOperatorScopes,
-              gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
-            }),
-            async () =>
-              runPluginHttpRoute(registry, route, route.handler, () => route.handler(req, res)),
-          )) !== false;
+        const runRoute = async () => {
+          if (isLegacyPluginRouteHandoff(req, route)) {
+            return respondPluginHttpRouteHandoff(req, res);
+          }
+          return (
+            (await withPluginRouteRuntimeScope(
+              createPluginRouteRuntimeScope({
+                registry,
+                route,
+                req,
+                res,
+                gatewayRequestContext,
+                gatewayRequestAuth,
+                gatewayRequestOperatorScopes,
+                gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
+              }),
+              async () =>
+                runPluginHttpRoute(registry, route, route.handler, () => route.handler(req, res)),
+            )) !== false
+          );
+        };
         // Entitled trusted-operator routes delegate substantive work through Gateway dispatch.
         // An outer root would make gateway.suspend.prepare nested and permanently unreachable.
         const handled = canRunPluginHttpRouteWithoutAdmission(route)
@@ -339,7 +368,11 @@ export function createGatewayPluginRequestHandler(params: {
           return true;
         }
         log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
-        finishFailedGatewayHttpResponse(res);
+        if (legacyRequest) {
+          res.destroy(err instanceof Error ? err : undefined);
+        } else {
+          finishFailedGatewayHttpResponse(res);
+        }
         return true;
       }
     }

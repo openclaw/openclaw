@@ -9,9 +9,6 @@ const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
 const suppressNotesStorage = new AsyncLocalStorage<boolean>();
 
 function isSuppressedByEnv(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(value);
   if (!normalized) {
     return false;

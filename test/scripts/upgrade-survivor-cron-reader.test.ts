@@ -140,6 +140,7 @@ it.each([
   { source: "native", damage: "offset" },
   { source: "native", damage: "transcript-duplicate" },
   { source: "native", damage: "transcript-other-run" },
+  { source: "native", damage: "transcript-other-prompt-run" },
   { source: "native", damage: "transcript-missing-cursor" },
 ])("checks candidate Cron pages for $source history ($damage)", async ({ source, damage }) => {
   const root = dirs.make("survivor-cron-reader-check-");
@@ -201,18 +202,32 @@ it.each([
       return reply({
         messages: [
           {
-            role: request.cursor ? "user" : "assistant",
+            role: "assistant",
             content: request.cursor
               ? `Reply with exactly ${transcriptMarker}.`
               : damage === "transcript-other-run"
                 ? "another run"
                 : transcriptMarker,
+            ...(request.cursor
+              ? {
+                  provenance: {
+                    kind: "internal_system",
+                    sourceTool: "cron",
+                    jobId: entry.jobId,
+                    runId:
+                      damage === "transcript-other-prompt-run" ? "another-run" : entry.sessionId,
+                    sourceSessionKey: entry.sessionKey,
+                  },
+                  senderSession: { sessionKey: entry.sessionKey },
+                }
+              : {}),
             __openclaw: {
               id:
                 request.cursor && damage !== "transcript-duplicate"
                   ? `prompt-${index}`
                   : `answer-${index}`,
               seq: request.cursor ? 1 : 2,
+              ...(request.cursor ? { turnBoundary: true } : {}),
             },
           },
         ],
@@ -266,7 +281,7 @@ it.each([
           earlier: {
             messages: [
               {
-                role: "user",
+                role: "assistant",
                 content: `Reply with exactly ${marker(job.effectiveAgentId)}.`,
               },
             ],

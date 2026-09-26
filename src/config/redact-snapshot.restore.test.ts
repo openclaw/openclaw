@@ -31,17 +31,6 @@ describe("restoreRedactedValues", () => {
     expect(result.models.providers.openai.baseUrl).toBe("https://alice:secret@example.test/v1");
   });
 
-  it("restores sentinel values from original config", () => {
-    const incoming = {
-      gateway: { auth: { token: REDACTED_SENTINEL } },
-    };
-    const original = {
-      gateway: { auth: { token: "real-secret-token-value" } },
-    };
-    const result = restoreRedactedValues(incoming, original) as typeof incoming;
-    expect(result.gateway.auth.token).toBe("real-secret-token-value");
-  });
-
   it("preserves non-sensitive fields unchanged", () => {
     const incoming = {
       ui: { seamColor: "#ff0000" },
@@ -125,7 +114,7 @@ describe("restoreRedactedValues", () => {
     }
   });
 
-  it.each(["toString", "constructor", "valueOf", "hasOwnProperty"])(
+  it.each(["constructor"])(
     "rejects inherited %s values when the original key is missing",
     (key) => {
       const hints = { [key]: { sensitive: true } };

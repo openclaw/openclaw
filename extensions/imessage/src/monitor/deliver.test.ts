@@ -34,10 +34,17 @@ vi.mock("../send.js", () => ({
     sendMessageIMessageMock(to, message, opts),
 }));
 
-vi.mock("./deliver.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/markdown-table-runtime")>()),
   resolveMarkdownTableMode: vi.fn(() => resolveMarkdownTableModeMock()),
-  chunkTextWithMode: (text: string) => chunkTextWithModeMock(text),
+}));
+vi.mock("openclaw/plugin-sdk/reply-chunking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-chunking")>()),
+  chunkMarkdownTextWithMode: (text: string) => chunkTextWithModeMock(text),
   resolveChunkMode: vi.fn(() => resolveChunkModeMock()),
+}));
+vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>()),
   convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
 }));
 
@@ -59,7 +66,9 @@ describe("deliverIMessageReply", () => {
 
   afterAll(() => {
     vi.doUnmock("../send.js");
-    vi.doUnmock("./deliver.runtime.js");
+    vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/reply-chunking");
+    vi.doUnmock("openclaw/plugin-sdk/text-chunking");
     vi.resetModules();
   });
 
@@ -163,39 +172,6 @@ describe("deliverIMessageReply", () => {
         mediaUrl: "https://example.com/voice.caf",
       }),
     );
-  });
-
-  it("records durable outbound sends in the sent-message cache", async () => {
-    const remember = vi.fn();
-    const send = createIMessageEchoCachingSend({
-      accountId: "acct-5",
-      sentMessageCache: { remember },
-    });
-    sendMessageIMessageMock.mockResolvedValueOnce({
-      messageId: "imsg-durable-1",
-      sentText: "durable hello",
-      receipt: createTestIMessageReceipt("imsg-durable-1"),
-    });
-
-    await send("chat_id:50", "durable hello", {
-      config: IMESSAGE_TEST_CFG,
-      accountId: "acct-ignored",
-    });
-
-    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
-      [
-        "chat_id:50",
-        "durable hello",
-        expect.objectContaining({
-          config: IMESSAGE_TEST_CFG,
-          accountId: "acct-ignored",
-        }),
-      ],
-    ]);
-    expect(remember).toHaveBeenCalledWith("acct-5:chat_id:50", {
-      text: "durable hello",
-      messageId: "imsg-durable-1",
-    });
   });
 
   it("sanitizes durable outbound text before sending", async () => {

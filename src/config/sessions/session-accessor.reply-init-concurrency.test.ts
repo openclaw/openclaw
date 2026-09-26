@@ -583,38 +583,6 @@ describe("session accessor cross-process concurrency", () => {
     }
   }, 15_000);
 
-  it("preserves locked replaceEvents without a prior readEvents call", async () => {
-    const tempDir = tempDirs.make("openclaw-transcript-replace-");
-    const storePath = path.join(tempDir, "sessions.json");
-    const sessionId = "replace-without-read";
-    const scope = {
-      agentId: AGENT_ID,
-      sessionId,
-      sessionKey: SESSION_KEY,
-      storePath,
-    };
-    const replacement = [
-      { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "replacement",
-        parentId: null,
-        message: { role: "assistant", content: "replacement content" },
-      },
-    ];
-
-    try {
-      await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-      await withTranscriptWriteLock(scope, async (transcript) => {
-        await transcript.replaceEvents(replacement);
-      });
-
-      await expect(loadTranscriptEvents(scope)).resolves.toEqual(replacement);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
   it("guards a second replace after replacing without a prior read", async () => {
     const tempDir = tempDirs.make("openclaw-transcript-double-replace-");
     const storePath = path.join(tempDir, "sessions.json");

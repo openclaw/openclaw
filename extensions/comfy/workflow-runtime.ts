@@ -1,4 +1,3 @@
-// Comfy plugin module implements workflow runtime behavior.
 import { randomInt } from "node:crypto";
 import fs from "node:fs/promises";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
@@ -108,7 +107,7 @@ type ComfyGeneratedAsset = {
   buffer: Buffer;
   mimeType: string;
   fileName: string;
-  nodeId: string;
+  metadata: { nodeId: string; promptId: string };
 };
 
 type ComfyWorkflowResult = {
@@ -132,24 +131,16 @@ function getComfyConfig(cfg?: OpenClawConfig): { config: ComfyProviderConfig; pa
   return { config: isRecord(legacyConfig) ? legacyConfig : {}, path: "models.providers.comfy" };
 }
 
-function stripNestedCapabilityConfig(config: ComfyProviderConfig): ComfyProviderConfig {
-  const next = { ...config };
-  delete next.image;
-  delete next.video;
-  delete next.music;
-  return next;
-}
-
 function getComfyCapabilityConfig(
   config: ComfyProviderConfig,
   capability: ComfyCapability,
 ): ComfyProviderConfig {
-  const shared = stripNestedCapabilityConfig(config);
+  const shared = { ...config };
+  delete shared.image;
+  delete shared.video;
+  delete shared.music;
   const nested = config[capability];
-  if (!isRecord(nested)) {
-    return shared;
-  }
-  return { ...shared, ...nested };
+  return isRecord(nested) ? { ...shared, ...nested } : shared;
 }
 
 function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
@@ -891,7 +882,7 @@ export async function runComfyWorkflow(params: {
       fileName:
         originalName ||
         `${params.capability}-${assetIndex}.${resolveFileExtension({ mimeType: downloaded.mimeType })}`,
-      nodeId: output.nodeId,
+      metadata: { nodeId: output.nodeId, promptId },
     });
   }
 

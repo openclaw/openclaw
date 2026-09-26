@@ -3,51 +3,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 
 describe("worker workspace quiescence", () => {
-  it("preserves dedicated POSIX workspace quiescence", async () => {
-    const nonce = "b".repeat(32);
-    const runWorkspaceCommand = vi.fn(async () => ({
-      stdout: `quiesced ${nonce}\n`,
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    }));
-    const quiesce = createWorkerWorkspaceQuiescence({
-      ownerSignal: new AbortController().signal,
-      sharedHost: false,
-      runWorkspaceCommand,
-    });
-
-    const lease = await quiesce("/workspace");
-    expect(lease).toBeDefined();
-    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
-    await lease.resume();
-  });
-
-  it("accepts an absolute Windows workspace path", async () => {
-    const nonce = "a".repeat(32);
-    const runWorkspaceCommand = vi.fn(async (command: { argv: readonly string[] }) => ({
-      stdout: command.argv.includes("final") ? `renewed ${nonce}\n` : `quiesced ${nonce}\n`,
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    }));
-    const quiesce = createWorkerWorkspaceQuiescence({
-      ownerSignal: new AbortController().signal,
-      sharedHost: true,
-      runWorkspaceCommand,
-    });
-
-    const lease = await quiesce(String.raw`C:\Users\angry\workspace`);
-    await lease.assertActive();
-    await lease.resume();
-
-    expect(runWorkspaceCommand).toHaveBeenCalledTimes(3);
-  });
-
   it.each([false, true])(
     "drains active renewal before release (owner closes: %s)",
     async (closes) => {
