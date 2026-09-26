@@ -127,6 +127,19 @@
               "cacheRead": 0.015,
               "cacheWrite": 0
             }
+          },
+          {
+            "id": "zai-glm-5-2",
+            "name": "Z.ai GLM 5.2",
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 1.4,
+              "output": 4.4,
+              "cacheRead": 0.14,
+              "cacheWrite": 0
+            }
           }
         ]
       }
