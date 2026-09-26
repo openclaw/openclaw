@@ -222,6 +222,9 @@ export function createProfileAvatarReader(
         loadBytes: () =>
           (bytes ??= readBytes().then(
             (avatar) => {
+              if (!avatar && row && avatarCache.get(row) === prepared) {
+                evictAvatar(row, prepared);
+              }
               if (!avatar || !row || avatarCache.get(row) !== prepared) {
                 bytes = undefined;
               }
