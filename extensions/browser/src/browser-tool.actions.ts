@@ -1,9 +1,4 @@
-/**
- * Browser agent tool action executors.
- *
- * Converts model-facing parameters into browser control client calls and wraps
- * browser-originated text as untrusted content before returning it to agents.
- */
+/** Browser actions wrap page-controlled text as untrusted content before returning it to agents. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readNonNegativeIntegerParam,
@@ -269,7 +264,6 @@ function readBrowserBatchAbort(result: unknown): BrowserBatchAbort | null {
   return { reason, afterAction, url, skipped };
 }
 
-/** True when an /act response reports a cross-document navigation. */
 function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | null): boolean {
   if (aborted?.reason === "navigation") {
     return true;
@@ -283,7 +277,6 @@ function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | nul
   );
 }
 
-/** Execute browser console retrieval and wrap page-controlled messages. */
 export async function executeConsoleAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;

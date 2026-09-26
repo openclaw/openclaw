@@ -61,37 +61,28 @@ export function collectWhatsAppStatusIssues(
       const lastDisconnect = readLastDisconnect(account.lastDisconnect);
       const lastError = normalizeOptionalString(account.lastError) ?? lastDisconnect?.error;
       const healthState = normalizeOptionalString(account.healthState);
+      const addIssue = (kind: ChannelStatusIssue["kind"], message: string, fix: string) => {
+        issues.push({ channel: "whatsapp", accountId, kind, message, fix });
+      };
+      const relink = `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`;
+      const repair = `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`;
 
       if (statusState === "unstable") {
-        issues.push({
-          channel: "whatsapp",
-          accountId,
-          kind: "auth",
-          message: "Auth state is still stabilizing.",
-          fix: "Wait a moment for queued credential writes to finish, then retry the command or rerun health.",
-        });
+        addIssue(
+          "auth",
+          "Auth state is still stabilizing.",
+          "Wait a moment for queued credential writes to finish, then retry the command or rerun health.",
+        );
         return;
       }
 
       if (healthState === "logged-out") {
-        issues.push({
-          channel: "whatsapp",
-          accountId,
-          kind: "auth",
-          message: `Session logged out${lastError ? `: ${lastError}` : "."}`,
-          fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
-        });
+        addIssue("auth", `Session logged out${lastError ? `: ${lastError}` : "."}`, relink);
         return;
       }
 
       if (!linked) {
-        issues.push({
-          channel: "whatsapp",
-          accountId,
-          kind: "auth",
-          message: "Not linked (no WhatsApp Web session).",
-          fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
-        });
+        addIssue("auth", "Not linked (no WhatsApp Web session).", relink);
         return;
       }
 
@@ -100,13 +91,11 @@ export function collectWhatsAppStatusIssues(
           lastInboundAt != null
             ? ` (last inbound ${Math.max(0, Math.floor((Date.now() - lastInboundAt) / 60000))}m ago)`
             : "";
-        issues.push({
-          channel: "whatsapp",
-          accountId,
-          kind: "runtime",
-          message: `Linked but stale${staleSuffix}${lastError ? `: ${lastError}` : "."}`,
-          fix: `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`,
-        });
+        addIssue(
+          "runtime",
+          `Linked but stale${staleSuffix}${lastError ? `: ${lastError}` : "."}`,
+          repair,
+        );
         return;
       }
 
@@ -121,42 +110,35 @@ export function collectWhatsAppStatusIssues(
             : healthState === "reconnecting"
               ? "reconnecting"
               : "stopped";
-        issues.push({
-          channel: "whatsapp",
-          accountId,
-          kind: "runtime",
-          message: `Linked but ${stateLabel}${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
-          fix: `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`,
-        });
+        addIssue(
+          "runtime",
+          `Linked but ${stateLabel}${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
+          repair,
+        );
         return;
       }
 
       if (
-        linked &&
         running &&
         connected &&
         reconnectAttempts != null &&
         reconnectAttempts > 0 &&
         isRecentDisconnect(lastDisconnect)
       ) {
-        issues.push({
-          channel: "whatsapp",
-          accountId,
-          kind: "runtime",
-          message: `Linked but recently reconnected (reconnectAttempts=${reconnectAttempts})${lastError ? `: ${lastError}` : "."}`,
-          fix: `Watch: ${formatCliCommand("openclaw logs --follow")} and run ${formatCliCommand("openclaw channels status --probe")} if disconnects continue. If it keeps flapping, restart the gateway or relink via channels login.`,
-        });
+        addIssue(
+          "runtime",
+          `Linked but recently reconnected (reconnectAttempts=${reconnectAttempts})${lastError ? `: ${lastError}` : "."}`,
+          `Watch: ${formatCliCommand("openclaw logs --follow")} and run ${formatCliCommand("openclaw channels status --probe")} if disconnects continue. If it keeps flapping, restart the gateway or relink via channels login.`,
+        );
         return;
       }
 
       if (running && !connected) {
-        issues.push({
-          channel: "whatsapp",
-          accountId,
-          kind: "runtime",
-          message: `Linked but disconnected${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
-          fix: `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`,
-        });
+        addIssue(
+          "runtime",
+          `Linked but disconnected${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
+          repair,
+        );
       }
     },
   });

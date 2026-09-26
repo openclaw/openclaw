@@ -23,54 +23,29 @@ describe("subscribeEmbeddedAgentSession thinking tag code span awareness", () =>
     return { emit, onPartialReply };
   }
 
-  it("does not strip thinking tags inside inline code backticks", () => {
+  it.each([
+    {
+      name: "does not strip thinking tags inside inline code backticks",
+      input: "The fix strips leaked `<thinking>` tags from messages.",
+      expected: "The fix strips leaked `<thinking>` tags from messages.",
+    },
+    {
+      name: "does not strip thinking tags inside fenced code blocks",
+      input: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
+      expected: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
+    },
+    {
+      name: "still strips actual thinking tags outside code spans",
+      input: "Hello <thinking>internal thought</thinking> world",
+      expected: "Hello  world",
+    },
+  ])("$name", ({ input, expected }) => {
     const { emit, onPartialReply } = createPartialReplyHarness();
-
-    emitAssistantTextDelta({
-      emit,
-      delta: "The fix strips leaked `<thinking>` tags from messages.",
-    });
-
+    emitAssistantTextDelta({ emit, delta: input });
     expect(onPartialReply).toHaveBeenCalledTimes(1);
     expect(onPartialReply).toHaveBeenCalledWith({
-      text: "The fix strips leaked `<thinking>` tags from messages.",
-      delta: "The fix strips leaked `<thinking>` tags from messages.",
-      replace: undefined,
-      mediaUrls: undefined,
-      phase: undefined,
-    });
-  });
-
-  it("does not strip thinking tags inside fenced code blocks", () => {
-    const { emit, onPartialReply } = createPartialReplyHarness();
-
-    emitAssistantTextDelta({
-      emit,
-      delta: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
-    });
-
-    expect(onPartialReply).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).toHaveBeenCalledWith({
-      text: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
-      delta: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
-      replace: undefined,
-      mediaUrls: undefined,
-      phase: undefined,
-    });
-  });
-
-  it("still strips actual thinking tags outside code spans", () => {
-    const { emit, onPartialReply } = createPartialReplyHarness();
-
-    emitAssistantTextDelta({
-      emit,
-      delta: "Hello <thinking>internal thought</thinking> world",
-    });
-
-    expect(onPartialReply).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).toHaveBeenCalledWith({
-      text: "Hello  world",
-      delta: "Hello  world",
+      text: expected,
+      delta: expected,
       replace: undefined,
       mediaUrls: undefined,
       phase: undefined,

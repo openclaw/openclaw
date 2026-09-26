@@ -53,40 +53,43 @@ owner validates its consumed source content, inherited config, selected compiler
 and complete output inventory. Unrelated existing source or test edits retain
 cache hits. Resolution-topology changes invalidate conservatively, including new
 module candidates outside declared roots. Stale declarations get a full native
-emit after clearing only their build-info file; the successful emitted inventory
+emit after clearing their private input receipt; the successful emitted inventory
 then drives obsolete declaration pruning. Missing or tampered outputs invalidate
 the owner. The content records live under
-`.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
+`.artifacts/extension-package-boundary`, outside packaged build cleanup. Private
+`.inputs.json` receipts contain normalized checkout-relative source and manifest
+paths instead of native `.tsbuildinfo` state. A warm run validates the records
+without emitting declarations.
 
 Packaged declaration builds and package-boundary records accept only checkout-owned input
 realpaths, including compiler libraries, inherited config, dependency links, and
-package manifests. Local pnpm links remain supported when their targets stay
-inside the checkout. The tsgo wrapper does not create or reuse a shared external
-install; invocations from subdirectories still use the containing checkout as
-the ownership boundary. Declared checkout junctions and platform path aliases map
-to the same native root for validation and actual snapshot reads. Local declaration
-preparation also aligns the compiler's `PWD` with its working directory so shell
-aliases do not change emitted inventory paths. Native resolution itself is not
-sandboxed: an ancestor install can still enter a successful compiler
-receipt. Resolution can read an ancestor's candidate `package.json` while searching
-for declarations, then resolve the import to checkout-local JavaScript. This can
-happen with a complete local frozen install and no external source files in the
-compiler Program; it does not by itself prove an undeclared dependency. Those
-manifests still affect resolution and must remain in the receipt. The owner fails
-with `Declaration input escapes checkout`, without publishing a success record or
-pruning obsolete declarations. Warm records use the same input check.
+package manifests. These paths share `compileNativeProject`, which uses the
+pinned native compiler's asynchronous API for checking and in-memory declaration
+emission. Its filesystem callbacks make candidates outside the checkout appear
+missing before native resolution can read them. Source and package-manifest reads
+are captured directly; admission does not depend on parsing resolution traces.
+The compiler version is pinned in `package.json` because this API is unstable.
+Configuration and requested semantic checks run before emission. Declaration
+errors come from the in-memory emit result, avoiding a separate declaration
+transform solely for diagnostics. Any error prevents artifact publication.
 
-Repair this at checkout provisioning: use a separate physical checkout whose
-ancestor directories do not contain `node_modules`, with the same candidate source
-(including any uncommitted changes) and its own `pnpm install --frozen-lockfile`.
-Run declaration preparation and dependent lint or package-boundary checks in that
-checkout, so the checks consume its freshly sealed receipts. A symlink to the
-nested checkout, a repeated install there, or `nodeLinker: isolated` does not bound
-native ancestor lookup. Do not alter the ancestor installation, add incidental
-dependencies, filter compiler receipts, or transplant declarations to bypass the
-checks. The pinned native compiler's filesystem callback API supports analysis,
-not declaration and build-info emission; native validation does not automatically
-create an isolated checkout.
+Nested physical worktrees are supported with their own
+`pnpm install --frozen-lockfile`, even when ancestor directories contain
+`node_modules`. An ancestor dependency cannot satisfy a missing local input or
+change the emitted declarations. Local pnpm links remain supported when their
+targets stay inside the checkout. A local link that resolves outside still fails
+with `Declaration input escapes checkout`, without publishing a success record or
+pruning obsolete declarations. An outside candidate remains inaccessible even if
+it is a symlink back into the checkout. Warm records use the same input check.
+Do not filter compiler receipts or transplant declarations to bypass the checks.
+
+Declared checkout junctions and platform path aliases map to the same native root
+for validation and actual snapshot reads. Local declaration preparation also
+aligns the compiler's `PWD` with its working directory so shell aliases do not
+change emitted inventory paths. Invocations from subdirectories still use the
+containing checkout as the ownership boundary. Other `pnpm tsgo` lanes continue
+to use the native CLI; its wrapper does not create or reuse a shared external
+install.
 
 Packaged SDK declarations belong to one staged owner shared by full, package, and
 `ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
@@ -98,29 +101,18 @@ and resolution topology without starting a compiler on hits. Cache hits restore
 into fresh staging and pass the same entry and relative declaration closure checks
 before publication.
 All tsdown declaration builds (the eight SDK/unified groups, workspace packages,
-and the AI package) use the same admission policy: native resolution may read an
-ancestor install, but outside input paths prevent accepting compiler output,
-publishing declarations, or sealing a success record. Successful builds need
-checkout-owned compiler libraries and declaration dependencies. In-checkout pnpm
-links remain supported; shared external installs are not. Compiler receipts retain
-complete source membership. The emitting process also
-records lexical resolution paths before symlink canonicalization, so an ancestor
-package alias pointing back inside the checkout still fails admission. Malformed
-resolution traces fail closed.
+and the AI package) use the same bounded compiler as local declaration preparation
+and package-boundary checks. Successful builds need checkout-owned compiler
+libraries and declaration dependencies; shared external installs are not supported.
+Compiler receipts retain complete source and package-manifest membership, including
+JSON inputs. Default type roots stay within the checkout, explicit type roots must
+be local, and a valid root `package.json` bounds source-package scope lookup.
 
-Default type roots stay within the checkout, and a valid root `package.json` stops
-source-package scope lookup. Explicit type roots must be local. For metadata
-lookups that native emission does not trace, each emitted source package must
-resolve its runtime dependencies to local package directories before ancestor
-search. Native emission also considers JSON program inputs during this lookup,
-so their package dependencies receive the same check. A missing local dependency with an ancestor installation, or an actual
-failed type lookup there, requires local declarations or a separate physical
-checkout. Complete nested checkouts can still build when their local inputs
-satisfy every lookup. Ancestor-install appearance and removal invalidate cached
-records; source and namespace changes during compilation prevent acceptance.
-Missing-file probes outside both the checkout and its absent ancestor install
-roots also fail admission, because their later appearance is not owned by the
-checkout cache.
+The shared snapshot policy still validates consumed bytes and resolution topology.
+Source and namespace changes during compilation prevent acceptance. New local
+module candidates invalidate cached records, as do ancestor-install appearance
+and removal. Outside probes always see missing files, so later changes to ancestor
+package contents cannot enter the compiler's filesystem view.
 Each emitted declaration must have one source-map owner in the successful compiler
 membership. The bundler consumes those declarations under their original source
 paths; private compiler stages are removed only after their child settles.

@@ -13,11 +13,11 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-contract.js";
 import { getRegisteredDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-state.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.test-support.js";
-import { readFollowupRequest } from "../../tasks/task-followup-completion.js";
+import { readFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type {
   FollowupRequest,
   FollowupCompletionOwner,
-} from "../../tasks/task-followup-completion.types.js";
+} from "../subagents/completion/session-followup-completion.types.js";
 import {
   prepareSessionsSendFollowup,
   startSessionsSendFollowup,
@@ -140,15 +140,14 @@ describe("followup retained session authorization", () => {
     const close = vi.fn();
     const completion: FollowupCompletionOwner = {
       request,
-      get receipt() {
-        return unexpected();
-      },
+      signal: new AbortController().signal,
       accepted: true,
       assertCurrent: unexpected,
       markAccepted: unexpected,
       finishExecution: unexpected,
       ownsExecution: unexpected,
       activate: unexpected,
+      cancel: unexpected,
       promoteYield: unexpected,
       successor: unexpected,
       prepareSuccessor: unexpected,

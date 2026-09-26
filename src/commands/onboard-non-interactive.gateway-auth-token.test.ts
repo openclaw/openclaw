@@ -2,7 +2,6 @@
 // plaintext by default, and env/store SecretRefs under --secret-input-mode ref.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   capturedReplaceConfigFileCalls,
@@ -16,6 +15,15 @@ import {
   testConfigStore,
   useGatewayOnboardTestHarness,
 } from "./onboard-non-interactive.gateway.test-mocks.js";
+
+const setupOptions = {
+  nonInteractive: true,
+  mode: "local",
+  authChoice: "skip",
+  skipSkills: true,
+  skipHealth: true,
+  installDaemon: false,
+} satisfies Parameters<typeof runNonInteractiveSetup>[0];
 
 describe("onboard (non-interactive): gateway auth token storage", () => {
   const { withStateDir } = useGatewayOnboardTestHarness("openclaw-onboard-auth-token-");
@@ -38,17 +46,12 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
           auth: { mode: "password", password: "test-password" },
           tailscale: { mode: "serve" },
         },
-      } as OpenClawConfig);
+      });
 
       await runNonInteractiveSetup(
         {
-          nonInteractive: true,
-          mode: "local",
+          ...setupOptions,
           workspace,
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: true,
-          installDaemon: false,
           gatewayBind: "loopback",
           gatewayAuth: "token",
           gatewayToken: token,
@@ -57,17 +60,7 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
         runtime,
       );
 
-      const cfg = readTestConfig() as {
-        gateway?: {
-          mode?: string;
-          bind?: string;
-          auth?: { mode?: string; token?: string };
-          tailscale?: { mode?: string };
-        };
-        agents?: { defaults?: { workspace?: string } };
-        tools?: { profile?: string };
-        hooks?: { internal?: { entries?: Record<string, { enabled?: boolean }> } };
-      };
+      const cfg = readTestConfig();
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg?.gateway?.mode).toBe("local");
@@ -94,31 +87,20 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
 
       await runNonInteractiveSetup(
         {
-          nonInteractive: true,
-          mode: "local",
+          ...setupOptions,
           workspace,
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: true,
-          installDaemon: false,
           gatewayPort: port,
           gatewayBind: "lan",
         },
         runtime,
       );
 
-      const cfg = readTestConfig() as {
-        gateway?: {
-          bind?: string;
-          port?: number;
-          auth?: { mode?: string; token?: string };
-        };
-      };
+      const cfg = readTestConfig();
 
       expect(cfg.gateway?.bind).toBe("lan");
       expect(cfg.gateway?.port).toBe(port);
       expect(cfg.gateway?.auth?.mode).toBe("token");
-      expect((cfg.gateway?.auth?.token ?? "").length).toBeGreaterThan(8);
+      expect(cfg.gateway?.auth?.token).toEqual(expect.stringMatching(/.{9}/));
     });
   }, 60_000);
 
@@ -135,22 +117,15 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
 
       await runNonInteractiveSetup(
         {
-          nonInteractive: true,
-          mode: "local",
+          ...setupOptions,
           workspace: path.join(stateDir, "openclaw"),
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: true,
-          installDaemon: false,
           gatewayPort: port,
           secretInputMode: "ref",
         },
         runtime,
       );
 
-      const cfg = readTestConfig() as {
-        gateway?: { auth?: { mode?: string; token?: unknown } };
-      };
+      const cfg = readTestConfig();
       expect(cfg.gateway?.auth?.mode).toBe("token");
       expect(cfg.gateway?.auth?.token).toEqual({
         source: "store",
@@ -181,20 +156,15 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
 
       await runNonInteractiveSetup(
         {
-          nonInteractive: true,
-          mode: "local",
+          ...setupOptions,
           workspace: path.join(stateDir, "openclaw"),
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: true,
-          installDaemon: false,
           gatewayPort: getPseudoPort(42_000),
           secretInputMode: "ref",
         },
         runtime,
       );
 
-      const cfg = readTestConfig() as { gateway?: { auth?: { token?: unknown } } };
+      const cfg = readTestConfig();
       expect(cfg.gateway?.auth?.token).toEqual({
         source: "env",
         provider: "default",

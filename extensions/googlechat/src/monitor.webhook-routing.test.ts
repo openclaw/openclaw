@@ -2,13 +2,14 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { verifyGoogleChatRequest } from "./auth.js";
 import { registerGoogleChatWebhookTarget } from "./monitor-routing.js";

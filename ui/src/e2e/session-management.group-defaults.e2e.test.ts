@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { readRepositoryBranches } from "../../../src/agents/worktrees/branches.runtime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
@@ -242,6 +243,12 @@ suite.define(() => {
         message: "prepare the client release",
         worktree: true,
       });
+    } catch (error) {
+      await captureControlUiE2eFailureDiagnostics(page, {
+        error: error instanceof Error ? error : new Error(String(error)),
+        label: "session-group-defaults-worktree",
+      });
+      throw error;
     } finally {
       await context.close();
     }

@@ -143,14 +143,14 @@ describe("worker store session change publications", () => {
     }
   });
 
-  it("publishes pending-only and conflict changes after their owner commits", () => {
+  it("publishes pending-only and conflict changes after their owner commits", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     seedAttachedPlacementEnvironment(database, {
       environmentId: `environment-${SESSION.sessionId}`,
       sessionId: SESSION.sessionId,
       ownerEpoch: 7,
     });
-    let active = store.startDispatch({ ...SESSION, executionMode: "remote-exec" });
+    let active = await store.startDispatch({ ...SESSION, executionMode: "remote-exec" });
     for (const step of [
       { to: "provisioning", patch: { environmentId: `environment-${SESSION.sessionId}` } },
       { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },

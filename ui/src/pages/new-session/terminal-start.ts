@@ -2,7 +2,6 @@ import { html, nothing } from "lit";
 import type { SessionsCatalogStartTerminalResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForTerminalSession } from "../../app-route-paths.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import {
@@ -73,23 +72,6 @@ async function startNewSessionInTerminal(
   );
 }
 
-function captureTerminalSubmissionInput(
-  place: DraftPlaceState,
-  catalogId: string,
-  initialMessage: string,
-) {
-  return {
-    catalogId,
-    agentId: normalizeAgentId(place.agentId),
-    hostId: place.terminalHostId,
-    cwd: place.folder.trim() || (place.terminalOnNode ? "" : place.workspacePath()),
-    initialMessage,
-    worktree: place.worktree,
-    worktreeName: place.worktreeName,
-    baseRef: place.baseRef,
-  };
-}
-
 /** Native startup shares draft custody, but never falls through to chat creation. */
 export async function submitDraftInTerminal(options: {
   snapshot: DraftSubmissionSnapshot;
@@ -119,7 +101,16 @@ export async function submitDraftInTerminal(options: {
   }
   const submission = options.capture(client);
   const initialMessage = flow.message.trim();
-  const terminalInput = captureTerminalSubmissionInput(place, catalogId, initialMessage);
+  const terminalInput = {
+    catalogId,
+    agentId,
+    hostId: place.terminalHostId,
+    cwd: place.folder.trim() || (place.terminalOnNode ? "" : place.workspacePath()),
+    initialMessage,
+    worktree: place.worktree,
+    worktreeName: place.worktreeName,
+    baseRef: place.baseRef,
+  };
   const consumeWorktreeName = place.captureSubmittedWorktreeName(terminalInput, agentId);
   submission.publish(
     buildLocalUserMessage({ text: initialMessage, createdAt: Date.now() }, "available"),
@@ -138,7 +129,11 @@ export async function submitDraftInTerminal(options: {
     }
     await submission.consume();
     if (submission.isCurrent()) {
-      navigateToStartedTerminal(context, result.sessionId);
+      context.replace("terminal", {
+        pathname: pathForTerminalSession(result.sessionId, context.basePath),
+        search: "",
+        hash: "",
+      });
     }
   } catch (error) {
     if (submission.isCurrent()) {
@@ -149,14 +144,6 @@ export async function submitDraftInTerminal(options: {
       submission.publish(null, false);
     }
   }
-}
-
-function navigateToStartedTerminal(context: ApplicationContext, sessionId: string): void {
-  context.replace("terminal", {
-    pathname: pathForTerminalSession(sessionId, context.basePath),
-    search: "",
-    hash: "",
-  });
 }
 
 export function renderNewSessionTerminalHost(params: {

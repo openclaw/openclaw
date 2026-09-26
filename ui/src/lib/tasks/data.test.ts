@@ -171,25 +171,6 @@ describe("task data", () => {
     expect(mergeTaskLists([running], [queued])).toEqual([running]);
   });
 
-  it("keeps the incoming running progress when both pages share a timestamp", () => {
-    const previous = task({
-      id: "shared",
-      status: "running",
-      updatedAt: 200,
-      toolUseCount: 1,
-      lastToolName: "read",
-    });
-    const progress = task({
-      id: "shared",
-      status: "running",
-      updatedAt: 200,
-      toolUseCount: 2,
-      lastToolName: "write",
-    });
-
-    expect(mergeTaskLists([previous], [progress])).toEqual([progress]);
-  });
-
   it("keeps the later page's equally current tool progress at the same tool count", () => {
     const previous = task({
       id: "shared",

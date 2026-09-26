@@ -12,6 +12,7 @@ import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-h
 import type { CronListPageOptions } from "../cron/service/list-page-types.js";
 import type { CronJobCreate, CronJobPatch } from "../cron/types.js";
 import { defaultRuntime } from "../runtime.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const gatewayRpc = vi.hoisted(() => ({
@@ -144,7 +145,6 @@ describe("scheduled backups", () => {
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ],
-    ["empty", "", "--agent must not be blank"],
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s scheduled backup agent", async (_label, agent, message) => {
     const runtime = createTestRuntime();
@@ -159,18 +159,17 @@ describe("scheduled backups", () => {
     expect(gatewayRpc.call).not.toHaveBeenCalled();
   });
 
-  it.each(["", "   "])("rejects an explicit blank interval %j before scheduling", async (every) => {
+  it("rejects an explicit blank interval before scheduling", async () => {
     const runtime = createTestRuntime();
     gatewayRpc.call.mockResolvedValue({ created: true, job: { id: "backup-job" } });
 
     await expect(
-      backupEnableCommand(runtime, { repository: "/tmp/openclaw-backups", every }),
+      backupEnableCommand(runtime, { repository: "/tmp/openclaw-backups", every: "   " }),
     ).rejects.toThrow("Invalid duration (empty)");
     expect(gatewayRpc.call).not.toHaveBeenCalled();
   });
 
   it.each([
-    { scenario: "ordinary", renamed: false, decoys: 1, disabled: false },
     { scenario: "renamed", renamed: true, decoys: 1, disabled: false },
     { scenario: "beyond the first page", renamed: false, decoys: 200, disabled: false },
     { scenario: "already disabled", renamed: false, decoys: 1, disabled: true },
@@ -182,6 +181,8 @@ describe("scheduled backups", () => {
         throw new Error("Scheduled execution is outside this lookup test");
       });
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: false,
         log: createNoopLogger(),

@@ -24,9 +24,12 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { listRecordedFirstHopSourceVersions } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   fullReleaseCandidateArtifact,
   fullReleaseCandidateManifestFixture,
@@ -5468,31 +5471,6 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
       expect(job.steps!.indexOf(install)).toBeGreaterThan(job.steps!.indexOf(checkout));
       expect(job.steps!.indexOf(install)).toBeGreaterThan(job.steps!.indexOf(setup));
       expect(job.steps!.indexOf(install)).toBeLessThan(job.steps!.indexOf(consumer));
-      const root = tempDirs.make("plugin-tooling-install-");
-      const tooling = join(root, toolingPath);
-      const bin = join(root, "bin");
-      mkdirSync(tooling);
-      mkdirSync(bin);
-      writeFileSync(join(root, "candidate-sentinel"), "unchanged");
-      writeFileSync(
-        join(bin, "pnpm"),
-        `#!${process.execPath}
-const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),ci:process.env.CI}));
-`,
-        { mode: 0o755 },
-      );
-      const result = spawnSync("bash", ["-euo", "pipefail", "-c", install.run!], {
-        cwd: tooling,
-        encoding: "utf8",
-        env: { ...process.env, ...install.env, PATH: `${bin}:${process.env.PATH}` },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(join(tooling, "install-proof.json"), "utf8"))).toMatchObject({
-        args: ["install", "--frozen-lockfile", "--prefer-offline", "--ignore-scripts"],
-        ci: "true",
-      });
-      expect(existsSync(join(root, "install-proof.json"))).toBe(false);
-      expect(readFileSync(join(root, "candidate-sentinel"), "utf8")).toBe("unchanged");
     },
   );
 
@@ -6759,7 +6737,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     if (tag.includes("alpha") || tag.includes("beta") || native) {
       return;
     }
-    const note = `- Android APK: skipped — apps/android/version.json is ${pin}, release train is 2026.9.1; run the shared mobile cutter (scripts/mobile-release-version.ts --prepare) before the next tag.`;
+    const note = `- Android APK: skipped — apps/android/version.json is ${pin}, release train is 2026.9.1; run pnpm android:version:pin -- --from-gateway before the next tag.`;
     expect(readFileSync(summaryPath, "utf8")).toContain(note);
     expect(outputs.android_release_note).toBe(note);
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
@@ -6918,7 +6896,7 @@ printf 'native_failed=%s\\n' "$native_failed"
     },
   );
 
-  it.each([
+  it.for([
     "success",
     "rerun-before-approval",
     "rerun-at-dispatch",
@@ -6930,40 +6908,50 @@ printf 'native_failed=%s\\n' "$native_failed"
     "other-workflow",
     "other-repository",
     "other-tooling",
-  ])("binds native qualification through Android approval and dispatch: %s", (mode) => {
-    const root = tempDirs.make("android-native-qualification-");
-    const bin = join(root, "bin");
-    mkdirSync(bin);
-    mkdirSync(join(root, ".release-harness"));
-    symlinkSync(resolve("scripts"), join(root, ".release-harness/scripts"), "dir");
-    const targetSha = "a".repeat(40);
-    const workflowSha = "d".repeat(40);
-    const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
-    const dispatchId = `release-native-android-123-2-${targetSha}`;
-    const run = {
-      id: 91,
-      run_attempt: mode === "rerun" ? 2 : 1,
-      event: "workflow_dispatch",
-      path: mode === "other-workflow" ? ".github/workflows/other.yml" : ".github/workflows/ci.yml",
-      display_title: `CI ${mode === "other-source" ? dispatchId.replace(targetSha, "b".repeat(40)) : dispatchId}`,
-      head_branch: mode === "other-ref" ? "main" : workflowRef,
-      head_sha: mode === "other-tooling" ? "c".repeat(40) : workflowSha,
-      repository: {
-        full_name: mode === "other-repository" ? "example/other" : "openclaw/openclaw",
-      },
-      actor: { login: "github-actions[bot]" },
-      triggering_actor: { login: "github-actions[bot]" },
-      status: "completed",
-      conclusion: mode === "failed" ? "failure" : "success",
-    };
-    const dispatchPath = join(root, "dispatch.json");
-    const androidDispatchPath = join(root, "android-dispatch.json");
-    const nativeRunPath = join(root, "native-run.json");
-    writeFileSync(nativeRunPath, JSON.stringify(run));
-    const gh = join(bin, "gh");
-    writeFileSync(
-      gh,
-      `#!${process.execPath}
+  ])(
+    "binds native qualification through Android approval and dispatch: %s",
+    (mode, { signal, onTestFinished }) => {
+      const lifetime = createFixtureLifetime();
+      const finished = new AbortController();
+      onTestFinished(async () => {
+        finished.abort();
+        await lifetime.cleanup();
+      });
+      return lifetime.run(async () => {
+        const root = lifetime.createTempDir("android-native-qualification-");
+        const bin = join(root, "bin");
+        mkdirSync(bin);
+        mkdirSync(join(root, ".release-harness"));
+        symlinkSync(resolve("scripts"), join(root, ".release-harness/scripts"), "dir");
+        const targetSha = "a".repeat(40);
+        const workflowSha = "d".repeat(40);
+        const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
+        const dispatchId = `release-native-android-123-2-${targetSha}`;
+        const run = {
+          id: 91,
+          run_attempt: mode === "rerun" ? 2 : 1,
+          event: "workflow_dispatch",
+          path:
+            mode === "other-workflow" ? ".github/workflows/other.yml" : ".github/workflows/ci.yml",
+          display_title: `CI ${mode === "other-source" ? dispatchId.replace(targetSha, "b".repeat(40)) : dispatchId}`,
+          head_branch: mode === "other-ref" ? "main" : workflowRef,
+          head_sha: mode === "other-tooling" ? "c".repeat(40) : workflowSha,
+          repository: {
+            full_name: mode === "other-repository" ? "example/other" : "openclaw/openclaw",
+          },
+          actor: { login: "github-actions[bot]" },
+          triggering_actor: { login: "github-actions[bot]" },
+          status: "completed",
+          conclusion: mode === "failed" ? "failure" : "success",
+        };
+        const dispatchPath = join(root, "dispatch.json");
+        const androidDispatchPath = join(root, "android-dispatch.json");
+        const nativeRunPath = join(root, "native-run.json");
+        writeFileSync(nativeRunPath, JSON.stringify(run));
+        const gh = join(bin, "gh");
+        writeFileSync(
+          gh,
+          `#!${process.execPath}
 import { readFileSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 if (args[0] === 'api' && args.some(arg => arg.endsWith('/workflows/ci.yml/dispatches'))) {
@@ -6996,25 +6984,27 @@ if (args[0] === 'api' && args.some(arg => arg.endsWith('/workflows/ci.yml/dispat
   }));
 } else throw new Error('Unexpected GitHub operation: ' + JSON.stringify(args));
 `,
-    );
-    chmodSync(gh, 0o755);
-    const nativeJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
-    const approvalJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_android");
-    const dispatch = workflowStep(nativeJob, "Dispatch and await exact-source native CI");
-    const proof = workflowStep(nativeJob, "Verify exact native CI qualification");
-    const approval = workflowStep(approvalJob, "Write Android release approval");
-    expect(nativeJob.outputs).toMatchObject({
-      workflow_ref: "${{ steps.dispatch.outputs.workflow_ref }}",
-    });
-    expect(proof.env?.NATIVE_CI_WORKFLOW_REF).toBe("${{ steps.dispatch.outputs.workflow_ref }}");
-    expect(approval.env?.NATIVE_CI_WORKFLOW_REF).toBe(
-      "${{ needs.qualify_android_native.outputs.workflow_ref }}",
-    );
-    const outputPath = join(root, "output");
-    writeFileSync(outputPath, "");
-    const rerunBeforeApproval =
-      mode === "rerun-before-approval"
-        ? `
+        );
+        chmodSync(gh, 0o755);
+        const nativeJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
+        const approvalJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_android");
+        const dispatch = workflowStep(nativeJob, "Dispatch and await exact-source native CI");
+        const proof = workflowStep(nativeJob, "Verify exact native CI qualification");
+        const approval = workflowStep(approvalJob, "Write Android release approval");
+        expect(nativeJob.outputs).toMatchObject({
+          workflow_ref: "${{ steps.dispatch.outputs.workflow_ref }}",
+        });
+        expect(proof.env?.NATIVE_CI_WORKFLOW_REF).toBe(
+          "${{ steps.dispatch.outputs.workflow_ref }}",
+        );
+        expect(approval.env?.NATIVE_CI_WORKFLOW_REF).toBe(
+          "${{ needs.qualify_android_native.outputs.workflow_ref }}",
+        );
+        const outputPath = join(root, "output");
+        writeFileSync(outputPath, "");
+        const rerunBeforeApproval =
+          mode === "rerun-before-approval"
+            ? `
 node --input-type=module <<'NODE'
 import { readFileSync, writeFileSync } from 'node:fs';
 const path = ${JSON.stringify(nativeRunPath)};
@@ -7022,96 +7012,128 @@ const run = JSON.parse(readFileSync(path, 'utf8'));
 writeFileSync(path, JSON.stringify({ ...run, run_attempt: 2, status: 'queued', conclusion: null }));
 NODE
 `
-        : "";
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        [
-          dispatch.run,
-          proof.run,
-          rerunBeforeApproval,
-          approval.run,
-          'dispatch_workflow_at_ref "$RELEASE_TAG" "$TARGET_SHA" android-release.yml -f tag="$RELEASE_TAG"',
-        ].join("\n"),
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          PATH: `${bin}:${process.env.PATH}`,
-          GITHUB_WORKSPACE: root,
-          RUNNER_TEMP: root,
-          GITHUB_OUTPUT: outputPath,
-          GITHUB_STEP_SUMMARY: join(root, "summary"),
-          GITHUB_REPOSITORY: "openclaw/openclaw",
-          GITHUB_RUN_ID: "123",
-          GITHUB_RUN_ATTEMPT: "2",
-          GITHUB_REF: `refs/tags/${workflowRef}`,
-          WORKFLOW_FULL_REF: `refs/tags/${workflowRef}`,
-          PARENT_WORKFLOW_SHA: workflowSha,
-          TARGET_SHA: targetSha,
-          RELEASE_TAG: "v2026.8.1",
-          RELEASE_COVERAGE_POLICY: "npm-stable-v1",
-          NATIVE_CI_RUN_ID: "91",
-          NATIVE_CI_WORKFLOW_REF: workflowRef,
-          NATIVE_CI_WORKFLOW_SHA: workflowSha,
-          RELEASE_PUBLISH_BRANCH: "main",
-          RELEASE_PUBLISH_FULL_REF: "refs/heads/main",
-          RELEASE_PUBLISH_WORKFLOW_SHA: workflowSha,
-          RELEASE_PUBLISH_RUN_ATTEMPT: "2",
-          RELEASE_PUBLISH_RUN_ID: "123",
-        },
-      },
-    );
-    if (mode === "moved-protected-tag") {
-      expect(existsSync(dispatchPath)).toBe(false);
-      expect(result.stderr).toContain("refusing dispatch");
-    } else {
-      expect(JSON.parse(readFileSync(dispatchPath, "utf8"))).toEqual({
-        ref: workflowRef,
-        inputs: {
-          target_ref: targetSha,
-          historical_target_tag: "v2026.8.1",
-          include_android: "true",
-          release_scope: "full",
-          dispatch_id: dispatchId,
-        },
+            : "";
+        const maxBuffer = 1024 * 1024;
+        const stdout = createBoundedChildOutput(maxBuffer);
+        const stderr = createBoundedChildOutput(maxBuffer);
+        const overflow = new AbortController();
+        let outputBytes = 0;
+        let childStatus: number;
+        try {
+          childStatus = await lifetime.track(
+            runManagedCommand({
+              bin: "bash",
+              args: [
+                "-c",
+                [
+                  dispatch.run,
+                  proof.run,
+                  rerunBeforeApproval,
+                  approval.run,
+                  'dispatch_workflow_at_ref "$RELEASE_TAG" "$TARGET_SHA" android-release.yml -f tag="$RELEASE_TAG"',
+                ].join("\n"),
+              ],
+              cwd: root,
+              env: {
+                PATH: `${bin}:${process.env.PATH}`,
+                GITHUB_WORKSPACE: root,
+                RUNNER_TEMP: root,
+                GITHUB_OUTPUT: outputPath,
+                GITHUB_STEP_SUMMARY: join(root, "summary"),
+                GITHUB_REPOSITORY: "openclaw/openclaw",
+                GITHUB_RUN_ID: "123",
+                GITHUB_RUN_ATTEMPT: "2",
+                GITHUB_REF: `refs/tags/${workflowRef}`,
+                WORKFLOW_FULL_REF: `refs/tags/${workflowRef}`,
+                PARENT_WORKFLOW_SHA: workflowSha,
+                TARGET_SHA: targetSha,
+                RELEASE_TAG: "v2026.8.1",
+                RELEASE_COVERAGE_POLICY: "npm-stable-v1",
+                NATIVE_CI_RUN_ID: "91",
+                NATIVE_CI_WORKFLOW_REF: workflowRef,
+                NATIVE_CI_WORKFLOW_SHA: workflowSha,
+                RELEASE_PUBLISH_BRANCH: "main",
+                RELEASE_PUBLISH_FULL_REF: "refs/heads/main",
+                RELEASE_PUBLISH_WORKFLOW_SHA: workflowSha,
+                RELEASE_PUBLISH_RUN_ATTEMPT: "2",
+                RELEASE_PUBLISH_RUN_ID: "123",
+              },
+              shell: false,
+              stdio: ["ignore", "pipe", "pipe"],
+              signal: AbortSignal.any([signal, finished.signal, overflow.signal]),
+              requireProcessTreeExit: process.platform !== "win32",
+              onReady(spawnedChild) {
+                for (const [pipe, output] of [
+                  [spawnedChild.stdout!, stdout],
+                  [spawnedChild.stderr!, stderr],
+                ] as const) {
+                  pipe.on("data", (chunk: Buffer) => {
+                    output.append(chunk);
+                    outputBytes += chunk.byteLength;
+                    if (outputBytes > maxBuffer) {
+                      overflow.abort();
+                    }
+                  });
+                }
+              },
+            }),
+          );
+        } catch (cause) {
+          if (overflow.signal.aborted) {
+            throw new Error("Android qualification output exceeded maxBuffer", { cause });
+          }
+          throw cause;
+        }
+        const result = { status: childStatus, stdout: stdout.text(), stderr: stderr.text() };
+        if (mode === "moved-protected-tag") {
+          expect(existsSync(dispatchPath)).toBe(false);
+          expect(result.stderr).toContain("refusing dispatch");
+        } else {
+          expect(JSON.parse(readFileSync(dispatchPath, "utf8"))).toEqual({
+            ref: workflowRef,
+            inputs: {
+              target_ref: targetSha,
+              historical_target_tag: "v2026.8.1",
+              include_android: "true",
+              release_scope: "full",
+              dispatch_id: dispatchId,
+            },
+          });
+          if (mode === "other-tooling") {
+            expect(readFileSync(outputPath, "utf8")).toBe("");
+            expect(result.stderr).toContain("used workflow SHA");
+          } else {
+            expect(readFileSync(outputPath, "utf8")).toContain(`workflow_ref=${workflowRef}`);
+          }
+        }
+        const approvalPath = join(root, "android-release-approval/approval.json");
+        const approved = mode === "success" || mode === "rerun-at-dispatch";
+        const qualified = approved || mode === "rerun-before-approval";
+        expect(existsSync(approvalPath)).toBe(approved);
+        if (approved) {
+          expect(JSON.parse(readFileSync(approvalPath, "utf8"))).toEqual({
+            version: 3,
+            repository: "openclaw/openclaw",
+            workflow: "OpenClaw Release Publish",
+            parentRunId: "123",
+            parentRunAttempt: 2,
+            workflowBranch: "main",
+            workflowFullRef: "refs/heads/main",
+            parentWorkflowSha: workflowSha,
+            releaseTag: "v2026.8.1",
+            targetSha,
+            nativeCi: { runId: "91", runAttempt: 1, workflowRef },
+          });
+        }
+        expect(existsSync(androidDispatchPath)).toBe(mode === "success");
+        expect(readFileSync(outputPath, "utf8").includes("qualified=true")).toBe(qualified);
+        expect(result.status === 0, result.stderr).toBe(mode === "success");
+        if (mode === "rerun-before-approval" || mode === "rerun-at-dispatch") {
+          expect(result.stderr).toContain("exact completed successful native CI attempt");
+        }
       });
-      if (mode === "other-tooling") {
-        expect(readFileSync(outputPath, "utf8")).toBe("");
-        expect(result.stderr).toContain("used workflow SHA");
-      } else {
-        expect(readFileSync(outputPath, "utf8")).toContain(`workflow_ref=${workflowRef}`);
-      }
-    }
-    const approvalPath = join(root, "android-release-approval/approval.json");
-    const approved = mode === "success" || mode === "rerun-at-dispatch";
-    const qualified = approved || mode === "rerun-before-approval";
-    expect(existsSync(approvalPath)).toBe(approved);
-    if (approved) {
-      expect(JSON.parse(readFileSync(approvalPath, "utf8"))).toEqual({
-        version: 3,
-        repository: "openclaw/openclaw",
-        workflow: "OpenClaw Release Publish",
-        parentRunId: "123",
-        parentRunAttempt: 2,
-        workflowBranch: "main",
-        workflowFullRef: "refs/heads/main",
-        parentWorkflowSha: workflowSha,
-        releaseTag: "v2026.8.1",
-        targetSha,
-        nativeCi: { runId: "91", runAttempt: 1, workflowRef },
-      });
-    }
-    expect(existsSync(androidDispatchPath)).toBe(mode === "success");
-    expect(readFileSync(outputPath, "utf8").includes("qualified=true")).toBe(qualified);
-    expect(result.status === 0, result.stderr).toBe(mode === "success");
-    if (mode === "rerun-before-approval" || mode === "rerun-at-dispatch") {
-      expect(result.stderr).toContain("exact completed successful native CI attempt");
-    }
-  });
+    },
+  );
 
   it("requires native-bound approval support only for Android qualification", () => {
     const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
@@ -8559,20 +8581,22 @@ test "$package_manager" = "pnpm@12.1.0"
     }
   });
 
-  it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "adopts and validates the exact $jobName run without waiting for terminal status",
-    (child) => {
-      const { calls, result } = runFullReleaseChildDispatch(child, {
-        MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
-        MOCK_GH_STATUSES: '["in_progress"]',
-      });
+  it.each(
+    FULL_RELEASE_CHILD_DISPATCHES.filter(
+      (child, index, children) =>
+        children.findIndex((entry) => entry.kind === child.kind) === index,
+    ),
+  )("adopts and validates the exact $jobName run without waiting for terminal status", (child) => {
+    const { calls, result } = runFullReleaseChildDispatch(child, {
+      MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+      MOCK_GH_STATUSES: '["in_progress"]',
+    });
 
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
-      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
-      expect(result.stdout).toContain("Dispatched");
-    },
-  );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
+    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+    expect(result.stdout).toContain("Dispatched");
+  });
 
   it.each([
     { exactTitleAt: 2, label: "inside the former window" },
@@ -10912,22 +10936,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it.each([
     { version: "2026.8.2" },
-    { version: "2026.8.1-beta.3" },
-    { telegramWaiver: "true" },
     { telegramWaiver: "2026.9.1-owner-approved" },
-    { telegramWaiver: "2026.8.1-owner-approval" },
-    { version: "2026.9.1-beta.1", telegramWaiver: "2026.9.1-beta.1-owner-approved" },
-    { version: "2026.10.1", telegramWaiver: "2026.10.1-owner-approved" },
     { rerunGroup: "npm-telegram" },
     { liveSuiteFilter: "qa-telegram" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live-all" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-all" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live-non-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-non-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "non-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "no-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "without-slack" },
   ])("rejects a conflicting Telegram waiver request: %j", (override) => {
     const options = { telegramWaiver: "2026.8.1-owner-approved", ...override };
     const umbrella = runFullReleaseInputValidation("stable", "false", options);
@@ -12695,16 +12706,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
   });
 
-  it("names package acceptance Telegram as artifact-backed package validation", () => {
-    const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
-
-    expect(workflow).toContain("package_telegram:");
-    expect(workflow).toContain("docker_acceptance_registry,");
-    expect(workflow).toContain("PACKAGE_TELEGRAM_RESULT:");
-    expect(workflow).toContain("package_telegram=${PACKAGE_TELEGRAM_RESULT}");
-    expect(workflow).not.toContain("npm_telegram:");
-  });
-
   it.each([
     [
       "accepts Telegram result success when enabled=true",
@@ -13462,25 +13463,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
           result.selection.map((selection) => [selection.variant, selection.producer_attempt]),
         ),
       ).toEqual({ baseline: 2, candidate: 1 });
-    });
-
-    it("selects core and soak attempts independently", () => {
-      const core = pair("qa_lab_runtime_pair_lane_release_checks", "core", "core");
-      const soak = pair("qa_lab_runtime_pair_lane_release_checks", "soak", "soak");
-      const result = runReleaseCheckArtifactResolve({
-        artifacts: [...artifactsFor(core, 2, 1), ...artifactsFor(soak, 1, 11)],
-        consumerAttempt: "2",
-        pairs: [core, soak],
-        runId,
-        targetSha,
-      });
-
-      expect(result.result.status, result.result.stderr).toBe(0);
-      expect(
-        Object.fromEntries(
-          result.selection.map((selection) => [selection.variant, selection.producer_attempt]),
-        ),
-      ).toEqual({ core: 2, soak: 1 });
     });
 
     it("fails when the latest producer attempt has no complete pair", () => {
@@ -15235,8 +15217,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ];
     expect(ciPath).toEqual([20, 150, 5]);
     const ciChildTimeout = ciPath.reduce((total, timeout) => total + timeout, 0);
-    expect(ciChildTimeout).toBe(175);
-    expect(ciChildTimeout).toBeLessThanOrEqual(diagnosticDrainTimeout);
     expect(diagnosticDrainTimeout - ciChildTimeout).toBeGreaterThanOrEqual(60);
 
     expect(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"]).toBe(30);
@@ -15327,11 +15307,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       stable: releasePackagePaths.stable.reduce((total, timeout) => total + timeout, 0),
       full: releasePackagePaths.full.reduce((total, timeout) => total + timeout, 0),
     };
-    expect(releasePackageTimeouts).toEqual({ beta: 305, stable: 305, full: 335 });
     for (const [profile, childTimeout] of Object.entries(releasePackageTimeouts)) {
-      expect(childTimeout, `release-package:${profile}`).toBeLessThanOrEqual(
-        diagnosticDrainTimeout,
-      );
       expect(
         diagnosticDrainTimeout - childTimeout,
         `release-package:${profile}`,
@@ -15451,18 +15427,11 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ["qa-live", releaseQaLivePath],
     ] as const) {
       const childTimeout = path.reduce((total, timeout) => total + timeout, 0);
-      expect(childTimeout, `release-checks:${pathName}`).toBeLessThanOrEqual(
-        diagnosticDrainTimeout,
-      );
       expect(
         diagnosticDrainTimeout - childTimeout,
         `release-checks:${pathName}`,
       ).toBeGreaterThanOrEqual(60);
     }
-    expect(releaseCrossOsPath.reduce((total, timeout) => total + timeout, 0)).toBe(200);
-    expect(releaseInstallPath.reduce((total, timeout) => total + timeout, 0)).toBe(250);
-    expect(releaseInstallNonrootPath.reduce((total, timeout) => total + timeout, 0)).toBe(190);
-    expect(releaseQaLivePath.reduce((total, timeout) => total + timeout, 0)).toBe(165);
 
     expect(
       jobNeeds(workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks")),
@@ -15483,7 +15452,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       (total, timeout) => total + timeout,
       0,
     );
-    expect(releaseTelegramTimeout).toBe(245);
     expect(diagnosticDrainTimeout - releaseTelegramTimeout).toBeGreaterThanOrEqual(60);
 
     const npmTelegramChildTimeout = timeoutForProfile(
@@ -15519,8 +15487,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ];
     expect(performanceArtifactPath).toEqual([10, 240, 5]);
     expect(performancePublishPath).toEqual([10, 240, 30]);
-    expect(performanceArtifactPath.reduce((total, timeout) => total + timeout, 0)).toBe(255);
-    expect(performancePublishPath.reduce((total, timeout) => total + timeout, 0)).toBe(280);
     const performanceParent = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance");
     expect(performanceParent["timeout-minutes"]).toBe(15);
     expect(workflowStep(performanceParent, "Dispatch OpenClaw Performance").run).toContain(

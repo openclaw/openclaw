@@ -93,6 +93,22 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
     }
   });
 
+  it("preserves CRLF body whitespace while removing only framing", () => {
+    const body = "  First\r\n\r\nSecond  ";
+    const content = wrap(body).replaceAll("\n", "\r\n").replaceAll("\r\r\n", "\r\n");
+    const message = { role, content, __openclaw: { idempotencyKey: importKey } };
+    expect(projectImportedMessageForDisplay(message)).toEqual({ ...message, content: body });
+    // Assistant media parsing already trims trailing whitespace; retain that display contract.
+    expect(normalizeMessage(message).content).toEqual(
+      normalizeMessage({ role, content: body }).content,
+    );
+    expect(displayed(message)).toBe(role === "assistant" ? "  First\r\n\r\nSecond" : body);
+  });
+});
+
+describe("imported history framing", () => {
+  const role = "assistant";
+
   it.each([
     ["fenced example", (text: string) => "~~~text\n" + text + "\n~~~"],
     ["inline example", (text: string) => "Example: " + text],
@@ -115,18 +131,6 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
     expect(displayed(message)).toBe(content);
   });
 
-  it("preserves CRLF body whitespace while removing only framing", () => {
-    const body = "  First\r\n\r\nSecond  ";
-    const content = wrap(body).replaceAll("\n", "\r\n").replaceAll("\r\r\n", "\r\n");
-    const message = { role, content, __openclaw: { idempotencyKey: importKey } };
-    expect(projectImportedMessageForDisplay(message)).toEqual({ ...message, content: body });
-    // Assistant media parsing already trims trailing whitespace; retain that display contract.
-    expect(normalizeMessage(message).content).toEqual(
-      normalizeMessage({ role, content: body }).content,
-    );
-    expect(displayed(message)).toBe(role === "assistant" ? "  First\r\n\r\nSecond" : body);
-  });
-
   it.each(["\n", "\r\n", "Thinking\n\n\n"])(
     "preserves extra leading separators %j instead of treating them as import framing",
     (prefix) => {
@@ -135,9 +139,7 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
       const message = { role, content, __openclaw: { idempotencyKey: importKey } };
       expect(projectImportedMessageForDisplay(message)).toEqual(message);
       // Assistant display removes leading blank lines, without unwrapping an ineligible frame.
-      expect(displayed(message)).toBe(
-        role === "assistant" && (prefix === "\n" || prefix === "\r\n") ? framed : content,
-      );
+      expect(displayed(message)).toBe(prefix === "\n" || prefix === "\r\n" ? framed : content);
       expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
     },
   );
@@ -147,7 +149,7 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
     const content = framed + suffix;
     const message = { role, content, __openclaw: { idempotencyKey: importKey } };
     expect(projectImportedMessageForDisplay(message)).toEqual(message);
-    expect(displayed(message)).toBe(role === "assistant" ? framed : content);
+    expect(displayed(message)).toBe(framed);
     expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
   });
 

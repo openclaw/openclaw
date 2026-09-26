@@ -8,6 +8,7 @@ import {
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
 } from "../infra/heartbeat-wake.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { listCronHeartbeatWaitOwners } from "./active-jobs.js";
 import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
 import type { CronEvent } from "./service.js";
@@ -26,7 +27,11 @@ describe("heartbeat payload execution", () => {
   it("fires as an interval heartbeat wake without enqueuing a system event", async () => {
     const { storePath, cleanup } = await makeStorePath();
     const { cron, enqueueSystemEvent, requestHeartbeat, requestHeartbeatAndWait } =
-      createStartedCronServiceWithFinishedBarrier({ storePath, logger: noopLogger });
+      createStartedCronServiceWithFinishedBarrier({
+        scheduler: createTestGatewayScheduler(),
+        storePath,
+        logger: noopLogger,
+      });
     try {
       await cron.start();
       const added = await cron.add(
@@ -111,6 +116,7 @@ describe("heartbeat payload execution", () => {
     const child = createDeferred<HeartbeatRunResult>();
     const events: CronEvent[] = [];
     const { cron, requestHeartbeatAndWait } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       logger: noopLogger,
       requestHeartbeatAndWait: async () => await child.promise,
@@ -176,6 +182,7 @@ describe("heartbeat payload execution", () => {
       setHeartbeatWakeHandler(handler);
       const events: CronEvent[] = [];
       const { cron } = createStartedCronServiceWithFinishedBarrier({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         logger: noopLogger,
         requestHeartbeatAndWait: (wake, lifecycle) =>
@@ -225,6 +232,7 @@ describe("heartbeat payload execution", () => {
     const { storePath, cleanup } = await makeStorePath();
     let observedWaitOwners: ReturnType<typeof listCronHeartbeatWaitOwners> | undefined;
     const { cron, finished } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       logger: noopLogger,
       requestHeartbeatAndWait: async () => {
@@ -276,6 +284,7 @@ describe("heartbeat payload execution", () => {
     const { storePath, cleanup } = await makeStorePath();
     const events: CronEvent[] = [];
     const { cron, requestHeartbeatAndWait } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       logger: noopLogger,
       requestHeartbeatAndWait: async (_request, lifecycle) =>
@@ -328,6 +337,7 @@ describe("heartbeat payload execution", () => {
     const events: CronEvent[] = [];
     const { cron, requestHeartbeat, requestHeartbeatAndWait } =
       createStartedCronServiceWithFinishedBarrier({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         logger: noopLogger,
         onEvent: (event) => events.push(structuredClone(event)),
@@ -361,7 +371,11 @@ describe("heartbeat payload execution", () => {
   it("routes migrated task jobs through the guarded task wake path", async () => {
     const { storePath, cleanup } = await makeStorePath();
     const { cron, enqueueSystemEvent, requestHeartbeat, requestHeartbeatAndWait } =
-      createStartedCronServiceWithFinishedBarrier({ storePath, logger: noopLogger });
+      createStartedCronServiceWithFinishedBarrier({
+        scheduler: createTestGatewayScheduler(),
+        storePath,
+        logger: noopLogger,
+      });
     try {
       await cron.start();
       const declarationKey = heartbeatTaskDeclarationKey("main", "inbox");

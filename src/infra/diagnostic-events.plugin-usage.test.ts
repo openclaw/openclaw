@@ -90,7 +90,7 @@ describe("diagnostic event plugin usage attribution", () => {
       ),
     );
 
-    expect(publicEvents).toEqual([
+    const expectedUnattributed = [
       {
         eventPluginId: "public-emitter-spoof",
         hostPluginId: undefined,
@@ -109,46 +109,17 @@ describe("diagnostic event plugin usage attribution", () => {
         internal: true,
         trusted: true,
       },
-    ]);
-    expect(trustedEvents).toEqual([
-      {
-        eventPluginId: "public-emitter-spoof",
-        privateHostPluginId: undefined,
-        internal: undefined,
-        trusted: true,
-      },
-      {
-        eventPluginId: undefined,
-        privateHostPluginId: undefined,
-        internal: undefined,
-        trusted: true,
-      },
-      {
-        eventPluginId: undefined,
-        privateHostPluginId: undefined,
-        internal: true,
-        trusted: true,
-      },
-    ]);
+    ];
+    expect(publicEvents).toEqual(expectedUnattributed);
+    expect(trustedEvents).toEqual(
+      expectedUnattributed.map(({ hostPluginId, ...event }) => ({
+        ...event,
+        privateHostPluginId: hostPluginId,
+      })),
+    );
     expect(otelEvents).toEqual([
-      {
-        eventPluginId: "public-emitter-spoof",
-        hostPluginId: undefined,
-        internal: undefined,
-        trusted: true,
-      },
-      {
-        eventPluginId: undefined,
-        hostPluginId: undefined,
-        internal: undefined,
-        trusted: true,
-      },
-      {
-        eventPluginId: undefined,
-        hostPluginId: "llm-task",
-        internal: true,
-        trusted: true,
-      },
+      ...expectedUnattributed.slice(0, 2),
+      { ...expectedUnattributed[2], hostPluginId: "llm-task" },
     ]);
   });
 

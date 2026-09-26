@@ -26,14 +26,19 @@ enum ExecEnvInvocationUnwrapper {
         self.unwrapWithMetadata(command)?.command
     }
 
-    static func unwrapWithMetadata(_ command: [String]) -> UnwrapResult? {
+    static func unwrapWithMetadata(
+        _ command: [String],
+        skippingEmptyArguments: Bool = false) -> UnwrapResult?
+    {
         var idx = 1
         var expectsOptionValue = false
         var usesModifiers = false
         while idx < command.count {
             let token = command[idx].trimmingCharacters(in: .whitespacesAndNewlines)
             if token.isEmpty {
-                return nil
+                guard skippingEmptyArguments else { return nil }
+                idx += 1
+                continue
             }
             if expectsOptionValue {
                 expectsOptionValue = false
@@ -71,16 +76,7 @@ enum ExecEnvInvocationUnwrapper {
                     idx += 1
                     continue
                 }
-                if lower.hasPrefix("-u") ||
-                    lower.hasPrefix("-c") ||
-                    lower.hasPrefix("-s") ||
-                    lower.hasPrefix("--unset=") ||
-                    lower.hasPrefix("--chdir=") ||
-                    lower.hasPrefix("--split-string=") ||
-                    lower.hasPrefix("--default-signal=") ||
-                    lower.hasPrefix("--ignore-signal=") ||
-                    lower.hasPrefix("--block-signal=")
-                {
+                if ExecEnvOptions.inlineValuePrefixes.contains(where: { lower.hasPrefix($0) }) {
                     usesModifiers = true
                     idx += 1
                     continue
@@ -91,7 +87,7 @@ enum ExecEnvInvocationUnwrapper {
         }
         guard !expectsOptionValue,
               idx < command.count,
-              !command[idx].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              skippingEmptyArguments || !command[idx].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         return UnwrapResult(command: Array(command[idx...]), usesModifiers: usesModifiers)
     }
@@ -113,53 +109,6 @@ enum ExecEnvInvocationUnwrapper {
                 break
             }
             current = unwrapped.command
-            depth += 1
-        }
-        return current
-    }
-
-    private static func unwrapTransparentEnvInvocation(_ command: [String]) -> [String]? {
-        var idx = 1
-        while idx < command.count {
-            let token = command[idx].trimmingCharacters(in: .whitespacesAndNewlines)
-            if token.isEmpty {
-                return nil
-            }
-            if token == "--" {
-                idx += 1
-                break
-            }
-            if token == "-" {
-                return nil
-            }
-            if self.isEnvAssignment(token) {
-                return nil
-            }
-            if token.hasPrefix("-"), token != "-" {
-                return nil
-            }
-            break
-        }
-        guard idx < command.count,
-              !command[idx].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return nil }
-        return Array(command[idx...])
-    }
-
-    static func unwrapTransparentDispatchWrappersForResolution(_ command: [String]) -> [String] {
-        var current = command
-        var depth = 0
-        while depth < self.maxWrapperDepth {
-            guard let token = current.first?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else {
-                break
-            }
-            guard ExecCommandToken.basenameLower(token) == "env" else {
-                break
-            }
-            guard let unwrapped = unwrapTransparentEnvInvocation(current), !unwrapped.isEmpty else {
-                break
-            }
-            current = unwrapped
             depth += 1
         }
         return current

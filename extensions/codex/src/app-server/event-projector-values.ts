@@ -149,11 +149,6 @@ export function extractRawAssistantText(item: JsonObject): string | undefined {
   return parts.length > 0 ? parts.join("").trim() : undefined;
 }
 
-export function readItemString(item: CodexThreadItem, key: string): string | undefined {
-  const value = item[key];
-  return typeof value === "string" ? value : undefined;
-}
-
 export function readItem(value: JsonValue | undefined): CodexThreadItem | undefined {
   if (!isJsonObject(value)) {
     return undefined;

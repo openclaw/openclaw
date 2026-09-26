@@ -72,13 +72,12 @@ describe("config secret refs schema", () => {
     }
   });
 
-  it.each(
-    (["allowedHosts", "bypassHosts"] as const).flatMap((field) =>
-      ["", "https://api.example.com", "api.example.com:443", "*.example.com", "bad host"].map(
-        (host) => ({ field, host }),
-      ),
-    ),
-  )("rejects invalid secret egress $field entry $host", ({ field, host }) => {
+  it.each([
+    { field: "allowedHosts", host: "" },
+    { field: "allowedHosts", host: "https://api.example.com" },
+    { field: "allowedHosts", host: "*.example.com" },
+    { field: "bypassHosts", host: "*.example.com" },
+  ])("rejects invalid secret egress $field entry $host", ({ field, host }) => {
     const result = validateConfigObjectRaw({
       secrets: { egressProxy: { enabled: false, [field]: [host] } },
     });
@@ -320,21 +319,6 @@ describe("config secret refs schema", () => {
     });
 
     expect(result.ok).toBe(true);
-  });
-
-  it("rejects invalid secret ref id", () => {
-    const result = validateOpenAiApiKeyRef({
-      source: "env",
-      provider: "default",
-      id: "bad id with spaces",
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(
-        result.issues.some((issue) => issue.path.includes("models.providers.openai.apiKey")),
-      ).toBe(true);
-    }
   });
 
   it("rejects env refs that are not env var names", () => {

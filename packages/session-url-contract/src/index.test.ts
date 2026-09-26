@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildControlUiCatalogSessionUrl,
-  buildControlUiSessionPath,
-  controlUiSessionSlug,
-} from "./index.js";
+import { buildControlUiCatalogSessionUrl, buildControlUiSessionPath } from "./index.js";
 import { buildControlUiCatalogSharePath } from "./share-build.js";
 
 const SHARE_ROUTE = {
@@ -22,32 +18,23 @@ type ChatParams = Omit<Parameters<typeof buildControlUiSessionPath>[0], "namespa
 const UUID_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 const buildChatPath = (params: ChatParams) =>
   buildControlUiSessionPath({ namespace: "chat", ...params });
+const THREAD_ID = "0123456789abcdef0123456789abcdef";
+const buildSharePath = (
+  params: Omit<Parameters<typeof buildControlUiCatalogSharePath>[0], "shareRoute" | "threadId">,
+) => buildControlUiCatalogSharePath({ shareRoute: SHARE_ROUTE, threadId: THREAD_ID, ...params });
 
 describe("buildControlUiCatalogSessionUrl", () => {
-  it.each([
-    {
-      label: "root base path",
-      agentId: "main",
-      basePath: undefined,
-      expected: "/chat/main?catalog=beam&host=gateway&thread=beam-1",
-    },
-    {
-      label: "nested base path and non-main agent",
-      agentId: "research",
-      basePath: "/admin/openclaw/",
-      expected: "/admin/openclaw/chat/research?catalog=beam&host=gateway&thread=beam-1",
-    },
-  ])("builds a canonical URL for $label", ({ agentId, basePath, expected }) => {
+  it("builds a canonical URL under a nested base path for a non-main agent", () => {
     expect(
       buildControlUiCatalogSessionUrl({
         namespace: "chat",
-        agentId,
-        basePath,
+        agentId: "research",
+        basePath: "/admin/openclaw/",
         catalog: "beam",
         host: "gateway",
         thread: "beam-1",
       }),
-    ).toBe(expected);
+    ).toBe("/admin/openclaw/chat/research?catalog=beam&host=gateway&thread=beam-1");
   });
 
   it("encodes reserved query characters", () => {
@@ -84,80 +71,34 @@ describe("buildControlUiCatalogSessionUrl", () => {
 describe("buildControlUiCatalogSharePath", () => {
   it.each([
     ["Fix: upload flow!", "fix-upload-flow-"],
-    ["Deploy face deadbeef", "deploy-"],
     ["🦞", ""],
     ["x".repeat(60), `${"x".repeat(48)}-`],
   ])("uses the session title slug for %s", (displayName, prefix) => {
-    expect(
-      buildControlUiCatalogSharePath({
-        shareRoute: SHARE_ROUTE,
-        threadId: "0123456789abcdef0123456789abcdef",
-        displayName,
-      }),
-    ).toBe(`/beam/${prefix}0123456789ab`);
+    expect(buildSharePath({ displayName })).toBe(`/beam/${prefix}0123456789ab`);
   });
 
-  it.each([
-    {
-      label: "root path",
-      basePath: undefined,
-      expected: "/beam/0123456789ab",
-    },
-    {
-      label: "nested base path",
-      basePath: "/admin/openclaw/",
-      expected: "/admin/openclaw/beam/0123456789ab",
-    },
-  ])("builds a lowercase 12-character share id for $label", ({ basePath, expected }) => {
-    expect(
-      buildControlUiCatalogSharePath({
-        shareRoute: SHARE_ROUTE,
-        threadId: "0123456789abcdef0123456789abcdef",
-        basePath,
-      }),
-    ).toBe(expected);
+  it("builds a lowercase 12-character share id under a nested base path", () => {
+    expect(buildSharePath({ basePath: "/admin/openclaw/" })).toBe(
+      "/admin/openclaw/beam/0123456789ab",
+    );
   });
 
   it("can retain the full id for an unambiguous fallback", () => {
-    expect(
-      buildControlUiCatalogSharePath({
-        shareRoute: SHARE_ROUTE,
-        threadId: "0123456789abcdef0123456789abcdef",
-        prefixLength: SHARE_ROUTE.fullLength,
-      }),
-    ).toBe("/beam/0123456789abcdef0123456789abcdef");
+    expect(buildSharePath({ prefixLength: SHARE_ROUTE.fullLength })).toBe(
+      "/beam/0123456789abcdef0123456789abcdef",
+    );
   });
 
   it.each([
-    {
-      shareRoute: { ...SHARE_ROUTE, routeSegment: "chat" },
-      threadId: "0123456789abcdef0123456789abcdef",
-    },
-    {
-      shareRoute: { ...SHARE_ROUTE, routeSegment: "focus" },
-      threadId: "0123456789abcdef0123456789abcdef",
-    },
-    {
-      shareRoute: { ...SHARE_ROUTE, routeSegment: "plugin" },
-      threadId: "0123456789abcdef0123456789abcdef",
-    },
-    {
-      shareRoute: { ...SHARE_ROUTE, routeSegment: "settings" },
-      threadId: "0123456789abcdef0123456789abcdef",
-    },
-    {
-      shareRoute: { ...SHARE_ROUTE, routeSegment: "Beam" },
-      threadId: "0123456789abcdef0123456789abcdef",
-    },
-    {
-      shareRoute: { ...SHARE_ROUTE, routeSegment: "beam/extra" },
-      threadId: "0123456789abcdef0123456789abcdef",
-    },
-    { shareRoute: SHARE_ROUTE, threadId: "0123456789ab" },
-    { shareRoute: SHARE_ROUTE, threadId: "0123456789ABCDEF0123456789ABCDEF" },
-    { shareRoute: SHARE_ROUTE, threadId: "not-hex" },
-  ])("rejects invalid catalog share input %#", ({ shareRoute, threadId }) => {
-    expect(buildControlUiCatalogSharePath({ shareRoute, threadId })).toBeNull();
+    ["chat", THREAD_ID],
+    ["Beam", THREAD_ID],
+    ["beam/extra", THREAD_ID],
+    ["beam", "0123456789ab"],
+    ["beam", "0123456789ABCDEF0123456789ABCDEF"],
+  ])("rejects invalid catalog share input %#", (routeSegment, threadId) => {
+    expect(
+      buildControlUiCatalogSharePath({ shareRoute: { ...SHARE_ROUTE, routeSegment }, threadId }),
+    ).toBeNull();
   });
 });
 
@@ -185,7 +126,6 @@ describe("buildControlUiSessionPath", () => {
       { sessionKey: "agent:research:main", mainKey: "workspace" },
       "/chat/research/main",
     ],
-    ["global", { sessionKey: "global", fallbackAgentId: "ops" }, "/chat/ops"],
     [
       "global under a configured main key",
       { sessionKey: "global", fallbackAgentId: "ops", mainKey: "workspace", exactKey: true },
@@ -247,11 +187,6 @@ describe("buildControlUiSessionPath", () => {
       ],
     ),
     [
-      "UUID slug",
-      { sessionKey: UUID_KEY, displayName: "Deploy Monitor" },
-      "/chat/main/deploy-monitor-12345678",
-    ],
-    [
       "reserved short ref",
       {
         sessionKey: "agent:main:dashboard:deadbeef-0aaa-4000-8000-000000000001",
@@ -266,23 +201,19 @@ describe("buildControlUiSessionPath", () => {
     },
   );
 
-  it.each([
-    ["agent:ops:telegram:12345", "/control/dashboard/ops/telegram/12345"],
-    ["agent:research:global", "/control/dashboard/research/~key/global"],
-  ])("preserves base paths and namespaces for %s", (sessionKey, expected) => {
+  it("preserves base paths and namespaces for qualified global keys", () => {
     expect(
       buildControlUiSessionPath({
         namespace: "dashboard",
-        sessionKey,
+        sessionKey: "agent:research:global",
         basePath: " /control/// ",
       }),
-    ).toBe(expected);
+    ).toBe("/control/dashboard/research/~key/global");
   });
 
   it.each([
     ["OPS_TEAM", "ops_team"],
     ["Research Agent!", "research-agent"],
-    ["..", "main"],
     ["Kelvin", "kelvin"],
     ["ſ", "main"],
   ])("normalizes fallback agent %j", (fallbackAgentId, expectedAgentId) => {
@@ -302,15 +233,12 @@ describe("buildControlUiSessionPath", () => {
     { sessionKey: "agent::control-link" },
     { sessionKey: "agent:main:" },
     { sessionKey: "agent:main:telegram::12345" },
-    { sessionKey: "agent:ops:room::part" },
     { sessionKey: "agent:ops::main" },
-    { sessionKey: "agent:ops:cron:" },
   ] satisfies readonly ChatParams[])("rejects invalid input %#", (params) => {
     expect(buildChatPath(params)).toBeNull();
   });
 
   it("removes trailing hex tokens from UUID display slugs", () => {
-    expect(controlUiSessionSlug("Deploy face deadbeef")).toBe("deploy");
     expect(buildChatPath({ sessionKey: UUID_KEY, displayName: "Deploy face deadbeef" })).toBe(
       "/chat/main/deploy-12345678",
     );

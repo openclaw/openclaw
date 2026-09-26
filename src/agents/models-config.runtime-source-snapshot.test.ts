@@ -1,6 +1,7 @@
 // Verifies generated models.json preserves source secret markers from runtime snapshots.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
@@ -72,113 +73,60 @@ afterAll(async () => {
   await fixtureSuite.cleanup();
 });
 
-function createOpenAiApiKeySourceConfig(): OpenClawConfig {
+function createProviderConfig(
+  fields: Pick<ModelProviderConfig, "apiKey" | "headers">,
+  provider = "openai",
+  baseUrl = "https://api.openai.com/v1",
+): OpenClawConfig {
   return {
     models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
-          api: "openai-completions" as const,
-          models: [],
-        },
-      },
+      providers: { [provider]: { baseUrl, api: "openai-completions", models: [], ...fields } },
     },
   };
+}
+
+function createOpenAiApiKeySourceConfig(): OpenClawConfig {
+  return createProviderConfig({
+    apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+  });
 }
 
 function createOpenAiApiKeyRuntimeConfig(): OpenClawConfig {
-  // Runtime config simulates already-resolved secrets that must not be persisted.
-  return {
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          apiKey: "sk-runtime-resolved", // pragma: allowlist secret
-          api: "openai-completions" as const,
-          models: [],
-        },
-      },
-    },
-  };
+  return createProviderConfig({ apiKey: "sk-runtime-resolved" }); // pragma: allowlist secret
 }
 
 function createCustomProviderApiKeySourceConfig(): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        litellm: {
-          baseUrl: "https://litellm.example/v1",
-          apiKey: {
-            source: "env",
-            provider: "default",
-            id: "OPENCLAW_MODEL_LITELLM_API_KEY", // pragma: allowlist secret
-          },
-          api: "openai-completions" as const,
-          models: [],
-        },
-      },
-    },
-  };
+  return createProviderConfig(
+    { apiKey: { source: "env", provider: "default", id: "OPENCLAW_MODEL_LITELLM_API_KEY" } },
+    "litellm",
+    "https://litellm.example/v1",
+  );
 }
 
 function createCustomProviderApiKeyRuntimeConfig(): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        litellm: {
-          baseUrl: "https://litellm.example/v1",
-          apiKey: "sk-litellm-runtime-secret", // pragma: allowlist secret
-          api: "openai-completions" as const,
-          models: [],
-        },
-      },
-    },
-  };
+  return createProviderConfig(
+    { apiKey: "sk-litellm-runtime-secret" }, // pragma: allowlist secret
+    "litellm",
+    "https://litellm.example/v1",
+  );
 }
 
 function createOpenAiHeaderSourceConfig(): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions" as const,
-          headers: {
-            Authorization: {
-              source: "env",
-              provider: "default",
-              id: "OPENAI_HEADER_TOKEN", // pragma: allowlist secret
-            },
-            "X-Tenant-Token": {
-              source: "file",
-              provider: "vault",
-              id: "/providers/openai/tenantToken",
-            },
-          },
-          models: [],
-        },
-      },
+  return createProviderConfig({
+    headers: {
+      Authorization: { source: "env", provider: "default", id: "OPENAI_HEADER_TOKEN" },
+      "X-Tenant-Token": { source: "file", provider: "vault", id: "/providers/openai/tenantToken" },
     },
-  };
+  });
 }
 
 function createOpenAiHeaderRuntimeConfig(): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions" as const,
-          headers: {
-            Authorization: "Bearer runtime-openai-token",
-            "X-Tenant-Token": "runtime-tenant-token",
-          },
-          models: [],
-        },
-      },
+  return createProviderConfig({
+    headers: {
+      Authorization: "Bearer runtime-openai-token",
+      "X-Tenant-Token": "runtime-tenant-token",
     },
-  };
+  });
 }
 
 function getOpenAiProvider(config: OpenClawConfig) {
@@ -419,53 +367,11 @@ describe("models-config runtime source snapshot", () => {
     expectOpenAiHeaderMarkers(providers);
   });
 
-  it("reapplies source markers when sourceConfigForSecrets uses mixed-case provider keys", async () => {
-    // Regression: provider keys in sourceConfigForSecrets may arrive as "OpenAI" while the
-    // merge boundary canonicalizes to "openai". The source-managed marker lookup must use the
-    // same provider-id normalizer, otherwise the resolved runtime apiKey leaks into models.json.
-    const mixedCaseSourceConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          OpenAI: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
-            api: "openai-completions" as const,
-            models: [],
-          },
-        },
-      },
-    };
-    const providers = await planGeneratedProviders({
-      config: createOpenAiApiKeyRuntimeConfig(),
-      sourceConfigForSecrets: mixedCaseSourceConfig,
-    });
-    expect(Object.keys(providers).toSorted()).toEqual(["openai"]);
-    expect(providers.OpenAI).toBeUndefined();
-    expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
-  });
-
   it("reapplies source header markers when sourceConfigForSecrets uses mixed-case provider keys", async () => {
     const sourceConfig: OpenClawConfig = {
       models: {
         providers: {
-          " OpenAI ": {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-completions" as const,
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
-            headers: {
-              Authorization: {
-                source: "env",
-                provider: "default",
-                id: "OPENAI_HEADER_TOKEN", // pragma: allowlist secret
-              },
-              "X-Tenant-Token": {
-                source: "file",
-                provider: "vault",
-                id: "/providers/openai/tenantToken",
-              },
-            },
-            models: [],
-          },
+          " OpenAI ": getOpenAiProvider(createOpenAiSourceConfigWithHeadersAndApiKey()),
         },
       },
     };

@@ -35,6 +35,7 @@ type IdentityRecord = {
   identity: DatabasePathIdentity;
   paths: Set<string>;
   generation: object;
+  admissions: Map<string, OpenClawStateDatabaseReadAdmission>;
 };
 type ReadSeal = { record?: IdentityRecord };
 type CloseAttempt = {
@@ -327,18 +328,41 @@ export function createOpenClawDatabaseMaintenanceScope(
 export function createOpenClawStateDatabaseAsyncLifecycle() {
   const resources = new Set<OpenClawStateDatabaseAsyncResource>();
   const records = new Map<string, IdentityRecord>();
+  const recordsByPath = new Map<string, IdentityRecord>();
   const seals = new Set<ReadSeal>();
   const attempts = new Map<IdentityRecord | undefined, CloseAttempt>();
   let tail = Promise.resolve();
 
-  // Internal lookups reuse the path normalized at the lifecycle boundary.
-  const known = (resolvedPath: string) =>
-    [...records.values()].find((record) => record.paths.has(resolvedPath));
-  const overlaps = (left: IdentityRecord, right: IdentityRecord) =>
-    left.identity.key === right.identity.key ||
-    [...left.paths].some((pathname) => right.paths.has(pathname));
-  const isSealed = (record: IdentityRecord) =>
-    [...seals].some((held) => held.record === undefined || overlaps(held.record, record));
+  const known = (pathname: string) =>
+    recordsByPath.get(pathname) ?? recordsByPath.get(path.resolve(pathname));
+  const bindPath = (record: IdentityRecord, pathname: string) => {
+    record.paths.add(pathname);
+    if (!recordsByPath.has(pathname)) {
+      recordsByPath.set(pathname, record);
+    }
+  };
+  const overlaps = (left: IdentityRecord, right: IdentityRecord) => {
+    if (left.identity.key === right.identity.key) {
+      return true;
+    }
+    for (const pathname of left.paths) {
+      if (right.paths.has(pathname)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const isSealed = (record: IdentityRecord) => {
+    if (seals.size === 0) {
+      return false;
+    }
+    for (const held of seals) {
+      if (held.record === undefined || overlaps(held.record, record)) {
+        return true;
+      }
+    }
+    return false;
+  };
   const assertOpen = (record: IdentityRecord) => {
     if (isSealed(record)) {
       throw new StateDatabaseReadAdmissionInvalidatedError(
@@ -373,7 +397,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     resolvedPath: string,
     preparedIdentity?: DatabasePathIdentity,
   ): IdentityRecord => {
-    const cached = known(resolvedPath);
+    const cached = recordsByPath.get(resolvedPath);
     if (cached && (!preparedIdentity || cached.identity.key === preparedIdentity.key)) {
       // Resolve first creation without replacing an established file's admission.
       return !preparedIdentity && cached.identity.key.startsWith("path:")
@@ -406,14 +430,16 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       }
     }
     if (!record) {
-      record = { identity, paths: new Set(), generation: {} };
+      record = { identity, paths: new Set(), generation: {}, admissions: new Map() };
       records.set(identity.key, record);
     }
-    record.paths.add(resolvedPath).add(identity.canonicalPath);
+    bindPath(record, resolvedPath);
+    bindPath(record, identity.canonicalPath);
     return record;
   };
-  const resolveForNative = (resolvedPath: string): IdentityRecord | undefined => {
-    const cached = known(resolvedPath);
+  const resolveForNative = (pathname: string): IdentityRecord | undefined => {
+    const resolvedPath = path.resolve(pathname);
+    const cached = recordsByPath.get(resolvedPath);
     if (cached) {
       return cached;
     }
@@ -423,6 +449,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   const invalidate = (record?: IdentityRecord) => {
     for (const current of record ? [record] : records.values()) {
       current.generation = {};
+      current.admissions.clear();
     }
   };
   const seal = (record?: IdentityRecord): ReadSeal => {
@@ -434,20 +461,69 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   const forget = (record: IdentityRecord) => {
     if (!isSealed(record) && records.get(record.identity.key) === record) {
       records.delete(record.identity.key);
+      for (const pathname of record.paths) {
+        if (recordsByPath.get(pathname) === record) {
+          recordsByPath.delete(pathname);
+          // A sealed predecessor keeps close custody until retirement, even if
+          // publication has already recorded a replacement at the same path.
+          for (const replacement of records.values()) {
+            if (replacement.paths.has(pathname)) {
+              recordsByPath.set(pathname, replacement);
+              break;
+            }
+          }
+        }
+      }
     }
+  };
+  // Keep closure creation off capture's warm branch: V8 otherwise allocates its
+  // captured environment even when returning an already retained admission.
+  const captureRecord = (
+    record: IdentityRecord,
+    databasePath: string,
+  ): OpenClawStateDatabaseReadAdmission => {
+    const previous = record.admissions.get(databasePath);
+    if (previous) {
+      return previous;
+    }
+    const generation = record.generation;
+    const admission: OpenClawStateDatabaseReadAdmission = Object.freeze({
+      databasePath,
+      get identity() {
+        return record.identity;
+      },
+      assertCurrent() {
+        assertOpen(record);
+        if (records.get(record.identity.key) !== record || record.generation !== generation) {
+          throw new StateDatabaseReadAdmissionInvalidatedError(
+            "OpenClaw state database read admission changed",
+          );
+        }
+      },
+    });
+    record.admissions.set(databasePath, admission);
+    return admission;
+  };
+  const captureResolved = (databasePath: string): OpenClawStateDatabaseReadAdmission => {
+    const record = resolve(databasePath);
+    assertOpen(record);
+    return captureRecord(record, databasePath);
   };
 
   return {
     identity(pathname: string): DatabasePathIdentity | undefined {
-      return known(path.resolve(pathname))?.identity ?? inspectDatabasePathIdentitySync(pathname);
+      return known(pathname)?.identity ?? inspectDatabasePathIdentitySync(pathname);
     },
     knownIdentity(this: void, pathname: string): DatabasePathIdentity | undefined {
-      return known(path.resolve(pathname))?.identity;
+      return known(pathname)?.identity;
     },
-    publish(pathname: string): DatabasePathIdentity {
+    publish(pathname: string): {
+      identity: DatabasePathIdentity;
+      admission: OpenClawStateDatabaseReadAdmission;
+    } {
       const resolvedPath = path.resolve(pathname);
       const identity = readDatabasePathIdentitySync(resolvedPath);
-      const previous = known(resolvedPath);
+      const previous = recordsByPath.get(resolvedPath);
       let record = findPhysicalRecord(identity);
       if (previous && previous.identity.key !== identity.key) {
         if (previous.identity.key.startsWith("path:") && !record) {
@@ -464,14 +540,17 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       if (!record) {
         record = resolve(resolvedPath, identity);
       }
-      record.paths.add(resolvedPath).add(identity.canonicalPath);
-      return identity;
+      bindPath(record, resolvedPath);
+      bindPath(record, identity.canonicalPath);
+      // Private native binding may publish while reads are sealed. Retain its
+      // generation now; every later worker use still checks the seal and lifetime.
+      return { identity, admission: captureRecord(record, resolvedPath) };
     },
     invalidate(pathname?: string): void {
       if (pathname === undefined) {
         invalidate();
       } else {
-        const record = known(path.resolve(pathname));
+        const record = known(pathname);
         if (record) {
           invalidate(record);
         }
@@ -487,24 +566,13 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       };
     },
     capture(this: void, pathname: string): OpenClawStateDatabaseReadAdmission {
-      const databasePath = path.resolve(pathname);
-      const record = resolve(databasePath);
-      assertOpen(record);
-      const generation = record.generation;
-      return {
-        databasePath,
-        get identity() {
-          return record.identity;
-        },
-        assertCurrent() {
-          assertOpen(record);
-          if (records.get(record.identity.key) !== record || record.generation !== generation) {
-            throw new StateDatabaseReadAdmissionInvalidatedError(
-              "OpenClaw state database read admission changed",
-            );
-          }
-        },
-      };
+      const cached = recordsByPath.get(pathname);
+      const retained = cached?.admissions.get(pathname);
+      if (cached && retained && cached.identity.key.startsWith("file:")) {
+        retained.assertCurrent();
+        return retained;
+      }
+      return captureResolved(path.resolve(pathname));
     },
     holdExclusion(pathname: string): () => void {
       const record = resolve(path.resolve(pathname));
@@ -523,7 +591,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       pathname: string | undefined,
       retireNative: (identity?: DatabasePathIdentity) => boolean,
     ): Promise<boolean> {
-      const record = pathname === undefined ? undefined : resolveForNative(path.resolve(pathname));
+      const record = pathname === undefined ? undefined : resolveForNative(pathname);
       if (pathname !== undefined && !record) {
         // No worker could enter a non-file target. Retire only the caller's exact
         // native path; undefined must not reach resource.close as a global drain.

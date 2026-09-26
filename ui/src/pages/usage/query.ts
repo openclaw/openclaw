@@ -135,47 +135,36 @@ const buildQuerySuggestions = (query: string, options: UsageFilterOptions): Quer
 
   if (!key) {
     return [
-      { label: "agent:", value: "agent:" },
-      { label: "channel:", value: "channel:" },
-      { label: "provider:", value: "provider:" },
-      { label: "model:", value: "model:" },
-      { label: "tool:", value: "tool:" },
-      { label: "has:errors", value: "has:errors" },
-      { label: "has:tools", value: "has:tools" },
-      { label: "minTokens:", value: "minTokens:" },
-      { label: "maxCost:", value: "maxCost:" },
-    ];
+      "agent:",
+      "channel:",
+      "provider:",
+      "model:",
+      "tool:",
+      "has:errors",
+      "has:tools",
+      "minTokens:",
+      "maxCost:",
+    ].map((suggestion) => ({ label: suggestion, value: suggestion }));
   }
 
-  const suggestions: QuerySuggestion[] = [];
-  const addValues = (prefix: string, values: string[]) => {
-    for (const val of values.slice(0, 6)) {
-      if (!value || normalizeLowercaseStringOrEmpty(val).includes(value)) {
-        suggestions.push({ label: `${prefix}:${val}`, value: `${prefix}:${val}` });
-      }
-    }
-  };
-
+  let candidates: string[];
   switch (key) {
     case "agent":
     case "channel":
     case "provider":
     case "model":
     case "tool":
-      addValues(key, options[key]);
+      candidates = options[key].slice(0, 6);
       break;
     case "has":
-      ["errors", "tools", "context", "usage", "model", "provider"].forEach((entry) => {
-        if (!value || entry.includes(value)) {
-          suggestions.push({ label: `has:${entry}`, value: `has:${entry}` });
-        }
-      });
+      candidates = ["errors", "tools", "context", "usage", "model", "provider"];
       break;
     default:
-      break;
+      return [];
   }
-
-  return suggestions;
+  return candidates
+    .filter((candidate) => !value || normalizeLowercaseStringOrEmpty(candidate).includes(value))
+    .map((candidate) => ({ label: `${key}:${candidate}`, value: `${key}:${candidate}` }));
 };
 
 const applySuggestionToQuery = (query: string, suggestion: string): string => {

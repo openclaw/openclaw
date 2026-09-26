@@ -18,6 +18,7 @@ import {
 } from "../config/sessions/legacy-transcript-repair.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { listExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
 import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
@@ -388,13 +389,14 @@ export async function noteSessionTranscriptHealth(options?: {
       });
       throw error;
     }
+    const failure = formatErrorMessage(error);
     note(
-      `- Skipped: Gateway or another SQLite maintenance command owns the state directory. Stop the Gateway, then run "${formatCliCommand("openclaw doctor --fix", params.env)}" for session-store maintenance.`,
+      `- Skipped: ${failure} Then run "${formatCliCommand("openclaw doctor --fix", params.env)}" for session-store maintenance.`,
       "Session SQLite",
     );
     recordPostSessionRefusal({
       code: "sqlite-maintenance-unavailable",
-      message: "Session SQLite maintenance ownership was unavailable.",
+      message: failure,
     });
     return postSessionPluginReceipt;
   }

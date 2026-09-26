@@ -1,81 +1,67 @@
-// Bounded data-URL cache for locally resolved assistant avatars. Kept apart
-// from the avatar projection so cache policy (identity validation, LRU bound)
-// stays independently testable with injected read/close seams.
+// Prepared avatar representations retain their source revision through delivery.
 import { createHash } from "node:crypto";
-import fs from "node:fs";
-import {
-  readOpenedLocalAgentAvatarDataUrl,
-  type OpenedLocalAgentAvatarFile,
-} from "../agents/identity-avatar-file.js";
+import type { PreparedLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
+import { resolveAvatarMime } from "../shared/avatar-policy.js";
 
-type AvatarDataUrlCacheEntry = {
-  ctimeMs: number;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  size: number;
-  dataUrl: string;
-};
+export type GatewayAvatarImageSource =
+  | { file: PreparedLocalAgentAvatarFile; revision: string }
+  | { dataUrl: string; revision: string };
 
-const GATEWAY_AVATAR_DATA_URL_CACHE_MAX_ENTRIES = 4;
+const fileSources = new WeakMap<PreparedLocalAgentAvatarFile, GatewayAvatarImageSource>();
+const inlineFiles = new WeakMap<PreparedLocalAgentAvatarFile, string>();
+const dataSources = new Map<string, GatewayAvatarImageSource>();
 
-export type GatewayAvatarImageSource = { file: OpenedLocalAgentAvatarFile } | { dataUrl: string };
-
-/** Include the representation version so a changed thumbnail policy cannot reuse old bytes. */
-export function gatewayAvatarImageRevision(source: GatewayAvatarImageSource): string {
-  return createHash("sha256")
-    .update("thumbnail-128-png-v1:")
-    .update(
-      "file" in source ? JSON.stringify([source.file.path, source.file.stat]) : source.dataUrl,
-    )
-    .digest("hex")
-    .slice(0, 16);
+export function prepareGatewayAvatarFile(
+  file: PreparedLocalAgentAvatarFile,
+): GatewayAvatarImageSource {
+  let source = fileSources.get(file);
+  if (!source) {
+    source = {
+      file,
+      revision: createHash("sha256")
+        .update("thumbnail-128-png-v1:")
+        .update(JSON.stringify([file.path, file.stat]))
+        .digest("hex")
+        .slice(0, 16),
+    };
+    fileSources.set(file, source);
+  }
+  return source;
 }
 
-export function createGatewayAvatarDataUrlCache(params?: {
-  maxEntries?: number;
-  read?: (opened: OpenedLocalAgentAvatarFile) => string | undefined;
-  close?: (fd: number) => void;
-}) {
-  const maxEntries = params?.maxEntries ?? GATEWAY_AVATAR_DATA_URL_CACHE_MAX_ENTRIES;
-  const read = params?.read ?? readOpenedLocalAgentAvatarDataUrl;
-  const close = params?.close ?? ((fd: number) => fs.closeSync(fd));
-  const entries = new Map<string, AvatarDataUrlCacheEntry>();
-  return {
-    read(opened: OpenedLocalAgentAvatarFile): string | undefined {
-      const cached = entries.get(opened.path);
-      if (
-        cached &&
-        cached.ctimeMs === opened.stat.ctimeMs &&
-        cached.dev === opened.stat.dev &&
-        cached.ino === opened.stat.ino &&
-        cached.mtimeMs === opened.stat.mtimeMs &&
-        cached.size === opened.stat.size
-      ) {
-        close(opened.fd);
-        entries.delete(opened.path);
-        entries.set(opened.path, cached);
-        return cached.dataUrl;
-      }
-      entries.delete(opened.path);
-      const dataUrl = read(opened);
-      if (!dataUrl || maxEntries <= 0) {
-        return dataUrl;
-      }
-      // The boundary-safe open already fstats the pinned descriptor. Reuse base64
-      // only while its file identity and mtime/size match; otherwise an atomic
-      // same-size replacement could leave stale identity data indefinitely.
-      entries.set(opened.path, {
-        ctimeMs: opened.stat.ctimeMs,
-        dev: opened.stat.dev,
-        ino: opened.stat.ino,
-        mtimeMs: opened.stat.mtimeMs,
-        size: opened.stat.size,
-        dataUrl,
-      });
-      pruneMapToMaxSize(entries, maxEntries);
-      return dataUrl;
-    },
+export function prepareGatewayAvatarDataUrl(dataUrl: string): GatewayAvatarImageSource | undefined {
+  const cached = dataSources.get(dataUrl);
+  if (cached) {
+    dataSources.delete(dataUrl);
+    dataSources.set(dataUrl, cached);
+    return cached;
+  }
+  if (!isRenderableAvatarImageDataUrl(dataUrl)) {
+    return undefined;
+  }
+  const source: GatewayAvatarImageSource = {
+    dataUrl,
+    revision: createHash("sha256")
+      .update("thumbnail-128-png-v1:")
+      .update(dataUrl)
+      .digest("hex")
+      .slice(0, 16),
   };
+  dataSources.set(dataUrl, source);
+  pruneMapToMaxSize(dataSources, 4);
+  return source;
+}
+
+export function gatewayAvatarFileDataUrl(file: PreparedLocalAgentAvatarFile): string | undefined {
+  if (!file.body) {
+    return undefined;
+  }
+  let dataUrl = inlineFiles.get(file);
+  if (!dataUrl) {
+    dataUrl = `data:${resolveAvatarMime(file.path)};base64,${file.body.toString("base64")}`;
+    inlineFiles.set(file, dataUrl);
+  }
+  return dataUrl;
 }

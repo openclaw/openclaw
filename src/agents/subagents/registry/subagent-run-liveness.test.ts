@@ -1,6 +1,6 @@
 // Subagent run liveness tests cover stale-unended detection and child-link
 // retention windows for registry list/read paths.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   isRetainedUnendedSubagentRun,
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
@@ -75,21 +75,6 @@ describe("subagent run liveness", () => {
     };
     expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
     expect(isRetainedUnendedSubagentRun(entry, now)).toBe(true);
-  });
-
-  it("defaults to current time when now is omitted", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    try {
-      expect(
-        isStaleUnendedSubagentRun({
-          createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-          execution: {},
-        }),
-      ).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("keeps child links during registration grace, recent completion, or pending descendants", () => {

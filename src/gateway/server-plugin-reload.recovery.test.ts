@@ -24,6 +24,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { activeSessions } from "../transcripts/capture.js";
 import { clearTranscriptCapturesForTest } from "../transcripts/capture.test-support.js";
 import type { TranscriptStartRequest } from "../transcripts/provider-types.js";
@@ -46,6 +47,7 @@ import {
   verifyGatewayCacheOwnership,
   verifySharedGatewayCacheOwnership,
 } from "./server-plugin-reload.cache.test-support.js";
+import { verifyCancelledDrainRollbackLease } from "./server-plugin-reload.cancel-lease.test-support.js";
 import {
   verifyDecisionSelectionIsolation,
   verifyDecisionEarlyReloadRecovery,
@@ -170,6 +172,8 @@ it.each(["commit", "rollback"] as const)(
     let hookSignal: PluginHookGatewayContext["abortSignal"];
     const schedulers = ["first", "next"].map((name) => {
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath: path.join(makeTrackedTempDir(`reload-cron-${name}`, tempDirs), "jobs.sqlite"),
         cronEnabled: false,
         log: mocks.log,
@@ -301,6 +305,12 @@ it.each([5_000, 15_000, 70_000])(
 
 it("keeps restored plugins serving when an expired drain observation settles late", () =>
   verifyLateActiveCallDrainObservation(createRecoveryFixture));
+
+it("keeps the lifecycle lease through cancelled drain rollback before admitting another writer", () =>
+  verifyCancelledDrainRollbackLease(
+    createRecoveryFixture,
+    makeTrackedTempDir("gateway-cancelled-drain-lease", tempDirs),
+  ));
 
 it("keeps old cleanup owned when the Gateway closes before replacement publication", () =>
   verifyPreCommitRetirementOwnership(createRecoveryFixture));

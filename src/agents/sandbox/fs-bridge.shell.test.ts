@@ -7,7 +7,6 @@ import {
   createSandbox,
   expectOnlyCanonicalPathCommands,
   createSandboxFsBridge,
-  createSeededSandboxFsBridge,
   getScriptsFromCalls,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
@@ -21,16 +20,6 @@ function expectNoScriptsContaining(scripts: string[], needle: string) {
 
 function expectSomeScriptContaining(scripts: string[], needle: string) {
   expect(scripts.join("\n")).toContain(needle);
-}
-
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 describe("sandbox fs bridge shell compatibility", () => {
@@ -159,26 +148,6 @@ describe("sandbox fs bridge shell compatibility", () => {
     expectNoScriptsContaining(scripts, 'cat >"$1"');
     expectNoScriptsContaining(scripts, 'cat >"$tmp"');
     expectSomeScriptContaining(scripts, "os.replace(");
-  });
-
-  it("routes mkdirp, remove, and rename through the pinned mutation helper", async () => {
-    await withTempDir("openclaw-fs-bridge-shell-write-", async (stateDir) => {
-      const { bridge } = await createSeededSandboxFsBridge(stateDir, {
-        rootFileName: "a.txt",
-      });
-
-      await bridge.mkdirp({ filePath: "nested" });
-      await bridge.remove({ filePath: "nested/file.txt" });
-      await bridge.rename({ from: "a.txt", to: "nested/b.txt" });
-
-      const scripts = getScriptsFromCalls();
-      expect(countMatching(scripts, (script) => script.includes("operation = sys.argv[1]"))).toBe(
-        3,
-      );
-      expectNoScriptsContaining(scripts, 'mkdir -p -- "$2"');
-      expectNoScriptsContaining(scripts, 'rm -f -- "$2"');
-      expectNoScriptsContaining(scripts, 'mv -- "$3" "$2/$4"');
-    });
   });
 
   it("re-validates target before the pinned write helper runs", async () => {

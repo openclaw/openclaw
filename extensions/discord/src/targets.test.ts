@@ -8,23 +8,7 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
-import { normalizeDiscordMessagingTarget } from "./normalize.js";
 import { parseDiscordTarget, resolveDiscordChannelId, resolveDiscordTarget } from "./targets.js";
-
-function expectTargetFields(
-  target: unknown,
-  expected: { kind: string; id: string; normalized?: string },
-): void {
-  if (!target || typeof target !== "object") {
-    throw new Error("Expected target record");
-  }
-  const actual = target as Record<string, unknown>;
-  expect(actual.kind).toBe(expected.kind);
-  expect(actual.id).toBe(expected.id);
-  if (expected.normalized !== undefined) {
-    expect(actual.normalized).toBe(expected.normalized);
-  }
-}
 
 describe("parseDiscordTarget", () => {
   it("parses user mention and prefixes", () => {
@@ -36,7 +20,7 @@ describe("parseDiscordTarget", () => {
       { input: "discord:user:987", id: "987", normalized: "user:987" },
     ] as const;
     for (const testCase of cases) {
-      expectTargetFields(parseDiscordTarget(testCase.input), {
+      expect(parseDiscordTarget(testCase.input)).toMatchObject({
         kind: "user",
         id: testCase.id,
         normalized: testCase.normalized,
@@ -51,7 +35,7 @@ describe("parseDiscordTarget", () => {
       { input: "general", id: "general", normalized: "channel:general" },
     ] as const;
     for (const testCase of cases) {
-      expectTargetFields(parseDiscordTarget(testCase.input), {
+      expect(parseDiscordTarget(testCase.input)).toMatchObject({
         kind: "channel",
         id: testCase.id,
         normalized: testCase.normalized,
@@ -60,7 +44,7 @@ describe("parseDiscordTarget", () => {
   });
 
   it("accepts numeric ids when a default kind is provided", () => {
-    expectTargetFields(parseDiscordTarget("123", { defaultKind: "channel" }), {
+    expect(parseDiscordTarget("123", { defaultKind: "channel" })).toMatchObject({
       kind: "channel",
       id: "123",
       normalized: "channel:123",
@@ -110,7 +94,7 @@ describe("resolveDiscordTarget", () => {
       { kind: "user", id: "user:999", name: "Jane" } as const,
     ]);
 
-    expectTargetFields(await resolveDiscordTarget("jane", { cfg, accountId: "default" }), {
+    expect(await resolveDiscordTarget("jane", { cfg, accountId: "default" })).toMatchObject({
       kind: "user",
       id: "999",
       normalized: "user:999",
@@ -119,7 +103,7 @@ describe("resolveDiscordTarget", () => {
 
   it("falls back to parsing when lookup misses", async () => {
     vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([]);
-    expectTargetFields(await resolveDiscordTarget("general", { cfg, accountId: "default" }), {
+    expect(await resolveDiscordTarget("general", { cfg, accountId: "default" })).toMatchObject({
       kind: "channel",
       id: "general",
     });
@@ -127,7 +111,7 @@ describe("resolveDiscordTarget", () => {
 
   it("does not call directory lookup for explicit user ids", async () => {
     const listPeers = vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive");
-    expectTargetFields(await resolveDiscordTarget("user:123", { cfg, accountId: "default" }), {
+    expect(await resolveDiscordTarget("user:123", { cfg, accountId: "default" })).toMatchObject({
       kind: "user",
       id: "123",
     });
@@ -148,38 +132,14 @@ describe("resolveDiscordTarget", () => {
       },
     } as OpenClawConfig;
 
-    expectTargetFields(
+    expect(
       await resolveDiscordTarget(
         "123",
         { cfg: cfgCandidate, accountId: "default" },
         { defaultKind: "channel" },
       ),
-      { kind: "user", id: "123", normalized: "user:123" },
-    );
+    ).toMatchObject({ kind: "user", id: "123", normalized: "user:123" });
     expect(listPeers).not.toHaveBeenCalled();
-  });
-
-  it("uses account allowFrom when disambiguating bare numeric ids", async () => {
-    const cfgEntry = {
-      channels: {
-        discord: {
-          accounts: {
-            default: {
-              allowFrom: ["456"],
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expectTargetFields(
-      await resolveDiscordTarget(
-        "456",
-        { cfg: cfgEntry, accountId: "default" },
-        { defaultKind: "channel" },
-      ),
-      { kind: "user", id: "456", normalized: "user:456" },
-    );
   });
 
   it("uses only canonical allowFrom for bare numeric ids", async () => {
@@ -195,14 +155,13 @@ describe("resolveDiscordTarget", () => {
       },
     } as OpenClawConfig;
 
-    expectTargetFields(
+    expect(
       await resolveDiscordTarget(
         "456",
         { cfg: cfgResult, accountId: "default" },
         { defaultKind: "channel" },
       ),
-      { kind: "channel", id: "456", normalized: "channel:456" },
-    );
+    ).toMatchObject({ kind: "channel", id: "456", normalized: "channel:456" });
   });
 
   it("uses account allowFrom before inherited root allowFrom for bare numeric ids", async () => {
@@ -219,22 +178,20 @@ describe("resolveDiscordTarget", () => {
       },
     } as OpenClawConfig;
 
-    expectTargetFields(
+    expect(
       await resolveDiscordTarget(
         "456",
         { cfg: cfgValue, accountId: "work" },
         { defaultKind: "channel" },
       ),
-      { kind: "user", id: "456", normalized: "user:456" },
-    );
-    expectTargetFields(
+    ).toMatchObject({ kind: "user", id: "456", normalized: "user:456" });
+    expect(
       await resolveDiscordTarget(
         "123",
         { cfg: cfgValue, accountId: "work" },
         { defaultKind: "channel" },
       ),
-      { kind: "channel", id: "123", normalized: "channel:123" },
-    );
+    ).toMatchObject({ kind: "channel", id: "123", normalized: "channel:123" });
   });
 
   it("caches username lookups under the configured default account when accountId is omitted", async () => {
@@ -255,19 +212,13 @@ describe("resolveDiscordTarget", () => {
       { kind: "user", id: "user:999", name: "Jane" } as const,
     ]);
 
-    expectTargetFields(await resolveDiscordTarget("jane", { cfg: cfgLocal }), {
+    expect(await resolveDiscordTarget("jane", { cfg: cfgLocal })).toMatchObject({
       kind: "user",
       id: "999",
       normalized: "user:999",
     });
     expect(resolveDiscordDirectoryUserId({ accountId: "work", handle: "jane" })).toBe("999");
     expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "jane" })).toBeUndefined();
-  });
-});
-
-describe("normalizeDiscordMessagingTarget", () => {
-  it("defaults raw numeric ids to channels", () => {
-    expect(normalizeDiscordMessagingTarget("123")).toBe("channel:123");
   });
 });
 

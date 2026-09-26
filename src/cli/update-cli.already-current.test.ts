@@ -25,8 +25,10 @@ import {
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import {
   candidateValidation,
+  gatewayFixturePid,
   loadInstalledPluginIndexInstallRecords,
   managedUpdateHandoff,
+  mockGetSelfAndAncestorPidsSync,
   nodeVersionSatisfiesEngine,
   pluginAvailabilityPreflight,
   readPackageVersion,
@@ -279,6 +281,7 @@ describe("update-cli", () => {
       mockFileBackedPathExists();
       vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entryPath);
       mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
+      mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, gatewayFixturePid, 1]));
       managedUpdateHandoff.start.mockResolvedValue({
         status: "started",
         handoffId: "current-artifact-handoff",

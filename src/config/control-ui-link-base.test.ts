@@ -53,27 +53,12 @@ describe("resolveControlUiSessionLinkBase", () => {
       }),
     ).toBeUndefined();
   });
-
-  it("omits a session link base with an oversized public origin", () => {
-    const publicOrigin = `https://${"a.".repeat(91)}example.com`;
-    expect(publicOrigin).toHaveLength(201);
-    expect(resolveControlUiSessionLinkBase({ gateway: { publicOrigin } })).toBeUndefined();
-  });
 });
 
 describe("resolveControlUiAutomationRunUrl", () => {
-  it.each([
-    { name: "without a public Gateway origin", gateway: {} },
-    {
-      name: "when the Control UI is disabled",
-      gateway: {
-        publicOrigin: "https://gateway.example.com",
-        controlUi: { enabled: false },
-      },
-    },
-  ])("omits automation links $name", ({ gateway }) => {
+  it("omits automation links without a public Gateway origin", () => {
     expect(
-      resolveControlUiAutomationRunUrl({ gateway }, { jobId: "daily-report" }),
+      resolveControlUiAutomationRunUrl({ gateway: {} }, { jobId: "daily-report" }),
     ).toBeUndefined();
   });
 

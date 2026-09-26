@@ -32,6 +32,9 @@ import {
   resolveOpenClawPackageRoot,
   runCommandWithTimeout,
   runExec,
+  runUpdateFailureTriage,
+  runUtf8CommandWithTimeout,
+  updateCliShared,
   updateFinalizeCommand,
 } from "./update-cli-modules.test-support.js";
 import {
@@ -57,6 +60,115 @@ describe("update-cli", () => {
     setTty,
     tempDirs,
   } = createUpdateCliFixture();
+
+  it.each([
+    { name: "Node", bun: undefined },
+    { name: "Bun", bun: "1.4.3" },
+  ])("uses the finalizer runtime for maintenance children under $name", async (runtime) => {
+    const originalVersions = Object.getOwnPropertyDescriptor(process, "versions");
+    if (!originalVersions) {
+      throw new Error("Missing process.versions descriptor");
+    }
+    const nodeRunner = path.resolve("fixture-runtime", "node");
+    const expectedRunner = runtime.bun ? process.execPath : nodeRunner;
+    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(nodeRunner);
+    Object.defineProperty(process, "versions", {
+      value: { ...process.versions, bun: runtime.bun },
+    });
+    try {
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
+      pathExists.mockImplementation(async (candidate: string) =>
+        candidate.endsWith("openclaw.mjs"),
+      );
+      syncPluginsForUpdateChannel.mockImplementation(async (params: { config?: OpenClawConfig }) =>
+        pluginSyncResult(params.config ?? baseConfig, true),
+      );
+      const readiness = await import("./update-cli/update-command-post-plugin-readiness.js");
+      const actualReadiness = await vi.importActual<typeof readiness>(
+        "./update-cli/update-command-post-plugin-readiness.js",
+      );
+      vi.mocked(readiness.applyPostPluginUpdateReadiness).mockImplementation(
+        actualReadiness.applyPostPluginUpdateReadiness,
+      );
+      const runOtherCommand = vi.mocked(runUtf8CommandWithTimeout).getMockImplementation();
+      vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (argv, options) => {
+        if (argv[2] === "doctor" && argv.includes("--lint")) {
+          return {
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit" as const,
+            stdout: JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }),
+            stderr: "",
+          };
+        }
+        if (!runOtherCommand) {
+          throw new Error("Missing update command fixture");
+        }
+        return runOtherCommand(argv, options);
+      });
+
+      await updateFinalizeCommand({ json: true, yes: true, timeout: "9", restart: false });
+
+      const maintenance = vi
+        .mocked(runExec)
+        .mock.calls.filter(([, args]) => args[0] === FRESH_POST_UPDATE_ENTRYPOINT);
+      expect(maintenance.map(([runner, args]) => [runner].concat(args.slice(1)))).toEqual([
+        [expectedRunner, "doctor", "--repair", "--non-interactive", "--yes"],
+        [
+          expectedRunner,
+          "doctor",
+          "--repair",
+          "--non-interactive",
+          "--no-workspace-suggestions",
+          "--yes",
+        ],
+        [expectedRunner, "config", "validate", "--json"],
+      ]);
+      expect(vi.mocked(runUtf8CommandWithTimeout).mock.calls.map(([argv]) => argv)).toContainEqual([
+        expectedRunner,
+        FRESH_POST_UPDATE_ENTRYPOINT,
+        "doctor",
+        "--lint",
+        "--json",
+        "--severity-min",
+        "error",
+      ]);
+      expect(completionCommandCall()?.[0][0]).toBe(expectedRunner);
+      expect(lastWriteJsonCall()).toMatchObject({ status: "ok", mode: "finalize" });
+    } finally {
+      Object.defineProperty(process, "versions", originalVersions);
+    }
+  });
+
+  it("retains the invoking Bun runtime for failed finalization diagnostics", async () => {
+    const originalVersions = Object.getOwnPropertyDescriptor(process, "versions");
+    if (!originalVersions) {
+      throw new Error("Missing process.versions descriptor");
+    }
+    const execPath = process.execPath;
+    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(
+      path.resolve("fixture-runtime", "node"),
+    );
+    Object.defineProperty(process, "versions", {
+      value: { ...process.versions, bun: "1.4.3" },
+    });
+    try {
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
+      vi.mocked(runExec).mockRejectedValueOnce(new Error("Doctor could not complete"));
+
+      await expect(
+        updateFinalizeCommand({ json: true, yes: true, timeout: "9", restart: false }),
+      ).rejects.toThrow("Doctor could not complete");
+
+      expect(runUpdateFailureTriage).toHaveBeenCalledOnce();
+      expect(vi.mocked(runUpdateFailureTriage).mock.calls[0]?.[0].target).toMatchObject({
+        nodeRunner: execPath,
+      });
+    } finally {
+      Object.defineProperty(process, "versions", originalVersions);
+    }
+  });
 
   it("updateFinalizeCommand defers plugin installation during pre-plugin doctor", async () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);

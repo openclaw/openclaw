@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 import {
   archiveLegacyStateSource,
   asObjectRecord,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { movePathWithCopyFallback } from "openclaw/plugin-sdk/security-runtime";
 import { resolveAcpxPluginConfig } from "./config.js";
 import {
   hashAcpxProcessCommand,

@@ -289,11 +289,11 @@ export class DiscordVoiceSessions {
     );
 
     let stopCompletion: Promise<void> | undefined;
-    const stopEntry = (optionsLocal: { reason: string }): void | Promise<void> => {
+    const stopEntry = (reason: string): void | Promise<void> => {
       if (entry.sessionLifecycle.status === "stopped") {
         return stopCompletion;
       }
-      entry.sessionLifecycle = { status: "stopped", reason: optionsLocal.reason };
+      entry.sessionLifecycle = { status: "stopped", reason };
       // A late callback from an old connection must not remove its replacement.
       if (this.params.sessions.get(guildId) === entry) {
         this.params.sessions.delete(guildId);
@@ -306,7 +306,7 @@ export class DiscordVoiceSessions {
       entry.realtimeLifecycle = {
         status: "stopped",
         generation: realtimeLifecycle.generation,
-        reason: optionsLocal.reason,
+        reason,
       };
       let realtimeCompletion: void | Promise<void> = undefined;
       try {
@@ -319,7 +319,7 @@ export class DiscordVoiceSessions {
       const audioCompletion = this.stopTransport(guildId, audio);
       stopCompletion = Promise.allSettled([realtimeCompletion, audioCompletion]).then(() => {
         entry.conversations.close();
-        this.params.onSessionStopped(entry, optionsLocal.reason);
+        this.params.onSessionStopped(entry, reason);
       });
       const completion = stopCompletion;
       this.pendingStops.add(completion);
@@ -368,9 +368,7 @@ export class DiscordVoiceSessions {
       receiveRecovery: createVoiceReceiveRecoveryState(),
       realtimeLifecycle: { status: "inactive", generation: 0 },
       stop(reason) {
-        return stopEntry({
-          reason: reason ?? `stop guild ${guildId} channel ${channelId}`,
-        });
+        return stopEntry(reason ?? `stop guild ${guildId} channel ${channelId}`);
       },
     };
 
@@ -384,7 +382,7 @@ export class DiscordVoiceSessions {
       }
     };
     const destroyedHandler = () => {
-      void stopEntry({ reason: "audio worker stopped" });
+      void stopEntry("audio worker stopped");
     };
     audio.on("stopped", destroyedHandler);
     if (!entry.captureOnly && isDiscordRealtimeVoiceMode(voiceMode)) {

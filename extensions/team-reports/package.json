@@ -39,7 +39,8 @@
       "openclawVersion": "2026.9.6",
       "bundledDist": false,
       "workerEntries": [
-        "./src/store.worker.ts"
+        "./src/store.worker.ts",
+        "./src/run.worker.ts"
       ],
       "staticAssets": [
         {

@@ -1,5 +1,6 @@
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 
@@ -104,6 +105,7 @@ function gatewayPrewarmItems(
 }
 
 export function scheduleGatewayHandlerPrewarm(params: {
+  scheduler: GatewayScheduler;
   getConfig: () => OpenClawConfig;
   startupTrace?: StartupTrace;
   log: { warn: (msg: string) => void };
@@ -111,7 +113,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
   waitForPostReadyWork?: () => Promise<void>;
 }): GatewayIdleTaskHandle {
   let stopped = false;
-  const startedAt = Date.now();
+  const startedAt = params.scheduler.now();
   // Warm code and local facts without executing requests or acquiring live provider catalogs.
   const items =
     params.items ??
@@ -139,7 +141,9 @@ export function scheduleGatewayHandlerPrewarm(params: {
       currentItemName = item.name;
       const load = () => item.load();
       idleTask = scheduleGatewayIdleTask({
-        delayMs: Math.max(0, (item.notBeforeMs ?? 0) - (Date.now() - startedAt)),
+        id: "startup:handler-prewarm",
+        scheduler: params.scheduler,
+        delayMs: Math.max(0, (item.notBeforeMs ?? 0) - (params.scheduler.now() - startedAt)),
         retryDelayMs: GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS,
         isClosing: () => stopped,
         isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,

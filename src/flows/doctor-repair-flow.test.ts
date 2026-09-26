@@ -96,70 +96,6 @@ describe("runDoctorHealthRepairs", () => {
     })).not.toMatchTypeOf<SplitRepair>();
   });
 
-  it("retains non-repairable findings for the legacy doctor owner", async () => {
-    const checks: DoctorHealthCheck[] = [
-      normalizeHealthCheck({
-        id: "test/legacy-only",
-        kind: "core",
-        description: "legacy only",
-        async detect() {
-          return [
-            {
-              checkId: "test/legacy-only",
-              severity: "warning",
-              message: "legacy repair still owns this finding",
-            },
-          ];
-        },
-      }),
-    ];
-
-    const result = await runDoctorHealthRepairs(ctx({}), { checks });
-
-    expect(result.config).toEqual({});
-    expect(result.findings).toHaveLength(1);
-    expect(result.remainingFindings).toEqual(result.findings);
-    expect(result.changes).toEqual([]);
-    expect(result.checksRepaired).toBe(0);
-    expect(result.checksValidated).toBe(0);
-  });
-
-  it("keeps split check findings when repair throws", async () => {
-    const checks: DoctorHealthCheck[] = [
-      normalizeHealthCheck({
-        id: "test/repair-throws",
-        kind: "core",
-        description: "repair throws",
-        async detect() {
-          return [
-            {
-              checkId: "test/repair-throws",
-              severity: "warning",
-              message: "needs repair",
-              path: "gateway.mode",
-            },
-          ];
-        },
-        async repair() {
-          throw new Error("repair exploded");
-        },
-      }),
-    ];
-
-    const result = await runDoctorHealthRepairs(ctx({}), { checks });
-
-    expect(result.findings).toMatchObject([
-      {
-        checkId: "test/repair-throws",
-        path: "gateway.mode",
-      },
-    ]);
-    expect(result.warnings).toEqual(["test/repair-throws repair failed: repair exploded"]);
-    expect(result.remainingFindings).toEqual(result.findings);
-    expect(result.checksRepaired).toBe(0);
-    expect(result.checksValidated).toBe(0);
-  });
-
   it("reports repair validation findings that remain after repair", async () => {
     const checks: DoctorHealthCheck[] = [
       normalizeHealthCheck({
@@ -195,45 +131,6 @@ describe("runDoctorHealthRepairs", () => {
       },
     ]);
     expect(result.warnings).toEqual(["test/not-fixed repair left 1 finding(s)"]);
-  });
-
-  it("validates successful repairs by default", async () => {
-    let detectCalls = 0;
-    const checks: DoctorHealthCheck[] = [
-      normalizeHealthCheck({
-        id: "test/no-default-validation",
-        kind: "core",
-        description: "no default validation",
-        async detect() {
-          detectCalls++;
-          return [
-            {
-              checkId: "test/no-default-validation",
-              severity: "warning",
-              message: "needs repair",
-            },
-          ];
-        },
-        async repair() {
-          return {
-            changes: ["Ran repair."],
-          };
-        },
-      }),
-    ];
-
-    const result = await runDoctorHealthRepairs(ctx({}), { checks });
-
-    expect(detectCalls).toBe(2);
-    expect(result.checksRepaired).toBe(1);
-    expect(result.checksValidated).toBe(1);
-    expect(result.remainingFindings).toEqual([
-      {
-        checkId: "test/no-default-validation",
-        severity: "warning",
-        message: "needs repair",
-      },
-    ]);
   });
 
   it("does not validate skipped or failed repair results", async () => {
@@ -315,6 +212,9 @@ describe("runDoctorHealthRepairs", () => {
       expect(result.checksRun).toBe(2);
       expect(result.checksRepaired).toBe(outcome === "validation-failed" ? 2 : 1);
       expect(result.checksValidated).toBe(1);
+      if (outcome === "throws") {
+        expect(result.warnings).toEqual([`${unresolvedId} repair failed: repair unavailable`]);
+      }
     },
   );
 

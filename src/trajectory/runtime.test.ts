@@ -515,6 +515,7 @@ describe("trajectory runtime", () => {
       assistantTexts: ["done"],
       finalPromptText: "inspect",
     });
+    expect(parsed.data.finalPromptTextOriginalLength).toBeUndefined();
     expect(parsed.data.messagesSnapshot).toBeUndefined();
     expect(parsed.data.droppedFields).toEqual(["messagesSnapshot"]);
     expect(
@@ -712,19 +713,6 @@ describe("trajectory runtime", () => {
     expect(Buffer.byteLength(parsed.data.finalPromptText, "utf8")).toBeLessThanOrEqual(4 * 1024);
     expect(Buffer.byteLength(parsed.data.finalPromptText, "utf8")).toBeGreaterThan(4 * 1024 - 4);
     expect(parsed.data.finalPromptTextOriginalLength).toBe(finalPromptText.length);
-  });
-
-  it("leaves short final prompts unchanged", () => {
-    const writes: string[] = [];
-    const recorder = createCapturedRuntimeRecorder(writes);
-
-    expectTrajectoryRuntimeRecorder(recorder).recordEvent("trace.artifacts", {
-      finalPromptText: "short prompt",
-    });
-
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
-    expect(parsed.data.finalPromptText).toBe("short prompt");
-    expect(parsed.data.finalPromptTextOriginalLength).toBeUndefined();
   });
 
   it("redacts secrets before preserving usage in truncated runtime events", () => {

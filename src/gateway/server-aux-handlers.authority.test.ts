@@ -10,6 +10,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -40,6 +41,7 @@ function createAuthorityHarness(
   > = {},
 ): GatewayAux {
   const aux = createGatewayAuxHandlers({
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     log: {},
     getNativeApprovalRouteCoordinator: () => undefined,
     activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
@@ -418,7 +420,7 @@ describe("gateway auxiliary authority lifecycle", () => {
       sessionId: identity.sessionId,
       ownerEpoch: 7,
     });
-    let placement = placements.startDispatch(identity);
+    let placement = await placements.startDispatch(identity);
     placement = placements.transition({
       sessionId: identity.sessionId,
       from: "requested",

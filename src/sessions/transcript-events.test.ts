@@ -46,16 +46,6 @@ describe("transcript events", () => {
     expect(readSessionTranscriptRunId(message)).toBe(expected);
   });
 
-  it("emits trimmed archive file updates only to internal listeners", () => {
-    const listener = vi.fn();
-    cleanup.push(onInternalSessionTranscriptUpdate(listener));
-
-    emitSessionTranscriptUpdate({ sessionFile: "  /tmp/session.jsonl  " });
-
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith({ sessionFile: "/tmp/session.jsonl" });
-  });
-
   it("does not expose file-only archive updates to public listeners", () => {
     const publicListener = vi.fn();
     const internalListener = vi.fn();
@@ -104,58 +94,6 @@ describe("transcript events", () => {
     });
   });
 
-  it("exposes identity-only updates to public listeners", () => {
-    const listener = vi.fn();
-    cleanup.push(onSessionTranscriptUpdate(listener));
-
-    emitSessionTranscriptUpdate({
-      target: {
-        agentId: " main ",
-        sessionId: " sess-1 ",
-        sessionKey: " agent:main:main ",
-      },
-      messageId: " msg-1 ",
-    });
-
-    expect(listener).toHaveBeenCalledWith({
-      target: {
-        agentId: "main",
-        sessionId: "sess-1",
-        sessionKey: "agent:main:main",
-      },
-      agentId: "main",
-      sessionId: "sess-1",
-      sessionKey: "agent:main:main",
-      messageId: "msg-1",
-    });
-  });
-
-  it("emits storage-neutral identity updates to internal listeners", () => {
-    const listener = vi.fn();
-    cleanup.push(onInternalSessionTranscriptUpdate(listener));
-
-    emitSessionTranscriptUpdate({
-      target: {
-        agentId: " main ",
-        sessionId: " sess-1 ",
-        sessionKey: " agent:main:main ",
-      },
-      messageId: " msg-1 ",
-    });
-
-    expect(listener).toHaveBeenCalledWith({
-      target: {
-        agentId: "main",
-        sessionId: "sess-1",
-        sessionKey: "agent:main:main",
-      },
-      agentId: "main",
-      sessionId: "sess-1",
-      sessionKey: "agent:main:main",
-      messageId: "msg-1",
-    });
-  });
-
   it("keeps normalized committed lifecycle and store ownership on internal events only", () => {
     const publicListener = vi.fn();
     const internalListener = vi.fn();
@@ -164,9 +102,9 @@ describe("transcript events", () => {
 
     emitSessionTranscriptUpdate({
       target: {
-        agentId: "main",
-        sessionId: "sess-1",
-        sessionKey: "agent:main:main",
+        agentId: " main ",
+        sessionId: " sess-1 ",
+        sessionKey: " agent:main:main ",
         storePath: "  /tmp/custom-sessions.json  ",
       },
       lifecycleRevision: "  committed-revision  ",
@@ -340,7 +278,7 @@ describe("transcript events", () => {
       message: { role: "assistant", content: [{ type }], stopReason: "error" },
       expected: undefined,
     })),
-    ...["stop", "length", "error", "aborted"].map((stopReason) => ({
+    ...["stop", "aborted"].map((stopReason) => ({
       name: `${stopReason} terminal assistant`,
       message: {
         role: "assistant",

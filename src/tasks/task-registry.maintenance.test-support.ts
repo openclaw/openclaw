@@ -10,8 +10,13 @@ import type { SessionBindingRecord } from "../infra/outbound/session-binding-ser
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { collectCronHistoryOverflowTaskIds } from "./cron-history-retention.js";
 import * as taskRegistry from "./runtime-internal.js";
+import {
+  captureCronTaskMaintenanceSelection,
+  prepareCronTaskMaintenance,
+} from "./task-cron-maintenance-policy.js";
 import * as acpCleanup from "./task-registry-acp-cleanup.js";
 import type { TaskRegistryAcpMaintenanceRuntime } from "./task-registry-acp-cleanup.js";
+import * as cronMaintenance from "./task-registry-maintenance-cron.js";
 import * as retention from "./task-registry-maintenance-retention.js";
 import * as backingFacts from "./task-registry-maintenance-session-facts.js";
 import type { BackingSessionRuntime } from "./task-registry-maintenance-session-facts.js";
@@ -93,6 +98,39 @@ function installMaintenanceRuntime(
   resetTaskRegistryMaintenanceMocks();
   configureTaskRegistryMaintenance({ runtimeAuthoritative: authoritative });
   replace(
+    cronMaintenance.reconcileCronTaskForMaintenance,
+    () => vi.spyOn(cronMaintenance, "reconcileCronTaskForMaintenance"),
+    async (selected, now, options) => {
+      options.assertOwnerCurrent();
+      const task = currentTasks.get(selected.taskId);
+      const jobId = task?.sourceId?.trim();
+      if (!task || (options.runtimeAuthoritative() && jobId && runtime.isCronJobActive(jobId))) {
+        return { task };
+      }
+      const rows = jobId
+        ? runtime.listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+            runtime: "cron",
+            sourceId: jobId,
+          })
+        : [];
+      const result = prepareCronTaskMaintenance(task, rows, {
+        taskId: selected.taskId,
+        selected: captureCronTaskMaintenanceSelection(selected),
+        now,
+        markLost: options.markLost,
+      });
+      if (result) {
+        currentTasks.set(task.taskId, result.task);
+      }
+      return {
+        task: result?.task ?? task,
+        ...(result && result.task.status !== selected.status
+          ? { outcome: result.task.status === "lost" ? ("lost" as const) : ("recovered" as const) }
+          : {}),
+      };
+    },
+  );
+  replace(
     cronJobs.isCronJobActive,
     () => vi.spyOn(cronJobs, "isCronJobActive"),
     runtime.isCronJobActive,
@@ -155,14 +193,16 @@ function installMaintenanceRuntime(
   replace(
     retention.applyTaskRegistryMaintenanceRetention,
     () => vi.spyOn(retention, "applyTaskRegistryMaintenanceRetention"),
-    async (selected, now, cronHistoryOverflowTaskIds, assertOwnerCurrent) => {
+    async (selected, now, cronHistoryOverflowSelections, assertOwnerCurrent) => {
       assertOwnerCurrent();
       // Keep retention decisions production-owned while these fixtures use an in-memory ledger.
       const result = prepareTaskRetention(currentTasks.get(selected.taskId), {
         taskId: selected.taskId,
-        selection: captureTaskRetentionSelection(selected),
+        selection:
+          cronHistoryOverflowSelections.get(selected.taskId) ??
+          captureTaskRetentionSelection(selected),
         now,
-        cronHistoryOverflow: cronHistoryOverflowTaskIds.has(selected.taskId),
+        cronHistoryOverflow: cronHistoryOverflowSelections.has(selected.taskId),
       });
       if (result.kind === "pruned") {
         currentTasks.delete(selected.taskId);
@@ -219,6 +259,18 @@ function createPreparedMaintenanceRead(): TaskRegistryMaintenanceRead {
   return {
     assertOwnerCurrent() {},
     assertCurrent() {},
+  };
+}
+
+function createMaintenanceSnapshot(snapshotTasks: TaskRecord[]) {
+  const overflowIds = collectCronHistoryOverflowTaskIds(snapshotTasks);
+  return {
+    taskIds: snapshotTasks.map((task) => task.taskId),
+    cronHistoryOverflowSelections: new Map(
+      snapshotTasks
+        .filter((task) => overflowIds.has(task.taskId))
+        .map((task) => [task.taskId, captureTaskRetentionSelection(task, true)]),
+    ),
   };
 }
 
@@ -337,13 +389,8 @@ export function createTaskRegistryMaintenanceHarness(params: {
     getTaskRegistryMaintenanceTask: (taskId: string) => currentTasks.get(taskId),
     prepareTaskRegistryRead: async () => createPreparedMaintenanceRead(),
     listTaskRecords: () => Array.from(currentTasks.values()),
-    getTaskRegistryMaintenanceSnapshot: () => {
-      const snapshotTasks = Array.from(currentTasks.values());
-      return {
-        taskIds: snapshotTasks.map((task) => task.taskId),
-        cronHistoryOverflowTaskIds: collectCronHistoryOverflowTaskIds(snapshotTasks),
-      };
-    },
+    getTaskRegistryMaintenanceSnapshot: () =>
+      createMaintenanceSnapshot(Array.from(currentTasks.values())),
     markTaskLostById: (patch) => {
       const current = currentTasks.get(patch.taskId);
       if (!current) {
@@ -460,13 +507,7 @@ export function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       getTaskRegistryMaintenanceTask: (taskId: string) => params.currentTasks.get(taskId),
       prepareTaskRegistryRead: async () => createPreparedMaintenanceRead(),
       listTaskRecords: listSnapshotTasks,
-      getTaskRegistryMaintenanceSnapshot: () => {
-        const snapshotTasks = listSnapshotTasks();
-        return {
-          taskIds: snapshotTasks.map((task) => task.taskId),
-          cronHistoryOverflowTaskIds: collectCronHistoryOverflowTaskIds(snapshotTasks),
-        };
-      },
+      getTaskRegistryMaintenanceSnapshot: () => createMaintenanceSnapshot(listSnapshotTasks()),
       markTaskLostById: (patch: {
         taskId: string;
         endedAt: number;

@@ -14,7 +14,7 @@ import { calculateCost } from "../model-utils.js";
 import { buildGuardedModelFetch } from "../transports/host-policy.js";
 import { parseJsonPreservingUnsafeIntegers } from "../transports/json-unsafe-integers.js";
 import {
-  assignTransportErrorDetails,
+  failTransportStream,
   notifyProviderHttpResponse,
   notifyProviderStreamOpened,
   parseTerminalToolCallArguments,
@@ -73,6 +73,7 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
   apiKey?: string;
 }): Promise<void> {
   const { stream, model, output, options, context, nextToolCallId } = params;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
   try {
     const host = getAiTransportHost();
@@ -149,12 +150,10 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       throw new Error("Google Interactions API returned empty response body");
     }
 
-    const reader = response.body.getReader();
+    reader = response.body.getReader();
     await notifyProviderStreamOpened({
       options,
-      cancelStream: async () => {
-        await reader.cancel();
-      },
+      cancelStream: () => reader?.cancel(),
     });
     stream.push({ type: "start", partial: output });
     const decoder = new TextDecoder();
@@ -206,6 +205,34 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       currentBlockType = null;
     };
 
+    const startTextBlock = (type: "text" | "thinking", text = "") => {
+      endCurrentBlock();
+      currentBlockIndex = output.content.length;
+      output.content.push(
+        type === "text"
+          ? { type, text }
+          : {
+              type,
+              thinking: text,
+              ...(latestThoughtSignature ? { thinkingSignature: latestThoughtSignature } : {}),
+            },
+      );
+      stream.push({
+        type: type === "text" ? "text_start" : "thinking_start",
+        contentIndex: currentBlockIndex,
+        partial: output,
+      });
+      if (text) {
+        stream.push({
+          type: type === "text" ? "text_delta" : "thinking_delta",
+          contentIndex: currentBlockIndex,
+          delta: text,
+          partial: output,
+        });
+      }
+      return type;
+    };
+
     let streamDone = false;
     let sawCompletion = false;
     while (!streamDone) {
@@ -249,7 +276,6 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             code: readStringField(providerError, "code"),
             type: "google_interactions_stream_error",
           });
-          await reader.cancel();
           throw error;
         } else if (eventType === "step.delta") {
           const delta = asOptionalRecord(event.delta);
@@ -259,15 +285,7 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             const text = readStringField(delta, "text") ?? "";
             if (text) {
               if (currentBlockType !== "text") {
-                endCurrentBlock();
-                currentBlockType = "text";
-                currentBlockIndex = output.content.length;
-                output.content.push({ type: "text", text: "" });
-                stream.push({
-                  type: "text_start",
-                  contentIndex: currentBlockIndex,
-                  partial: output,
-                });
+                currentBlockType = startTextBlock("text");
               }
               const block = output.content[currentBlockIndex];
               if (!block || block.type !== "text") {
@@ -300,19 +318,7 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             }
             if (thinkingText) {
               if (currentBlockType !== "thinking") {
-                endCurrentBlock();
-                currentBlockType = "thinking";
-                currentBlockIndex = output.content.length;
-                output.content.push({
-                  type: "thinking",
-                  thinking: "",
-                  ...(latestThoughtSignature ? { thinkingSignature: latestThoughtSignature } : {}),
-                });
-                stream.push({
-                  type: "thinking_start",
-                  contentIndex: currentBlockIndex,
-                  partial: output,
-                });
+                currentBlockType = startTextBlock("thinking");
               }
               const block = output.content[currentBlockIndex];
               if (!block || block.type !== "thinking") {
@@ -410,51 +416,15 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
                 .join("");
             }
             if (currentBlockType !== "thinking") {
-              endCurrentBlock();
-              currentBlockType = "thinking";
-              currentBlockIndex = output.content.length;
-              output.content.push({
-                type: "thinking",
-                thinking: initialThinking,
-                ...(latestThoughtSignature ? { thinkingSignature: latestThoughtSignature } : {}),
-              });
-              stream.push({
-                type: "thinking_start",
-                contentIndex: currentBlockIndex,
-                partial: output,
-              });
-              if (initialThinking) {
-                stream.push({
-                  type: "thinking_delta",
-                  contentIndex: currentBlockIndex,
-                  delta: initialThinking,
-                  partial: output,
-                });
-              }
+              currentBlockType = startTextBlock("thinking", initialThinking);
             }
           } else if (step?.type === "model_output") {
-            endCurrentBlock();
-            currentBlockType = "text";
-            currentBlockIndex = output.content.length;
             const initialText = Array.isArray(step.content)
               ? step.content
                   .map((content) => readStringField(asOptionalRecord(content), "text") ?? "")
                   .join("")
               : "";
-            output.content.push({ type: "text", text: initialText });
-            stream.push({
-              type: "text_start",
-              contentIndex: currentBlockIndex,
-              partial: output,
-            });
-            if (initialText) {
-              stream.push({
-                type: "text_delta",
-                contentIndex: currentBlockIndex,
-                delta: initialText,
-                partial: output,
-              });
-            }
+            currentBlockType = startTextBlock("text", initialText);
           } else if (step?.type === "function_call") {
             endCurrentBlock();
             currentBlockType = "toolCall";
@@ -521,14 +491,13 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       }
     }
 
-    if (streamDone) {
-      void reader.cancel().catch(() => {});
-    }
-
     endCurrentBlock();
 
     if (!sawCompletion) {
-      throw new Error("Google Interactions stream ended before interaction.completed");
+      throw Object.assign(new Error("Google Interactions stream ended before a terminal event"), {
+        code: "STREAM_INCOMPLETE",
+        type: "google_incomplete_stream",
+      });
     }
 
     if (latestThoughtSignature) {
@@ -556,12 +525,13 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
     stream.end();
   } catch (error) {
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
-    assignTransportErrorDetails(output, failure, options?.signal);
-    stream.push({
-      type: "error",
-      reason: output.stopReason === "aborted" ? "aborted" : "error",
-      error: output,
-    });
-    stream.end();
+    failTransportStream({ stream, output, signal: options?.signal, error: failure });
+  } finally {
+    if (reader) {
+      // Track cleanup without delaying terminal delivery or replacing the original failure.
+      const cancellation = reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+      getAiTransportHost().observePendingProviderWork?.(cancellation);
+    }
   }
 }

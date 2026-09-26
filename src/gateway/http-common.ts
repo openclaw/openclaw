@@ -39,21 +39,31 @@ export function setDefaultSecurityHeaders(
   }
 }
 
+/** Prepare an unsent error response; committed responses can only be closed. */
+export function prepareGatewayHttpErrorResponse(
+  res: ServerResponse,
+  statusMessage: string,
+): boolean {
+  if (res.destroyed || res.writableEnded) {
+    return false;
+  }
+  if (res.headersSent) {
+    // Ending would frame a partial chunked body as a complete successful response.
+    res.destroy();
+    return false;
+  }
+  clearHttpResponseRepresentationHeaders(res);
+  res.removeHeader("Content-Length");
+  res.setHeader("Cache-Control", "no-store");
+  res.statusMessage = statusMessage;
+  return true;
+}
+
 /** Finish a failed request without rewriting committed headers or orphaning its transport. */
 export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
-  if (res.destroyed || res.writableEnded) {
-    return;
-  }
-  if (!res.headersSent) {
-    clearHttpResponseRepresentationHeaders(res);
-    res.setHeader("Cache-Control", "no-store");
-    res.statusMessage = "Internal Server Error";
+  if (prepareGatewayHttpErrorResponse(res, "Internal Server Error")) {
     respondPlainText(res, 500, res.statusMessage);
-    return;
   }
-
-  // Ending would frame a partial chunked body as a complete successful response.
-  res.destroy();
 }
 
 export function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -68,8 +78,8 @@ export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
 }
 
 export function sendUnauthorized(res: ServerResponse) {
-  if (res.headersSent || res.writableEnded || res.destroyed) {
-    return finishFailedGatewayHttpResponse(res);
+  if (!prepareGatewayHttpErrorResponse(res, "Unauthorized")) {
+    return;
   }
   res.removeHeader("Set-Cookie");
   sendJson(res, 401, {

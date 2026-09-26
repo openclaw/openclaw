@@ -1,4 +1,3 @@
-// Qa Channel plugin module implements bus client behavior.
 import http from "node:http";
 import https from "node:https";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
@@ -8,18 +7,21 @@ import {
   buildQaTarget,
   parseQaTarget,
   type QaTargetParts,
+  type QaBusCreateThreadInput,
+  type QaBusDeleteMessageInput,
+  type QaBusEditMessageInput,
+  type QaBusReactToMessageInput,
+  type QaBusReadMessageInput,
+  type QaBusOutboundMessageInput,
+  type QaBusInboundMessageInput,
+  type QaBusMessage,
+  type QaBusPollResult,
+  type QaBusSearchMessagesInput,
+  type QaBusStateSnapshot,
+  type QaBusThread,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import type {
-  QaBusInboundMessageInput,
-  QaBusMessage,
-  QaBusPollResult,
-  QaBusSearchMessagesInput,
-  QaBusStateSnapshot,
-  QaBusThread,
-  QaBusToolCall,
-} from "./protocol.js";
 
 export { buildQaTarget, parseQaTarget };
 
@@ -43,9 +45,12 @@ export type {
   QaBusThread,
   QaBusToolCall,
   QaBusWaitForInput,
-} from "./protocol.js";
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 
-type JsonResult<T> = Promise<T>;
+type QaBusAccountRequest<T> = Omit<T, "accountId" | "timestamp"> & {
+  baseUrl: string;
+  accountId: string;
+};
 const QA_BUS_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 /** Total deadline for local qa-bus POST requests and long-poll response grace. */
 const QA_BUS_REQUEST_TIMEOUT_MS = 10_000;
@@ -90,7 +95,7 @@ async function postJson<T>(
   path: string,
   body: unknown,
   options: QaBusPostOptions = {},
-): JsonResult<T> {
+): Promise<T> {
   const url = buildQaBusUrl(baseUrl, path);
   const payload = JSON.stringify(body);
   const client = url.protocol === "https:" ? https : http;
@@ -185,31 +190,13 @@ export async function pollQaBus(params: {
   );
 }
 
-export async function sendQaBusMessage(params: {
-  baseUrl: string;
-  accountId: string;
-  to: string;
-  text: string;
-  isError?: boolean;
-  senderId?: string;
-  senderName?: string;
-  threadId?: string;
-  replyToId?: string;
-  attachments?: import("./protocol.js").QaBusAttachment[];
-  toolCalls?: QaBusToolCall[];
-}) {
+export async function sendQaBusMessage(params: QaBusAccountRequest<QaBusOutboundMessageInput>) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params, {
     timeoutMs: QA_BUS_MESSAGE_REQUEST_TIMEOUT_MS,
   });
 }
 
-export async function createQaBusThread(params: {
-  baseUrl: string;
-  accountId: string;
-  conversationId: string;
-  title: string;
-  createdBy?: string;
-}) {
+export async function createQaBusThread(params: QaBusAccountRequest<QaBusCreateThreadInput>) {
   return await postJson<{ thread: QaBusThread }>(
     params.baseUrl,
     "/v1/actions/thread-create",
@@ -217,38 +204,19 @@ export async function createQaBusThread(params: {
   );
 }
 
-export async function reactToQaBusMessage(params: {
-  baseUrl: string;
-  accountId: string;
-  messageId: string;
-  emoji: string;
-  senderId?: string;
-}) {
+export async function reactToQaBusMessage(params: QaBusAccountRequest<QaBusReactToMessageInput>) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/actions/react", params);
 }
 
-export async function editQaBusMessage(params: {
-  baseUrl: string;
-  accountId: string;
-  messageId: string;
-  text: string;
-}) {
+export async function editQaBusMessage(params: QaBusAccountRequest<QaBusEditMessageInput>) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/actions/edit", params);
 }
 
-export async function deleteQaBusMessage(params: {
-  baseUrl: string;
-  accountId: string;
-  messageId: string;
-}) {
+export async function deleteQaBusMessage(params: QaBusAccountRequest<QaBusDeleteMessageInput>) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/actions/delete", params);
 }
 
-export async function readQaBusMessage(params: {
-  baseUrl: string;
-  accountId: string;
-  messageId: string;
-}) {
+export async function readQaBusMessage(params: QaBusAccountRequest<QaBusReadMessageInput>) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/actions/read", params);
 }
 

@@ -1,4 +1,3 @@
-// Workshop frontmatter helpers parse generated skill metadata before saving drafts.
 import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
 import type { SkillProposalRecord } from "./types.js";
@@ -17,11 +16,6 @@ export function resolveSkillProposalName(
   return kind === "create" ? target.skillKey : target.skillName;
 }
 
-// JSON strings are valid YAML scalars and avoid ad hoc escaping.
-function yamlScalar(value: string): string {
-  return JSON.stringify(value);
-}
-
 /** Renders proposal markdown while preserving allowed original frontmatter fields. */
 export function renderProposalMarkdown(params: {
   name: string;
@@ -32,8 +26,9 @@ export function renderProposalMarkdown(params: {
   version?: string;
   date?: string;
 }): string {
+  const extracted = extractFrontmatterBlock(params.content);
   const originalFrontmatter =
-    extractFrontmatterBlock(params.content)?.block ??
+    extracted?.block ??
     (params.fallbackFrontmatterContent
       ? extractFrontmatterBlock(params.fallbackFrontmatterContent)?.block
       : undefined);
@@ -46,16 +41,16 @@ export function renderProposalMarkdown(params: {
         "date",
       ])
     : "";
-  const extracted = extractFrontmatterBlock(params.content);
   const body = (extracted?.body ?? normalizeNewlines(params.content)).trimStart();
   const version = params.version ?? "v1";
   const date = params.date ?? new Date().toISOString();
+  // JSON strings are valid YAML scalars and avoid ad hoc escaping.
   const frontmatter = [
-    `name: ${yamlScalar(params.name)}`,
-    `description: ${yamlScalar(params.description)}`,
+    `name: ${JSON.stringify(params.name)}`,
+    `description: ${JSON.stringify(params.description)}`,
     "status: proposal",
-    `version: ${yamlScalar(version)}`,
-    `date: ${yamlScalar(date)}`,
+    `version: ${JSON.stringify(version)}`,
+    `date: ${JSON.stringify(date)}`,
     keptFrontmatter,
   ]
     .filter(Boolean)

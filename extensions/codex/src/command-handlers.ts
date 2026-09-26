@@ -1,4 +1,3 @@
-// Codex plugin module implements command handlers behavior.
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
 import { resolveCodexAppServerAuthAccountCacheKey } from "./app-server/auth-bridge.js";

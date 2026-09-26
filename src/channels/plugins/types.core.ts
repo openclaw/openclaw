@@ -1,8 +1,3 @@
-/**
- * Core channel plugin public types.
- *
- * Defines channel metadata, capabilities, action discovery, setup, status, and runtime contexts.
- */
 import type { TSchema } from "typebox";
 import type { AgentTool, AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type {
@@ -27,7 +22,7 @@ import type {
 import type { ChannelProgressDraftCompositorSnapshot } from "../progress-draft-compositor.types.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
-import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
+import type { ChannelMessageActionName } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
@@ -718,8 +713,6 @@ export type ChannelDirectoryEntry = {
   rank?: number;
   raw?: unknown;
 };
-
-type ChannelMessageActionName = ChannelMessageActionNameFromList;
 
 /** Execution context passed to channel-owned actions on the shared `message` tool. */
 export type ChannelMessageActionContext = {

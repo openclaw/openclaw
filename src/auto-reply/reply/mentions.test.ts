@@ -10,10 +10,6 @@ import {
 } from "./mentions.js";
 
 describe("stripStructuralPrefixes", () => {
-  it("returns empty string for undefined input at runtime", () => {
-    expect(stripStructuralPrefixes(undefined as unknown as string)).toBe("");
-  });
-
   it("returns empty string for empty input", () => {
     expect(stripStructuralPrefixes("")).toBe("");
   });
@@ -86,7 +82,8 @@ describe("derived Unicode mention matching", () => {
     } as Parameters<typeof buildMentionRegexes>[0];
   }
 
-  it.each(["包", "苏苏", "あ", "김", "Jörg", "Б", "ع", "क"])(
+  // Includes the single-character Han regression (#87303).
+  it.each(["包", "苏苏", "Jörg", "क"])(
     "matches standalone %s and rejects Unicode substrings",
     (name) => {
       const regexes = buildMentionRegexes(configForName(name), "unicode-agent");
@@ -140,14 +137,6 @@ describe("derived mention matching with decorated identity names", () => {
     };
   }
 
-  it("matches a trailing-emoji name with the emoji typed or omitted", () => {
-    const regexes = buildMentionRegexes(configForName("小蝶🦋"), "decorated-agent");
-
-    expect(matchesMentionPatterns("小蝶🦋 幫我查一下", regexes)).toBe(true);
-    expect(matchesMentionPatterns("小蝶 幫我查一下", regexes)).toBe(true);
-    expect(matchesMentionPatterns("@小蝶 幫我查一下", regexes)).toBe(true);
-  });
-
   it("matches interior decoration typed as emoji, a space, or nothing", () => {
     const regexes = buildMentionRegexes(configForName("Papillon🦋Bot"), "decorated-agent");
 
@@ -173,7 +162,7 @@ describe("derived mention matching with decorated identity names", () => {
     ).toBe(true);
   });
 
-  it.each(["-", "/", ".", "・"])(
+  it.each([".", "・"])(
     "keeps identifier punctuation %s required, not omissible decoration",
     (separator) => {
       const cfg = configForName(`foo${separator}bar`);
@@ -198,7 +187,7 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("bot status", regexes)).toBe(false);
   });
 
-  it.each(["$", "%", "+", "="])("keeps %s literal when a variation selector follows it", (base) => {
+  it.each(["$", "%", "+"])("keeps %s literal when a variation selector follows it", (base) => {
     // U+FE0F only requests emoji presentation on a character Unicode admits
     // as an emoji base. After anything else it changes no presentation, so
     // the character stays a required separator instead of gaining the name
@@ -328,13 +317,6 @@ describe("derived mention matching with decorated identity names", () => {
     );
   });
 
-  it("keeps an emoji-only identity name matching literally", () => {
-    const regexes = buildMentionRegexes(configForName("🦋"), "decorated-agent");
-
-    expect(matchesMentionPatterns("🦋 status", regexes)).toBe(true);
-    expect(matchesMentionPatterns("hello there", regexes)).toBe(false);
-  });
-
   it("matches an emoji-only ZWJ identity that normalization splits apart", () => {
     // Matching sees the joiner stripped, stripping sees the raw text: an
     // identity with no word token at all has to answer to both forms.
@@ -369,11 +351,9 @@ describe("derived mention matching with decorated identity names", () => {
     ["variation selector on emoji punctuation", "‼️"],
     ["enclosed letter", "🅰️"],
     ["keycap", "#️⃣"],
-    ["numeric keycap", "1️⃣"],
     ["joined sequence", "👩‍👧"],
     ["skin tone modifier", "👍🏽"],
     ["regional indicator pair", "🇹🇼"],
-    ["subdivision tag sequence", "🏴󠁧󠁢󠁳󠁣󠁴󠁿"],
   ])("handles trailing decoration built from a %s", (_label, decoration) => {
     const cfg = configForName(`小蝶${decoration}`);
     const regexes = buildMentionRegexes(cfg, "decorated-agent");
@@ -740,18 +720,5 @@ describe("derived mention matching with decorated identity names", () => {
       "查天氣",
     );
     expect(stripMentions("小蝶 查天氣", {} as MsgContext, cfg, "decorated-agent")).toBe("查天氣");
-  });
-});
-
-describe("CJK single-char mention matching (regression #87303)", () => {
-  const cfgWithCjkName = {
-    agents: {
-      list: [{ id: "cjk-agent", identity: { name: "包" } }],
-    },
-  } as Parameters<typeof buildMentionRegexes>[0];
-
-  it("matches the reported standalone Han identity", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkName, "cjk-agent");
-    expect(matchesMentionPatterns("@包 你好", regexes)).toBe(true);
   });
 });

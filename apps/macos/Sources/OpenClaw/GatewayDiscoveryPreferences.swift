@@ -9,8 +9,7 @@ enum GatewayDiscoveryPreferences {
         let defaults = AppDefaults.standard
         let raw = defaults.string(forKey: self.preferredStableIDKey)
             ?? defaults.string(forKey: self.legacyPreferredStableIDKey)
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
+        return self.normalized(raw)
     }
 
     static func setPreferredStableID(_ stableID: String?) {
@@ -20,17 +19,14 @@ enum GatewayDiscoveryPreferences {
         let trimmed = stableID?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmed, !trimmed.isEmpty {
             AppDefaults.standard.set(trimmed, forKey: self.preferredStableIDKey)
-            AppDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
         } else {
             AppDefaults.standard.removeObject(forKey: self.preferredStableIDKey)
-            AppDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
         }
+        AppDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
     }
 
     static func preferredRouteBinding() -> String? {
-        let raw = AppDefaults.standard.string(forKey: self.preferredRouteBindingKey)
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
+        self.normalized(AppDefaults.standard.string(forKey: self.preferredRouteBindingKey))
     }
 
     static func setPreferredStableID(_ stableID: String?, routeBinding: String?) {

@@ -1,6 +1,3 @@
-/**
- * Cerebras model provider builder.
- */
 import { normalizeOpenRouterModelPricing } from "openclaw/plugin-sdk/model-catalog-pricing";
 import type { OpenAICompatibleModelDiscoveryOptions } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
@@ -14,6 +11,13 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+export const CEREBRAS_BASE_URL = manifest.modelCatalog.providers.cerebras.baseUrl;
+export const CEREBRAS_MODEL_CATALOG = manifest.modelCatalog.providers.cerebras.models;
+
+export function buildCerebrasCatalogModels(): ModelDefinitionConfig[] {
+  return buildCerebrasProvider().models;
+}
 
 function projectCerebrasModels(
   rows: readonly unknown[],

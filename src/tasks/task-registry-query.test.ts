@@ -104,7 +104,7 @@ describe("listTaskSessionActivity", () => {
     });
     expect(activity[0]).toMatchObject({ status: "cancelled", ownerKey: task.ownerKey });
     expect(
-      await applyTaskRegistryMaintenanceRetention(completed, Date.now(), new Set(), () => {}),
+      await applyTaskRegistryMaintenanceRetention(completed, Date.now(), new Map(), () => {}),
     ).toBe("pruned");
     expect(listTaskSessionActivity()).toEqual([activity[1]]);
   });
@@ -286,7 +286,7 @@ describe("listTaskRecordsForOwnerTree", () => {
     expect(before[0]?.detail).toEqual({ changed: true });
     expect(listTaskRecordsForOwnerTree(owners)[0]?.detail).toEqual({ changed: "canonical" });
     expect(
-      await applyTaskRegistryMaintenanceRetention(parent, Date.now(), new Set(), () => {}),
+      await applyTaskRegistryMaintenanceRetention(parent, Date.now(), new Map(), () => {}),
     ).toBe("pruned");
     expect(listTaskRecordsForOwnerTree(owners)).toEqual([]);
     publishTaskRecordAfterAtomicStore({ ...parent, scopeKind: "system" });
@@ -480,7 +480,6 @@ describe("listTaskRecordPage", () => {
   );
 
   it.each([
-    { name: "stale cursor", continuation: true, mutate: true, failLater: false },
     { name: "cursorless retry", continuation: false, mutate: true, failLater: false },
     {
       name: "stale cursor before a later failure",

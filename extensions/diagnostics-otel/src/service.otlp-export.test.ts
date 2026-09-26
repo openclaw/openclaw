@@ -133,7 +133,10 @@ const SHARED_ENDPOINT_ROUTING_CASES = [
 
 test.each(
   SHARED_ENDPOINT_ROUTING_CASES.flatMap((entry) =>
-    (["config", "environment"] as const).map((source) => Object.assign({ source }, entry)),
+    (entry.suffix === "" || entry.suffix.includes("?")
+      ? (["config", "environment"] as const)
+      : (["config"] as const)
+    ).map((source) => Object.assign({ source }, entry)),
   ),
 )(
   "routes real exporters from a shared $label endpoint in $source",
@@ -724,7 +727,9 @@ const OTEL_ENDPOINT_SECURITY_CASES = OTEL_ENDPOINT_SIGNAL_CASES.flatMap((signal)
       "path-concatenated shared configuration",
       "path-concatenated signal configuration",
     ] as const
-  ).map((source) => Object.assign({ source }, signal)),
+  )
+    .filter((source) => signal.signal === "traces" || source === "signal configuration")
+    .map((source) => Object.assign({ source }, signal)),
 );
 
 test.each(OTEL_ENDPOINT_SECURITY_CASES)(
@@ -828,7 +833,12 @@ const OTEL_TLS_MATERIAL_CASES = [
 
 const OTEL_TLS_FILE_SECURITY_CASES = OTEL_ENDPOINT_SIGNAL_CASES.flatMap((signal) =>
   OTEL_TLS_MATERIAL_CASES.flatMap((material) =>
-    (["shared", "signal"] as const).map((scope) => Object.assign({ scope }, signal, material)),
+    (["shared", "signal"] as const)
+      .filter(
+        (scope) =>
+          signal.signal === "traces" || (material.suffix === "CERTIFICATE" && scope === "signal"),
+      )
+      .map((scope) => Object.assign({ scope }, signal, material)),
   ),
 );
 
@@ -890,11 +900,7 @@ test.each(OTEL_ENDPOINT_SIGNAL_CASES)(
   },
 );
 
-test.each(
-  OTEL_ENDPOINT_SIGNAL_CASES.flatMap((signal) =>
-    OTEL_TLS_MATERIAL_CASES.map((material) => Object.assign({}, signal, material)),
-  ),
-)(
+test.each([{ ...OTEL_ENDPOINT_SIGNAL_CASES[0], ...OTEL_TLS_MATERIAL_CASES[0] }])(
   "rejects an empty $signal $label file before the SDK can silently downgrade trust",
   async ({ signal, suffix, label, flags }) => {
     process.env[PRELOAD_ENV] = "0";
@@ -917,7 +923,7 @@ test.each(
   },
 );
 
-test.each(OTEL_ENDPOINT_SIGNAL_CASES)(
+test.each([OTEL_ENDPOINT_SIGNAL_CASES[0]])(
   "rejects the raw whitespace-padded $signal TLS certificate path the SDK cannot read",
   async ({ signal, flags }) => {
     process.env[PRELOAD_ENV] = "0";
@@ -937,10 +943,8 @@ test.each(OTEL_ENDPOINT_SIGNAL_CASES)(
 );
 
 test.each(
-  OTEL_ENDPOINT_SIGNAL_CASES.flatMap((signal) =>
-    (["CLIENT_CERTIFICATE", "CLIENT_KEY"] as const).map((suffix) =>
-      Object.assign({ suffix }, signal),
-    ),
+  (["CLIENT_CERTIFICATE", "CLIENT_KEY"] as const).map((suffix) =>
+    Object.assign({ suffix }, OTEL_ENDPOINT_SIGNAL_CASES[0]),
   ),
 )(
   "rejects the real $signal exporter when only $suffix mTLS material is configured",

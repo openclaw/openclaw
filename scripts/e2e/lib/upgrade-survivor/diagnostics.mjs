@@ -57,6 +57,8 @@ const logNames = [
   "install.log",
   "update.json",
   "update.err",
+  "update-noop.json",
+  "update-noop.err",
   ...siblingRefusalLogs,
   ...restoredIndexLogs,
   ...backupRollbackLogs,
@@ -96,11 +98,26 @@ const logNames = [
   "webhooks-only-policy/update.err",
   "webhooks-only-policy/gateway.log",
   "webhooks-only-policy/baseline-gateway.log",
+  "legacy-operator-post-update-cron-history.json",
+  "legacy-operator-candidate-cron-history.json",
   "dreaming-cron-proof.json",
   "legacy-operator-baseline-turn.out",
   "legacy-operator-baseline-turn.err",
   "legacy-operator-candidate-turn.out",
   "legacy-operator-candidate-turn.err",
+  "legacy-operator-run-survivor-default-owner.out",
+  "legacy-operator-run-survivor-default-owner.err",
+  "legacy-operator-run-survivor-ops-owner.out",
+  "legacy-operator-run-survivor-ops-owner.err",
+  ...["post-update", "candidate"].flatMap((stage) =>
+    [0, 1].flatMap((index) =>
+      ["", "-earlier"].flatMap((page) =>
+        ["out", "err"].map(
+          (extension) => `legacy-operator-${stage}-transcript-${index}${page}.${extension}`,
+        ),
+      ),
+    ),
+  ),
   "gateway.log",
   "gateway.log.doctor",
   "missing-load-path/baseline-gateway.log",
@@ -1689,11 +1706,29 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
       reason: sanitize(companion.reason, "baseline companion"),
     };
   }
+  let missingLoadPath = null;
+  const applicability = snapshot.missingLoadPath;
+  if (applicability !== null && applicability !== undefined) {
+    if (
+      !(applicability.applicability === "supported" && applicability.reason === null) &&
+      !(
+        applicability.applicability === "unsupported-driver" &&
+        applicability.reason === "published-cli-rejects-invalid-config-before-staging"
+      )
+    ) {
+      throw new Error();
+    }
+    missingLoadPath = {
+      applicability: applicability.applicability,
+      reason: applicability.reason,
+    };
+  }
   return {
     status: "passed",
     baseline: textFields(snapshot.baseline, ["spec", "version"], sanitize),
     candidate: textFields(snapshot.candidate, ["kind", "version"], sanitize),
     baselineCompanion,
+    missingLoadPath,
     ...textFields(
       snapshot,
       [
@@ -1758,6 +1793,15 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)
           ? ["legacy-operator-cron-history-proof.json"]
+          : []),
+        ...(snapshot.scenario === "legacy-operator-state" &&
+        (snapshot.baseline.version === "2026.9.6" ||
+          (snapshot.updateRestartMode === "manual" &&
+            ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)))
+          ? [
+              "legacy-operator-post-update-cron-history.json",
+              "legacy-operator-candidate-cron-history.json",
+            ]
           : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&

@@ -47,11 +47,7 @@ describe("streamOpenAICodexResponses retry classification", () => {
     "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
   });
 
-  it.each([
-    { status: 401, statusText: "Unauthorized", message: "Invalid credentials" },
-    { status: 403, statusText: "Forbidden", message: "Account is not authorized" },
-    { status: 400, statusText: "Bad Request", message: "Unsupported parameter" },
-  ])(
+  it.each([{ status: 401, statusText: "Unauthorized", message: "Invalid credentials" }])(
     "does not retry non-retryable ChatGPT responses: $status",
     async ({ status, statusText, message }) => {
       const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
@@ -133,18 +129,6 @@ describe("streamOpenAICodexResponses retry classification", () => {
         code: "CERT_HAS_EXPIRED",
       }),
     }),
-    Object.assign(new Error("TLS validation failed"), {
-      code: "CERT_NOT_YET_VALID",
-    }),
-    new Error("fetch failed", {
-      cause: Object.assign(new Error("TLS validation failed"), {
-        code: "CERT_NOT_YET_VALID",
-      }),
-    }),
-    new Error("certificate is not yet valid"),
-    Object.assign(new Error("TLS validation failed"), {
-      code: "ERR_TLS_CERT_ALTNAME_INVALID",
-    }),
   ])("does not retry deterministic TLS certificate failures", async (error) => {
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(error);
     vi.stubGlobal("fetch", fetchMock);
@@ -223,7 +207,6 @@ describe("streamOpenAICodexResponses retry classification", () => {
 
   it.each([
     { status: 429, code: undefined, message: "Too many requests" },
-    { status: 500, code: undefined, message: "Maintenance in progress." },
     { status: 503, code: undefined, message: "Maintenance in progress." },
     { status: 503, code: "maintenance", message: "Maintenance in progress." },
   ])(

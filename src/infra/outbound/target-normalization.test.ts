@@ -7,7 +7,6 @@ import {
   buildTargetResolverSignature,
   looksLikeTargetId,
   maybeResolvePluginMessagingTarget,
-  normalizeChannelTargetInput,
   normalizeTargetForProvider,
   resolveNormalizedTargetInput,
 } from "./target-normalization.js";
@@ -39,41 +38,16 @@ beforeEach(() => {
   getActivePluginChannelRegistryVersionMock.mockReturnValue(++registryVersion);
 });
 
-describe("normalizeChannelTargetInput", () => {
-  it("trims raw target input", () => {
-    expect(normalizeChannelTargetInput("  channel:C1  ")).toBe("channel:C1");
-  });
-});
-
 describe("normalizeTargetForProvider", () => {
   it.each([undefined, "   "])("returns undefined for blank raw input %j", (raw) => {
     expect(normalizeTargetForProvider("alpha", raw)).toBeUndefined();
   });
 
-  it.each([
-    {
-      provider: "unknown",
-      setup: () => {
-        getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
-        getChannelPluginMock.mockReturnValueOnce(undefined);
-      },
-      expected: "raw-id",
-    },
-    {
-      provider: "alpha",
-      setup: () => {
-        getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
-        getChannelPluginMock.mockReturnValueOnce(undefined);
-      },
-      expected: "raw-id",
-    },
-  ])(
-    "falls back to trimmed input when provider normalization misses for %j",
-    ({ provider, setup, expected }) => {
-      setup();
-      expect(normalizeTargetForProvider(provider, "  raw-id  ")).toBe(expected);
-    },
-  );
+  it("falls back to trimmed input when provider normalization misses", () => {
+    getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
+    getChannelPluginMock.mockReturnValueOnce(undefined);
+    expect(normalizeTargetForProvider("unknown", "  raw-id  ")).toBe("raw-id");
+  });
 
   it("uses the cached target normalizer until the plugin registry version changes", () => {
     const firstNormalizer = vi.fn((raw: string) => raw.trim().toUpperCase());

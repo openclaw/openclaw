@@ -15,49 +15,24 @@ import {
 } from "./update-command-service.js";
 
 export const preservedActivationCases = [
-  ...(
-    [
-      { mode: "git", outcome: "healthy" },
-      { mode: "npm", outcome: "healthy" },
-      { mode: "npm", outcome: "stale retry" },
-    ] as const
-  ).map(({ mode, outcome }) => ({
-    mode,
-    outcome,
-    denial: "sealed" as const,
-    json: true,
-    phase: "initial",
-  })),
-  ...(["git", "npm", "pnpm", "bun"] as const).flatMap((mode) =>
-    (["sealed", "unknown"] as const).flatMap((denial) =>
-      (mode === "git" || mode === "npm"
-        ? ["healthy", "json denial", "stale retry", "uninspectable", "foreign"]
-        : ["healthy"]
-      ).map((outcome) => ({
-        mode,
-        denial,
-        outcome,
-        json: outcome === "json denial",
-        phase: "late",
-      })),
-    ),
-  ),
-  ...(["sealed", "unknown"] as const).flatMap((denial) =>
-    ["initial", "late"].flatMap((phase) =>
-      // Late healthy/stale-retry Git tuples are already covered above.
-      (phase === "late"
-        ? ["stale build", "missing build"]
-        : ["healthy", "stale build", "missing build", "stale retry"]
-      ).map((outcome) => ({
-        mode: "git" as const,
-        denial,
-        outcome,
-        json: false,
-        phase,
-      })),
-    ),
-  ),
-];
+  { phase: "initial", mode: "git", denial: "sealed", outcome: "healthy", json: true },
+  { phase: "initial", mode: "npm", denial: "sealed", outcome: "healthy", json: true },
+  { phase: "initial", mode: "npm", denial: "sealed", outcome: "stale retry", json: true },
+  { phase: "late", mode: "git", denial: "sealed", outcome: "healthy", json: false },
+  { phase: "late", mode: "npm", denial: "unknown", outcome: "healthy", json: false },
+  { phase: "late", mode: "git", denial: "unknown", outcome: "json denial", json: true },
+  { phase: "late", mode: "npm", denial: "sealed", outcome: "json denial", json: true },
+  { phase: "late", mode: "git", denial: "sealed", outcome: "uninspectable", json: false },
+  { phase: "late", mode: "npm", denial: "unknown", outcome: "foreign", json: false },
+  { phase: "late", mode: "git", denial: "unknown", outcome: "stale retry", json: false },
+  { phase: "late", mode: "npm", denial: "sealed", outcome: "stale retry", json: false },
+  { phase: "initial", mode: "git", denial: "unknown", outcome: "stale build", json: false },
+  { phase: "initial", mode: "git", denial: "sealed", outcome: "missing build", json: false },
+  { phase: "late", mode: "git", denial: "unknown", outcome: "stale build", json: false },
+  { phase: "late", mode: "git", denial: "sealed", outcome: "missing build", json: false },
+  { phase: "late", mode: "pnpm", denial: "sealed", outcome: "healthy", json: false },
+  { phase: "late", mode: "bun", denial: "unknown", outcome: "healthy", json: false },
+] as const;
 
 export type InstallRootTransitionFixture = {
   root: string;

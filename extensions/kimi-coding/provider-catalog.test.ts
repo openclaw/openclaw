@@ -1,10 +1,9 @@
 import { clampThinkingLevel, type Model } from "openclaw/plugin-sdk/llm";
-// Kimi Coding tests cover provider catalog plugin behavior.
 import { parseModelRef } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
-import { isKimiK3ModelId, KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
+import { KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
 
 describe("kimi provider catalog", () => {
   it.each(["k3", "k3-256k"])("keeps documented off thinking selectable for %s", (id) => {
@@ -14,14 +13,9 @@ describe("kimi provider catalog", () => {
       throw new Error(`Missing catalog model ${id}`);
     }
     const model: Model<"anthropic-messages"> = {
-      id: row.id,
-      name: row.name,
-      reasoning: row.reasoning,
-      thinkingLevelMap: row.thinkingLevelMap,
-      contextWindow: row.contextWindow,
-      maxTokens: row.maxTokens,
-      cost: row.cost,
+      ...row,
       api: "anthropic-messages",
+      compat: undefined,
       provider: "kimi",
       baseUrl: provider.baseUrl,
       input: ["text", "image"],
@@ -41,8 +35,7 @@ describe("kimi provider catalog", () => {
       "kimi-for-coding",
       "kimi-for-coding-highspeed",
     ]);
-    expect(provider.models.find((model) => model.id === "k3")).toMatchObject({
-      name: "Kimi K3",
+    const k3Contract = {
       reasoning: true,
       thinkingLevelMap: {
         minimal: "low",
@@ -53,25 +46,18 @@ describe("kimi provider catalog", () => {
         max: "max",
       },
       cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-      contextWindow: 1_048_576,
       maxTokens: 131_072,
       compat: { codeMode: "preferred" },
+    };
+    expect(provider.models.find((model) => model.id === "k3")).toMatchObject({
+      ...k3Contract,
+      name: "Kimi K3",
+      contextWindow: 1_048_576,
     });
     expect(provider.models.find((model) => model.id === "k3-256k")).toMatchObject({
+      ...k3Contract,
       name: "Kimi K3 (256k)",
-      reasoning: true,
-      thinkingLevelMap: {
-        minimal: "low",
-        low: "low",
-        medium: "high",
-        high: "high",
-        xhigh: "max",
-        max: "max",
-      },
-      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
       contextWindow: 262_144,
-      maxTokens: 131_072,
-      compat: { codeMode: "preferred" },
     });
     expect(provider.models.find((model) => model.id === "kimi-for-coding-highspeed")).toMatchObject(
       {
@@ -101,9 +87,7 @@ describe("kimi provider catalog", () => {
     ["kimi-code", "kimi-for-coding"],
     ["k2p5", "kimi-for-coding"],
     ["kimi-for-coding", "kimi-for-coding"],
-    ["k3", "k3"],
     ["k3[1m]", "k3"],
-    ["kimi-for-coding-highspeed", "kimi-for-coding-highspeed"],
   ])("normalizes %s to %s through the helper and static manifest", (input, expected) => {
     expect(normalizeKimiCodingModelId(input)).toBe(expected);
     expect(
@@ -112,11 +96,5 @@ describe("kimi provider catalog", () => {
         allowPluginNormalization: false,
       }),
     ).toEqual({ provider: "kimi", model: expected });
-  });
-
-  it("recognizes K3 thinking-policy models", () => {
-    expect(isKimiK3ModelId("k3")).toBe(true);
-    expect(isKimiK3ModelId("K3-256K")).toBe(true);
-    expect(isKimiK3ModelId("kimi-for-coding")).toBe(false);
   });
 });

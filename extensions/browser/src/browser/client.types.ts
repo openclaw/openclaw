@@ -149,13 +149,4 @@ export type BrowserOpenResult = BrowserTab & {
   resolvedProfile?: string;
 };
 
-/** ARIA snapshot node exposed in structured snapshot responses. */
-export type SnapshotAriaNode = {
-  ref: string;
-  role: string;
-  name: string;
-  value?: string;
-  description?: string;
-  backendDOMNodeId?: number;
-  depth: number;
-};
+export type { AriaSnapshotNode as SnapshotAriaNode } from "./cdp-ax.js";

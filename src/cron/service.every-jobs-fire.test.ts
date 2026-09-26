@@ -9,6 +9,10 @@ import {
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import {
   createStartedCronServiceWithFinishedBarrier,
@@ -28,17 +32,18 @@ describe("CronService interval/cron jobs fire on time", () => {
     finished,
     jobId,
     firstDueAt,
+    clock,
   }: {
     cron: CronService;
     finished: { waitForOk: (id: string) => Promise<unknown> };
     jobId: string;
     firstDueAt: number;
+    clock: ReturnType<typeof createGatewaySchedulerClock>;
   }) => {
-    const untilDueMs = firstDueAt - Date.now();
-    // Move wall time five milliseconds ahead without consuming the timer's remaining delay.
-    vi.setSystemTime(new Date(Date.now() + 5));
+    const untilDueMs = firstDueAt - clock.clock.now();
+    clock.setTime(clock.clock.now() + 5);
     const finishedRun = finished.waitForOk(jobId);
-    await vi.advanceTimersByTimeAsync(untilDueMs);
+    await clock.advanceBy(untilDueMs);
     await finishedRun;
     const jobs = await cron.list({ includeDisabled: true });
     return jobs.find((current) => current.id === jobId);
@@ -74,7 +79,9 @@ describe("CronService interval/cron jobs fire on time", () => {
 
   it("fires an every-type main job when the timer fires a few ms late", async () => {
     const store = await makeStorePath();
+    const clock = createGatewaySchedulerClock(Date.now());
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath: store.storePath,
       logger: noopLogger,
     });
@@ -97,6 +104,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       finished,
       jobId: job.id,
       firstDueAt,
+      clock,
     });
     expectMainSystemEvent(enqueueSystemEvent, "tick");
     expect(updated?.state.lastStatus).toBe("ok");
@@ -109,7 +117,9 @@ describe("CronService interval/cron jobs fire on time", () => {
 
   it("keeps a due timer frozen while scheduling is paused and fires it after resume", async () => {
     const store = await makeStorePath();
+    const clock = createGatewaySchedulerClock(Date.now());
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath: store.storePath,
       logger: noopLogger,
     });
@@ -125,12 +135,12 @@ describe("CronService interval/cron jobs fire on time", () => {
     });
 
     cron.pauseScheduling();
-    await vi.advanceTimersByTimeAsync(10_005);
+    await clock.advanceBy(10_005);
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
 
     const finishedRun = finished.waitForOk(job.id);
     cron.resumeScheduling();
-    await vi.advanceTimersByTimeAsync(2_000);
+    await clock.advanceBy(2_000);
     await finishedRun;
     expectMainSystemEvent(enqueueSystemEvent, "resumed-tick");
 
@@ -141,7 +151,9 @@ describe("CronService interval/cron jobs fire on time", () => {
   it("rolls a failed scheduler resume back so a retry can rearm cron", async () => {
     const store = await makeStorePath();
     const logger = createNoopLogger();
+    const scheduler = createTestGatewayScheduler();
     const cron = new CronService({
+      scheduler,
       storePath: store.storePath,
       cronEnabled: true,
       log: logger,
@@ -164,29 +176,23 @@ describe("CronService interval/cron jobs fire on time", () => {
       throw new Error("arm failed");
     });
 
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     expect(() => cron.resumeScheduling()).toThrow("arm failed");
-    expect(setTimeoutSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 10_000);
-    expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[0]?.value);
-    setTimeoutSpy.mockClear();
-    clearTimeoutSpy.mockClear();
+    expect(scheduler.nextWakeAtMs).toBeNull();
 
     expect(() => cron.resumeScheduling()).not.toThrow();
-    expect(setTimeoutSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 10_000);
-    expect(clearTimeoutSpy).not.toHaveBeenCalled();
+    expect(scheduler.nextWakeAtMs).toBe(Date.now() + 10_000);
 
     cron.stop();
-    expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[0]?.value);
-    setTimeoutSpy.mockRestore();
-    clearTimeoutSpy.mockRestore();
+    expect(scheduler.nextWakeAtMs).toBeNull();
     await store.cleanup();
   });
 
   it("keeps admission closed until a real cron scheduler resume retry succeeds", async () => {
     const store = await makeStorePath();
     const logger = createNoopLogger();
+    const clock = createGatewaySchedulerClock(Date.now());
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath: store.storePath,
       logger,
     });
@@ -216,12 +222,13 @@ describe("CronService interval/cron jobs fire on time", () => {
       ).toMatchObject({ status: "recovering" });
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
 
+      await clock.advanceBy(1_000);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(getGatewaySuspendStatus("stale-id")).toEqual({ status: "running" });
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
 
       const finishedRun = finished.waitForOk(job.id);
-      await vi.advanceTimersByTimeAsync(9_005);
+      await clock.advanceBy(9_005);
       await finishedRun;
       expectMainSystemEvent(enqueueSystemEvent, "recovered-tick");
     } finally {
@@ -233,11 +240,14 @@ describe("CronService interval/cron jobs fire on time", () => {
 
   it("keeps a due timer pending when restart signal admission rolls back", async () => {
     const store = await makeStorePath();
+    const clock = createGatewaySchedulerClock(Date.now());
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath: store.storePath,
       logger: noopLogger,
     });
     resetGatewayWorkAdmission();
+    let wake: ReturnType<typeof clock.advanceBy> = undefined;
 
     try {
       await cron.start();
@@ -253,7 +263,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       const pendingSignal = beginGatewayRestartSignalAdmission();
       expect(pendingSignal).not.toBeNull();
       const finishedRun = finished.waitForOk(job.id);
-      await vi.advanceTimersByTimeAsync(10_005);
+      wake = clock.advanceBy(10_005);
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
 
       expect(pendingSignal?.rollback()).toBe(true);
@@ -262,19 +272,19 @@ describe("CronService interval/cron jobs fire on time", () => {
     } finally {
       cron.stop();
       resetGatewayWorkAdmission();
+      await wake;
       await store.cleanup();
     }
   });
 
   it("fires a cron-expression job when the timer fires a few ms late", async () => {
     const store = await makeStorePath();
+    const clock = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:59.000Z"));
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath: store.storePath,
       logger: noopLogger,
     });
-
-    // Set time to just before a minute boundary.
-    vi.setSystemTime(new Date("2025-12-13T00:00:59.000Z"));
 
     await cron.start();
     const job = await cron.add({
@@ -293,6 +303,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       finished,
       jobId: job.id,
       firstDueAt,
+      clock,
     });
     expectMainSystemEvent(enqueueSystemEvent, "cron-tick");
     expect(updated?.state.lastStatus).toBe("ok");
@@ -308,6 +319,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+    const clock = createGatewaySchedulerClock(nowMs);
 
     await writeCronStoreSnapshot({
       storePath: store.storePath,
@@ -340,6 +352,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     });
 
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -351,13 +364,13 @@ describe("CronService interval/cron jobs fire on time", () => {
     await cron.start();
     // Perf: a few recomputation cycles are enough to catch "every" drift.
     for (let minute = 1; minute <= 3; minute++) {
-      vi.setSystemTime(new Date(nowMs + minute * 60_000));
+      clock.setTime(nowMs + minute * 60_000);
       const minuteRun = await cron.run("minute-cron", "force");
       expect(minuteRun).toEqual({ ok: true, ran: true });
     }
 
     // "every" cadence is 2m; verify it stays due at the 6-minute boundary.
-    vi.setSystemTime(new Date(nowMs + 6 * 60_000));
+    clock.setTime(nowMs + 6 * 60_000);
     const sfRun = await cron.run("loaded-every", "due");
     expect(sfRun).toEqual({ ok: true, ran: true });
 

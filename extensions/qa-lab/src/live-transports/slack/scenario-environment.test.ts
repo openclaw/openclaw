@@ -9,7 +9,7 @@ function createEnvironment() {
     channelId: "C123456789",
     driverBotUserId: "U123456789",
     driverClient: {} as never,
-    getMessageWriteCursor: () => 0,
+    getMessageWriteCursor: async () => 0,
     readMessageWrites: async () => [],
     readNativeWrites: async () => [],
     sutAppToken: "xapp-test",

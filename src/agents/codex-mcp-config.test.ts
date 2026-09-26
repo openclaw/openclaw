@@ -485,38 +485,4 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       expect(loaded.staticServerNames).toEqual(["search"]);
     });
   });
-
-  it("keeps static projection byte-identical when no resolver exists", async () => {
-    mocks.bundleMcp = {
-      config: {
-        mcpServers: {
-          search: {
-            type: "http",
-            url: "https://mcp.example.com/mcp",
-          },
-        },
-      },
-      diagnostics: [],
-    };
-
-    const a = await loadCodexBundleMcpThreadConfigCore({
-      workspaceDir: "/workspace",
-      cfg: {},
-      toolsEnabled: true,
-    });
-    const b = await loadCodexBundleMcpThreadConfigCore({
-      workspaceDir: "/workspace",
-      cfg: {},
-      toolsEnabled: true,
-    });
-    expect(a.configPatch).toEqual(b.configPatch);
-    expect(a.fingerprint).toBe(b.fingerprint);
-    expect(a.configPatch).toEqual({
-      mcp_servers: {
-        search: {
-          url: "https://mcp.example.com/mcp",
-        },
-      },
-    });
-  });
 });

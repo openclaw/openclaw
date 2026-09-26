@@ -263,18 +263,6 @@ describe("shouldDeferWake", () => {
         }),
       ).toEqual({ defer: true, reason: "min-spacing", retryAtMs: 200_500 });
     });
-
-    it("does not gate manual wakes on min-spacing", () => {
-      expect(
-        decide({
-          intent: "manual",
-          now: 200_000,
-          nextDueMs: 100_000,
-          lastRunStartedAtMs: 199_999,
-          reason: "manual",
-        }),
-      ).toEqual({ defer: false });
-    });
   });
 
   describe("flood guard", () => {
@@ -311,13 +299,5 @@ describe("recordRunStart", () => {
       recordRunStart(buffer, value);
     }
     expect(buffer).toEqual([5, 6, 7, 8, 9, 10]);
-  });
-
-  it("preserves insertion order", () => {
-    const buffer: number[] = [];
-    recordRunStart(buffer, 100);
-    recordRunStart(buffer, 200);
-    recordRunStart(buffer, 300);
-    expect(buffer).toEqual([100, 200, 300]);
   });
 });

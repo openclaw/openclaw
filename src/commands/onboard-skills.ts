@@ -23,7 +23,6 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 import { isNodeManagerChoice, type NodeManagerChoice } from "./onboard-types.js";
 
-const HOMEBREW_PROMPT_PLATFORMS = new Set(["darwin", "linux"]);
 const SKIPPED_INSTALL_NAME_LIMIT = 8;
 
 type OnboardInstallSkill = {
@@ -37,10 +36,6 @@ type SkippedInstall = {
   reason: SkillInstallSkipReason;
   detail?: string;
 };
-
-function supportsHomebrewPrompt(platform: NodeJS.Platform): boolean {
-  return HOMEBREW_PROMPT_PLATFORMS.has(platform);
-}
 
 function summarizeInstallFailure(message: string): string | undefined {
   const cleaned = message.replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "").trim();
@@ -276,11 +271,7 @@ export async function setupSkills(
       };
     }
 
-    const deferredSkippedInstallable: SkippedInstall[] = [];
     for (const target of selectedReadySkills) {
-      if (target.install.length === 0) {
-        continue;
-      }
       const installId = target.install[0]?.id;
       if (!installId) {
         continue;
@@ -302,35 +293,30 @@ export async function setupSkills(
             ? t("wizard.skills.installedWithWarnings", { name: target.name })
             : t("wizard.skills.installed", { name: target.name }),
         );
-        for (const warning of warnings) {
-          runtime.log(warning);
-        }
-        continue;
-      }
-      if (result.skipReason) {
+      } else if (result.skipReason) {
         spin.stop(t("wizard.skills.installSkipped", { name: target.name }));
         const detail = summarizeInstallFailure(result.message);
-        deferredSkippedInstallable.push({
+        selectedSkippedInstallable.push({
           skill: target,
           reason: result.skipReason,
           ...(detail ? { detail } : {}),
         });
-        for (const warning of warnings) {
-          runtime.log(warning);
-        }
-        continue;
+      } else {
+        const code = result.code == null ? "" : ` (exit ${result.code})`;
+        const detail = summarizeInstallFailure(result.message);
+        spin.stop(
+          t("wizard.skills.installFailed", {
+            name: target.name,
+            code,
+            detail: detail ? ` - ${detail}` : "",
+          }),
+        );
       }
-      const code = result.code == null ? "" : ` (exit ${result.code})`;
-      const detail = summarizeInstallFailure(result.message);
-      spin.stop(
-        t("wizard.skills.installFailed", {
-          name: target.name,
-          code,
-          detail: detail ? ` - ${detail}` : "",
-        }),
-      );
       for (const warning of warnings) {
         runtime.log(warning);
+      }
+      if (result.ok || result.skipReason) {
+        continue;
       }
       if (result.stderr) {
         runtime.log(result.stderr.trim());
@@ -342,11 +328,8 @@ export async function setupSkills(
       );
       runtime.log(t("wizard.skills.docsLine"));
     }
-    if (deferredSkippedInstallable.length > 0) {
-      selectedSkippedInstallable.push(...deferredSkippedInstallable);
-    }
     if (
-      supportsHomebrewPrompt(process.platform) &&
+      (process.platform === "darwin" || process.platform === "linux") &&
       selectedSkippedInstallable.some((item) => item.reason === "brew")
     ) {
       await prompter.note(

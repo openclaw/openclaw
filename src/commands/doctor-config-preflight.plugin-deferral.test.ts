@@ -234,7 +234,7 @@ describe("configured plugin migration deferral", () => {
         await fs.writeFile(configPath, JSON.stringify(config));
         await fs.writeFile(source, '{"binding":"retained"}\n');
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-          recordDeferredPluginMigrations({
+          await recordDeferredPluginMigrations({
             pending: [
               {
                 pluginId,

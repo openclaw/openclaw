@@ -12,6 +12,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
+import { saveMSTeamsDelegatedTokens } from "./delegated-state.js";
 import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
@@ -19,7 +20,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { createMSTeamsSetupWizardBase } from "./setup-core.js";
-import { resolveMSTeamsCredentials, saveDelegatedTokens } from "./token.js";
+import { resolveMSTeamsCredentials } from "./token.js";
 
 const t = createSetupTranslator();
 
@@ -310,7 +311,7 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
           progress.stop();
           throw err;
         }
-        await saveDelegatedTokens(tokens);
+        await saveMSTeamsDelegatedTokens(tokens);
         progress.stop(t("wizard.msteams.delegatedAuthConfigured"));
       }
     }

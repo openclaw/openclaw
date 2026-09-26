@@ -8,12 +8,19 @@ import * as workerAdmission from "../infra/sqlite-worker-broker-admission.js";
 import type { Job } from "../infra/sqlite-worker-broker.types.js";
 import type { SqliteWorkerNativeSettlementOwner } from "../infra/sqlite-worker-operation-settlement.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
+import { CRON_HISTORY_KEEP_PER_JOB } from "./cron-history-retention.js";
 import { loadTaskAcpSessionCloser } from "./task-registry-acp-cleanup.js";
 import { getTaskPreparedActivity, recordTaskActivityEvent } from "./task-registry-activity.js";
+import * as snapshots from "./task-registry-maintenance-snapshot.js";
+import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import { isTaskRegistryTaskSettled, prepareTaskRegistryRead } from "./task-registry-read.js";
 import {
   getTasksByRunId,
@@ -24,13 +31,20 @@ import {
   tasks,
 } from "./task-registry-state.js";
 import { runTaskRegistryMaintenance } from "./task-registry.maintenance.js";
-import { getTaskRegistryStore, onTaskRegistryChange } from "./task-registry.store.js";
+import {
+  configureTaskRegistryRuntime,
+  getTaskRegistryStore,
+  onTaskRegistryChange,
+} from "./task-registry.store.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import type { TaskRegistryObserverEvent } from "./task-registry.store.types.js";
 import {
+  createStoredTask,
   createTaskFixture,
+  prepareTaskFixtureRead,
   reloadTaskRegistryFromStoreAsync,
   resetTaskRegistryForTests,
+  withTaskRegistryTempDir,
 } from "./task-registry.test-support.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { resetTaskFlowRegistryForTests } from "./task-runtime.test-helpers.js";
@@ -51,6 +65,135 @@ function taskMembership(task: TaskRecord) {
 }
 
 describe("task maintenance retention", () => {
+  it("keeps an overflow candidate when a newer peer leaves its partition before the native write", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        await runTaskRegistryMaintenance();
+        const now = Date.now();
+        const store = getTaskRegistryStore();
+        const records = Array.from({ length: CRON_HISTORY_KEEP_PER_JOB + 1 }, (_, index) => ({
+          ...createStoredTask(),
+          taskId: `cron-peer-race-${index}`,
+          runtime: "cron" as const,
+          sourceId: "peer-race-job",
+          status: "succeeded" as const,
+          createdAt: now + index,
+          endedAt: now + index,
+          lastEventAt: now + index,
+          cleanupAfter: now + 86_400_000,
+          notifyPolicy: "silent" as const,
+          detail: { kind: "cron-run", storeKey: "peer-race-store" },
+        }));
+        runOpenClawStateWriteTransaction(() => {
+          for (const task of records) {
+            store.upsertTaskWithDeliveryState({ task });
+          }
+        });
+        const context = captureOpenClawStateWorkerContext();
+        await reloadTaskRegistryFromStoreAsync(context);
+        const candidate = expectDefined(records[0], "overflow candidate");
+        const peer = expectDefined(records.at(-1), "newer cron peer");
+        const prepare = store.prepareRetentionSourceAsync.bind(store);
+        let moved = false;
+        const preparation = vi
+          .spyOn(store, "prepareRetentionSourceAsync")
+          .mockImplementation(async (...args) => {
+            const source = await prepare(...args);
+            if (!moved && args[1] === candidate.taskId) {
+              moved = true;
+              const replacement = { ...peer, sourceId: "another-job" };
+              store.upsertTaskWithDeliveryState({ task: replacement });
+              publishTaskRecordAfterAtomicStore(replacement);
+            }
+            return source;
+          });
+        const summary = await runTaskRegistryMaintenance();
+        preparation.mockRestore();
+
+        expect(moved).toBe(true);
+        expect(summary.pruned).toBe(0);
+        expect(tasks.has(candidate.taskId)).toBe(true);
+        expect(
+          (await store.loadMutationSnapshotAsync(context, { taskId: candidate.taskId })).tasks.get(
+            candidate.taskId,
+          ),
+        ).toMatchObject(candidate);
+
+        store.upsertTaskWithDeliveryState({ task: peer });
+        publishTaskRecordAfterAtomicStore(peer);
+        expect((await runTaskRegistryMaintenance()).pruned).toBe(1);
+        expect(tasks.has(candidate.taskId)).toBe(false);
+        expect(
+          (await store.loadMutationSnapshotAsync(context, { taskId: candidate.taskId })).tasks.has(
+            candidate.taskId,
+          ),
+        ).toBe(false);
+      },
+      { durableStore: true },
+    );
+  });
+
+  it("preserves cron overflow rows whose partition or rank changed after the maintenance snapshot", async () => {
+    await withTaskRegistryTempDir(async () => {
+      await runTaskRegistryMaintenance();
+      const now = Date.now();
+      const storeKey = "original raw store ";
+      const records: TaskRecord[] = Array.from(
+        { length: CRON_HISTORY_KEEP_PER_JOB + 5 },
+        (_, index) => ({
+          ...createStoredTask(),
+          taskId: `cron-overflow-${index}`,
+          runtime: "cron",
+          sourceId: "retention-job ",
+          status: "succeeded",
+          createdAt: now + index,
+          endedAt: now + index,
+          lastEventAt: now + index,
+          cleanupAfter: now + 86_400_000,
+          notifyPolicy: "silent",
+          detail: { kind: "cron-run", storeKey },
+        }),
+      );
+      const changes: Partial<TaskRecord>[] = [
+        { detail: { kind: "cron-run", storeKey: " original raw store " } },
+        { sourceId: "retention-job" },
+        { detail: { kind: "quiet", storeKey } },
+        { endedAt: now + 60_000, lastEventAt: now + 60_000 },
+      ];
+      const replacements = changes.map((change, index) => ({
+        ...expectDefined(records[index], "selected cron overflow row"),
+        ...change,
+      }));
+      const control = expectDefined(records[changes.length], "unchanged cron overflow row");
+      const store = createInMemoryTaskRegistryStore({
+        tasks: new Map(records.map((task) => [task.taskId, task])),
+        deliveryStates: new Map(),
+      });
+      configureTaskRegistryRuntime({ store });
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+      const snapshot = snapshots.getTaskRegistryMaintenanceSnapshot;
+      vi.spyOn(snapshots, "getTaskRegistryMaintenanceSnapshot").mockImplementationOnce((read) => {
+        const selected = snapshot(read);
+        for (const replacement of replacements) {
+          store.upsertTaskWithDeliveryState({ task: replacement });
+          publishTaskRecordAfterAtomicStore(replacement);
+        }
+        return selected;
+      });
+
+      const summary = await runTaskRegistryMaintenance();
+
+      expect(summary.pruned).toBe(1);
+      expect(tasks.has(control.taskId)).toBe(false);
+      const stored = store.loadSnapshot().tasks;
+      expect(stored.has(control.taskId)).toBe(false);
+      for (const replacement of replacements) {
+        expect(tasks.get(replacement.taskId)).toEqual(replacement);
+        expect(stored.get(replacement.taskId)).toEqual(replacement);
+      }
+    });
+  });
+
   it.each(["prune", "stamp"] as const)(
     "keeps %s responsive and unpublished while foreign writer custody is held",
     async (operation) => {
@@ -91,6 +234,9 @@ describe("task maintenance retention", () => {
             await reloadTaskRegistryFromStoreAsync(context);
             await loadTaskAcpSessionCloser();
             await prepareTaskRegistryRead();
+            for (const task of fixtures) {
+              await prepareTaskFixtureRead(task);
+            }
 
             const before = fixtures.map(({ taskId }) => {
               const task = structuredClone(expectDefined(tasks.get(taskId), "resident task"));

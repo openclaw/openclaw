@@ -14,6 +14,7 @@ import {
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -84,6 +85,7 @@ function replaceSessionEntry(...args: Parameters<typeof replaceSessionEntryCore>
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-remove-session-cleanup-",
+  fakeTimers: false,
 });
 
 afterEach(() => {
@@ -106,6 +108,7 @@ describe("CronService.remove session cleanup", () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -145,6 +148,7 @@ describe("CronService.remove session cleanup", () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -196,6 +200,7 @@ describe("CronService.remove session cleanup", () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -254,7 +259,6 @@ describe("CronService.remove session cleanup", () => {
       });
 
     try {
-      await vi.advanceTimersByTimeAsync(50);
       await unrelatedAdd;
       expect(unrelatedAdded).toBe(true);
     } finally {
@@ -270,6 +274,7 @@ describe("CronService.remove session cleanup", () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -307,6 +312,7 @@ describe("CronService.remove session cleanup", () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -368,6 +374,7 @@ describe("CronService.remove session cleanup", () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -410,7 +417,7 @@ describe("CronService.remove session cleanup", () => {
         replacementAdded = true;
         return job;
       });
-    await vi.advanceTimersByTimeAsync(50);
+    await cron.status();
     expect(replacementAdded).toBe(false);
 
     clearCronJobActive(original.id, originalMarker);
@@ -434,6 +441,7 @@ describe("CronService.remove session cleanup", () => {
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const createCron = () =>
       new CronService({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         cronEnabled: true,
         defaultAgentId: "main",
@@ -477,7 +485,7 @@ describe("CronService.remove session cleanup", () => {
         replacementAdded = true;
         return job;
       });
-    await vi.advanceTimersByTimeAsync(50);
+    await replacementCron.status();
     expect(replacementAdded).toBe(false);
 
     clearCronJobActive(original.id, originalMarker);
@@ -498,6 +506,7 @@ describe("CronService.remove session cleanup", () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",

@@ -32,7 +32,7 @@ import {
 } from "./update-command-service-plan.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
-  shouldBlockMutableUpdateFromGatewayServiceEnv,
+  mutableUpdateGatewayServiceBlock,
   UpdateCommandAbort,
 } from "./update-command-service.js";
 
@@ -184,18 +184,23 @@ export async function finishAlreadyCurrentUpdate(
         updateRun: params.opts.run,
       });
     }
-    if (
-      stopState &&
-      (stopState.blockMessage ||
-        shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop: stopState }))
-    ) {
+    const block = stopState?.blockMessage
+      ? {
+          message: stopState.blockMessage,
+          failureFacts:
+            stopState.blockFailureFacts ??
+            collectServiceInspectionFailureFacts(stopState.serviceUpdateVerdict),
+        }
+      : await mutableUpdateGatewayServiceBlock({
+          preManagedServiceStop: stopState,
+          root: params.root,
+          runId: params.opts.run?.runId,
+        });
+    if (block) {
       throw new UpdatePreMutationError(
         "managed-service-preflight",
-        formatUpdateAncestryBlockMessage(
-          stopState.blockMessage ??
-            "Run openclaw update from a terminal outside the Gateway service before changing installed plugins.",
-        ),
-        { failureFacts: collectServiceInspectionFailureFacts(stopState.serviceUpdateVerdict) },
+        formatUpdateAncestryBlockMessage(block.message),
+        block,
       );
     }
     await assertOpenClawStateWriteAllowedAtPath({

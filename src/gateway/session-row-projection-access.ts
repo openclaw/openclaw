@@ -1,17 +1,40 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { SessionRowProjectionBinding } from "./session-row-projection-binding.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
-const projections = new WeakMap<object, () => SessionRowProjection | undefined>();
+const projections = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionRowProjectionOwners"),
+  () =>
+    new WeakMap<
+      object,
+      {
+        read: () => SessionRowProjection | undefined;
+        binding: InstanceType<typeof SessionRowProjectionBinding>;
+      }
+    >(),
+);
 
 /** Context copies retain the original instance binding; the runtime owns disposal. */
 export function bindSessionRowProjection<T extends object>(
   context: T,
   read: () => SessionRowProjection | undefined,
 ) {
-  projections.set(context, read);
-  return Object.assign(context, { sessionRowProjectionOwner: context });
+  const binding =
+    projections.get(context)?.binding ??
+    new SessionRowProjectionBinding(context, (query) => {
+      const target = projections.get(context)?.read()?.sharingTarget(query);
+      // The projection owns store-locator mapping; session-key aliases still require an exact read.
+      return target?.canonicalKey === query.key && target.agentId === query.agentId
+        ? target.entry
+        : undefined;
+    });
+  projections.set(context, { read, binding });
+  return Object.assign(context, { sessionRowProjectionOwner: binding });
 }
 
 export function getSessionRowProjection(context?: { sessionRowProjectionOwner?: object }) {
-  const owner = context?.sessionRowProjectionOwner;
-  return owner ? projections.get(owner)?.() : undefined;
+  const binding = context?.sessionRowProjectionOwner;
+  return binding instanceof SessionRowProjectionBinding
+    ? projections.get(binding.owner)?.read()
+    : undefined;
 }

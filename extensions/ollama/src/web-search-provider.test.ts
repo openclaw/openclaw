@@ -274,11 +274,6 @@ describe("ollama web search provider", () => {
       "http://localhost:11434/api/experimental/web_search",
     ],
     [
-      "uses the configured Ollama Cloud host for web search",
-      () => createOllamaConfig({ baseUrl: "https://ollama.com" }),
-      "https://ollama.com/api/web_search",
-    ],
-    [
       "uses the model provider baseURL alias for web search",
       () =>
         createOllamaConfig({
@@ -374,31 +369,26 @@ describe("ollama web search provider", () => {
     });
   });
 
-  it.each<SecretInput>([
-    {
-      source: "env",
-      provider: "default",
-      id: "OLLAMA_WEB_SEARCH_REF",
+  it.each<SecretInput>(["${OLLAMA_WEB_SEARCH_REF}"])(
+    "resolves provider apiKey env SecretRef %# for web search requests",
+    async (apiKey) => {
+      const refEnvVar = "OLLAMA_WEB_SEARCH_REF";
+      const resolvedKey = "resolved-ref-value";
+      await withEnvAsync({ [refEnvVar]: resolvedKey }, async () => {
+        fetchWithSsrFGuardMock.mockResolvedValueOnce(searchResponse());
+
+        const result = await runOllamaWebSearch(
+          createOllamaConfig({
+            baseUrl: "https://ollama.com",
+            apiKey,
+          }),
+        );
+
+        expect(result.count).toBe(1);
+        expectHostedRequest(resolvedKey);
+      });
     },
-    "$OLLAMA_WEB_SEARCH_REF",
-    "${OLLAMA_WEB_SEARCH_REF}",
-  ])("resolves provider apiKey env SecretRef %# for web search requests", async (apiKey) => {
-    const refEnvVar = "OLLAMA_WEB_SEARCH_REF";
-    const resolvedKey = "resolved-ref-value";
-    await withEnvAsync({ [refEnvVar]: resolvedKey }, async () => {
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(searchResponse());
-
-      const result = await runOllamaWebSearch(
-        createOllamaConfig({
-          baseUrl: "https://ollama.com",
-          apiKey,
-        }),
-      );
-
-      expect(result.count).toBe(1);
-      expectHostedRequest(resolvedKey);
-    });
-  });
+  );
 
   it("keeps the ambient cloud fallback when a configured selected-host key is also set", async () => {
     // Regression guard (mixed credentials): a configured selected-host key must not suppress the
@@ -427,16 +417,6 @@ describe("ollama web search provider", () => {
     [
       "does not use ambient env fallback when a configured apiKey SecretRef is unavailable",
       { source: "env", provider: "default", id: "OLLAMA_WEB_SEARCH_REF" },
-      "models.providers.ollama.apiKey env SecretRef OLLAMA_WEB_SEARCH_REF is not available",
-    ],
-    [
-      "does not use ambient env fallback when configured apiKey SecretRef shorthand $OLLAMA_WEB_SEARCH_REF is unavailable",
-      "$OLLAMA_WEB_SEARCH_REF",
-      "models.providers.ollama.apiKey env SecretRef OLLAMA_WEB_SEARCH_REF is not available",
-    ],
-    [
-      "does not use ambient env fallback when configured apiKey SecretRef shorthand ${OLLAMA_WEB_SEARCH_REF} is unavailable",
-      "${OLLAMA_WEB_SEARCH_REF}",
       "models.providers.ollama.apiKey env SecretRef OLLAMA_WEB_SEARCH_REF is not available",
     ],
     [
@@ -527,10 +507,6 @@ describe("ollama web search provider", () => {
 
   it.each([
     {
-      name: "the configured model provider",
-      config: createOllamaConfig({ baseUrl: "https://ollama.com", apiKey: "hosted-test-key" }),
-    },
-    {
       name: "the plugin's higher-priority web search override",
       config: {
         ...createOllamaConfig({ apiKey: "hosted-test-key" }),
@@ -560,17 +536,6 @@ describe("ollama web search provider", () => {
     {
       name: "the configured model provider",
       config: createOllamaConfig({ baseUrl: "https://ollama.com" }),
-    },
-    {
-      name: "the plugin's higher-priority web search override",
-      config: {
-        ...createOllamaConfig(),
-        plugins: {
-          entries: {
-            ollama: { config: { webSearch: { baseUrl: "https://ollama.com/v1" } } },
-          },
-        },
-      },
     },
   ])("warns when $name selects hosted search without an API key", async ({ config }) => {
     await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {

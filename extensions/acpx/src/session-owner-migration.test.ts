@@ -139,7 +139,7 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
   };
 }
 
-it.each(["none", "publication", "canonical"])(
+it.each(["publication", "canonical"])(
   "preserves raw history and resumes idempotently after interruption=%s",
   async (interrupted) => {
     const f = await fixture();

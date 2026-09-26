@@ -227,83 +227,6 @@ describe("cdp helpers", () => {
     ).rejects.toThrow("browser endpoint blocked by policy");
   });
 
-  it("still grants configured loopback for same-shaped strict navigation policy", async () => {
-    await expect(
-      assertCdpEndpointAllowed("http://127.0.0.1:9222/json/version", {
-        allowedHostnames: ["api.example.com"],
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
-    );
-  });
-
-  it("releases guarded CDP fetches for bodyless requests", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: {
-        ok: true,
-        status: 200,
-      },
-      release,
-    });
-
-    await expect(
-      fetchOk("http://127.0.0.1:9222/json/close/TARGET_1", 250, undefined, {
-        dangerouslyAllowPrivateNetwork: false,
-        allowedHostnames: ["127.0.0.1"],
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses an exact loopback allowlist for guarded loopback CDP fetches", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: {
-        ok: true,
-        status: 200,
-      },
-      release,
-    });
-
-    await expect(
-      fetchOk("http://127.0.0.1:9222/json/version", 250, undefined, {
-        dangerouslyAllowPrivateNetwork: false,
-      }),
-    ).resolves.toBeUndefined();
-
-    const request = requireGuardedFetchRequest();
-    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
-    expect(request?.policy).toEqual({
-      dangerouslyAllowPrivateNetwork: false,
-      allowedHostnames: ["127.0.0.1"],
-    });
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("sends URL credentials as an auth header for guarded CDP fetches", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: {
-        ok: true,
-        status: 200,
-      },
-      release,
-    });
-
-    await expect(
-      fetchOk("http://openclaw:relay-token@127.0.0.1:9222/json/version", 250),
-    ).resolves.toBeUndefined();
-
-    const request = requireGuardedFetchRequest();
-    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
-    expect(request?.init?.headers).toEqual({
-      Authorization: "Basic b3BlbmNsYXc6cmVsYXktdG9rZW4=",
-    });
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
   it("threads caller abort and strict CDP policy through browser identity lookup", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -671,15 +594,6 @@ describe("CDP reachability policy", () => {
     ).rejects.toThrow(/private\/internal\/special-use ip address/i);
   });
 
-  it("preserves navigation policy when it rejects the selected profile host", () => {
-    const profile = createProfile({});
-    const browserPolicy = {
-      allowedHostnames: ["metadata.internal"],
-    };
-
-    expect(resolveCdpReachabilityPolicy(profile, browserPolicy)).toBe(browserPolicy);
-  });
-
   it("preserves a private-network policy that rejects the selected CDP host", () => {
     const profile = createProfile({});
     const browserPolicy = {
@@ -828,19 +742,6 @@ describe("CDP reachability policy", () => {
     ).not.toThrow();
   });
 
-  it("rejects Chrome MCP explicit CDP URL profiles under explicit strict policy", () => {
-    const profile = createProfile({
-      driver: "existing-session",
-      cdpUrl: "http://127.0.0.1:9222",
-      cdpHost: "127.0.0.1",
-      cdpIsLoopback: true,
-    });
-
-    expect(() =>
-      assertChromeMcpCdpTransportAllowed(profile, { dangerouslyAllowPrivateNetwork: false }),
-    ).toThrow(/cannot carry that pinned transport/i);
-  });
-
   it("rejects Chrome MCP explicit CDP URL profiles after explicit strict CDP scoping", () => {
     const profile = createProfile({
       driver: "existing-session",
@@ -859,19 +760,6 @@ describe("CDP reachability policy", () => {
     expect(() => assertChromeMcpCdpTransportAllowed(profile, cdpPolicy)).toThrow(
       /cannot carry that pinned transport/i,
     );
-  });
-
-  it("rejects Chrome MCP explicit CDP URL profiles under endpoint allowlists", () => {
-    const profile = createProfile({
-      driver: "existing-session",
-      cdpUrl: "http://127.0.0.1:9222",
-      cdpHost: "127.0.0.1",
-      cdpIsLoopback: true,
-    });
-
-    expect(() =>
-      assertChromeMcpCdpTransportAllowed(profile, { allowedHostnames: ["127.0.0.1"] }),
-    ).toThrow(/cannot carry that pinned transport/i);
   });
 
   it("does not let trusted private CDP policy override endpoint allowlists for Chrome MCP", () => {

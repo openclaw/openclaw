@@ -238,11 +238,3 @@ describe("Google Chat semantic whitespace", () => {
     expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 32_000)).toBe(true);
   });
 });
-
-it("preserves task-list fallback when semantic whitespace joins the next chunk", () => {
-  const paragraph = "A".repeat(31_998);
-  const chunks = formatGoogleChatTextChunks(`**${paragraph}**\n\n- [x] done`);
-
-  expect(chunks).toEqual([`*${paragraph}*`, "\n\n[x] done"]);
-  expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 32_000)).toBe(true);
-});

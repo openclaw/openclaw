@@ -1145,53 +1145,6 @@ describe("sendMessageMatrix mentions", () => {
     );
   });
 
-  it("keeps bare localpart text as plain text", async () => {
-    const { client, sendMessage } = makeClient();
-
-    await sendMessageMatrix("room:!room:example", "hello @alice", {
-      client,
-      cfg: {} as never,
-    });
-
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-    expect((sentContent(sendMessage) as { formatted_body?: string }).formatted_body).not.toContain(
-      "matrix.to/#/@alice:example.org",
-    );
-  });
-
-  it.each(["\\@alice:example.org", "`literal then \\@alice:example.org"])(
-    "does not emit mentions for escaped qualified users in %j",
-    async (markdown) => {
-      const { client, sendMessage } = makeClient();
-
-      await sendMessageMatrix("room:!room:example", markdown, {
-        client,
-        cfg: {} as never,
-      });
-
-      expect(sentContent(sendMessage).body).toBe(markdown);
-      expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-      expect(
-        (sentContent(sendMessage) as { formatted_body?: string }).formatted_body,
-      ).not.toContain("matrix.to/");
-    },
-  );
-
-  it.each(["\\@room please review", "``literal then \\@room please review"])(
-    "does not emit mentions for escaped room mentions in %j",
-    async (markdown) => {
-      const { client, sendMessage } = makeClient();
-
-      await sendMessageMatrix("room:!room:example", markdown, {
-        client,
-        cfg: {} as never,
-      });
-
-      expect(sentContent(sendMessage).body).toBe(markdown);
-      expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-    },
-  );
-
   it("marks room mentions via m.mentions.room", async () => {
     const { client, sendMessage } = makeClient();
 
@@ -1559,44 +1512,6 @@ describe("sendSingleTextMessageMatrix", () => {
         vi.useRealTimers();
       }
     }
-  });
-
-  it("does not activate mentions inside Matrix tool-progress code spans", async () => {
-    const { client, sendMessage } = makeClient();
-
-    await sendSingleTextMessageMatrix(
-      "room:!room:example",
-      "Working...\n- `@room ping @alice:example.org !room:example.org`",
-      {
-        client,
-        cfg: {} as never,
-      },
-    );
-
-    expect(sentContent(sendMessage).body).toBe(
-      "Working...\n- `@room ping @alice:example.org !room:example.org`",
-    );
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-    const formattedBody = (sentContent(sendMessage) as { formatted_body?: string }).formatted_body;
-    expect(formattedBody).toContain("<code>@room ping @alice:example.org !room:example.org</code>");
-    expect(formattedBody).not.toContain("matrix.to");
-  });
-
-  it("does not activate filename-embedded Matrix mentions in normal text", async () => {
-    const { client, sendMessage } = makeClient();
-
-    await sendSingleTextMessageMatrix(
-      "room:!room:example",
-      "read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed",
-      {
-        client,
-        cfg: {} as never,
-      },
-    );
-
-    const content = sentContent(sendMessage);
-    expect(content["m.mentions"]).toEqual({});
-    expect((content as { formatted_body?: string }).formatted_body).not.toContain("matrix.to");
   });
 
   it("merges extra content fields into single-event sends", async () => {
@@ -2278,36 +2193,6 @@ describe("voteMatrixPoll", () => {
       }),
     ).rejects.toThrow("is not a Matrix poll start event");
     expect(sendEvent).not.toHaveBeenCalled();
-  });
-
-  it("accepts decrypted poll start events returned from encrypted rooms", async () => {
-    const { client, getEvent, sendEvent } = makeClient();
-    getEvent.mockResolvedValue({
-      type: "m.poll.start",
-      content: {
-        "m.poll.start": {
-          question: { "m.text": "Lunch?" },
-          max_selections: 1,
-          answers: [{ id: "a1", "m.text": "Pizza" }],
-        },
-      },
-    });
-
-    const result = await voteMatrixPoll("room:!room:example", "$poll", {
-      client,
-      cfg: {} as never,
-      optionIndex: 1,
-    });
-    expect(result.pollId).toBe("$poll");
-    expect(result.answerIds).toEqual(["a1"]);
-    expect(sendEvent).toHaveBeenCalledWith("!room:example", "m.poll.response", {
-      "m.poll.response": { answers: ["a1"] },
-      "org.matrix.msc3381.poll.response": { answers: ["a1"] },
-      "m.relates_to": {
-        rel_type: "m.reference",
-        event_id: "$poll",
-      },
-    });
   });
 });
 

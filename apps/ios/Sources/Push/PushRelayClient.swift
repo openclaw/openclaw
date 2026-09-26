@@ -92,17 +92,16 @@ private struct RelayErrorResponse: Decodable {
     var reason: String?
 }
 
-private struct PushRelayAppAttestProof {
-    var keyId: String
-    var attestationObject: String?
-    var assertion: String
-    var clientDataHash: String
-    var signedPayloadBase64: String
-}
-
 private struct PushRelaySimulatorProofPayload: Encodable {
     var signedPayloadBase64: String
     var hmacSha256Base64Url: String
+}
+
+private func pushRelayBase64URL(_ data: Data) -> String {
+    data.base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
 }
 
 private final class PushRelayAppAttestService {
@@ -110,7 +109,7 @@ private final class PushRelayAppAttestService {
         challenge: String,
         signedPayload: Data,
         scope: PushRelayRegistrationStore.AppAttestScope)
-    async throws -> PushRelayAppAttestProof {
+    async throws -> PushRelayAppAttestPayload {
         let service = DCAppAttestService.shared
         guard service.isSupported else {
             throw PushRelayError.unsupportedAppAttest
@@ -129,11 +128,11 @@ private final class PushRelayAppAttestService {
             signedPayloadHash: signedPayloadHash,
             scope: scope)
 
-        return PushRelayAppAttestProof(
+        return PushRelayAppAttestPayload(
             keyId: keyID,
             attestationObject: attestationObject,
             assertion: assertion.base64EncodedString(),
-            clientDataHash: Self.base64URL(signedPayloadHash),
+            clientDataHash: pushRelayBase64URL(signedPayloadHash),
             signedPayloadBase64: signedPayload.base64EncodedString())
     }
 
@@ -184,13 +183,6 @@ private final class PushRelayAppAttestService {
             throw error
         }
     }
-
-    private static func base64URL(_ data: Data) -> String {
-        data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-    }
 }
 
 private final class PushRelayReceiptProvider {
@@ -230,17 +222,10 @@ private final class PushRelaySimulatorProofProvider {
             using: SymmetricKey(data: Data(secret.utf8)))
         return PushRelaySimulatorProofPayload(
             signedPayloadBase64: signedPayloadBase64,
-            hmacSha256Base64Url: Self.base64URL(Data(signature)))
+            hmacSha256Base64Url: pushRelayBase64URL(Data(signature)))
         #else
         throw PushRelayError.relayMisconfigured("Simulator proof is only available in iOS Simulator")
         #endif
-    }
-
-    private static func base64URL(_ data: Data) -> String {
-        data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
     }
 }
 
@@ -308,7 +293,7 @@ final class PushRelayClient: @unchecked Sendable {
             apnsEnvironment: input.environment.rawValue,
             relayProfile: input.relayProfile.rawValue,
             proofPolicy: input.proofPolicy.rawValue)
-        let appAttest: PushRelayAppAttestProof?
+        let appAttest: PushRelayAppAttestPayload?
         do {
             GatewayDiagnostics.pushRelay.stage("app attest proof start")
             appAttest = try await self.createAppAttestProofIfNeeded(
@@ -352,14 +337,7 @@ final class PushRelayClient: @unchecked Sendable {
             gateway: signedPayload.gateway,
             appVersion: signedPayload.appVersion,
             apnsToken: signedPayload.apnsToken,
-            appAttest: appAttest.map {
-                PushRelayAppAttestPayload(
-                    keyId: $0.keyId,
-                    attestationObject: $0.attestationObject,
-                    assertion: $0.assertion,
-                    clientDataHash: $0.clientDataHash,
-                    signedPayloadBase64: $0.signedPayloadBase64)
-            },
+            appAttest: appAttest,
             receipt: receipt,
             simulatorProof: simulatorProof)
 
@@ -409,7 +387,7 @@ final class PushRelayClient: @unchecked Sendable {
         challenge: String,
         signedPayloadData: Data,
         scope: PushRelayRegistrationStore.AppAttestScope)
-    async throws -> PushRelayAppAttestProof? {
+    async throws -> PushRelayAppAttestPayload? {
         guard proofPolicy != .internalSimulator else { return nil }
         return try await self.appAttest.createProof(
             challenge: challenge,

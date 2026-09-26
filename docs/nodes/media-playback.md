@@ -108,6 +108,17 @@ duration/dimensions for media facts and the Control UI `?meta=1` availability
 probe. Video dimensions account for non-square pixels and quarter-turn display
 rotation; image dimensions account for EXIF orientation. Probing is best-effort:
 a missing or failed probe leaves fields absent instead of rejecting the attachment.
+The Gateway shares concurrent metadata inspections for the same local file and
+reuses successful results while that file is unchanged. Replacing or editing the
+file triggers a fresh inspection; failed probes remain retryable.
+Distinct files wait in a bounded inspection queue. If the queue is full, metadata
+reports temporary unavailability that you can retry, and playback remains
+preparing. Disconnected requests stop waiting, and queued probes with no remaining
+viewers release their queue slots immediately. Queued reads recheck current access
+before opening and probing the file. A busy inspector does not discard outgoing
+attachments; their optional playback metadata can remain absent. Outgoing reply
+creation uses immediate inspection admission and does not wait behind queued
+viewer requests.
 
 Gateway-managed assistant attachments use these per-file caps:
 

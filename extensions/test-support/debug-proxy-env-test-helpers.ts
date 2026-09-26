@@ -33,15 +33,30 @@ export function installDebugProxyTestResetHooks() {
   let priorProxyEnv = originalProxyEnv;
 
   afterEach(async () => {
-    const { closeDebugProxyCaptureStore } = await import("openclaw/plugin-sdk/proxy-capture");
-    const { closeOpenClawStateDatabaseForTest } =
+    const { closeDebugProxyCaptureStore, finalizeDebugProxyCaptureAsync } =
+      await import("openclaw/plugin-sdk/proxy-capture");
+    const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
       await import("openclaw/plugin-sdk/sqlite-runtime-testing");
-    closeDebugProxyCaptureStore();
-    closeOpenClawStateDatabaseForTest();
+    const errors: unknown[] = [];
+    for (const cleanup of [
+      finalizeDebugProxyCaptureAsync,
+      closeDebugProxyCaptureStore,
+      closeOpenClawStateDatabaseAsync,
+      closeOpenClawStateDatabaseForTest,
+    ]) {
+      try {
+        await cleanup();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
     restoreDebugProxyEnv(priorProxyEnv);
     priorProxyEnv = originalProxyEnv;
+    if (errors.length) {
+      throw new AggregateError(errors, "Debug proxy test cleanup failed.");
+    }
   });
 
   return {

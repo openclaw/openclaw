@@ -384,6 +384,13 @@ describe("asynchronous registry restoration", () => {
     );
     const retirementError = new Error("Synthetic task publication admission retired");
     const context = captureOpenClawStateWorkerContext();
+    const admission = context.admission;
+    context.admission = {
+      ...admission,
+      get identity() {
+        return admission.identity;
+      },
+    };
     const observed: string[] = [];
     let loads = 0;
     configureTaskFlowRegistryRuntime({

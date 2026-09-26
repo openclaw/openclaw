@@ -120,6 +120,28 @@ describe("scripts/pr prepare mode preflight", () => {
         '#!/bin/sh\nprintf "%s\\n" "$*" >> "$PR_TEST_GH_CALLS"\nexit 99\n',
       );
       chmodSync(join(bin, "gh"), 0o755);
+      for (const args of [
+        ["prepare-push", "123", "--resume-crabbox-run"],
+        ["prepare-push", "123", "--resume-crabbox-run", "0"],
+        ["prepare-push", "123", "--resume-crabbox-run", "01"],
+        ["prepare-push", "123", "--resume-crabbox-run", "9007199254740992"],
+        ["prepare-push", "123", "--resume-crabbox-run", "99", "extra"],
+        ["prepare-push", "123", "--run-id", "run_fake"],
+        ["ci-dispatch", "123", "--backend", "crabbox", "--pending-gates"],
+      ]) {
+        const result = spawnSync(join(root, "scripts/pr"), args, {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...env, PR_TEST_GH_CALLS: ghCalls },
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(2);
+        expect(existsSync(ghCalls)).toBe(false);
+        expect(readFileSync(evidence, "utf8")).toBe("previous exact-head proof\n");
+        expect(readdirSync(evidenceRoot)).toEqual(originalArtifacts);
+        expect(git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks")).toBe(
+          "",
+        );
+      }
       for (const command of ["prepare-run", "prepare-gates", "prepare-push"]) {
         for (const scenario of [
           {

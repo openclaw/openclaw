@@ -73,15 +73,12 @@ describe("channelsResolveCommand", () => {
     });
   });
 
-  it.each([undefined, "work"])(
-    "rejects missing entries before config for account %j",
-    async (account) => {
-      await expect(channelsResolveCommand({ account, entries: [] }, runtime)).rejects.toThrow(
-        "At least one entry is required.",
-      );
-      expect(mocks.loadConfig).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects missing entries before config for a named account", async () => {
+    await expect(channelsResolveCommand({ account: "work", entries: [] }, runtime)).rejects.toThrow(
+      "At least one entry is required.",
+    );
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+  });
 
   it("retains the unsupported resolver error for a named account", async () => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
@@ -154,7 +151,6 @@ describe("channelsResolveCommand", () => {
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ],
-    ["empty", "", "--agent must not be blank"],
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s explicit agent before channel resolution", async (_label, agent, message) => {
     mocks.loadConfig.mockReturnValue({

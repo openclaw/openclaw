@@ -5,8 +5,10 @@ import {
   createStartAccountContext,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setZaloRuntime, type OpenClawConfig, type PluginRuntime } from "../runtime-api.js";
+import { setZaloRuntime } from "../runtime-api.js";
 import { resolveZaloAccount } from "./accounts.js";
 import { zaloPlugin } from "./channel.js";
 

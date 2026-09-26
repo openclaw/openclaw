@@ -32,6 +32,7 @@ export function collectReclamationChangedSessionKeys(
     case "maintenance-finalize":
       return result.value.committedEntries.map(({ sessionKey }) => sessionKey);
     case "maintenance-preservation-required":
+    case "maintenance-plan-stale":
     case "maintenance-statistics":
       return [];
     default:
