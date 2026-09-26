@@ -197,6 +197,48 @@ function limitPartialUserTranscript(text: string): string {
   return tail.replace(/^\S+\s+/, "").trimStart() || tail.trimStart();
 }
 
+function compactTranscriptText(value: string): string {
+  return value.toLowerCase().replaceAll(/\s/g, "");
+}
+
+/**
+ * Return only the part of an incoming caller transcript that was not already
+ * committed by an earlier incremental caller turn. Used at connection close so
+ * the provider's single end-of-call flush cannot duplicate committed turns.
+ * On any divergence it returns the whole incoming text (over-keep, never drop).
+ */
+function stripCommittedCallerPrefix(committed: string | undefined, incoming: string): string {
+  const source = normalizeTranscriptText(incoming);
+  if (!source) {
+    return "";
+  }
+  const compactCommitted = compactTranscriptText(committed ?? "");
+  if (!compactCommitted) {
+    return source;
+  }
+  let compact = "";
+  const indexByCompact: number[] = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source.charAt(index);
+    if (/\s/.test(character)) {
+      continue;
+    }
+    compact += character.toLowerCase();
+    indexByCompact.push(index);
+  }
+  if (!compact) {
+    return "";
+  }
+  if (compactCommitted.includes(compact)) {
+    return "";
+  }
+  if (compact.startsWith(compactCommitted)) {
+    const position = indexByCompact[compactCommitted.length];
+    return position === undefined ? "" : source.slice(position).trim();
+  }
+  return source;
+}
+
 function withFallbackConsultQuestion(args: unknown, fallback: string | undefined): unknown {
   const providerQuestion = readConsultQuestionText(args);
   const question = fallback?.trim();
@@ -388,6 +430,7 @@ export class RealtimeCallHandler {
   private readonly activeBridgesByCallId = new Map<string, ActiveRealtimeVoiceBridge>();
   private readonly activeTelephonyBindingsByCallId = new Map<string, RealtimeTelephonyBinding>();
   private readonly userTranscriptStatesByCallId = new Map<string, UserTranscriptState>();
+  private readonly callerTurnCommitsByCallId = new Map<string, string>();
   private readonly forcedConsultsByCallId = new Map<string, ForcedConsultState>();
   private readonly consultSessionsByCallId = new Map<string, RealtimeConsultSession>();
   private readonly nativeConsultsInFlightByCallId = new Map<string, NativeConsultState>();
@@ -1174,9 +1217,12 @@ export class RealtimeCallHandler {
             final: text,
           });
           this.clearPartialUserTranscript(callId, userTranscriptOwner);
-          this.setRecentFinalUserTranscript(callId, userTranscriptOwner, transcript);
+          const committedCallerText = this.callerTurnCommitsByCallId.get(callId) ?? "";
+          this.callerTurnCommitsByCallId.delete(callId);
+          const residualTranscript = stripCommittedCallerPrefix(committedCallerText, transcript);
+          this.setRecentFinalUserTranscript(callId, userTranscriptOwner, residualTranscript);
           console.log(
-            `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=true chars=${text.trim().length} aggregateChars=${transcript.length}`,
+            `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=true chars=${text.trim().length} aggregateChars=${transcript.length} residualChars=${residualTranscript.length}`,
           );
           const event: NormalizedEvent = {
             id: `realtime-speech-${callSid}-${randomUUID()}`,
@@ -1184,12 +1230,13 @@ export class RealtimeCallHandler {
             callId,
             providerCallId: callSid,
             timestamp: Date.now(),
-            transcript,
+            transcript: residualTranscript,
             isFinal: true,
           };
           const generation = continuityGeneration;
           transcriptPersistence = this.manager.processEvent(event).then(() => {
             if (
+              !residualTranscript ||
               handlesAgentConsult ||
               sessionClosed ||
               generation !== continuityGeneration ||
@@ -1203,7 +1250,7 @@ export class RealtimeCallHandler {
               session,
               callId,
               callSid,
-              transcript,
+              transcript: residualTranscript,
               userTranscriptOwner,
               clearAudio: () => {
                 const clearedBytes = audioPacer.clearAudio();
@@ -1216,14 +1263,34 @@ export class RealtimeCallHandler {
           void transcriptPersistence.catch(reportTranscriptFailure);
           return;
         }
-        transcriptPersistence = this.manager
-          .processEvent({
-            id: `realtime-bot-${callSid}-${randomUUID()}`,
-            type: "call.assistant-speech",
-            callId,
-            providerCallId: callSid,
-            timestamp: Date.now(),
-            transcript: text,
+        const pendingCallerTurn = this.takeCallerTurnCommitText(callId, userTranscriptOwner);
+        // Settle any earlier rejection before chaining this independent event, so one failed
+        // write cannot skip every later caller/assistant write for the rest of the call.
+        transcriptPersistence = transcriptPersistence
+          .catch(reportTranscriptFailure)
+          .then(async () => {
+            if (pendingCallerTurn) {
+              await this.manager.processEvent({
+                id: `realtime-caller-turn-${callSid}-${randomUUID()}`,
+                type: "call.speech",
+                callId,
+                providerCallId: callSid,
+                timestamp: Date.now(),
+                transcript: pendingCallerTurn,
+                isFinal: true,
+              });
+              // Only mark committed after the write succeeds; a failed write leaves the text
+              // available to the provider's end-of-call flush instead of dropping it.
+              this.recordCommittedCallerTurn(callId, pendingCallerTurn);
+            }
+            await this.manager.processEvent({
+              id: `realtime-bot-${callSid}-${randomUUID()}`,
+              type: "call.assistant-speech",
+              callId,
+              providerCallId: callSid,
+              timestamp: Date.now(),
+              transcript: text,
+            });
           })
           .then(() => {});
         void transcriptPersistence.catch(reportTranscriptFailure);
@@ -1357,6 +1424,7 @@ export class RealtimeCallHandler {
         if (ownsCallState) {
           void closeBinding(telephonyBinding, reason);
         }
+        this.callerTurnCommitsByCallId.delete(callId);
         this.streamDisconnectLifecycle.retire(callSid, streamSid);
         if (ws.readyState === WebSocket.OPEN) {
           ws.close(reason === "error" ? 1011 : 1000, "Bridge disconnected");
@@ -1690,6 +1758,35 @@ export class RealtimeCallHandler {
   private resetUserTranscriptState(callId: string, owner: UserTranscriptState): void {
     this.clearPartialUserTranscript(callId, owner);
     this.clearRecentFinalUserTranscript(callId, owner);
+  }
+
+  /**
+   * Take the caller's pending partial turn text to persist as a committed caller
+   * entry, subtracting it from the live partial buffer. The committed-caller
+   * ledger (used for end-of-call dedupe) is advanced only once the write
+   * succeeds, via {@link recordCommittedCallerTurn}.
+   */
+  private takeCallerTurnCommitText(callId: string, owner: UserTranscriptState): string | undefined {
+    const state = this.getUserTranscriptState(callId, owner);
+    const pending = normalizeTranscriptText(state?.partial ?? "");
+    if (!pending) {
+      return undefined;
+    }
+    if (state?.partial) {
+      this.consumePartialUserTranscript(callId, owner, state.partial);
+    }
+    return pending;
+  }
+
+  /**
+   * Fold a caller turn into the per-call committed-caller ledger. Turns are
+   * concatenated verbatim rather than overlap-deduplicated: a caller may repeat
+   * the same short phrase ("yes", "yes") and both turns must remain, otherwise
+   * the end-of-call flush would re-append the second phrase as a duplicate.
+   */
+  private recordCommittedCallerTurn(callId: string, text: string): void {
+    const committed = this.callerTurnCommitsByCallId.get(callId) ?? "";
+    this.callerTurnCommitsByCallId.set(callId, committed ? `${committed} ${text}` : text);
   }
 
   private clearUserTranscriptState(callId: string, owner: UserTranscriptState): void {

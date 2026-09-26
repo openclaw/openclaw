@@ -119,7 +119,7 @@ describe("RealtimeCallHandler transcript disposal", () => {
       expect(new Set(events.map((event) => event.id)).size).toBe(4);
     } finally {
       ws.terminate();
-      await handler.close();
+      await handler.close().catch(() => undefined);
       await server.close();
     }
   });
@@ -200,6 +200,120 @@ describe("RealtimeCallHandler transcript disposal", () => {
       await closing?.catch(() => undefined);
       ws.terminate();
       await handler.close();
+      await server.close();
+    }
+  });
+
+  it("preserves repeated caller turns and does not duplicate them at end-of-call", async () => {
+    let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
+    const { call, handler, processEvent } = createCarrierLifecycleHarness((request) => {
+      callbacks = request;
+      return createBridge(() => {});
+    });
+    const { server, ws } = await connectCarrierStream(handler);
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-repeat-turn", callSid: call.providerCallId },
+        }),
+      );
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      callbacks?.onTranscript?.("user", "yes", false);
+      callbacks?.onTranscript?.("assistant", "First reply", true);
+      callbacks?.onTranscript?.("user", "yes", false);
+      callbacks?.onTranscript?.("assistant", "Second reply", true);
+      await vi.waitFor(() => {
+        expect(
+          processEvent.mock.calls.filter(([event]) => event.type === "call.assistant-speech"),
+        ).toHaveLength(2);
+      });
+      callbacks?.onTranscript?.("user", "yes yes", true);
+      await vi.waitFor(() => {
+        expect(
+          processEvent.mock.calls.filter(([event]) => event.type === "call.speech"),
+        ).toHaveLength(3);
+      });
+      const events = processEvent.mock.calls.map(([event]) => event);
+      expect(
+        events.filter((event) => event.type === "call.speech").map((event) => event.transcript),
+      ).toEqual(["yes", "yes", ""]);
+      expect(
+        events
+          .filter((event) => event.type === "call.assistant-speech")
+          .map((event) => event.transcript),
+      ).toEqual(["First reply", "Second reply"]);
+    } finally {
+      ws.terminate();
+      await handler.close().catch(() => undefined);
+      await server.close();
+    }
+  });
+
+  it("keeps persisting later turns after one transcript write fails", async () => {
+    let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
+    const { call, handler, processEvent } = createCarrierLifecycleHarness((request) => {
+      callbacks = request;
+      return createBridge(() => {});
+    });
+    const { server, ws } = await connectCarrierStream(handler);
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-recover-write", callSid: call.providerCallId },
+        }),
+      );
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      processEvent.mockRejectedValueOnce(new Error("transcript write failed"));
+      callbacks?.onTranscript?.("assistant", "First reply", true);
+      callbacks?.onTranscript?.("assistant", "Second reply", true);
+      await vi.waitFor(() => {
+        const assistantTurns = processEvent.mock.calls
+          .filter(([event]) => event.type === "call.assistant-speech")
+          .map(([event]) => event.transcript);
+        expect(assistantTurns).toEqual(["First reply", "Second reply"]);
+      });
+    } finally {
+      ws.terminate();
+      await handler.close().catch(() => undefined);
+      await server.close();
+    }
+  });
+
+  it("keeps caller speech for the end-of-call flush when its turn write fails", async () => {
+    let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
+    const { call, handler, processEvent } = createCarrierLifecycleHarness((request) => {
+      callbacks = request;
+      return createBridge(() => {});
+    });
+    const { server, ws } = await connectCarrierStream(handler);
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-failed-turn", callSid: call.providerCallId },
+        }),
+      );
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      processEvent.mockRejectedValueOnce(new Error("caller turn write failed"));
+      callbacks?.onTranscript?.("user", "hello", false);
+      callbacks?.onTranscript?.("assistant", "Hi", true);
+      await vi.waitFor(() => expect(processEvent).toHaveBeenCalled());
+      callbacks?.onTranscript?.("user", "hello", true);
+      await vi.waitFor(() => {
+        expect(
+          processEvent.mock.calls.filter(([event]) => event.type === "call.speech"),
+        ).toHaveLength(2);
+      });
+      expect(
+        processEvent.mock.calls
+          .filter(([event]) => event.type === "call.speech")
+          .map(([event]) => event.transcript),
+      ).toEqual(["hello", "hello"]);
+    } finally {
+      ws.terminate();
+      await handler.close().catch(() => undefined);
       await server.close();
     }
   });
