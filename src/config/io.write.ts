@@ -260,19 +260,22 @@ export async function writeConfigFileFromContext(
   // write authored (so saved blanks elsewhere can be migrated). Without any
   // path metadata the whole write is treated as authoring and every blank is
   // preserved for strict validation; returning undefined triggers that mode.
-  const resolveExplicitSet = (): ReadonlySet<string> | undefined => {
-    const paths = options.explicitSetPaths ?? [];
-    if (paths.length === 0) {
-      return undefined;
-    }
-    return new Set([
-      ...paths.map((p) => p.filter((s) => s.length > 0).join(".")),
+  // The write migration's preserve set: paths the current write explicitly set
+  // (plus the canonical entries form of an explicit agents.list edit). Saved
+  // blanks elsewhere are migrated using the pre-write source config, so a
+  // blank restored from the authored roster never blocks an unrelated write.
+  const resolveExplicitSet = (): ReadonlySet<string> =>
+    new Set([
+      ...(options.explicitSetPaths ?? []).map((p) => p.filter((s) => s.length > 0).join(".")),
       // Canonical roster prep converts an explicit agents.list.N.<field> edit
       // into agents.entries.<id>.<field>; keep the converted path so a
       // converted blank the current write explicitly set stays preserved.
-      ...remapLegacyListExplicitPaths(paths, nextConfig),
+      ...remapLegacyListExplicitPaths(options.explicitSetPaths, nextConfig),
     ]);
-  };
+  // Pre-write source config still carrying any saved blank (include-expanded,
+  // before load migrations remove them). The write migration uses it to tell a
+  // saved blank (migrate) from a newly authored one (preserve for validation).
+  const savedSourceForWrite = snapshot.sourceConfigBeforeMigrations ?? snapshot.parsed;
   const resolveValidationCandidate = (candidate: unknown) => {
     // Validate removals now; apply them once to the final authored output after materialization.
     const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
@@ -285,8 +288,11 @@ export async function writeConfigFileFromContext(
     // restoreAuthoredAgentRoster / include expansion) must not block an
     // unrelated settings change: migrate it unless the current write itself
     // sets that path (new blank authoring keeps the strict field error).
-    return migrateBlankAgentWorkspaceForWrite(preflight as OpenClawConfig, resolveExplicitSet())
-      .config;
+    return migrateBlankAgentWorkspaceForWrite(
+      preflight as OpenClawConfig,
+      resolveExplicitSet(),
+      savedSourceForWrite,
+    ).config;
   };
   const validationCandidate = resolveValidationCandidate(persistCandidate);
   const validateCandidate = (candidate: unknown) => {
@@ -335,6 +341,7 @@ export async function writeConfigFileFromContext(
   persistCandidate = migrateBlankAgentWorkspaceForWrite(
     persistCandidate as OpenClawConfig,
     resolveExplicitSet(),
+    savedSourceForWrite,
   ).config;
 
   let cfgToWrite = persistCandidate as OpenClawConfig;

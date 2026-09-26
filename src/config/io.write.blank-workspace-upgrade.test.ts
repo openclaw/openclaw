@@ -156,4 +156,35 @@ describe("newly authored blank agent workspace is still rejected", () => {
     expect(message).toContain("workspace");
     expect(message).toContain("blank");
   });
+
+  it("a full write without explicit path metadata migrates a saved blank workspace instead of rejecting it", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "proof-150929-write-saved-nopaths-"));
+    // The saved config carries a historically accepted blank workspace.
+    fs.writeFileSync(
+      path.join(root, "openclaw.json"),
+      JSON.stringify({
+        agents: { entries: { alpha: { workspace: " " } } },
+        gateway: { mode: "local", port: 18799, auth: { mode: "none" } },
+      }),
+    );
+    const ctx = makeContext(root);
+    const base = await readConfigFileSnapshotInternal(ctx, {});
+    const next = JSON.parse(JSON.stringify(base.snapshot.config)) as {
+      agents: { entries: Record<string, { workspace?: string }> };
+      gateway: { port?: number };
+    };
+    // An unrelated full-config write (no explicitSetPaths) must not be blocked
+    // by the restored saved blank: the migration sees it is saved (present in
+    // the pre-write source) and removes it, so the write succeeds.
+    next.gateway.port = 18800;
+    let threw = false;
+    try {
+      await writeConfigFileFromContext(ctx, next, {}, async () => base);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    const persisted = fs.readFileSync(path.join(root, "openclaw.json"), "utf-8");
+    expect(persisted).not.toContain('"workspace"');
+  });
 });
