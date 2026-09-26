@@ -574,7 +574,7 @@ if(fs.existsSync(owner.staging.root))throw new Error('explicit recovery retained
     withFixture(async (f) => {
       const result = await f.program(`${seedMirror}
 const protectedRoot=join(ctx.root,'protected');fs.mkdirSync(join(protectedRoot,'mirrors'),{recursive:true,mode:0o700});
-for(let i=0;i<8;i++)fs.mkdirSync(join(protectedRoot,'mirrors',String(i).padStart(64,'0')),{mode:0o700});
+for(let i=0;i<32;i++)fs.mkdirSync(join(protectedRoot,'mirrors',String(i).padStart(64,'0')),{mode:0o700});
 const refused=createMirrorStaging(protectedRoot,ctx.repository)===undefined;
 const namespaceVictim=join(ctx.root,'namespace-victim');fs.mkdirSync(namespaceVictim,{mode:0o700});
 fs.writeFileSync(join(namespaceVictim,'sentinel'),'preserve victim');
@@ -589,7 +589,7 @@ for(const kind of ['symlink','file']){
 if(fs.readFileSync(join(ctx.root,'namespace-file','mirrors'),'utf8')!=='preserve replacement')throw new Error('replacement namespace changed');
 const old=[];
 const corruptMetadata='artifacts-'+'0'.repeat(64)+'.json';
-for(let i=0;i<9;i++){
+for(let i=0;i<33;i++){
   const repo=join(ctx.root,'repo-'+i);fs.mkdirSync(repo);
   const init=cp.spawnSync('git',['-C',repo,'init','--quiet','--template=']);if(init.status!==0)throw new Error('git init failed');
   const owner=createMirrorStaging(ctx.staging,repo);seed(owner);owner.finish();old.push(owner.staging.root);
@@ -597,15 +597,15 @@ for(let i=0;i<9;i++){
   receipt.mirror.lastUsed=i;fs.writeFileSync(receiptPath,JSON.stringify(receipt));
   if(i===0)fs.writeFileSync(join(owner.staging.root,corruptMetadata),'malformed recovery metadata');
 }
-console.log(JSON.stringify({refused,namespaceFallback,namespaceVictimPreserved:fs.readdirSync(namespaceVictim).length===1&&fs.readFileSync(join(namespaceVictim,'sentinel'),'utf8')==='preserve victim',protectedSlots:fs.readdirSync(join(protectedRoot,'mirrors')).filter(name=>name!=='.allocation.lock').length,slots:fs.readdirSync(join(ctx.staging,'mirrors')).filter(name=>name!=='.allocation.lock').length,surviving:old.filter(path=>fs.existsSync(path)).length,newest:fs.existsSync(old[8]),corruptRetained:fs.readFileSync(join(old[0],corruptMetadata),'utf8')==='malformed recovery metadata',healthyVictimRemoved:!fs.existsSync(old[1])}));`);
+console.log(JSON.stringify({refused,namespaceFallback,namespaceVictimPreserved:fs.readdirSync(namespaceVictim).length===1&&fs.readFileSync(join(namespaceVictim,'sentinel'),'utf8')==='preserve victim',protectedSlots:fs.readdirSync(join(protectedRoot,'mirrors')).filter(name=>name!=='.allocation.lock').length,slots:fs.readdirSync(join(ctx.staging,'mirrors')).filter(name=>name!=='.allocation.lock').length,surviving:old.filter(path=>fs.existsSync(path)).length,newest:fs.existsSync(old[32]),corruptRetained:fs.readFileSync(join(old[0],corruptMetadata),'utf8')==='malformed recovery metadata',healthyVictimRemoved:!fs.existsSync(old[1])}));`);
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({
         refused: true,
         namespaceFallback: [true, true],
         namespaceVictimPreserved: true,
-        protectedSlots: 8,
-        slots: 8,
-        surviving: 8,
+        protectedSlots: 32,
+        slots: 32,
+        surviving: 32,
         newest: true,
         corruptRetained: true,
         healthyVictimRemoved: true,

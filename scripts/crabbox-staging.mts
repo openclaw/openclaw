@@ -564,7 +564,7 @@ function stagingHandle(root: string, initialReceipt: Receipt, recorded: boolean)
   };
 }
 
-const mirrorLimit = 8;
+const mirrorLimit = 32;
 const mirrorDatabase = "mirror.sqlite";
 
 function privateMirrorDirectory(path: string) {

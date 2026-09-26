@@ -206,7 +206,7 @@ Private mirrors disable Git hooks and fsmonitor; source enumeration also disable
 fsmonitor in mirror mode. Other active Git callbacks retain the preparation hold
 and cannot make a reusable cache. Ordinary fresh-capsule behavior is unchanged.
 
-The sync root admits at most eight mirror slots. Allocation evicts the least
+The sync root admits at most 32 mirror slots. Allocation evicts the least
 recently used idle mirror; active, corrupt-ownership, or interrupted slots remain
 protected and count toward the limit. If no slot can be safely reclaimed, the run
 uses ordinary fresh staging. `staging inspect` identifies idle mirrors, and
