@@ -80,6 +80,7 @@ import {
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import { registerChatSendPayloadLimitTests } from "./chat-send-payload-limits.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
@@ -1279,6 +1280,7 @@ function installPairClientPresentationCommand() {
 }
 
 describe("handleSendChat", () => {
+  registerChatSendPayloadLimitTests({ row, idleChatHistory });
   beforeEach(() => {
     vi.stubGlobal("sessionStorage", createStorageMock());
   });
@@ -6222,79 +6224,6 @@ describe("handleSendChat", () => {
       expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" }),
     ]);
     expect(host.chatMessages).toStrictEqual([]);
-  });
-
-  it("keeps an acknowledged live send pending while durable history is briefly stale", async () => {
-    let historyRequests = 0;
-    let runId: string | undefined;
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.history": () => {
-          historyRequests += 1;
-          return Promise.resolve({
-            messages:
-              historyRequests > 2
-                ? [{ role: "user", __openclaw: { idempotencyKey: `${runId}:user` } }]
-                : [],
-            sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-          });
-        },
-        "chat.send": (params: unknown) => {
-          const payload = requireRecord(params, "live send payload");
-          runId = String(payload.idempotencyKey);
-          return Promise.resolve({ runId, status: "started" });
-        },
-      },
-    });
-
-    await handleSendChat(host, "history will catch up");
-    expect(host.chatQueue).toEqual([
-      expect.objectContaining({ sendState: "sending", text: "history will catch up" }),
-    ]);
-    expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue).toEqual([
-      expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" }),
-    ]);
-
-    host.chatRunId = null;
-    await flushChatQueueForEvent(host);
-
-    expect(host.chatQueue[0]?.sendState).toBe("sending");
-    expect(host.lastError).toBeNull();
-    await flushChatQueueForEvent(host);
-    expect(historyRequests).toBeGreaterThanOrEqual(3);
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.lastError).toBeNull();
-  });
-
-  it("keeps an acknowledged live send pending while its connection stays current", async () => {
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.history": () => idleChatHistory(),
-        "chat.send": (params: unknown) => {
-          const payload = requireRecord(params, "live send payload");
-          const runId = String(payload.idempotencyKey);
-          return Promise.resolve({ runId, status: "started" });
-        },
-      },
-    });
-
-    await handleSendChat(host, "history never catches up");
-    host.chatRunId = null;
-    await flushChatQueueForEvent(host);
-
-    expect(host.chatQueue[0]?.sendState).toBe("sending");
-    expect(host.lastError).toBeNull();
-
-    now += 5_001;
-    await flushChatQueueForEvent(host);
-
-    expect(host.chatQueue[0]).toMatchObject({
-      sendState: "sending",
-      text: "history never catches up",
-    });
-    expect(host.lastError).toBeNull();
   });
 
   it("coalesces duplicate queued local commands while the first command is running", async () => {

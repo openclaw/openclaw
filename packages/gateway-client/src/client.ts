@@ -230,7 +230,6 @@ export type GatewayClientConnectionMetadata = {
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
 const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
-
 function resolveLegacyNodePlatform(platform: string): string | undefined {
   switch (platform) {
     case "macos":
