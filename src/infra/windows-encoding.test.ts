@@ -135,6 +135,29 @@ describe("windows output encoding", () => {
     expect(queryWindowsRegistryValueMock).not.toHaveBeenCalled();
   });
 
+  it("resolves and decodes CP866 console output on Russian Windows", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    spawnSyncMock.mockReturnValue({
+      output: [null, "Текущая кодовая страница: 866\r\n", ""],
+      pid: 1,
+      signal: null,
+      status: 0,
+      stderr: "",
+      stdout: "Текущая кодовая страница: 866\r\n",
+    });
+    vi.resetModules();
+    const { decodeWindowsOutputBuffer: decodeOutput, resolveWindowsConsoleEncoding } =
+      await import("./windows-encoding.js");
+
+    expect(resolveWindowsConsoleEncoding()).toBe("cp866");
+    expect(
+      decodeOutput({
+        buffer: Buffer.from([0x82, 0xe5, 0xae, 0xa4]),
+        platform: "win32",
+      }),
+    ).toBe("Вход");
+  });
+
   it("bounds and caches failed Windows encoding probes", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     spawnSyncMock.mockReturnValue({
