@@ -617,8 +617,8 @@ function resolveSourceScopePath(databasePath: string): string {
 
 /** Only a live process-local exclusion owner may copy its already-drained source. */
 export function hasStateDatabaseSourceExclusion(databasePath: string): boolean {
-  const pathname = resolveSourceScopePath(databasePath);
-  const scope = sourceReadScopes.getStore()?.get(pathname);
+  const scopes = sourceReadScopes.getStore();
+  const scope = scopes?.get(resolveSourceScopePath(databasePath));
   if (!scope?.active) {
     return false;
   }
@@ -630,8 +630,12 @@ export function hasStateDatabaseSourceExclusion(databasePath: string): boolean {
 export function prepareStateDatabaseSourceExclusion(
   databasePath: string,
 ): (() => void) | undefined {
+  const scopes = sourceReadScopes.getStore();
+  if (!scopes) {
+    return undefined;
+  }
   const pathname = resolveSourceScopePath(databasePath);
-  const scope = sourceReadScopes.getStore()?.get(pathname);
+  const scope = scopes.get(pathname);
   if (!scope) {
     return undefined;
   }

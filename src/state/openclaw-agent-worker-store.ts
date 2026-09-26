@@ -5,7 +5,6 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
-import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -88,7 +87,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
           nativeLocation: prepared.filename,
         }
       : undefined;
-  const identity = expectedIdentity ? `file:${expectedIdentity.physicalIdentity}` : undefined;
   const moduleUrl = new URL(worker.moduleUrl).href;
   const input = structuredClone(worker.input);
   const state = captureOpenClawStateDatabaseReadAdmission(
@@ -118,9 +116,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
       !isOpenClawAgentDatabasePathCurrent(current)
     ) {
       throw new Error("Borrowed agent database closed or changed before Worker admission");
-    }
-    if (identity) {
-      assertExistingDatabaseIdentity(options.path, identity);
     }
   };
   assertHeld();
