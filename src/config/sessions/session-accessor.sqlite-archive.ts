@@ -116,6 +116,8 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
           threadId,
           isMainThread,
           workerThreadId,
+          // Without the store path a multi-second reclamation cannot be attributed (#157686).
+          database: params.workerData.plan.databaseOptions.path,
           reclamationKind: params.diagnostics?.kind ?? params.workerData.plan.kind,
           elapsedMs,
           outcome,
