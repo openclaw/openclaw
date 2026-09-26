@@ -73,9 +73,7 @@ describe("Agents API event submission retries", () => {
         queueResponse(Response.json({ id: "session-fixture", status: "idle" }));
       }
       await submit();
-      const next = requests()
-        .filter((request) => request.method === "POST")
-        .at(-1)!;
+      const next = requests().findLast((request) => request.method === "POST")!;
       expect(next.headers.get("Idempotency-Key")).not.toBe(key);
     },
   );
