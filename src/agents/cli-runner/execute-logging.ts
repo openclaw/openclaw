@@ -62,6 +62,11 @@ export const CLAUDE_SELECTED_AUTH_ENV_KEYS = new Set([
 export const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set([
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+  // Re-injected per run from OpenClaw's effective thinking level. Without these
+  // the paired node falls back to Claude Code's own effort resolution, so
+  // `/think off` would silently revert on the node host.
+  "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
+  "MAX_THINKING_TOKENS",
 ]);
 export function resolveNodeClaudeAuthEnv(context: PreparedCliRunContext): Record<string, string> {
   const secretInput = context.preparedBackend.secretInput;
