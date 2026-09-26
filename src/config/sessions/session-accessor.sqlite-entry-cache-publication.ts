@@ -16,6 +16,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache-state.js";
 import {
   createSessionEntryCreationOperation,
+  projectSessionSharingEntry,
   type SessionEntryCacheDatabase,
   type SessionEntryCreationOperation,
   type SessionEntryPlaceholder,
@@ -296,19 +297,6 @@ export function publishSessionEntryPlaceholderInsertion(
   emitPreparedSessionSharingChange(database, sessionKey, database.agentId, undefined, receipt);
 }
 
-export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingEntry {
-  return {
-    sessionId: entry.sessionId,
-    updatedAt: entry.updatedAt,
-    lifecycleRevision: entry.lifecycleRevision,
-    archivedAt: entry.archivedAt,
-    visibility: entry.visibility,
-    incognito: entry.incognito,
-    createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
-    sandbox: entry.sandbox,
-  };
-}
-
 /** The existing entry writer advances retained facts before any commit observer can reenter. */
 export function retainPreparedSessionSharingFacts(params: {
   databaseIdentity: string;
@@ -403,7 +391,7 @@ function retainedSharingReads(database: SessionEntryCacheDatabase, sessionKey: s
     : undefined;
 }
 // Process-held stores cannot be reopened in a worker. Their existing writer publishes
-// only sharing fields, bounded by live entries and the native database's lifetime.
+// content-free metadata, bounded by live entries and the native database's lifetime.
 const incognitoSharingEntries = resolveGlobalSingleton(
   Symbol.for("openclaw.incognitoSessionSharingEntries"),
   () =>
