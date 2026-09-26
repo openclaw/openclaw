@@ -9,29 +9,16 @@ export type CliOutboundSendSource = {
   [channelId: string]: unknown;
 };
 
-function normalizeLegacyChannelStem(raw: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(
-    raw
-      .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-      .replace(/_/g, "-")
-      .trim(),
-  );
-  return normalized.replace(/-/g, "");
-}
-
 function resolveChannelIdFromLegacySourceKey(key: string): string | undefined {
   const match = key.match(/^sendMessage(.+)$/);
   if (!match) {
     return undefined;
   }
-  const normalizedStem = normalizeLegacyChannelStem(match[1] ?? "");
+  const normalizedStem = normalizeLowercaseStringOrEmpty(match[1]).replace(/[-_]/g, "");
   return normalizedStem || undefined;
 }
 
-/**
- * Pass CLI send sources through as-is — both CliOutboundSendSource and
- * OutboundSendDeps are now channel-ID-keyed records.
- */
+/** Preserve explicit dependencies while filling channel and legacy aliases. */
 export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource): OutboundSendDeps {
   const outbound: OutboundSendDeps = { ...deps };
 

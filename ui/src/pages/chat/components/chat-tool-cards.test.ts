@@ -9,7 +9,8 @@ import {
   formatCollapsedToolSummaryText,
   resolveCollapsedToolArgumentPreview,
 } from "../../../lib/chat/tool-cards.ts";
-import { renderToolCard, renderToolPreview } from "./chat-tool-cards.ts";
+import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolPreview } from "./widget-card.ts";
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,

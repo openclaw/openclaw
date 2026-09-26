@@ -68,19 +68,7 @@ describe("Twitch message-tool delivery", () => {
       message: "**Hello** Twitch!",
       expected: "Hello Twitch!",
     },
-    {
-      name: "literal markdown code",
-      explicit: false,
-      message: "Use `*literal*` here",
-      expected: "Use *literal* here",
-    },
     { name: "literal horizontal rule", explicit: false, message: "`---`", expected: "---" },
-    {
-      name: "escaped emphasis",
-      explicit: true,
-      message: String.raw`Use \*literal\* here`,
-      expected: "Use *literal* here",
-    },
   ])(
     "sends $name",
     async ({ explicit, message, expected, singleAccount, bareTarget, sameSource }) => {

@@ -20,7 +20,7 @@ import {
   mergeModelRefMapEntries,
   rewriteModelRefs,
 } from "./legacy-config-migrations.runtime.models.refs.js";
-import { hasOwnKey, isRecord } from "./legacy-config-record-shared.js";
+import { isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 import {
   modelEntryWithRuntimePolicy,
@@ -201,7 +201,7 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
         const nextAccount = { ...rawAccount };
         let accountChanged = false;
         for (const key of inheritedPolicyKeys) {
-          if (hasOwnKey(nextAccount, key)) {
+          if (Object.hasOwn(nextAccount, key)) {
             continue;
           }
           const value = rawChannel[key];
@@ -818,24 +818,44 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
   };
 }
 
+function normalizeModelProviders(
+  cfg: OpenClawConfig,
+  normalize: (provider: Record<string, unknown>, providerId: string) => Record<string, unknown>,
+): OpenClawConfig {
+  const providers = cfg.models?.providers;
+  if (!isRecord(providers)) {
+    return cfg;
+  }
+  let nextProviders: Record<string, unknown> | undefined;
+  for (const [providerId, provider] of Object.entries(providers)) {
+    if (!isRecord(provider)) {
+      continue;
+    }
+    const next = normalize(provider, providerId);
+    if (next !== provider) {
+      (nextProviders ??= { ...providers })[providerId] = next;
+    }
+  }
+  return nextProviders
+    ? {
+        ...cfg,
+        models: {
+          ...cfg.models,
+          providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
+        },
+      }
+    : cfg;
+}
+
 /** Rename legacy OpenAI API identifiers to the current completion/chat API ids. */
 export function normalizeLegacyOpenAIModelProviderApi(
   cfg: OpenClawConfig,
   changes: string[],
 ): OpenClawConfig {
-  const rawModels = cfg.models;
-  if (!isRecord(rawModels) || !isRecord(rawModels.providers)) {
+  if (!isRecord(cfg.models)) {
     return cfg;
   }
-
-  const rawProviders: Record<string, unknown> = rawModels.providers;
-  let providersChanged = false;
-  const nextProviders: Record<string, unknown> = { ...rawProviders };
-  for (const [providerId, rawProvider] of Object.entries(rawProviders)) {
-    if (!isRecord(rawProvider)) {
-      continue;
-    }
-
+  return normalizeModelProviders(cfg, (rawProvider, providerId) => {
     let providerChanged = false;
     const nextProvider: Record<string, unknown> = { ...rawProvider };
     if (nextProvider.api === "openai") {
@@ -870,24 +890,8 @@ export function normalizeLegacyOpenAIModelProviderApi(
       }
     }
 
-    if (!providerChanged) {
-      continue;
-    }
-    nextProviders[providerId] = nextProvider;
-    providersChanged = true;
-  }
-
-  if (!providersChanged) {
-    return cfg;
-  }
-
-  return {
-    ...cfg,
-    models: {
-      ...rawModels,
-      providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
-    },
-  };
+    return providerChanged ? nextProvider : rawProvider;
+  });
 }
 
 /** Remove retired bundled nano-banana skill config after migrating image generation models. */
@@ -1012,16 +1016,12 @@ export function normalizeLegacyNanoBananaSkill(
     skills.entries = entries;
   }
   changes.push(`Removed legacy skills.entries.${NANO_BANANA_SKILL_KEY}.`);
-  skillsChanged = true;
 
   if (Object.keys(skills).length === 0) {
     const { skills: _ignored, ...rest } = next;
     return rest;
   }
 
-  if (!skillsChanged) {
-    return next;
-  }
   return {
     ...next,
     skills,
@@ -1081,7 +1081,7 @@ function isNativeOllamaModelConfig(
 
 function hasConfiguredOllamaProviderNumCtx(provider: Record<string, unknown>): boolean {
   const rawParams = provider.params;
-  return isRecord(rawParams) && hasOwnKey(rawParams, "num_ctx");
+  return isRecord(rawParams) && Object.hasOwn(rawParams, "num_ctx");
 }
 
 function applyLegacyOllamaProviderNumCtxParams(params: {
@@ -1097,7 +1097,7 @@ function applyLegacyOllamaProviderNumCtxParams(params: {
   if (rawParams !== undefined && !isRecord(rawParams)) {
     return { provider: params.provider, changed: false };
   }
-  if (rawParams && hasOwnKey(rawParams, "num_ctx")) {
+  if (rawParams && Object.hasOwn(rawParams, "num_ctx")) {
     return { provider: params.provider, changed: false };
   }
 
@@ -1123,21 +1123,10 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
   cfg: OpenClawConfig,
   changes: string[],
 ): OpenClawConfig {
-  const rawProviders = cfg.models?.providers;
-  if (!isRecord(rawProviders)) {
-    return cfg;
-  }
-
-  let providersChanged = false;
-  const nextProviders = { ...rawProviders };
-  type ProviderConfigMap = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
-  for (const [providerId, rawProvider] of Object.entries(rawProviders)) {
-    if (!isRecord(rawProvider)) {
-      continue;
-    }
+  return normalizeModelProviders(cfg, (rawProvider, providerId) => {
     const rawModels = rawProvider.models;
     if (!Array.isArray(rawModels)) {
-      continue;
+      return rawProvider;
     }
     // A new provider-wide pin would also override current caps, including API-overridden rows.
     // Migrate uncapped native siblings individually while keeping authored provider pins intact.
@@ -1152,12 +1141,7 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       isNativeOllamaProviderConfig(providerParams.provider) &&
       hasConfiguredOllamaProviderNumCtx(providerParams.provider);
     if (rawModels.length === 0) {
-      if (!providerParams.changed) {
-        continue;
-      }
-      nextProviders[providerId] = providerParams.provider as ProviderConfigMap[string];
-      providersChanged = true;
-      continue;
+      return providerParams.provider;
     }
 
     let modelsChanged = false;
@@ -1173,7 +1157,7 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       if (rawParams !== undefined && !isRecord(rawParams)) {
         return model;
       }
-      if (rawParams && hasOwnKey(rawParams, "num_ctx")) {
+      if (rawParams && Object.hasOwn(rawParams, "num_ctx")) {
         return model;
       }
 
@@ -1195,28 +1179,10 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       });
     });
 
-    if (!modelsChanged && !providerParams.changed) {
-      continue;
-    }
-
-    nextProviders[providerId] = {
-      ...providerParams.provider,
-      models: nextModels,
-    } as ProviderConfigMap[string];
-    providersChanged = true;
-  }
-
-  if (!providersChanged) {
-    return cfg;
-  }
-
-  return {
-    ...cfg,
-    models: {
-      ...cfg.models,
-      providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
-    },
-  };
+    return modelsChanged || providerParams.changed
+      ? { ...providerParams.provider, models: nextModels }
+      : rawProvider;
+  });
 }
 
 const MISTRAL_MODEL_CACHE_READ_COST_BY_ID: Record<string, number> = {
@@ -1264,20 +1230,13 @@ export function normalizeLegacyMistralModelDefaults(
   cfg: OpenClawConfig,
   changes: string[],
 ): OpenClawConfig {
-  const rawProviders = cfg.models?.providers;
-  if (!isRecord(rawProviders)) {
-    return cfg;
-  }
-
-  let providersChanged = false;
-  const nextProviders = { ...rawProviders };
-  for (const [providerId, rawProvider] of Object.entries(rawProviders)) {
-    if (normalizeProviderId(providerId) !== "mistral" || !isRecord(rawProvider)) {
-      continue;
+  return normalizeModelProviders(cfg, (rawProvider, providerId) => {
+    if (normalizeProviderId(providerId) !== "mistral") {
+      return rawProvider;
     }
     const rawModels = rawProvider.models;
     if (!Array.isArray(rawModels)) {
-      continue;
+      return rawProvider;
     }
 
     let modelsChanged = false;
@@ -1335,27 +1294,7 @@ export function normalizeLegacyMistralModelDefaults(
       return modelChanged ? nextModel : model;
     });
 
-    if (!modelsChanged) {
-      continue;
-    }
-
-    nextProviders[providerId] = {
-      ...rawProvider,
-      models: nextModels,
-    };
-    providersChanged = true;
-  }
-
-  if (!providersChanged) {
-    return cfg;
-  }
-
-  return {
-    ...cfg,
-    models: {
-      ...cfg.models,
-      providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
-    },
-  };
+    return modelsChanged ? { ...rawProvider, models: nextModels } : rawProvider;
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

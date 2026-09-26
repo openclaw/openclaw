@@ -13,13 +13,14 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type MockInstance,
 } from "vitest";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { extractToolResultMediaArtifact } from "../agents/embedded-agent-tool-media.js";
-import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -47,10 +48,18 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createFixture,
+  createManagedOutgoingImageBlocks,
+  createPngDataUrl,
+  expectPathMissing,
   prepareAgentSessionStore,
   prepareManagedSessionStore as seedManagedSessionStore,
+  replaceTestSessionEntry,
+  requireAttachmentIdFromUrl,
+  requireBlock,
   requireManagedOriginalPath,
+  TINY_PNG_BASE64,
   usePreparedManagedImageState,
+  type RequestResult,
 } from "./managed-image-attachments.test-support.js";
 import {
   attachManagedImageRecordToMessage,
@@ -63,11 +72,8 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 type PlaybackTranscodeResolution = Awaited<
   ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
 >;
-type PlaybackModeForSourceResolver = (
-  ...args: Parameters<
-    (typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]
-  >
-) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
+type PlaybackMetadataForSourceResolver =
+  (typeof import("../media/playback-transcode.js"))["resolvePlaybackMetadataForSource"];
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
 const resolveSharedSecretHttpOperatorScopesMock = vi.fn();
@@ -75,8 +81,7 @@ const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
-const probePlaybackMediaFileDescriptorMock = vi.fn(async () => ({ durationMs: 1000 }));
-const resolvePlaybackModeForSourceMock = vi.fn<PlaybackModeForSourceResolver>();
+const resolvePlaybackMetadataForSourceMock = vi.fn<PlaybackMetadataForSourceResolver>();
 const resolvePlaybackTranscodeMock = vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({
   kind: "passthrough",
 }));
@@ -110,10 +115,10 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  resolvePlaybackModeForSourceMock.mockReset();
-  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
-    mimeType === "audio/x-caf" ? "transcode" : "native",
-  );
+  resolvePlaybackMetadataForSourceMock.mockReset();
+  resolvePlaybackMetadataForSourceMock.mockImplementation(async ({ mimeType }) => ({
+    playback: mimeType === "audio/x-caf" ? "transcode" : "native",
+  }));
 });
 
 vi.mock("../config/config.js", () => ({
@@ -142,18 +147,14 @@ vi.mock("./session-transcript-readers.js", () => ({
   }),
 }));
 
-vi.mock("../media/media-probe.js", () => ({
-  probePlaybackMediaFileDescriptor: probePlaybackMediaFileDescriptorMock,
-}));
-
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
-  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
-    mimeType === "audio/x-caf" ? "transcode" : "native",
-  );
+  resolvePlaybackMetadataForSourceMock.mockImplementation(async ({ mimeType }) => ({
+    playback: mimeType === "audio/x-caf" ? "transcode" : "native",
+  }));
   return {
     ...actual,
-    resolvePlaybackModeForSource: resolvePlaybackModeForSourceMock,
+    resolvePlaybackMetadataForSource: resolvePlaybackMetadataForSourceMock,
     resolvePlaybackTranscode: resolvePlaybackTranscodeMock,
   };
 });
@@ -163,8 +164,8 @@ const {
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
   MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX,
   attachManagedOutgoingMediaToMessage: attachManagedOutgoingImagesToMessage,
-  cleanupManagedOutgoingMediaRecords: cleanupManagedOutgoingImageRecords,
   createManagedOutgoingMediaBlocks: createManagedOutgoingImageBlocksActual,
+  cleanupManagedOutgoingMediaRecords: cleanupManagedOutgoingImageRecords,
   handleManagedOutgoingMediaHttpRequest: handleManagedOutgoingImageHttpRequest,
   prepareOutgoingMediaFromReplyPayload,
   readManagedOutgoingImageThumbnail,
@@ -172,100 +173,7 @@ const {
   resolveManagedImageAttachmentLimits,
 } = await import("./managed-image-attachments.js");
 const { bindHttpResponseAuthority } = await import("./http-request-authority.js");
-
-type ManagedOutgoingImageTestParams = Omit<
-  Parameters<typeof createManagedOutgoingImageBlocksActual>[0],
-  "items"
-> & {
-  mediaUrls?: string[] | null;
-  attachments?: ReplyMediaAttachment[] | null;
-  allowLocalNonImage?: boolean;
-};
-
-function createManagedOutgoingImageBlocks(params: ManagedOutgoingImageTestParams) {
-  const { mediaUrls, attachments, allowLocalNonImage, ...ownerParams } = params;
-  return createManagedOutgoingImageBlocksActual({
-    ...ownerParams,
-    items: (mediaUrls ?? []).map((url, index) => {
-      const attachment = attachments?.[index];
-      return Object.assign(
-        { url, trustedLocal: allowLocalNonImage === true },
-        typeof attachment?.name === "string" ? { filename: attachment.name } : {},
-        typeof attachment?.mimeType === "string" ? { mimeType: attachment.mimeType } : {},
-        typeof attachment?.durationMs === "number" ? { durationMs: attachment.durationMs } : {},
-        typeof attachment?.width === "number" ? { width: attachment.width } : {},
-        typeof attachment?.height === "number" ? { height: attachment.height } : {},
-      );
-    }),
-  });
-}
-
-async function replaceTestSessionEntry(
-  scope: {
-    agentId: string;
-    env: NodeJS.ProcessEnv;
-    sessionKey: string;
-    storePath?: string;
-  },
-  entry: { sessionId: string; updatedAt: number },
-): Promise<void> {
-  const { replaceSessionEntrySync } = await import("../config/sessions/session-accessor.js");
-  // Fixture seeding does not need the async entry writer's background maintenance.
-  replaceSessionEntrySync(scope, entry);
-}
-
-type RequestResult = {
-  statusCode: number;
-  headers: http.IncomingHttpHeaders;
-  body: Buffer;
-};
-
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=";
-
-async function createPngDataUrl(width: number, height: number): Promise<string> {
-  const buffer = createSolidPngBuffer(width, height, { r: 24, g: 64, b: 128 });
-  return `data:image/png;base64,${buffer.toString("base64")}`;
-}
-
-function requireAttachmentIdFromUrl(url: unknown): string {
-  expect(url).toBeTypeOf("string");
-  const attachmentId = String(url).split("/").at(-2);
-  if (!attachmentId) {
-    throw new Error(`expected attachment id in URL ${String(url)}`);
-  }
-  return attachmentId;
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.access(targetPath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected ${targetPath} to be missing`);
-}
-
-type ManagedImageBlock = {
-  type?: string;
-  artifactId?: string;
-  alt?: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  url?: string;
-  openUrl?: string;
-  fileName?: string;
-  playback?: "native" | "transcode";
-};
-
-function requireBlock(blocks: unknown[], index = 0): ManagedImageBlock {
-  const block = blocks[index];
-  if (!block) {
-    throw new Error(`expected block ${index}`);
-  }
-  return block as ManagedImageBlock;
-}
+const { PlaybackInspectionBusyError } = await import("../media/playback-transcode.js");
 
 async function prepareManagedSessionStore(stateDir: string): Promise<void> {
   const store = await seedManagedSessionStore(stateDir);
@@ -1468,20 +1376,29 @@ describe("createManagedOutgoingImageBlocks", () => {
     },
   );
 
-  it.each([
-    { kind: "audio" as const, contentType: "audio/mpeg", fileName: "theme.mp3" },
-    { kind: "video" as const, contentType: "video/mp4", fileName: "clip.mp4" },
-  ])(
-    "creates managed $kind blocks with media artifact ids",
-    async ({ kind, contentType, fileName }) => {
+  it.each(
+    [
+      { kind: "audio" as const, contentType: "audio/mpeg", fileName: "theme.mp3" },
+      { kind: "video" as const, contentType: "video/mp4", fileName: "clip.mp4" },
+    ].flatMap((fixture) =>
+      ["available", "busy"].map((inspection) => Object.assign({}, fixture, { inspection })),
+    ),
+  )(
+    "creates managed $kind blocks and retains originals when inspection is $inspection",
+    async ({ kind, contentType, fileName, inspection }) => {
       const sourcePath = path.join(stateDir, "workspace", fileName);
       await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-      await fs.writeFile(
-        sourcePath,
+      const original =
         kind === "audio"
           ? Buffer.from([0xff, 0xfb, 0x90, 0x00])
-          : Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]),
-      );
+          : Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+      await fs.writeFile(sourcePath, original);
+      if (inspection === "busy") {
+        resolvePlaybackMetadataForSourceMock.mockRejectedValueOnce(
+          new PlaybackInspectionBusyError(),
+        );
+      }
+      const onPrepareError = vi.fn();
 
       const blocks = await createManagedOutgoingImageBlocks({
         sessionKey: "agent:main:main",
@@ -1489,23 +1406,32 @@ describe("createManagedOutgoingImageBlocks", () => {
         stateDir,
         localRoots: [path.join(stateDir, "workspace")],
         allowLocalNonImage: true,
+        continueOnPrepareError: true,
+        onPrepareError,
       });
 
+      expect(onPrepareError).not.toHaveBeenCalled();
       expect(blocks).toHaveLength(1);
       const block = requireBlock(blocks);
       expect(block).toMatchObject({
         type: kind,
         mimeType: contentType,
         fileName,
-        playback: "native",
       });
+      expect(block.playback).toBe(inspection === "busy" ? undefined : "native");
       const attachmentId = requireAttachmentIdFromUrl(block.url);
       expect(block.artifactId).toBe(`${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`);
-      expect((await readManagedImageRecord(attachmentId, stateDir))?.original).toMatchObject({
+      const record = await readManagedImageRecord(attachmentId, stateDir);
+      if (!record) {
+        throw new Error("Expected a persisted managed media record");
+      }
+      expect(record.original).toMatchObject({
         contentType,
         width: null,
         height: null,
       });
+      const { mediaRoot, mediaSubdir, mediaId } = record.original;
+      expect(await fs.readFile(path.join(mediaRoot, mediaSubdir, mediaId))).toEqual(original);
     },
   );
 
@@ -1651,11 +1577,74 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
   });
 
+  it("publishes managed media while both inspection slots remain occupied", async () => {
+    const actual = await vi.importActual<typeof import("../media/playback-transcode.js")>(
+      "../media/playback-transcode.js",
+    );
+    resolvePlaybackMetadataForSourceMock.mockImplementation(
+      actual.resolvePlaybackMetadataForSource,
+    );
+    const mediaProbe = await import("../media/media-probe.js");
+    const entered = createDeferred();
+    const release = createDeferred();
+    let started = 0;
+    const probe = vi
+      .spyOn(mediaProbe, "probePlaybackMediaFileDescriptor")
+      .mockImplementation(async () => {
+        if (++started === 2) {
+          entered.resolve();
+        }
+        await release.promise;
+        return { durationMs: 1000, audioCodec: "mp3", audioStreamIndex: 0 };
+      });
+    const abort = new AbortController();
+    const pending: Promise<unknown>[] = [];
+    onTestFinished(async () => {
+      abort.abort();
+      release.resolve();
+      await Promise.allSettled(pending);
+      probe.mockRestore();
+    });
+    for (const name of ["held-a.mp3", "held-b.mp3"]) {
+      const filePath = path.join(stateDir, name);
+      await fs.writeFile(filePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+      const sourcePath = await fs.realpath(filePath);
+      pending.push(
+        actual.resolvePlaybackMetadataForSource({
+          sourcePath,
+          sourceStat: await fs.stat(sourcePath),
+          mimeType: "audio/mpeg",
+          kind: "audio",
+        }),
+      );
+    }
+    await entered.promise;
+    const onPrepareError = vi.fn();
+    const creation = createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: ["data:audio/mpeg;base64,//uQAA=="],
+      stateDir,
+      abortSignal: abort.signal,
+      continueOnPrepareError: true,
+      onPrepareError,
+    });
+    pending.push(creation);
+    const blocks = await creation;
+    expect(onPrepareError).not.toHaveBeenCalled();
+    expect(blocks).toHaveLength(1);
+    const block = requireBlock(blocks);
+    expect(block).toMatchObject({ type: "audio", mimeType: "audio/mpeg" });
+    expect(
+      await readManagedImageRecord(requireAttachmentIdFromUrl(block.url), stateDir),
+    ).not.toBeNull();
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
   it("returns a visible failure without publishing a record when playback inspection fails", async () => {
     const sourcePath = path.join(stateDir, "workspace", "voice.mp3");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-    resolvePlaybackModeForSourceMock.mockRejectedValueOnce(
+    resolvePlaybackMetadataForSourceMock.mockRejectedValueOnce(
       new Error("synthetic playback inspection failure"),
     );
 

@@ -5252,7 +5252,7 @@ describe("runCodexAppServerAttempt", () => {
             errors: [],
           },
         ],
-      } satisfies v2.SkillsListResponse;
+      } satisfies import("./protocol-control-plane.js").CodexSkillsListResponse;
     });
     params.explicitSkillSelections = [{ name: "release-command", path: skillPath }];
 

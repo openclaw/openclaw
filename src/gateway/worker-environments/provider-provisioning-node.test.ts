@@ -819,7 +819,7 @@ describe("node worker provider provisioning", () => {
         },
       });
     });
-    seedActivePlacement(placements, {
+    await seedActivePlacement(placements, {
       environmentId: result.environmentId,
       ownerEpoch: attachedCredential.ownerEpoch,
     });

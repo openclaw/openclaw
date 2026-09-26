@@ -13,6 +13,7 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
@@ -21,6 +22,46 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import { selectProfileDisplayEntries } from "./user-profiles-internal.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
+
+it("captures queued read routing and schema facts without reading unrelated environment values", async () => {
+  const { root, pathname } = source();
+  let unrelatedReads = 0;
+  const env: NodeJS.ProcessEnv = {
+    OPENCLAW_STATE_DIR: root,
+    OPENCLAW_SUPERVISOR_MODE: " EXTERNAL ",
+    get UNRELATED_INITIALIZATION_VALUE() {
+      unrelatedReads += 1;
+      return "synthetic initializer input";
+    },
+  };
+  const dispatch = createDeferredCore();
+  const task = queueTask(dispatch.promise);
+  const result = withExistingOpenClawStateSchema({ path: pathname }, () =>
+    executeExistingOpenClawStateRead({ path: pathname, env }, { type: "fleet.list" }),
+  );
+  try {
+    await task.submitted;
+    env.OPENCLAW_STATE_DIR = path.join(root, "changed-after-capture");
+    env.OPENCLAW_SUPERVISOR_MODE = "internal";
+    dispatch.resolve();
+    const request = await task.captured;
+    expect(request.context.environment).toEqual({
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_SUPERVISOR_MODE: "external",
+    });
+    expect(request.context.existingSchemaPath).toBe(pathname);
+    // Windows captures case-insensitive environment semantics before selecting these facts.
+    if (process.platform !== "win32") {
+      expect(unrelatedReads).toBe(0);
+    }
+    task.result.resolve(emptyReply);
+    await expect(result).resolves.toEqual(emptyReply);
+  } finally {
+    dispatch.resolve();
+    task.result.resolve(emptyReply);
+    await Promise.allSettled([result]);
+  }
+});
 
 it("retains the shared pool after a resource drain fails until canonical retry", async () => {
   const { options } = source();
@@ -672,6 +713,13 @@ it.each(["single", "union"] as const)(
   async (shape) => {
     const { options } = source();
     const context = captureOpenClawStateWorkerContext(options);
+    const admission = context.admission;
+    context.admission = {
+      ...admission,
+      get identity() {
+        return admission.identity;
+      },
+    };
     const selector = "任务🦞".repeat(512);
     const scope = {
       taskId: selector,

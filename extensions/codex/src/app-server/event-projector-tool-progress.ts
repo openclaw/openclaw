@@ -406,10 +406,6 @@ export class CodexToolProgressProjection {
     this.emitTranscriptToolCallProgress(params);
   }
 
-  recordTranscriptResult(params: ToolTranscriptResultInput): void {
-    this.emitTranscriptToolResultProgress(params);
-  }
-
   matchesEcho(text: string): boolean {
     for (const state of this.echoesByItem.values()) {
       if (state.streamedDisplayText === text || state.displayTexts.includes(text)) {
@@ -520,7 +516,7 @@ export class CodexToolProgressProjection {
     });
   }
 
-  private emitTranscriptToolResultProgress(params: ToolTranscriptResultInput): void {
+  recordTranscriptResult(params: ToolTranscriptResultInput): void {
     if (
       (params.name === "progress_card" && !params.isError) ||
       this.transcriptProgressSuppressedIds.has(params.id) ||

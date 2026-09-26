@@ -127,7 +127,11 @@ export function insertPane(
   return next;
 }
 
-export function closePane(layout: ChatSplitLayout, paneId: string): ChatSplitLayout | undefined {
+export function closePane(
+  layout: ChatSplitLayout,
+  paneId: string,
+  keepSinglePaneIds?: ReadonlySet<string>,
+): ChatSplitLayout | undefined {
   const location = findPane(layout, paneId);
   if (!location) {
     return cloneLayout(layout);
@@ -154,7 +158,9 @@ export function closePane(layout: ChatSplitLayout, paneId: string): ChatSplitLay
   } else {
     column.paneWeights = normalizeSplitLayoutWeights(column.paneWeights);
   }
-  if (panesOf(next).length <= 1) {
+  const remaining = panesOf(next);
+  // An ownerless saved alias cannot fall back to the page's last confirmed route.
+  if (remaining.length <= 1 && !keepSinglePaneIds?.has(remaining[0]?.id ?? "")) {
     return undefined;
   }
   next.columnWeights = normalizeSplitLayoutWeights(next.columnWeights);

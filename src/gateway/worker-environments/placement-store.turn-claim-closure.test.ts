@@ -69,7 +69,7 @@ function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-
 }
 
 it("rejects an unbounded claim wait when its signal is already aborted", async () => {
-  const active = advanceToActive();
+  const active = await advanceToActive();
   const claim = await store.claimTurn({
     ...SESSION,
     owner: placementTurnOwner(active),
@@ -91,7 +91,7 @@ it.each([
 ] as const)(
   "projects $executionMode workspace reconciliation at its owned boundary",
   async (scenario) => {
-    const active = advanceToActive(scenario.executionMode);
+    const active = await advanceToActive(scenario.executionMode);
     const claim = await store.claimTurn({
       ...SESSION,
       owner: placementTurnOwner(active),
@@ -131,7 +131,7 @@ it.each([
 );
 
 it("keeps placement and result facts in one snapshot across a peer commit", async () => {
-  const active = advanceToActive();
+  const active = await advanceToActive();
   const claim = await store.claimTurn({
     ...SESSION,
     owner: placementTurnOwner(active),
@@ -216,7 +216,7 @@ it("keeps placement and result facts in one snapshot across a peer commit", asyn
 });
 
 it("rejects invalid placement fields when reading projection facts", async () => {
-  const active = advanceToActive();
+  const active = await advanceToActive();
   database.db
     .prepare("UPDATE worker_session_placements SET worker_bundle_hash = ' ' WHERE session_id = ?")
     .run(active.sessionId);
@@ -227,7 +227,7 @@ it("rejects invalid placement fields when reading projection facts", async () =>
 });
 
 async function bindFinishingOwner() {
-  const active = advanceToActive();
+  const active = await advanceToActive();
   const claim = await store.claimTurn({
     ...SESSION,
     owner: placementTurnOwner(active),
@@ -396,7 +396,7 @@ it.each([
 it("emits exact worker claim closure after release and owner fencing", async () => {
   const closed = vi.fn();
   const unregister = store.registerTurnClaimClosedHandler(closed);
-  const active = advanceToActive();
+  const active = await advanceToActive();
   const owner = {
     kind: "worker" as const,
     environmentId: active.environmentId,
@@ -440,7 +440,7 @@ it.each([
 ] as const)("fences the exact $ownerKind claim when reconciliation starts", async (scenario) => {
   const closed = vi.fn();
   const unregister = store.registerTurnClaimClosedHandler(closed);
-  const active = advanceToActive(scenario.executionMode);
+  const active = await advanceToActive(scenario.executionMode);
   const claim = await store.claimTurn({
     ...SESSION,
     owner: placementTurnOwner(active),
@@ -496,7 +496,7 @@ it.each([
 });
 
 it("rejects retained worker lineage capabilities after either owner closes", async () => {
-  const active = advanceToActive();
+  const active = await advanceToActive();
   const owner = {
     kind: "worker" as const,
     environmentId: active.environmentId,
@@ -584,7 +584,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
 });
 
 it("lets an unaudited admitted worker complete the exact turn that closes its owners", async () => {
-  const active = advanceToActive();
+  const active = await advanceToActive();
   const claim = await store.claimTurn({
     ...SESSION,
     claimId: "claim-terminal-continuation",
@@ -653,7 +653,7 @@ it.each([
 ] as const)(
   "prepares worker transcript publication only for its live owner: %s",
   async (scenario) => {
-    const active = advanceToActive();
+    const active = await advanceToActive();
     const claim = await store.claimTurn({
       ...SESSION,
       owner: placementTurnOwner(active),

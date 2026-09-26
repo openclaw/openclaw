@@ -85,9 +85,9 @@ enum WideAreaGatewayDiscovery {
                 lanHost: txt["lanHost"],
                 tailnetDns: txt["tailnetDns"],
                 gatewayPort: parseInt(txt["gatewayPort"]),
-                gatewayTls: parseBool(txt["gatewayTls"]),
-                gatewayDirectReachable: parseBool(txt["gatewayDirectReachable"]),
-                sshPort: parseInt(txt["sshPort"]),
+                gatewayTls: GatewayDiscoveryText.txtBoolValue(txt, key: "gatewayTls"),
+                gatewayDirectReachable: GatewayDiscoveryText.txtBoolValue(txt, key: "gatewayDirectReachable"),
+                sshPort: self.parseInt(txt["sshPort"]),
                 cliPath: txt["cliPath"])
             beacons.append(beacon)
         }
@@ -112,10 +112,8 @@ enum WideAreaGatewayDiscovery {
 
         var seen = Set<String>()
         return ips.filter { value in
-            guard self.isTailnetIPv4(value) else { return false }
-            if seen.contains(value) { return false }
-            seen.insert(value)
-            return true
+            guard TailscaleNetwork.isTailnetIPv4(value) else { return false }
+            return seen.insert(value).inserted
         }
     }
 
@@ -127,19 +125,17 @@ enum WideAreaGatewayDiscovery {
             "tailscale",
         ]
 
-        var output: String?
         for candidate in candidates {
             if let result = await BoundedCommand.run(
                 path: candidate,
                 arguments: ["status", "--json"],
                 timeout: 0.7)
             {
-                output = result
-                break
+                return result
             }
         }
 
-        return output
+        return nil
     }
 
     private static func loadWideAreaPtrRecords(
@@ -219,22 +215,6 @@ enum WideAreaGatewayDiscovery {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return Int(trimmed)
-    }
-
-    private static func parseBool(_ value: String?) -> Bool {
-        guard let value else { return false }
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized == "1" || normalized == "true" || normalized == "yes"
-    }
-
-    private static func isTailnetIPv4(_ value: String) -> Bool {
-        let parts = value.split(separator: ".")
-        if parts.count != 4 { return false }
-        let octets = parts.compactMap { Int($0) }
-        if octets.count != 4 { return false }
-        let a = octets[0]
-        let b = octets[1]
-        return a == 100 && b >= 64 && b <= 127
     }
 
     private static func decodeDnsSdEscapes(_ value: String) -> String {

@@ -39,7 +39,7 @@ it("prepares current placement facts off the host thread and retries failed refr
     };
     replaceSessionEntrySync(identity, { sessionId: identity.sessionId, updatedAt: 1 });
     const placements = createWorkerSessionPlacementStore();
-    placements.startDispatch(identity);
+    await placements.startDispatch(identity);
     const options = {
       cfg: {
         agents: {
@@ -150,7 +150,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       profileId: "desktop",
       nodeDeviceId: "row-device",
     });
-    let placement = placements.startDispatch(identity);
+    let placement = await placements.startDispatch(identity);
     for (const step of [
       { to: "provisioning", patch: { environmentId: "row-environment" } },
       { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },

@@ -7,7 +7,7 @@ type PermitWaiter = {
 /**
  * FIFO admission with caller-owned lifetime. Cancellation/deadlines only stop
  * waiting: an acquired permit stays held until its idempotent release is called.
- * A null result means admission was aborted or its deadline elapsed.
+ * acquire returns null on cancellation/expiry; tryAcquire returns null when busy.
  */
 export function createPermitPool(limit: number) {
   let active = 0;
@@ -37,7 +37,13 @@ export function createPermitPool(limit: number) {
     };
   };
 
+  const tryAcquire = (): PermitRelease | null => (active < limit ? createRelease() : null);
+
   return {
+    get pendingCount(): number {
+      return waiters.length;
+    },
+    tryAcquire,
     async acquire({
       signal,
       deadlineAtMs,
@@ -47,8 +53,9 @@ export function createPermitPool(limit: number) {
       if (expired()) {
         return null;
       }
-      if (active < limit) {
-        return createRelease();
+      const releasePermit = tryAcquire();
+      if (releasePermit) {
+        return releasePermit;
       }
       return await new Promise<PermitRelease | null>((resolve) => {
         let settled = false;

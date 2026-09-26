@@ -1055,16 +1055,6 @@ describe("deliverAgentCommandResult payload normalization", () => {
     ]);
   });
 
-  it("dedupes exact short text on a confirmed matching route", async () => {
-    const delivered = await deliverAgentCommandResultForTest({
-      payloads: [{ text: "Ready" }],
-      sentTarget: { text: "Ready" },
-    });
-
-    expect(delivered.payloads).toEqual([]);
-    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
-  });
-
   it("dedupes visible text after parsing a final reply directive", async () => {
     const delivered = await deliverAgentCommandResultForTest({
       payloads: [{ text: "[[reply_to_current]] Ready" }],

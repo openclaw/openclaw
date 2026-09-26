@@ -6,8 +6,14 @@ import type {
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 
-const { probeClaudeCliAuthStatus } = vi.hoisted(() => ({
+const { probeClaudeCliAuthStatus, runUtf8CommandWithTimeout } = vi.hoisted(() => ({
   probeClaudeCliAuthStatus: vi.fn(),
+  runUtf8CommandWithTimeout: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importActual) => ({
+  ...(await importActual<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runUtf8CommandWithTimeout,
 }));
 
 vi.mock("./cli-auth-seam.js", async (importActual) => {
@@ -26,11 +32,13 @@ const { default: anthropicPlugin } = await import("./index.js");
 
 beforeEach(() => {
   probeClaudeCliAuthStatus.mockReset();
+  runUtf8CommandWithTimeout.mockReset();
   vi.unstubAllEnvs();
 });
 
 afterAll(() => {
   vi.doUnmock("./cli-auth-seam.js");
+  vi.doUnmock("openclaw/plugin-sdk/process-runtime");
   vi.resetModules();
 });
 
@@ -545,19 +553,43 @@ describe("anthropic cli migration", () => {
     },
   );
 
-  it("probes auth with the Claude runtime command and setup environment", async () => {
-    probeClaudeCliAuthStatus.mockReturnValue({ status: "available" });
-    const method = await resolveAnthropicCliAuthMethod();
-    const ctx = createProviderAuthContext();
-    ctx.env = { CLAUDE_CONFIG_DIR: "/tmp/claude-work" };
+  it.each(["setup", "gateway"] as const)(
+    "probes the %s native login without forwarding inherited provider credentials",
+    async (source) => {
+      const actual =
+        await vi.importActual<typeof import("./cli-auth-seam.js")>("./cli-auth-seam.js");
+      probeClaudeCliAuthStatus.mockImplementation(actual.probeClaudeCliAuthStatus);
+      runUtf8CommandWithTimeout.mockResolvedValue({
+        code: 0,
+        termination: "exit",
+        stdout: JSON.stringify({ loggedIn: true }),
+      });
+      vi.stubEnv("CLAUDE_CONFIG_DIR", "/tmp/gateway-claude-work");
+      vi.stubEnv("ANTHROPIC_API_KEY", "synthetic-gateway-key");
+      vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "synthetic-gateway-token");
+      const method = await resolveAnthropicCliAuthMethod();
+      if (source === "setup") {
+        const ctx = createProviderAuthContext();
+        ctx.env = {
+          CLAUDE_CONFIG_DIR: "/tmp/claude-work",
+          ANTHROPIC_API_KEY: "synthetic-setup-key",
+          CLAUDE_CODE_OAUTH_TOKEN: "synthetic-setup-token",
+        };
+        await method.run(ctx);
+      } else {
+        await method.runNonInteractive!(createProviderAuthMethodNonInteractiveContext());
+      }
 
-    await method.run(ctx);
-
-    expect(probeClaudeCliAuthStatus).toHaveBeenCalledWith({
-      command: "claude",
-      env: { CLAUDE_CONFIG_DIR: "/tmp/claude-work" },
-    });
-  });
+      expect(runUtf8CommandWithTimeout).toHaveBeenCalledTimes(1);
+      const [command, options] = runUtf8CommandWithTimeout.mock.calls[0]!;
+      expect(command).toEqual(["claude", "auth", "status", "--json"]);
+      expect(options.baseEnv.CLAUDE_CONFIG_DIR).toBe(
+        source === "setup" ? "/tmp/claude-work" : "/tmp/gateway-claude-work",
+      );
+      expect(options.baseEnv.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(options.baseEnv.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    },
+  );
 
   it("does not copy native Claude credentials into OpenClaw", () => {
     const result = buildAnthropicCliMigrationResult({});
@@ -609,19 +641,6 @@ describe("anthropic cli migration", () => {
       agentRuntime: { id: "claude-cli" },
     });
     expect(defaults?.models?.["openai/gpt-5.2"]).toEqual({});
-  });
-
-  it("uses the Gateway Claude config directory for non-interactive auth probes", async () => {
-    vi.stubEnv("CLAUDE_CONFIG_DIR", "/tmp/gateway-claude-work");
-    probeClaudeCliAuthStatus.mockReturnValue({ status: "available" });
-    const method = await resolveAnthropicCliAuthMethod();
-
-    await method.runNonInteractive?.(createProviderAuthMethodNonInteractiveContext());
-
-    expect(probeClaudeCliAuthStatus).toHaveBeenCalledWith({
-      command: "claude",
-      env: expect.objectContaining({ CLAUDE_CONFIG_DIR: "/tmp/gateway-claude-work" }),
-    });
   });
 
   it("registered non-interactive cli auth reports missing local auth and exits cleanly", async () => {

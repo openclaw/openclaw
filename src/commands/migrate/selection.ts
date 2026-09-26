@@ -1,12 +1,13 @@
 /** Selection helpers for filtering migration plan items before apply. */
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { markMigrationItemSkipped, summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
+import { applyMigrationItemSelection } from "./item-selection.js";
 import { MIGRATION_CONFLICT_REASON_PHRASES } from "./output.js";
+import type { MigrateCommonOptions } from "./types.js";
 
 // Selection tokens are shared with the command and prompt implementations.
 const MIGRATION_NOT_SELECTED_REASON = "not selected for migration";
@@ -20,45 +21,19 @@ function normalizeSelectionRef(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function readMigrationSkillName(item: MigrationItem): string | undefined {
-  return normalizeOptionalString(item.details?.skillName);
-}
-
-function readMigrationSkillSourceLabel(item: MigrationItem): string | undefined {
-  return normalizeOptionalString(item.details?.sourceLabel);
-}
-
-function readMigrationPluginName(item: MigrationItem): string | undefined {
-  return normalizeOptionalString(item.details?.pluginName);
-}
-
-function readMigrationPluginConfigKey(item: MigrationItem): string | undefined {
-  return normalizeOptionalString(item.details?.configKey);
-}
-
-function readMigrationPluginMarketplaceName(item: MigrationItem): string | undefined {
-  return normalizeOptionalString(item.details?.marketplaceName);
-}
-
-function migrationSkillRefs(item: MigrationItem): string[] {
-  const skillName = readMigrationSkillName(item);
-  const idSuffix = item.id.startsWith("skill:") ? item.id.slice("skill:".length) : undefined;
+function migrationItemRefs(item: MigrationItem, kind: "skill" | "plugin"): string[] {
+  const prefix = `${kind}:`;
+  const idSuffix = item.id.startsWith(prefix) ? item.id.slice(prefix.length) : undefined;
   const sourceBase = item.source ? path.basename(item.source) : undefined;
   const targetBase = item.target ? path.basename(item.target) : undefined;
-  return [item.id, idSuffix, skillName, sourceBase, targetBase].filter(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
-  );
-}
-
-function migrationPluginRefs(item: MigrationItem): string[] {
-  const pluginName = readMigrationPluginName(item);
-  const configKey = readMigrationPluginConfigKey(item);
-  const idSuffix = item.id.startsWith("plugin:") ? item.id.slice("plugin:".length) : undefined;
-  const sourceBase = item.source ? path.basename(item.source) : undefined;
-  const targetBase = item.target ? path.basename(item.target) : undefined;
-  return [item.id, idSuffix, pluginName, configKey, sourceBase, targetBase].filter(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
-  );
+  return [
+    item.id,
+    idSuffix,
+    normalizeOptionalString(item.details?.[`${kind}Name`]),
+    ...(kind === "plugin" ? [normalizeOptionalString(item.details?.configKey)] : []),
+    sourceBase,
+    targetBase,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
 function formatSelectionRefList(values: readonly string[]): string {
@@ -123,9 +98,7 @@ function resolveSelectedMigrationItemIds(params: {
     const available = params.items
       .map(params.formatSelectionLabel)
       .toSorted((a, b) => a.localeCompare(b));
-    const titleKind =
-      expectDefined(params.kindLabel[0], "kind label entry at 0").toUpperCase() +
-      params.kindLabel.slice(1);
+    const titleKind = params.kindLabel === "skill" ? "Skill" : "Plugin";
     const parts: string[] = [];
     if (unknownRefs.length > 0) {
       parts.push(
@@ -171,7 +144,7 @@ export function getSelectableMigrationPluginItems(plan: MigrationPlan): Migratio
 
 /** Formats the visible label for a plugin migration checkbox. */
 export function formatMigrationPluginSelectionLabel(item: MigrationItem): string {
-  return readMigrationPluginName(item) ?? item.id.replace(/^plugin:/u, "");
+  return normalizeOptionalString(item.details?.pluginName) ?? item.id.replace(/^plugin:/u, "");
 }
 
 /** Defaults migration checkboxes to planned item ids in plan order. */
@@ -181,7 +154,7 @@ export function getDefaultMigrationSelectionValues(items: readonly MigrationItem
 
 /** Formats the visible label for a skill migration checkbox. */
 export function formatMigrationSkillSelectionLabel(item: MigrationItem): string {
-  return readMigrationSkillName(item) ?? item.id.replace(/^skill:/u, "");
+  return normalizeOptionalString(item.details?.skillName) ?? item.id.replace(/^skill:/u, "");
 }
 
 function humanizeMigrationConflictReason(reason: string | undefined): string {
@@ -196,7 +169,7 @@ export function formatMigrationSkillSelectionHint(item: MigrationItem): string |
   if (item.status !== "conflict") {
     return undefined;
   }
-  const sourceLabel = readMigrationSkillSourceLabel(item);
+  const sourceLabel = normalizeOptionalString(item.details?.sourceLabel);
   const reason = humanizeMigrationConflictReason(item.reason);
   return sourceLabel ? `${sourceLabel} ${reason}` : reason;
 }
@@ -206,7 +179,7 @@ export function formatMigrationPluginSelectionHint(item: MigrationItem): string 
   if (item.status !== "conflict") {
     return undefined;
   }
-  const marketplace = readMigrationPluginMarketplaceName(item);
+  const marketplace = normalizeOptionalString(item.details?.marketplaceName);
   const reason = humanizeMigrationConflictReason(item.reason);
   return marketplace ? `${marketplace} plugin ${reason}` : reason;
 }
@@ -223,7 +196,8 @@ export function applyMigrationSelectedSkillItemIds(
       .filter((item) => selectedItemIds.has(item.id))
       .map(
         (item) =>
-          readMigrationSkillName(item) ?? (item.source ? path.basename(item.source) : undefined),
+          normalizeOptionalString(item.details?.skillName) ??
+          (item.source ? path.basename(item.source) : undefined),
       )
       .filter((name) => name !== undefined),
   );
@@ -254,7 +228,7 @@ export function applyMigrationSelectedSkillItemIds(
 }
 
 /** Applies skill refs passed by CLI flags to a migration plan. */
-export function applyMigrationSkillSelection(
+function applyMigrationSkillSelection(
   plan: MigrationPlan,
   selectedSkillRefs: readonly string[] | undefined,
 ): MigrationPlan {
@@ -265,7 +239,7 @@ export function applyMigrationSkillSelection(
   const selectedIds = resolveSelectedMigrationItemIds({
     items: selectable,
     selectedRefs: selectedSkillRefs,
-    refsForItem: migrationSkillRefs,
+    refsForItem: (item) => migrationItemRefs(item, "skill"),
     formatSelectionLabel: formatMigrationSkillSelectionLabel,
     kindLabel: "skill",
     availableLabel: "skills",
@@ -274,7 +248,7 @@ export function applyMigrationSkillSelection(
 }
 
 /** Applies plugin refs passed by CLI flags to a migration plan. */
-export function applyMigrationPluginSelection(
+function applyMigrationPluginSelection(
   plan: MigrationPlan,
   selectedPluginRefs: readonly string[] | undefined,
 ): MigrationPlan {
@@ -285,7 +259,7 @@ export function applyMigrationPluginSelection(
   const selectedIds = resolveSelectedMigrationItemIds({
     items: selectable,
     selectedRefs: selectedPluginRefs,
-    refsForItem: migrationPluginRefs,
+    refsForItem: (item) => migrationItemRefs(item, "plugin"),
     formatSelectionLabel: formatMigrationPluginSelectionLabel,
     kindLabel: "plugin",
     availableLabel: "plugins",
@@ -303,7 +277,7 @@ export function applyMigrationSelectedPluginItemIds(
   const selectedConfigKeys = new Set(
     selectable
       .filter((item) => selectedItemIds.has(item.id))
-      .map(readMigrationPluginConfigKey)
+      .map((item) => normalizeOptionalString(item.details?.configKey))
       .filter((value): value is string => value !== undefined),
   );
   const items = plan.items.map((item) => {
@@ -321,6 +295,16 @@ export function applyMigrationSelectedPluginItemIds(
     items,
     summary: summarizeMigrationItems(items),
   };
+}
+
+export function applyMigrationSelections(
+  plan: MigrationPlan,
+  opts: MigrateCommonOptions,
+): MigrationPlan {
+  return applyMigrationItemSelection(
+    applyMigrationPluginSelection(applyMigrationSkillSelection(plan, opts.skills), opts.plugins),
+    opts.itemIds,
+  );
 }
 
 function applyCodexPluginConfigSelection(

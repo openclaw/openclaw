@@ -16,7 +16,7 @@ import {
   readSessionBackingFactsInWorker,
 } from "../config/sessions/session-accessor.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
-import { resolveCronTaskRecordTimestamp } from "../cron/task-run-detail.js";
+import { resolveCronRunRecordTimestamp } from "../cron/run-history-detail.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -263,7 +263,7 @@ function resolveDurableCronTaskRecovery(
   if (!row || !isCronTerminalTaskStatus(row.status)) {
     return undefined;
   }
-  const endedAt = resolveCronTaskRecordTimestamp(row);
+  const endedAt = resolveCronRunRecordTimestamp(row);
   return {
     status: row.status,
     endedAt,

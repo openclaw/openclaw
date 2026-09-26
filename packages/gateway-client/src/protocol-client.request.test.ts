@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayProtocolClientOptions } from "./protocol-client-contract.js";
 import {
@@ -93,6 +94,207 @@ afterEach(() => {
 });
 
 describe("GatewayProtocolClient requests", () => {
+  it.each(["event", "refusal"])(
+    "parks 40 polling identity clients during 30 seconds of suspension (%s)",
+    async (notification) => {
+      vi.useFakeTimers();
+      let suspended = true;
+      let refused = 0;
+      let recovered = 0;
+      const clients = Array.from({ length: 40 }, () => {
+        const harness = createRequestHarness({
+          requestTimeoutMs: 60_000,
+          send: (frame) => {
+            const connection = harness.connections[0];
+            assert(connection);
+            if (suspended) {
+              refused += 1;
+            }
+            respond(
+              connection,
+              frame.id,
+              suspended
+                ? {
+                    code: "UNAVAILABLE",
+                    message: "agent.identity.get unavailable during gateway suspension",
+                    retryable: true,
+                    retryAfterMs: 60_000,
+                    details: { reason: "gateway-suspending", phase: "prepared" },
+                  }
+                : { agentId: "main" },
+              !suspended,
+            );
+          },
+        });
+        const connection = harness.connections[0];
+        assert(connection);
+        const notify = (phase: string) =>
+          connection.handlers.message(
+            JSON.stringify({ type: "event", event: "gateway.suspension", payload: { phase } }),
+          );
+        if (notification === "event") {
+          notify("prepared");
+        }
+        let pending = false;
+        const poll = () => {
+          if (pending) {
+            return;
+          }
+          pending = true;
+          void harness.client.request("agent.identity.get", { agentId: "main" }).then(
+            () => {
+              pending = false;
+              recovered += 1;
+            },
+            () => {
+              pending = false;
+            },
+          );
+        };
+        poll();
+        return { ...harness, notify, timer: setInterval(poll, 1_000) };
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(29_999);
+        for (const { timer } of clients) {
+          clearInterval(timer);
+        }
+        await vi.advanceTimersByTimeAsync(1);
+        suspended = false;
+        for (const { notify } of clients) {
+          notify("accepting");
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        console.info(
+          JSON.stringify({ notification, clients: 40, suspendedMs: 30_000, refused, recovered }),
+        );
+        expect(refused).toBeLessThanOrEqual(40);
+        expect(recovered).toBe(40);
+      } finally {
+        for (const { client, timer } of clients) {
+          clearInterval(timer);
+          client.stop();
+        }
+      }
+    },
+  );
+
+  it("seeds the identity wait from hello and keeps writes synchronous", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createRequestHarness();
+    const connection = connections[0];
+    assert(connection);
+    connection.handlers.message(
+      JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "test" } }),
+    );
+    respond(connection, latestFrame(connection).id, {
+      snapshot: { suspension: { phase: "prepared" } },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const identity = client.request("agent.identity.get", { agentId: "main" });
+    const write = client.request("users.prefs.set", { theme: "dark" });
+    const control = client.request("gateway.suspend.resume", { suspensionId: "owned" });
+    expect(connection.frames.map((frame) => frame.method)).toEqual([
+      "connect",
+      "users.prefs.set",
+      "gateway.suspend.resume",
+    ]);
+    const writeFrame = connection.frames[1];
+    assert(writeFrame);
+    respond(connection, writeFrame.id, { code: "UNAVAILABLE", message: "suspended" }, false);
+    await expect(write).rejects.toThrow("suspended");
+    respond(connection, latestFrame(connection).id, { resumed: true });
+    await control;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(latestFrame(connection).method).toBe("agent.identity.get");
+    respond(connection, latestFrame(connection).id, { agentId: "main" });
+    await expect(identity).resolves.toEqual({ agentId: "main" });
+    client.stop();
+  });
+
+  it.each(["timeout", "abort", "disconnect"])(
+    "retires a parked identity on %s without sending it after resume",
+    async (retirement) => {
+      vi.useFakeTimers();
+      const { client, connections } = createRequestHarness();
+      const connection = connections[0];
+      assert(connection);
+      connection.handlers.message(
+        JSON.stringify({
+          type: "event",
+          event: "gateway.suspension",
+          payload: { phase: "draining" },
+        }),
+      );
+      const controller = new AbortController();
+      const request = client.request(
+        "agent.identity.get",
+        {},
+        { timeoutMs: 500, signal: controller.signal },
+      );
+      const outcome = request.catch((error: unknown) => error);
+      expect(connection.frames).toHaveLength(0);
+      if (retirement === "timeout") {
+        await vi.advanceTimersByTimeAsync(500);
+        expect(await outcome).toMatchObject({ code: "CLIENT_TIMEOUT", requestSent: false });
+      } else if (retirement === "abort") {
+        controller.abort();
+        expect(await outcome).toMatchObject({
+          message: "gateway request aborted for agent.identity.get",
+        });
+      } else {
+        connection.close(1012, "restart");
+        expect(await outcome).toMatchObject({ message: "gateway closed (1012): restart" });
+        client.start();
+      }
+      connection.handlers.message(
+        JSON.stringify({
+          type: "event",
+          event: "gateway.suspension",
+          payload: { phase: "accepting" },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(connection.frames).toHaveLength(0);
+      expect(client.hasPendingRequests).toBe(false);
+      const current = connections.at(-1);
+      assert(current);
+      const next = client.request("agent.identity.get", {});
+      respond(current, latestFrame(current).id, { agentId: "main" });
+      await expect(next).resolves.toEqual({ agentId: "main" });
+      client.stop();
+    },
+  );
+
+  it("honors retry-after without resetting the original identity deadline", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createRequestHarness();
+    const connection = connections[0];
+    assert(connection);
+    const request = client.request("agent.identity.get", {}, { timeoutMs: 1_500 });
+    const outcome = request.catch((error: unknown) => error);
+    respond(
+      connection,
+      latestFrame(connection).id,
+      {
+        code: "UNAVAILABLE",
+        message: "suspended",
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { reason: "gateway-suspending" },
+      },
+      false,
+    );
+    await vi.advanceTimersByTimeAsync(999);
+    expect(connection.frames).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connection.frames).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await outcome).toMatchObject({ code: "CLIENT_TIMEOUT", requestSent: true });
+    expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
   it.each([false, true])(
     "retains correlated negative payloads with custom factory=%s",
     async (custom) => {

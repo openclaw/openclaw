@@ -1405,7 +1405,6 @@ describe("scripts/changed-lanes", () => {
       "src/plugins/bundled-channel-config-metadata.ts",
       "extensions/discord/channel-config-api.ts",
       "extensions/feishu/src/webhook-path.ts",
-      "extensions/mattermost/src/secret-input.ts",
       "src/plugin-sdk/channel-config-ui-hints.ts",
       "src/plugin-sdk/channel-core.ts",
       "src/plugin-sdk/secret-input-schema.ts",

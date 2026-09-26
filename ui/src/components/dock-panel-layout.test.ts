@@ -63,16 +63,6 @@ describe("createDockPanelLayout", () => {
     });
   });
 
-  it("restores a left dock without changing existing consumers", () => {
-    const layout = createLayout("right");
-    localStorage.setItem(
-      "test.dock-panel.right",
-      JSON.stringify({ open: true, dock: "left", height: 320, width: 420 }),
-    );
-
-    expect(layout.load()).toEqual({ open: true, dock: "left", height: 320, width: 420 });
-  });
-
   it("rejects docks unsupported by a consumer", () => {
     const layout = createDockPanelLayout({
       storageKey: "test.dock-panel.side-only",

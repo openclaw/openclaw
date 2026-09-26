@@ -18,7 +18,6 @@ import {
 import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
-  resolveCodexContextEngineProjectionReserveTokens,
   resolveCodexContinuityProjectionMaxChars,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
@@ -206,7 +205,6 @@ export async function prepareCodexAttemptContext(
     promptText: params.prompt,
     promptContextRange: undefined as CodexProjectedContextRange | undefined,
     developerInstructions: baseDeveloperInstructions,
-    prePromptMessageCount: historyState.messages.length,
     contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,
     precomputedStaleBindingContinuityProjectionApplied: false,
     staleBindingContinuityForcedFreshStart: false,
@@ -219,7 +217,6 @@ export async function prepareCodexAttemptContext(
   };
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,
-    reserveTokens: resolveCodexContextEngineProjectionReserveTokens(),
   });
   const codexContinuityProjectionMaxChars = resolveCodexContinuityProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,

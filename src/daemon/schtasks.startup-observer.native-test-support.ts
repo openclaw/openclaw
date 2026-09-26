@@ -72,6 +72,7 @@ const harnessSource = String.raw`
 import cp from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+const launcherStartedAt = Date.now();
 const spec = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const save = (value) => {
   const text = JSON.stringify(value);
@@ -80,6 +81,7 @@ const save = (value) => {
   fs.renameSync(spec.invocationPath + ".tmp", spec.invocationPath);
 };
 const nativeSpawn = cp.spawn;
+let detachedRecord;
 cp.spawn = (command, args, options) => {
   if (options?.detached !== true) return nativeSpawn(command, args, options);
   const record = {
@@ -90,6 +92,7 @@ cp.spawn = (command, args, options) => {
     scriptPath: options.env?.OPENCLAW_TASK_SCRIPT ?? null, spawnObserved: false, exitObserved: false,
     exitCode: null, exitSignal: null,
   };
+  detachedRecord = record;
   save(record);
   const descriptors = spec.variant === "file-backed-diagnostic"
     ? [fs.openSync(spec.stdoutPath, "wx"), fs.openSync(spec.stderrPath, "wx")] : [];
@@ -114,6 +117,29 @@ const command = spec.mode === "direct" ? {
   workingDirectory: spec.proofRoot,
 } : null;
 await launchFallbackTaskScript(spec.env, command);
+if (spec.variant === "parent-retained-diagnostic") {
+  if (!detachedRecord) throw new Error("Parent-retained diagnostic did not observe an owner spawn");
+  detachedRecord.parentRetention = { startedAt: Date.now(), releasedAt: null, reason: null };
+  save(detachedRecord);
+  await new Promise((resolve) => {
+    const release = (reason) => {
+      Object.assign(detachedRecord.parentRetention, { releasedAt: Date.now(), reason });
+      save(detachedRecord);
+      resolve();
+    };
+    function observe() {
+      if (detachedRecord.exitObserved) { release("detached-child-exit"); return; }
+      if (fs.existsSync(spec.markerPath + ".started.json")) { release("probe-start"); return; }
+      if (Date.now() >= launcherStartedAt + spec.timeoutMs) {
+        process.exitCode = 2;
+        release("original-launcher-deadline");
+        return;
+      }
+      setTimeout(observe, 25);
+    }
+    observe();
+  });
+}
 `;
 
 const observerSource = String.raw`
@@ -236,7 +262,9 @@ export async function runObservedStartupLaunch(params: {
   lifetime: ReturnType<typeof createFixtureLifetime>;
   signal: AbortSignal;
 }): Promise<{ launcherPid: number; childPid: number }> {
-  async function run(variant: "unchanged-stdio-control" | "file-backed-diagnostic") {
+  async function run(
+    variant: "unchanged-stdio-control" | "file-backed-diagnostic" | "parent-retained-diagnostic",
+  ) {
     for (const suffix of ["", ".started.json", ".survived.json", ".release"]) {
       await fs.rm(params.markerPath + suffix, { force: true });
     }
@@ -432,7 +460,10 @@ export async function runObservedStartupLaunch(params: {
     );
     if (!params.signal.aborted) {
       try {
-        await run("file-backed-diagnostic");
+        const fileBacked = await run("file-backed-diagnostic");
+        if (fileBacked.event === "failed" && !params.signal.aborted) {
+          await run("parent-retained-diagnostic");
+        }
       } catch (diagnosticError) {
         throw new AggregateError(
           [failure, diagnosticError],

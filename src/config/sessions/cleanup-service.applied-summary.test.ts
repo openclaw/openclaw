@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -54,9 +55,10 @@ import type { SessionEntry } from "./types.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("sessions cleanup applied summary", () => {
-  afterEach(() => {
+  afterEach(async () => {
     cleanupRace.afterPreview = undefined;
     cleanupRace.postCommitFailureStorePath = undefined;
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -122,7 +124,20 @@ describe("sessions cleanup applied summary", () => {
         expect(result.previewResults[0]?.summary).toMatchObject(expected);
         expect(result.appliedSummaries[0]).toMatchObject(expected);
         expect(loadSessionEntry(scope("hook:disposable"))).toBeUndefined();
-        await closeOpenClawAgentDatabasesAsync(state.stateDir);
+        let resourceRetired = false;
+        registerOpenClawAgentDatabaseAsyncResource({
+          agentId: "main",
+          path: resolveSqliteTargetFromSessionStorePath(storePath).path,
+          revoke: () => {},
+          close: async () => {
+            await Promise.resolve();
+            resourceRetired = true;
+          },
+        });
+        // Reopening must follow native retirement, not only synchronous revocation.
+        await closeOpenClawAgentDatabasesAsync(state.root);
+        closeOpenClawAgentDatabasesForTest(state.root);
+        expect(resourceRetired).toBe(true);
         expect(loadSessionEntry(scope("conversation"))).toMatchObject({
           sessionId: "conversation",
           archivedAt: expect.any(Number),

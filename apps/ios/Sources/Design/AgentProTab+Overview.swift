@@ -157,7 +157,7 @@ extension AgentProTab {
                 self.agentName(for: agent),
                 agent.id,
                 self.normalized(agent.workspace),
-                self.modelLabel(for: agent),
+                RootSidebar.agentModelLabel(agent),
             ]
                 .compactMap(\.self)
                 .joined(separator: " ")

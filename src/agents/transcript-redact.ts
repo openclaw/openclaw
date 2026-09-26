@@ -26,7 +26,6 @@ import {
   sanitizeTranscriptImageDataUrlField,
   sanitizeTranscriptImageRecord,
   shouldPreserveNestedTranscriptImageDataUrlFields,
-  shouldPreserveTranscriptImagePayload,
 } from "./transcript-redact-images.js";
 import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
 import {
@@ -657,7 +656,7 @@ function redactTranscriptStructuredValue(
         continue;
       }
     }
-    if (shouldPreserveTranscriptImagePayload(source, key, item, preserveImageDataUrlFields)) {
+    if (key === "data" && sanitizedImageRecord) {
       continue;
     }
     const redacted =

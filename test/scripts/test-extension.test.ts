@@ -210,22 +210,9 @@ describe("scripts/test-extension.mts", () => {
     },
     {
       extensionId: "feishu",
-      workerFiles: [
-        "bot.broadcast.test.ts",
-        "bot.test.ts",
-        "dedup.test.ts",
-        "feishu-ingress.test.ts",
-        "monitor.bot-menu.test.ts",
-        "monitor.dedupe-lifecycle.test.ts",
-        "monitor.helpers.test.ts",
-        "monitor.lifecycle.test.ts",
-        "monitor.reaction.test.ts",
-        "monitor.startup.test.ts",
-        "monitor.webhook-e2e.test.ts",
-        "monitor.webhook-security.test.ts",
-        "outbound-delivery.test.ts",
-        "outbound.send-authority.test.ts",
-      ].map((file) => `extensions/feishu/src/${file}`),
+      workerFiles: databaseWorkerExtensionTestFiles.filter((file) =>
+        file.startsWith("extensions/feishu/"),
+      ),
     },
   ])(
     "splits the $extensionId batch between persistence and channel owners without double counting",

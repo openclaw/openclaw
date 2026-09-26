@@ -30,6 +30,35 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("recovers a removed captures directory without releasing a live instance", async () => {
+  const stateDir = temp.make("capture-recovery-missing-");
+  const instance = retainPluginSourceCaptureInstance(stateDir);
+  const first = instance.createDirectory();
+  const captures = path.dirname(first);
+  const root = path.dirname(captures);
+  await sweepPluginSourceCaptureDirectories(stateDir);
+  fs.rmSync(captures, { recursive: true });
+  let worker: ReturnType<typeof createPluginSourceCaptureRoot> | undefined;
+  try {
+    worker = createPluginSourceCaptureRoot(stateDir, "openclaw-model-catalog-");
+    fs.writeFileSync(path.join(worker.directory, "source.js"), "recovered capture");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 2 * hour);
+    await sweepPluginSourceCaptureDirectories(stateDir);
+    expect(fs.readFileSync(path.join(worker.directory, "source.js"), "utf8")).toBe(
+      "recovered capture",
+    );
+    await worker.release();
+    expect(fs.existsSync(root)).toBe(true);
+    const next = instance.createDirectory();
+    expect(fs.readdirSync(captures)).toEqual([path.basename(next)]);
+  } finally {
+    await worker?.release();
+    await instance.releaseAsync();
+  }
+  expect(fs.existsSync(root)).toBe(false);
+});
+
 it.each(["sync", "async"])("preserves custody after partial %s disposal", async (mode) => {
   const stateDir = temp.make("capture-recovery-state-");
   const instance = mode === "sync" ? retainPluginSourceCaptureInstance(stateDir) : undefined;
