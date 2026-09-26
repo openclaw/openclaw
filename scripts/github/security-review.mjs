@@ -42,6 +42,20 @@ function ciRunState(run) {
   }
 }
 
+function assertCiRunIdentity(current, expected) {
+  if (
+    current.id !== expected.id ||
+    current.head_sha !== expected.head_sha ||
+    current.head_branch !== expected.head_branch ||
+    current.path !== expected.path ||
+    current.event !== expected.event ||
+    current.repository?.id !== expected.repository?.id ||
+    (expected.event === "workflow_dispatch" && current.display_title !== expected.display_title)
+  ) {
+    throw new Error("The CI run identity changed during security review.");
+  }
+}
+
 async function ciState(review) {
   const { api, owner, repo, pullRequest } = review;
   const root = `/repos/${owner}/${repo}/actions`;
@@ -71,20 +85,22 @@ async function ciState(review) {
   let run;
   for (const candidate of candidates.toSorted((left, right) => right.id - left.id)) {
     if (
-      candidate.event !== "pull_request" ||
-      candidate.status !== "completed" ||
-      candidate.conclusion !== "skipped"
+      candidate.status === "completed" &&
+      (candidate.event !== "pull_request" || candidate.conclusion !== "skipped")
     ) {
       run = candidate;
       break;
     }
-    // Reruns retain their ID; a skipped list entry can already have a new attempt.
+    // Completion events can precede the run-list projection. Refresh the exact
+    // run before waiting; skipped entries can also already have a new attempt.
     const current = await api.request(`${root}/runs/${candidate.id}`);
     const currentState = ciRunState(current);
-    if (current.id !== candidate.id || current.head_sha !== candidate.head_sha) {
-      throw new Error("The CI run identity changed during security review.");
-    }
-    if (currentState !== "completed" || current.conclusion !== "skipped") {
+    assertCiRunIdentity(current, candidate);
+    if (
+      current.event !== "pull_request" ||
+      currentState !== "completed" ||
+      current.conclusion !== "skipped"
+    ) {
       run = current;
       break;
     }
@@ -110,9 +126,7 @@ async function ciState(review) {
   }
   const current = await api.request(`${root}/runs/${run.id}`);
   const currentState = ciRunState(current);
-  if (current.id !== run.id || current.head_sha !== run.head_sha) {
-    throw new Error("The CI run identity changed during security review.");
-  }
+  assertCiRunIdentity(current, run);
   if (currentState === "pending") {
     return "pending";
   }

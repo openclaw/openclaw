@@ -1131,6 +1131,7 @@ describe("combined security review entry point", () => {
     {
       name: "unfinished CI",
       response: { total_count: 1, workflow_runs: [{ ...run, status: "in_progress" }] },
+      current: { ...run, status: "in_progress" },
     },
     {
       name: "another workflow",
@@ -1146,11 +1147,47 @@ describe("combined security review entry point", () => {
     {
       name: "newer unfinished run",
       response: { total_count: 2, workflow_runs: [run, { ...run, id: 11, status: "queued" }] },
+      current: { ...run, id: 11, status: "queued" },
     },
-  ])("does not turn $name into a passing combined gate", ({ response }) => {
-    const result = evaluate({ [runsPath]: response });
+  ])("does not turn $name into a passing combined gate", ({ response, current }) => {
+    const result = evaluate({
+      [runsPath]: response,
+      ...(current ? { [`GET ${actions}/runs/${current.id}`]: current } : {}),
+    });
     expect(result.status, result.stderr).toBe(0);
     expect(result.combined).toEqual(["pending", "pending"]);
+    expect(result.requests.some((entry) => entry.path.endsWith("/jobs"))).toBe(false);
+  });
+
+  it("settles completed CI when the run list still reports its previous attempt in progress", () => {
+    const current = { ...run, run_attempt: 2 };
+    const result = evaluate({
+      [runsPath]: { total_count: 1, workflow_runs: [{ ...run, status: "in_progress" }] },
+      [`GET ${actions}/runs/10`]: current,
+      [`GET ${actions}/runs/10/attempts/2/jobs`]: jobs,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.combined).toEqual(["pending", "success"]);
+    expect(result.requests.filter((entry) => entry.path.endsWith("/jobs"))).toEqual([
+      expect.objectContaining({ path: `${actions}/runs/10/attempts/2/jobs` }),
+    ]);
+  });
+
+  it.each([
+    { field: "id", value: 11 },
+    { field: "head_sha", value: "d".repeat(40) },
+    { field: "head_branch", value: "other-branch" },
+    { field: "path", value: ".github/workflows/other.yml" },
+    { field: "repository", value: { id: 2 } },
+    { field: "event", value: "push" },
+  ])("rejects a changed $field when refreshing an unfinished run", ({ field, value }) => {
+    const result = evaluate({
+      [runsPath]: { total_count: 1, workflow_runs: [{ ...run, status: "in_progress" }] },
+      [`GET ${actions}/runs/10`]: { ...run, [field]: value },
+    });
+    expect(result.status).toBe(1);
+    expect(result.combined).toEqual(["pending", "failure"]);
+    expect(result.requests.some((entry) => entry.path.endsWith("/jobs"))).toBe(false);
   });
 
   it.each([
@@ -1216,6 +1253,7 @@ describe("combined security review entry point", () => {
   it("settles after CI completes without leaving either evaluation failed", () => {
     const waiting = evaluate({
       [runsPath]: { total_count: 1, workflow_runs: [{ ...run, status: "in_progress" }] },
+      [`GET ${actions}/runs/10`]: { ...run, status: "in_progress" },
     });
     const completed = evaluate();
     expect(waiting.status, waiting.stderr).toBe(0);
