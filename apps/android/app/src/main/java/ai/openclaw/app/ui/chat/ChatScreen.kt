@@ -93,13 +93,22 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -143,7 +152,6 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AdminPanelSettings
-import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
@@ -233,6 +241,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
@@ -913,7 +922,7 @@ internal fun ChatScreen(
     }
   }
 
-  val headerContent: @Composable ((() -> Unit)?, () -> Unit) -> Unit = { onJumpToLatest, dismissDetails ->
+  val headerContent: @Composable (() -> Unit) -> Unit = { dismissDetails ->
     ChatHeader(
       activeAgent = activeAgent,
       projectLabel = activeProjectLabel,
@@ -924,13 +933,6 @@ internal fun ChatScreen(
         dismissDetails()
         onOpenSidebar()
       },
-      onJumpToLatest =
-        onJumpToLatest?.let { jump ->
-          {
-            dismissDetails()
-            jump()
-          }
-        },
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       sessionCreating = sessionCreating,
@@ -1084,17 +1086,18 @@ internal fun ChatScreen(
     tabletopPanes = tabletopPanes,
     features = features,
     conversationStatus = conversationStatus,
-    header = { onJumpToLatest, compactHeight, tabletop ->
-      if ((!compactHeight || tabletop) && !detailsExpanded) headerContent(onJumpToLatest) { detailsExpanded = false }
+    onJumpToLatestRequested = { detailsExpanded = false },
+    header = { compactHeight, tabletop ->
+      if ((!compactHeight || tabletop) && !detailsExpanded) headerContent { detailsExpanded = false }
     },
-  ) { onJumpToLatest, compactHeight, tabletop ->
+  ) { compactHeight, tabletop ->
     ChatComposer(
       onInputPositioned = { composerAnchor = it },
       ownerReady = composerOwnerReady,
       compactHeight = compactHeight,
       detailsExpanded = detailsExpanded,
       onDetailsExpandedChange = { detailsExpanded = it },
-      conversationHeader = { dismissDetails -> headerContent(onJumpToLatest, dismissDetails) },
+      conversationHeader = { dismissDetails -> headerContent(dismissDetails) },
       conversationStatus = {
         if (!tabletop) conversationStatus()
       },
@@ -1525,7 +1528,6 @@ private fun ChatHeader(
   sessionColor: String?,
   showSidebarButton: Boolean,
   onOpenSidebar: () -> Unit,
-  onJumpToLatest: (() -> Unit)?,
   healthOk: Boolean,
   pendingRunCount: Int,
   sessionCreating: Boolean,
@@ -1575,7 +1577,7 @@ private fun ChatHeader(
         Modifier
           .align(Alignment.CenterStart)
           .fillMaxWidth()
-          .padding(start = 52.dp, end = if (onJumpToLatest != null) 100.dp else 52.dp)
+          .padding(start = 52.dp, end = 52.dp)
           .clearAndSetSemantics {
             contentDescription = listOfNotNull(projectLabel, sessionTitle, statusLabel).joinToString(", ")
           },
@@ -1650,13 +1652,6 @@ private fun ChatHeader(
       }
     }
     Row(modifier = Modifier.align(Alignment.CenterEnd)) {
-      if (onJumpToLatest != null) {
-        HeaderIcon(
-          icon = Icons.Default.ArrowDownward,
-          contentDescription = nativeString("Jump to latest"),
-          onClick = onJumpToLatest,
-        )
-      }
       Box {
         HeaderIcon(
           icon = Icons.Default.MoreVert,
@@ -1718,6 +1713,81 @@ private fun HeaderIcon(
 }
 
 @Composable
+private fun ChatScrollToLatestButton(
+  visible: Boolean,
+  onClick: () -> Unit,
+) {
+  val animationsEnabled = rememberSystemAnimationsEnabled()
+  val offsetPx = with(LocalDensity.current) { 8.dp.roundToPx() }
+  val enterEasing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
+  val exitEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
+  val visibility = remember { MutableTransitionState(false) }
+  visibility.targetState = visible
+
+  Box(
+    modifier = Modifier.size(scrollToLatestButtonSize).semantics { if (!visible) hideFromAccessibility() },
+    contentAlignment = Alignment.Center,
+  ) {
+    AnimatedVisibility(
+      visibleState = visibility,
+      enter =
+        if (animationsEnabled) {
+          fadeIn(tween(180, easing = enterEasing)) +
+            scaleIn(initialScale = 0.9f, animationSpec = tween(180, easing = enterEasing)) +
+            slideInVertically(initialOffsetY = { offsetPx }, animationSpec = tween(180, easing = enterEasing))
+        } else {
+          fadeIn(tween(100, easing = LinearEasing))
+        },
+      exit =
+        if (animationsEnabled) {
+          fadeOut(tween(300, easing = exitEasing)) +
+            scaleOut(targetScale = 0.9f, animationSpec = tween(300, easing = exitEasing)) +
+            slideOutVertically(targetOffsetY = { offsetPx }, animationSpec = tween(300, easing = exitEasing))
+        } else {
+          fadeOut(tween(100, easing = LinearEasing))
+        },
+    ) {
+      Surface(
+        onClick = onClick,
+        enabled = visible,
+        modifier =
+          Modifier.size(scrollToLatestButtonSize).semantics {
+            if (visible) {
+              contentDescription = nativeString("Jump to latest")
+              role = Role.Button
+            } else {
+              hideFromAccessibility()
+            }
+          },
+        shape = CircleShape,
+        color = Color.Transparent,
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Surface(
+            modifier = Modifier.size(48.dp),
+            shape = CircleShape,
+            color = ClawTheme.colors.surfaceRaised,
+            border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+            shadowElevation = 4.dp,
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              val iconColor = ClawTheme.colors.text
+              Canvas(Modifier.size(20.dp)) {
+                val strokeWidth = 1.5.dp.toPx()
+                val unit = size.width / 24f
+                drawLine(iconColor, Offset(12f * unit, 5f * unit), Offset(12f * unit, 19f * unit), strokeWidth, cap = StrokeCap.Round)
+                drawLine(iconColor, Offset(5f * unit, 12f * unit), Offset(12f * unit, 19f * unit), strokeWidth, cap = StrokeCap.Round)
+                drawLine(iconColor, Offset(19f * unit, 12f * unit), Offset(12f * unit, 19f * unit), strokeWidth, cap = StrokeCap.Round)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
 private fun ChatMessageList(
   sessionKey: String,
   mainSessionKey: String,
@@ -1763,8 +1833,9 @@ private fun ChatMessageList(
   tabletopPanes: TabletopPaneBounds?,
   features: List<DisplayFeature>,
   conversationStatus: @Composable () -> Unit,
-  header: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
-  composer: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
+  onJumpToLatestRequested: () -> Unit,
+  header: @Composable (Boolean, Boolean) -> Unit,
+  composer: @Composable (Boolean, Boolean) -> Unit,
 ) {
   val history = remember(messages, sessionKey, mainSessionKey) { prepareChatHistory(messages, sessionKey, mainSessionKey) }
   val indicatorVisible = activeRunCount > 0
@@ -1819,7 +1890,6 @@ private fun ChatMessageList(
     onDispose { turnRecapResolver.abandonActiveWatch(sessionKey) }
   }
 
-  val onJumpToLatest = readerScroll.jumpToLatest.takeIf { readerScroll.showJumpToLatest }
   val density = LocalDensity.current
   val headerTextHeight = minimumChatLineHeight(chatProjectStyle()) + minimumChatLineHeight(chatTitleStyle())
   val readerLineHeight = minimumChatLineHeight(ClawTheme.type.body)
@@ -1839,9 +1909,18 @@ private fun ChatMessageList(
     minimumReaderHeight = minimumReaderHeight,
     touchTarget = ClawTheme.spacing.touchTarget,
     modifier = modifier,
-    header = { compact, tabletop -> header(onJumpToLatest, compact, tabletop) },
+    header = header,
     status = conversationStatus,
-    composer = { compact, tabletop -> composer(onJumpToLatest, compact, tabletop) },
+    composer = composer,
+    scrollToLatest = { available ->
+      ChatScrollToLatestButton(
+        visible = readerScroll.showJumpToLatest && available,
+        onClick = {
+          onJumpToLatestRequested()
+          readerScroll.jumpToLatest()
+        },
+      )
+    },
     transcript = {
       CompositionLocalProvider(LocalChatReaderNavigation provides readerScroll.navigation) {
         ChatMessageDisclosure(
