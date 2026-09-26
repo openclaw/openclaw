@@ -395,6 +395,31 @@ it("resolves runtime aliases and import/require conditions without following dec
   );
 });
 
+it.each(["mixed", "declaration-only"] as const)(
+  "retains explicit declaration inputs without runtime traversal (%s)",
+  (inventory) => {
+    const root = tempDirs.make("openclaw-explicit-declarations-");
+    const declarations = ["types.d.ts", "types.d.mts", "types.d.cts"];
+    for (const file of declarations) {
+      writeFileSync(join(root, file), 'export * from "./missing-declaration.js";\n');
+    }
+    const inputs = [...declarations];
+    if (inventory === "mixed") {
+      writeFileSync(
+        join(root, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext" } }),
+      );
+      writeFileSync(join(root, "entry.mts"), 'import "./runtime.mts";\n');
+      writeFileSync(join(root, "runtime.mts"), "export const runtime = true;\n");
+      inputs.push("entry.mts");
+    }
+    expect(collectRuntimeImportClosure(root, inputs, { validatePackages: true })).toEqual(
+      [...inputs, ...(inventory === "mixed" ? ["runtime.mts"] : [])].toSorted(),
+    );
+    expect(existsSync(join(root, "tsconfig.json"))).toBe(inventory === "mixed");
+  },
+);
+
 it("keeps native update authority free of eager recovery reporting and handoff staging", () => {
   const closure = collectRuntimeImportClosure(process.cwd(), [
     "src/cli/update-cli/update-command-executor.ts",

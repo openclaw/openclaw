@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import {
+  chmodSync,
   closeSync,
   constants,
   createReadStream,
@@ -11,7 +12,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
@@ -19,7 +20,9 @@ import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
-const fixture = () => createMainRefreshFixture(tempDirs.make("openclaw-pr-main-refresh-"));
+const fixture = (options?: Parameters<typeof createMainRefreshFixture>[1]) =>
+  createMainRefreshFixture(tempDirs.make("openclaw-pr-main-refresh-"), options);
+const shellQuote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
 
 function recoverFixtureLock(f: ReturnType<typeof fixture>, oid: string) {
   const pgid = Number(/^pgid=(\d+)$/m.exec(f.git(f.canonical, "cat-file", "blob", oid))?.[1]);
@@ -38,6 +41,57 @@ function recoverFixtureLock(f: ReturnType<typeof fixture>, oid: string) {
 }
 
 describePosix("native PR main refresh boundaries", () => {
+  it("retains Git's captured search path through observation without recursive dispatch", () => {
+    const originalPath = process.env.PATH;
+    if (!originalPath) {
+      throw new Error("The fixture must retain its original Git search path");
+    }
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const bin = tempDirs.make("openclaw-pr-git-dispatcher-");
+    const dispatcher = join(bin, "git");
+    const calls = join(bin, "calls");
+    writeFileSync(
+      dispatcher,
+      `#!/bin/sh
+set -eu
+printf '%s\\n' "$PATH" >> ${shellQuote(calls)}
+if [ "\${PR_FIXTURE_GIT_REDIRECTED:-}" = 1 ]; then
+  echo 'fixture Git dispatcher reentered its observer' >&2
+  exit 97
+fi
+selected=$(command -v git)
+if [ "$selected" != "$0" ]; then
+  PR_FIXTURE_GIT_REDIRECTED=1 exec "$selected" "$@"
+fi
+PATH=${shellQuote(originalPath)} exec ${shellQuote(realGit)} "$@"
+`,
+    );
+    chmodSync(dispatcher, 0o755);
+    let f: ReturnType<typeof fixture>;
+    try {
+      process.env.PATH = `${bin}${delimiter}${originalPath}`;
+      f = fixture();
+    } finally {
+      process.env.PATH = originalPath;
+    }
+    writeFileSync(calls, "");
+    f.git(f.origin, "update-ref", "refs/pull/42/head", f.main);
+    f.configure({ moveSharedAfterFetch: true });
+    const result = f.run("review-init");
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(f.git(f.worktree, "rev-parse", "refs/heads/pr-42")).toBe(f.head);
+    expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.main);
+    expect(f.git(f.canonical, "rev-parse", "refs/remotes/origin/main")).toBe(f.movedMain);
+    expect(f.events().filter((event) => event.kind === "main-fetch")).toHaveLength(1);
+    expect(f.events().filter((event) => event.kind === "fetched")).toEqual([
+      { kind: "fetched", sha: f.main, shared: f.movedMain },
+    ]);
+    const paths = readFileSync(calls, "utf8").trim().split("\n");
+    expect(paths.length).toBeGreaterThan(1);
+    expect(paths.every((value) => value === f.backendPath)).toBe(true);
+    expect(f.events().filter((event) => event.kind === "unexpected-push")).toEqual([]);
+  });
+
   it.each([
     "review-init",
     "review-checkout-pr",
@@ -301,7 +355,7 @@ describePosix("native PR main refresh boundaries", () => {
     f.git(f.worktree, "commit", "--allow-empty", "-qm", "reviewed fixup");
     const published = f.git(f.worktree, "rev-parse", "HEAD");
     const gitShim = join(f.root, "bin", "git");
-    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const backendPath = shellQuote(f.backendPath);
     const updateMetadata = [
       'const fs = require("node:fs")',
       "const file = process.argv[1]",
@@ -315,8 +369,8 @@ describePosix("native PR main refresh boundaries", () => {
       gitShim,
       `#!/bin/sh
 if [ "$1" = push ] && [ "$2" = "--force-with-lease=refs/heads/topic:${f.head}" ] && [ "$4" = "${published}:refs/heads/topic" ]; then
-  "${realGit}" "$@" || exit "$?"
-  "${realGit}" -C "${f.origin}" update-ref refs/pull/42/head "${published}" || exit "$?"
+  PATH=${backendPath} ${shellQuote(f.realGit)} "$@" || exit "$?"
+  PATH=${backendPath} ${shellQuote(f.realGit)} -C "${f.origin}" update-ref refs/pull/42/head "${published}" || exit "$?"
   "${process.execPath}" -e '${updateMetadata}' "${join(f.root, "control.json")}" "${published}"
   exit "$?"
 fi
@@ -708,8 +762,7 @@ ${readFileSync(gitShim, "utf8")}
   });
 
   it("preserves foreign checkout-hook changes when cold review initialization requests a reset", () => {
-    const f = fixture();
-    f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
+    const f = fixture({ precreateWorktree: false });
     const hooks = join(f.canonical, ".git", "hooks");
     writeFileSync(
       join(hooks, "post-checkout"),
@@ -728,8 +781,7 @@ ${readFileSync(gitShim, "utf8")}
   });
 
   it("uses the private checkpoint after an uninterrupted cold bootstrap while main moves", () => {
-    const f = fixture();
-    f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
+    const f = fixture({ precreateWorktree: false });
     f.git(f.canonical, "checkout", "--detach", f.head);
     f.git(f.canonical, "update-ref", "-d", "refs/remotes/origin/main");
     f.configure({ moveAfterFirstFetch: true });
@@ -749,8 +801,7 @@ ${readFileSync(gitShim, "utf8")}
   it.each([1, 2])(
     "provisions without a local main anchor and retries cold fetch %s failure",
     (fetchNumber) => {
-      const f = fixture();
-      f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
+      const f = fixture({ precreateWorktree: false });
       f.git(f.canonical, "update-ref", "-d", "refs/remotes/origin/main");
       f.configure({ failFetchAt: fetchNumber });
       const failed = f.run("review-checkout-main");
@@ -780,8 +831,7 @@ ${readFileSync(gitShim, "utf8")}
   );
 
   it("rejects a later uninjected provisioner despite an earlier valid receipt", () => {
-    const f = fixture();
-    f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
+    const f = fixture({ precreateWorktree: false });
     const first = f.run("review-checkout-main");
     expect(first.status, first.stdout + first.stderr).toBe(0);
     f.assertPrivateHandoffVerified();
@@ -828,7 +878,9 @@ printf 'replacement=%s\\n' "$PR_MAIN_SHA"
         .filter((e) => e.kind === "fetched")
         .map((e) => e.sha),
     ).toEqual([f.main, f.movedMain, f.movedMain]);
-    expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.movedMain);
+    expect(f.git(join(`${f.canonical}.pr-worktrees`, "pr-42"), "rev-parse", "HEAD")).toBe(
+      f.movedMain,
+    );
     expect(
       f.git(f.canonical, "for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks"),
     ).toBe("");
@@ -840,8 +892,7 @@ printf 'replacement=%s\\n' "$PR_MAIN_SHA"
   ])(
     "recovers cold $phase fetch interruption through the native exact owner",
     async ({ fetchNumber }) => {
-      const f = fixture();
-      f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
+      const f = fixture({ precreateWorktree: false });
       f.git(f.canonical, "checkout", "--detach", f.head);
       f.git(f.canonical, "update-ref", "-d", "refs/remotes/origin/main");
       f.git(f.canonical, "update-ref", "refs/heads/origin/main", f.head);

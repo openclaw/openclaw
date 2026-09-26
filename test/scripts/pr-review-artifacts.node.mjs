@@ -252,6 +252,7 @@ set -euo pipefail
 canonical_repo_root="$1"
 script_parent_dir="$2"
 repo_root() { printf '%s\\n' "$canonical_repo_root"; }
+source "$2/pr-lib/worktree.sh"
 source "$2/pr-lib/common.sh"
 source "$2/pr-lib/review.sh"
 review_guard() { echo FRESH_GUARD; return 42; }

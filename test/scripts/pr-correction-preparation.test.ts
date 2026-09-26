@@ -1,13 +1,5 @@
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -16,6 +8,10 @@ import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scripts = join(process.cwd(), "scripts");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/gu, `'\\''`)}'`;
+}
 
 function fixture() {
   const root = tempDirs.make("openclaw-pr-correction-");
@@ -87,6 +83,7 @@ function fixture() {
           'pr_git() { "${OPENCLAW_PR_GIT:-${GIT_EXEC:-git}}" "$@"; }',
           'pr_gh() { gh "$@"; }',
           "common_repo_root() { pwd; }",
+          "pr_worktree_path() { pwd; }",
           "pr_worktree_state() { jq -n --arg path \"$PWD\" '{present:true,path:$path}'; }",
           "read_pr_view_json() { cat .local/pr-meta.json; }",
           'review_guard() { REVIEW_MODE=pr; source .local/pr-meta.env; [ "$(git rev-parse HEAD)" = "$PR_HEAD_SHA" ]; }',
@@ -136,6 +133,10 @@ describePosix("native correction preparation", () => {
       const f = fixture();
       expect(f.run("prepare_init 42 '' correction").status).toBe(0);
       f.commitFix();
+      const backendPath = process.env.PATH;
+      if (!backendPath) {
+        throw new Error("The fixture must retain its original Git search path");
+      }
       const resolved = spawnSync("bash", ["-c", "command -v git"], { encoding: "utf8" });
       expect(resolved.status, resolved.stderr).toBe(0);
       const bin = join(f.root, ".local", "git-bin");
@@ -146,9 +147,14 @@ describePosix("native correction preparation", () => {
       const selectedDir = join(f.root, ".local", "selected git");
       mkdirSync(selectedDir);
       const selected = join(selectedDir, "git");
-      symlinkSync(resolved.stdout.trim(), selected);
+      // Keep a PATH-resolving Git shim from rediscovering the poisoned outer Git.
+      writeFileSync(
+        selected,
+        `#!/bin/sh\nPATH=${shellQuote(backendPath)} exec ${shellQuote(resolved.stdout.trim())} "$@"\n`,
+        { mode: 0o755 },
+      );
       const env = {
-        PATH: `${bin}:${process.env.PATH}`,
+        PATH: `${bin}:${backendPath}`,
         OPENCLAW_PR_GIT: selector === "OPENCLAW_PR_GIT" ? selected : "",
         GIT_EXEC: selector === "GIT_EXEC" ? selected : "",
       };

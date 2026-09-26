@@ -208,6 +208,9 @@ const repositoryScriptEntries = [
   // worktree.sh invokes this journal-state validator by path before native replay.
   "scripts/pr-lib/review-transition-state.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
+  // worktree.sh and common.sh invoke native placement owners by path.
+  "scripts/pr-lib/worktree-isolate.mjs!",
+  "scripts/pr-lib/worktree-placement.mjs!",
   // worktree.sh launches the locked cold-worktree adapter by path.
   "scripts/pr-lib/worktree-provision.mts!",
   "scripts/pre-commit/filter-staged-files.mjs!",

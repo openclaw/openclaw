@@ -38,7 +38,7 @@ function coldFixture(perWorktreeConfig = true) {
 }
 
 function expectSeed(f: ReturnType<typeof coldFixture>, pr = 42) {
-  const worktree = join(f.canonical, ".worktrees", `pr-${pr}`);
+  const worktree = join(`${f.canonical}.pr-worktrees`, `pr-${pr}`);
   expect(f.git(worktree, "symbolic-ref", "HEAD")).toBe(`refs/heads/temp/pr-${pr}`);
   expect(f.git(worktree, "rev-parse", "HEAD")).toBe(f.main);
   expect(f.git(f.canonical, "rev-parse", `refs/heads/temp/pr-${pr}`)).toBe(f.main);
@@ -55,7 +55,7 @@ function nextPr(f: ReturnType<typeof coldFixture>, pr: number) {
   });
   const result = f.run(["review-init", String(pr)]);
   expect(result.status, result.stderr).toBe(0);
-  return { worktree: join(f.canonical, ".worktrees", `pr-${pr}`), stderr: result.stderr };
+  return { worktree: join(`${f.canonical}.pr-worktrees`, `pr-${pr}`), stderr: result.stderr };
 }
 
 describePosix("native PR source provisioning", () => {
@@ -69,11 +69,11 @@ describePosix("native PR source provisioning", () => {
     expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.main);
     expect(f.git(f.canonical, "rev-parse", "refs/remotes/origin/main")).toBe(shared);
     expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
-    expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
+    expect(existsSync(join(`${f.canonical}.pr-worktrees`, ".templates"))).toBe(false);
   });
 
-  it("preserves a symlinked parent through native Git with acceleration enabled", () => {
-    const f = coldFixture(false);
+  it("does not provision through a symlinked legacy parent with acceleration enabled", () => {
+    const f = coldFixture();
     writeFileSync(f.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({ worktreeAcceleration: true }));
     const preload = join(f.root, "native-provision-imports.mjs");
     const guardReceipt = join(f.root, "native-provision-imports.txt");
@@ -96,6 +96,7 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
     f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href} ${f.env.NODE_OPTIONS}`;
     const parent = join(f.canonical, ".worktrees");
     const physicalParent = join(f.root, "pr-worktrees");
+    // Legacy aliases remain untouched; new native checkouts have a physical owner.
     rmdirSync(parent);
     mkdirSync(physicalParent);
     symlinkSync(physicalParent, parent, "dir");
@@ -104,7 +105,8 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
     expect(result.stderr).toContain("PR source checkout: Git checkout.");
     expect(readFileSync(guardReceipt, "utf8")).toMatch(/^[1-9]\d*\n$/);
     expectSeed(f);
-    expect(f.git(f.worktree, "rev-parse", "--show-toplevel")).toBe(join(physicalParent, "pr-42"));
+    expect(f.git(f.worktree, "rev-parse", "--show-toplevel")).toBe(f.worktree);
+    expect(readdirSync(physicalParent)).toEqual([]);
     expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.main);
     expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
     expect(existsSync(join(physicalParent, ".templates"))).toBe(false);
@@ -131,7 +133,7 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
         f.git(f.canonical, "rev-parse", `${f.main}^{tree}`),
       );
       expect(existsSync(join(f.worktree, "scripts", "pr"))).toBe(true);
-      expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
+      expect(existsSync(join(`${f.canonical}.pr-worktrees`, ".templates"))).toBe(false);
     },
   );
 
@@ -154,7 +156,7 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
       expectSeed(f);
       if (transport === "count") {
         expect(result.stderr).toContain("PR source checkout: Git checkout.");
-        expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
+        expect(existsSync(join(`${f.canonical}.pr-worktrees`, ".templates"))).toBe(false);
       }
       expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.main);
       expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
@@ -186,7 +188,7 @@ printf 'hook-owned edit\\n' > src/subject.ts
     expect(
       f.git(f.canonical, "rev-parse", "--verify", "refs/openclaw/pr-operation-locks/42"),
     ).toMatch(/^[0-9a-f]{40}$/);
-    expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
+    expect(existsSync(join(`${f.canonical}.pr-worktrees`, ".templates"))).toBe(false);
   });
 
   it.each(["absolute", "relative", "command-scoped", "parameter-scoped"] as const)(
@@ -235,7 +237,7 @@ printf 'configured hook edit\\n' > src/subject.ts
       expect(readFileSync(join(f.worktree, "src", "subject.ts"), "utf8")).toBe(
         "configured hook edit\n",
       );
-      expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
+      expect(existsSync(join(`${f.canonical}.pr-worktrees`, ".templates"))).toBe(false);
       expect(f.git(f.canonical, "status", "--porcelain")).toBe("");
       expect(
         f.git(f.canonical, "rev-parse", "--verify", "refs/openclaw/pr-operation-locks/42"),
@@ -270,7 +272,7 @@ printf 'branch hook edit\\n' > src/subject.ts
     expectSeed(f);
     expect(readFileSync(receipt, "utf8")).toBe(`${f.worktree}\n`);
     expect(readFileSync(join(f.worktree, "src", "subject.ts"), "utf8")).toBe("branch hook edit\n");
-    expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
+    expect(existsSync(join(`${f.canonical}.pr-worktrees`, ".templates"))).toBe(false);
   });
 
   it("preserves a caller fsmonitor hook without enabling it in managed Git", () => {
@@ -288,7 +290,7 @@ printf 'branch hook edit\\n' > src/subject.ts
     expect(readFileSync(receipt, "utf8").trim().split("\n")).toContain(f.worktree);
     expectSeed(f);
     expect(f.git(f.worktree, "config", "--get", "core.fsmonitor")).toBe(monitor);
-    expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
+    expect(existsSync(join(`${f.canonical}.pr-worktrees`, ".templates"))).toBe(false);
   });
 
   it("preserves the caller branch and initialized checkout after a nonzero hook exit", () => {
@@ -364,7 +366,7 @@ ${changeLock}
       );
       expect(f.git(f.canonical, "worktree", "list", "--porcelain")).toContain(f.worktree);
       expect(f.git(f.canonical, "status", "--porcelain")).toBe("");
-      expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
+      expect(existsSync(join(`${f.canonical}.pr-worktrees`, ".templates"))).toBe(false);
       const observed = readFileSync(receipt, "utf8").trim();
       if (change === "replaced") {
         expect(observed).toMatch(/^[0-9a-f]{40}$/);
@@ -386,7 +388,7 @@ ${changeLock}
       const f = coldFixture(false);
       const first = f.run("review-init");
       expect(first.status, first.stderr).toBe(0);
-      const templates = join(f.canonical, ".worktrees", ".templates");
+      const templates = join(`${f.canonical}.pr-worktrees`, ".templates");
       expect(existsSync(templates)).toBe(true);
       const templateNames = readdirSync(templates).toSorted();
       expect(templateNames.length).toBeGreaterThan(0);

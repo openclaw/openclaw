@@ -67,7 +67,7 @@ printf 'HTTP/2.0 200 OK\\r\\n\\r\\n{"login":"fixture"}\\n'
   git(canonical, "commit", "-qm", "test: synthetic provision input");
   const main = git(canonical, "rev-parse", "HEAD");
   git(canonical, "remote", "add", "origin", canonical);
-  const worktree = join(canonical, ".worktrees", "pr-42");
+  const worktree = join(`${canonical}.pr-worktrees`, "pr-42");
   const script = `set -euo pipefail
 canonical_repo_root="$1"
 script_parent_dir="$2/scripts"
@@ -77,10 +77,21 @@ source "$script_parent_dir/pr-lib/common.sh"
 source "$script_parent_dir/pr-lib/operation-lock.sh"
 if [ "$3" = recover ]; then
   recover_pr_operation_lock 42 "$4" --confirmed-no-running-tools
+elif [ "$3" = list ] || [ "$3" = gc ]; then
+  pr_gh() { printf 'MERGED\\n'; }
+  if [ "$3" = list ]; then
+    list_pr_worktrees
+  else
+    gc_pr_worktrees false
+  fi
 else
   acquire_pr_operation_lock 42
   begin_pr_operation_validation_phase
-  enter_worktree 42
+  if [ "$3" = isolate ]; then
+    isolate_pr_worktree 42 "$4"
+  else
+    enter_worktree 42
+  fi
 fi
 `;
   return {
@@ -119,7 +130,7 @@ fi
 }
 
 export function expectProvisionSeed(f: ReturnType<typeof createProvisionOwnerFixture>, pr = 42) {
-  const worktree = join(f.canonical, ".worktrees", `pr-${pr}`);
+  const worktree = join(`${f.canonical}.pr-worktrees`, `pr-${pr}`);
   expect(f.git(worktree, "symbolic-ref", "HEAD")).toBe(`refs/heads/temp/pr-${pr}`);
   expect(f.git(worktree, "rev-parse", "HEAD")).toBe(f.main);
   expect(f.git(f.canonical, "rev-parse", `refs/heads/temp/pr-${pr}`)).toBe(f.main);

@@ -33,7 +33,7 @@ const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
 // Keep real worktree/index behavior at the provisioning boundary; the complete
 // locked adapter path is covered by pr-worktree-provision.test.ts.
 const provisionWorktreeFixture =
-  'provision_pr_worktree() { pr_git -C "$1" worktree add -- "$1/.worktrees/pr-$2" "temp/pr-$2"; }';
+  'provision_pr_worktree() { pr_git -C "$1" worktree add -- "$1.pr-worktrees/pr-$2" "temp/pr-$2"; }';
 
 type Fixture = {
   root: string;
@@ -67,7 +67,7 @@ function createFixtureTemplate() {
 
 function createFixture(): Fixture {
   const template = (fixtureTemplate ??= createFixtureTemplate());
-  const root = tempDirs.make("openclaw-pr-worktree-containment-");
+  const root = join(tempDirs.make("openclaw-pr-worktree-containment-"), "repo");
   // Copy complete history before worktrees exist; each case owns its fetch and refs.
   cpSync(template.root, root, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   const { mainSha } = template;
@@ -119,7 +119,7 @@ function createReviewFixtureTemplate() {
 
 function createReviewFixture(): ReviewFixture {
   const template = (reviewFixtureTemplate ??= createReviewFixtureTemplate());
-  const root = tempDirs.make("openclaw-pr-review-transition-");
+  const root = join(tempDirs.make("openclaw-pr-review-transition-"), "repo");
   cpSync(template.root, root, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   const { mainSha, prASha, prBSha } = template;
   git(root, "remote", "add", "origin", root);
@@ -306,7 +306,10 @@ describePosix("scripts/pr worktree containment", () => {
       expect(readFileSync(fetchHead, "utf8")).toBe(previousFetch);
       expect(git(fixture.root, "rev-parse", "refs/remotes/origin/main")).toBe(fixture.mainSha);
       for (const pr of [42, 43]) {
-        const worktree = join(fixture.root, ".worktrees", `pr-${pr}`);
+        const worktree = join(
+          pr === 42 ? join(fixture.root, ".worktrees") : `${fixture.root}.pr-worktrees`,
+          `pr-${pr}`,
+        );
         expect(git(worktree, "rev-parse", "HEAD")).toBe(fixture.siblingSha);
         expect(git(worktree, "status", "--porcelain", "--untracked-files=no")).toBe("");
       }
@@ -321,18 +324,18 @@ describePosix("scripts/pr worktree containment", () => {
     it.each([
       {
         name: "private fetch interrupted",
-        failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
+        failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root.pr-worktrees/pr-42" ]',
         code: 130,
       },
       {
         name: "private fetch Git error",
-        failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
+        failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root.pr-worktrees/pr-42" ]',
         code: 128,
       },
       { name: "GitHub auth failure", failure: '[ "$1" = gh_plain ]', code: 1 },
     ])(`stops on $name without replaying a pending transition (${caller})`, ({ failure, code }) => {
       const fixture = createReviewFixture();
-      const worktree = join(fixture.root, ".worktrees", "pr-42");
+      const worktree = join(`${fixture.root}.pr-worktrees`, "pr-42");
       const setup = runShell(fixture, [
         "review_init 42",
         "review_checkout_pr 42",
@@ -360,7 +363,7 @@ describePosix("scripts/pr worktree containment", () => {
     },
     {
       name: "second fetch",
-      failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root/.worktrees/pr-42" ]',
+      failure: '[[ "$*" == *" fetch "* ]] && [ "$PWD" = "$fixture_root.pr-worktrees/pr-42" ]',
       provisioned: true,
     },
     { name: "auth", failure: '[ "$1" = gh_plain ]', provisioned: false },
@@ -368,7 +371,7 @@ describePosix("scripts/pr worktree containment", () => {
     "stops cold entry on $name failure, retaining only completed provisioning",
     ({ failure, provisioned }) => {
       const fixture = createFixture();
-      const worktree = join(fixture.root, ".worktrees", "pr-42");
+      const worktree = join(`${fixture.root}.pr-worktrees`, "pr-42");
       const result = runShell(fixture, [
         ...traceEntryCommands(failure, 130),
         "enter_worktree 42 true || exit $?",
@@ -409,12 +412,12 @@ describePosix("scripts/pr worktree containment", () => {
     },
     {
       name: "post-add parent resolution",
-      failure: '[ "$*" = "pwd -P" ] && [ "$PWD" = "$fixture_root/.worktrees" ]',
+      failure: '[ "$*" = "pwd -P" ] && [ "$PWD" = "$fixture_root.pr-worktrees" ]',
       setup: [],
     },
     {
       name: "worktree cd",
-      failure: '[ "$*" = "cd $fixture_root/.worktrees/pr-42" ] && [ "$BASH_SUBSHELL" = 0 ]',
+      failure: '[ "$*" = "cd $fixture_root.pr-worktrees/pr-42" ] && [ "$BASH_SUBSHELL" = 0 ]',
       setup: [],
     },
     {
@@ -449,6 +452,7 @@ describePosix("scripts/pr worktree containment", () => {
       "enter_worktree 42 false || exit $?",
     ]);
     expectEntryStopped(fixture, result);
+    expect(existsSync(join(`${fixture.root}.pr-worktrees`, "pr-42", ".local"))).toBe(false);
     expect(existsSync(join(fixture.root, ".worktrees", "pr-42", ".local"))).toBe(false);
   });
 
@@ -531,7 +535,10 @@ describePosix("scripts/pr worktree containment", () => {
 
   it.each(["cold", "warm"])("enters a %s PR worktree and fetches in its Git context", (state) => {
     const fixture = createFixture();
-    const expectedWorktree = join(fixture.root, ".worktrees", "pr-42");
+    const expectedWorktree = join(
+      state === "warm" ? join(fixture.root, ".worktrees") : `${fixture.root}.pr-worktrees`,
+      "pr-42",
+    );
     if (state === "warm") {
       git(fixture.root, "worktree", "add", expectedWorktree, "-b", "temp/pr-42", "origin/main");
     }
@@ -680,7 +687,7 @@ describePosix("scripts/pr worktree containment", () => {
 
   it("recovers an interrupted transition before repeated init, main, and PR checkout", () => {
     const fixture = createReviewFixture();
-    const artifact = join(fixture.root, ".worktrees", "pr-42", ".local", "review-note");
+    const artifact = join(`${fixture.root}.pr-worktrees`, "pr-42", ".local", "review-note");
 
     const result = runShell(fixture, [
       "review_init 42",
@@ -699,15 +706,20 @@ describePosix("scripts/pr worktree containment", () => {
     ]);
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(git(join(fixture.root, ".worktrees", "pr-42"), "rev-parse", "HEAD")).toBe(
+    expect(git(join(`${fixture.root}.pr-worktrees`, "pr-42"), "rev-parse", "HEAD")).toBe(
       fixture.prBSha,
     );
     expect(
-      git(join(fixture.root, ".worktrees", "pr-42"), "status", "--short", "--untracked-files=no"),
+      git(
+        join(`${fixture.root}.pr-worktrees`, "pr-42"),
+        "status",
+        "--short",
+        "--untracked-files=no",
+      ),
     ).toBe("");
     expect(readFileSync(artifact, "utf8")).toBe("preserve me\n");
     expect(
-      existsSync(join(fixture.root, ".worktrees", "pr-42", ".local", "review-transition.json")),
+      existsSync(join(`${fixture.root}.pr-worktrees`, "pr-42", ".local", "review-transition.json")),
     ).toBe(false);
     expectCanonicalCheckoutUnchanged(fixture);
   });
@@ -741,7 +753,7 @@ describePosix("scripts/pr worktree containment", () => {
       },
     ])(`recovers completed deletions after $name (${mode})`, ({ setup }) => {
       const fixture = createReviewFixture();
-      const worktree = join(fixture.root, ".worktrees", "pr-42");
+      const worktree = join(`${fixture.root}.pr-worktrees`, "pr-42");
       const result = runShell(fixture, [
         "review_init 42",
         "review_checkout_pr 42",
@@ -768,7 +780,7 @@ describePosix("scripts/pr worktree containment", () => {
 
     it(`recovers target index entries with source worktree entries (${mode})`, () => {
       const fixture = createReviewFixture();
-      const worktree = join(fixture.root, ".worktrees", "pr-42");
+      const worktree = join(`${fixture.root}.pr-worktrees`, "pr-42");
       const result = runShell(fixture, [
         "review_init 42",
         "review_checkout_pr 42",
@@ -842,7 +854,7 @@ describePosix("scripts/pr worktree containment", () => {
   ]) {
     it(`refuses and preserves ${testCase.name} foreign state`, () => {
       const fixture = createReviewFixture();
-      const worktree = join(fixture.root, ".worktrees", "pr-42");
+      const worktree = join(`${fixture.root}.pr-worktrees`, "pr-42");
       const result = runShell(fixture, [
         "review_init 42",
         "review_checkout_pr 42",
@@ -885,7 +897,7 @@ describePosix("scripts/pr worktree containment", () => {
     },
   ])("refuses and preserves a foreign $name", ({ setup, symlink }) => {
     const fixture = createReviewFixture();
-    const worktree = join(fixture.root, ".worktrees", "pr-42");
+    const worktree = join(`${fixture.root}.pr-worktrees`, "pr-42");
     const prepared = runShell(fixture, [
       "review_init 42",
       "review_checkout_pr 42",
@@ -916,7 +928,7 @@ describePosix("scripts/pr worktree containment", () => {
         fixture.mainSha = git(fixture.root, "rev-parse", "HEAD");
         git(fixture.root, "checkout", fixture.siblingBranch);
       }
-      const worktree = join(fixture.root, ".worktrees", "pr-42");
+      const worktree = join(`${fixture.root}.pr-worktrees`, "pr-42");
       const prepared = runShell(fixture, [
         "review_init 42",
         "review_checkout_pr 42",
@@ -993,7 +1005,7 @@ describePosix("scripts/pr worktree containment", () => {
         git(fixture.root, "checkout", fixture.siblingBranch);
       }
       const linkTarget = "directoryTarget" in collision ? ".local/link-target" : "missing";
-      const worktree = join(fixture.root, ".worktrees", "pr-42");
+      const worktree = join(`${fixture.root}.pr-worktrees`, "pr-42");
       const setup = runShell(fixture, [
         "review_init 42",
         "review_checkout_pr 42",
@@ -1042,7 +1054,7 @@ describePosix("scripts/pr worktree containment", () => {
     git(fixture.root, "checkout", fixture.siblingBranch);
     const setup = runShell(fixture, ["review_init 42"]);
     expect(setup.status, setup.stdout + setup.stderr).toBe(0);
-    const worktree = join(fixture.root, ".worktrees", "pr-42");
+    const worktree = join(`${fixture.root}.pr-worktrees`, "pr-42");
     const before = reviewState(worktree);
     const artifact = readFileSync(join(worktree, ".local", "review-mode.env"), "utf8");
     const result = runShell(fixture, ["review_checkout_pr 42"]);
@@ -1067,9 +1079,9 @@ describePosix("scripts/pr worktree containment", () => {
     ]);
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(readFileSync(join(fixture.root, ".worktrees", "pr-42", "main-only.txt"), "utf8")).toBe(
-      "main-only\n",
-    );
+    expect(
+      readFileSync(join(`${fixture.root}.pr-worktrees`, "pr-42", "main-only.txt"), "utf8"),
+    ).toBe("main-only\n");
     expectCanonicalCheckoutUnchanged(fixture);
   });
 
@@ -1087,7 +1099,7 @@ describePosix("scripts/pr worktree containment", () => {
     git(fixture.root, "update-ref", "refs/pull/42/head", "HEAD");
     git(fixture.root, "checkout", fixture.siblingBranch);
 
-    const worktree = join(fixture.root, ".worktrees", "pr-42");
+    const worktree = join(`${fixture.root}.pr-worktrees`, "pr-42");
     const setup = runShell(fixture, ["review_init 42"]);
     expect(setup.status, setup.stdout + setup.stderr).toBe(0);
     writeFileSync(git(worktree, "rev-parse", "--git-path", "info/exclude"), "zz-*\n");
@@ -1100,6 +1112,10 @@ describePosix("scripts/pr worktree containment", () => {
     const tools = join(fixture.root, "tools");
     const commandLog = join(fixture.root, "git-commands.log");
     mkdirSync(tools);
+    const backendPath = process.env.PATH;
+    if (!backendPath) {
+      throw new Error("The fixture must retain its original Git search path");
+    }
     const realGit = spawnSync("bash", ["-c", "command -v git"], {
       encoding: "utf8",
     }).stdout.trim();
@@ -1117,15 +1133,16 @@ describePosix("scripts/pr worktree containment", () => {
         '  printf "%s\\n" "Argument list too long" >&2',
         "  exit 126",
         "fi",
-        'exec "$REAL_GIT" "$@"',
+        'PATH="$REAL_GIT_PATH" exec "$REAL_GIT" "$@"',
       ].join("\n"),
     );
     chmodSync(join(tools, "git"), 0o755);
 
     const result = runShell(fixture, ["review_checkout_pr 42"], {
       GIT_COMMAND_LOG: commandLog,
-      PATH: `${tools}:${process.env.PATH ?? ""}`,
+      PATH: `${tools}:${backendPath}`,
       REAL_GIT: realGit,
+      REAL_GIT_PATH: backendPath,
       LC_ALL: "C",
     });
 

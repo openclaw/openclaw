@@ -62,6 +62,7 @@ afterEach(async () => {
   }
 });
 const repoRoot = process.cwd();
+const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
 const commonScript = join(repoRoot, "scripts/pr-lib/common.sh");
 const lockScript = join(repoRoot, "scripts/pr-lib/operation-lock.sh");
 const processGroupRunner = join(repoRoot, "scripts/pr-lib/process-group-runner.mjs");
@@ -150,10 +151,8 @@ afterAll(() => {
 });
 
 function createRepo(nestedName?: string, tempRoot = tempDirs.make("openclaw-pr-operation-lock-")) {
-  const dir = nestedName ? join(tempRoot, nestedName) : tempRoot;
-  if (nestedName) {
-    mkdirSync(dir);
-  }
+  const dir = join(tempRoot, nestedName ?? "repo");
+  mkdirSync(dir);
   // Preserve per-test Git isolation without paying five setup processes per fixture.
   cpSync(templateRepo, dir, { recursive: true });
   return dir;
@@ -181,7 +180,7 @@ function enterPrWorktree(repoDir: string, pr: number) {
     // The provisioner suite owns allocation/config/template proof. Keep these
     // shell registration, branch-reset, and sparse checks on a real Git checkout.
     "provision_pr_worktree() {",
-    '  command git -C "$1" worktree add -- "$1/.worktrees/pr-$2" "temp/pr-$2"',
+    '  command git -C "$1" worktree add -- "$1.pr-worktrees/pr-$2" "temp/pr-$2"',
     "}",
     // Entry and cleanup still run under the real per-PR lock.
     `acquire_pr_operation_lock ${pr}`,
@@ -189,7 +188,7 @@ function enterPrWorktree(repoDir: string, pr: number) {
     `enter_worktree ${pr}`,
   ]);
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  return { result, worktreeDir: join(repoDir, ".worktrees", `pr-${pr}`) };
+  return { result, worktreeDir: join(`${repoDir}.pr-worktrees`, `pr-${pr}`) };
 }
 
 function expectWorktreeBranch(worktreeDir: string, branch: string) {
@@ -242,7 +241,11 @@ function writeOperationFixture(repoDir: string, name: string, commands: string[]
   const fixture = writeFixtureFile(
     repoDir,
     name,
-    ["#!/usr/bin/env bash", ...bashSource(repoDir), ...commands].join("\n"),
+    [
+      process.platform === "darwin" ? "#!/bin/bash" : "#!/usr/bin/env bash",
+      ...bashSource(repoDir),
+      ...commands,
+    ].join("\n"),
   );
   chmodSync(fixture, 0o755);
   return fixture;
@@ -454,7 +457,7 @@ function runLockShell(
   commands: string[],
   parentEnv: NodeJS.ProcessEnv = process.env,
 ) {
-  return spawnSync("bash", ["-c", [...bashSource(repoDir), ...commands].join("\n")], {
+  return spawnSync(bash, ["-c", [...bashSource(repoDir), ...commands].join("\n")], {
     cwd: repoDir,
     env: createIndependentPrFixtureEnv(parentEnv),
     detached: true,
@@ -492,7 +495,7 @@ function spawnHolder(repoDir: string, statusFile: string, pr = 42, trapTerm = tr
       ]
     : [];
   return spawnDetached(
-    "bash",
+    bash,
     [
       "-c",
       [
@@ -854,13 +857,14 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const target = refOid(repoDir, "HEAD");
     execFileSync("git", ["checkout", "--detach", head], { cwd: repoDir });
     const binDir = tempDirs.make("openclaw-pr-query-failure-");
+    const backendPath = expectDefined(process.env.PATH, "Git backend search PATH");
     const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
     const proxy = writeFixtureFile(binDir, "git", [
       "#!/usr/bin/env bash",
       'args=("$@")',
       'while [ "${1:-}" = -c ]; do shift 2; done',
       `case "$*" in ${JSON.stringify(query)}*) echo 'fixture query failed' >&2; exit 7 ;; esac`,
-      `exec '${realGit}' "\${args[@]}"`,
+      `PATH=${shellQuote(backendPath)} exec ${shellQuote(realGit)} "\${args[@]}"`,
     ]);
     chmodSync(proxy, 0o755);
     const result = runLockShell(repoDir, [
@@ -940,7 +944,10 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(git("ls-remote", "origin", "refs/pull/42/head")).toBe(
         `${pullHead}\trefs/pull/42/head`,
       );
-      const worktreeDir = join(repoDir, ".worktrees/pr-42");
+      const worktreeDir = join(
+        existing ? join(repoDir, ".worktrees") : `${repoDir}.pr-worktrees`,
+        "pr-42",
+      );
       const localDir = join(worktreeDir, ".local");
       const artifactNames = [
         "pr-meta.json",
@@ -2233,6 +2240,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const queryExited = join(binDir, "query-exited");
     const validatorStarted = join(binDir, "validator-started");
     const validatorExited = join(binDir, "validator-exited");
+    const backendPath = expectDefined(process.env.PATH, "Git backend search PATH");
     const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
     const proxy = writeFixtureFile(binDir, "git", [
       "#!/usr/bin/env bash",
@@ -2240,7 +2248,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       'while [ "${1:-}" = -c ]; do shift 2; done',
       'if [ "$1" = ls-tree ]; then',
       `  printf '%s\\n' "$$" >> '${validatorStarted}'`,
-      `  '${realGit}' "\${args[@]}" || exit $?`,
+      `  PATH=${shellQuote(backendPath)} ${shellQuote(realGit)} "\${args[@]}" || exit $?`,
       "  exec 1>&-",
       "  sleep 0.1",
       `  printf '%s\\n' "$$" >> '${validatorExited}'`,
@@ -2252,7 +2260,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       `  : > '${queryExited}'`,
       "  exit 0",
       "fi",
-      `exec '${realGit}' "\${args[@]}"`,
+      `PATH=${shellQuote(backendPath)} exec ${shellQuote(realGit)} "\${args[@]}"`,
     ]);
     chmodSync(proxy, 0o755);
     const result = await runSupervisedOperation(repoDir, ".local/joined-worktree-operation.sh", [
@@ -3074,6 +3082,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const located = runLockShell(repoDir, ["worktree_path_for_branch pr-42"]);
     expect(located.status, `${located.stdout}\n${located.stderr}`).toBe(0);
     expect(located.stdout.trim()).toBe(canonicalWorktreeDir);
+    const listed = runLockShell(repoDir, ["pr_gh() { printf 'MERGED\\n'; }", "list_pr_worktrees"]);
+    expect(listed.status, `${listed.stdout}\n${listed.stderr}`).toBe(0);
+    expect(listed.stdout.trim()).toBe("42\t.worktrees/pr-42\tMERGED");
     const result = runLockShell(repoDir, [
       "pr_gh() { printf 'MERGED\\n'; }",
       "gc_pr_worktrees false",
@@ -3567,10 +3578,13 @@ describePosix("scripts/pr per-PR operation lock", () => {
     });
     rmSync(worktreeDir, { recursive: true });
     addTrackedUiConfig(repoDir);
-    const { result } = enterPrWorktree(repoDir, 42);
-    expect(result.stdout).toContain("Removing exact stale PR worktree .worktrees/pr-42");
-    expect(existsSync(worktreeDir)).toBe(true);
-    expectWorktreeBranch(worktreeDir, "temp/pr-42");
+    const { result, worktreeDir: isolated } = enterPrWorktree(repoDir, 42);
+    expect(result.stdout).toContain(
+      `Removing exact stale PR worktree ${physicalWorktreesDir}/pr-42`,
+    );
+    expect(existsSync(worktreeDir)).toBe(false);
+    expect(existsSync(isolated)).toBe(true);
+    expectWorktreeBranch(isolated, "temp/pr-42");
   });
   it("resets an existing script-owned branch when adding a fresh worktree", () => {
     const repoDir = createRepo();

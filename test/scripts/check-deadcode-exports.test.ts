@@ -148,6 +148,17 @@ describe("check-deadcode-exports", () => {
     expect(scriptRootWorkspace.entry).not.toContain(fixture);
   });
 
+  it("models the path-launched native worktree placement owners as executable roots", () => {
+    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
+      expect(workspace.entry).toEqual(
+        expect.arrayContaining([
+          "scripts/pr-lib/worktree-isolate.mjs!",
+          "scripts/pr-lib/worktree-placement.mjs!",
+        ]),
+      );
+    }
+  });
+
   it("keeps the script unused-export scan scoped to real executable roots", () => {
     expect(scriptRootWorkspace.entry).toEqual(
       expect.arrayContaining([

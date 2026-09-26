@@ -19,6 +19,7 @@ import {
   requireGitCommandOutput,
 } from "../../src/infra/git-exec.js";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
+import { requireIsolatedPrWorktreeParent } from "./worktree-placement.mjs";
 import { formatProvisionError } from "./worktree-provision-error.mjs";
 
 type ProvisionParams = {
@@ -216,7 +217,7 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
         }
       };
       await assertSeed();
-      const worktreeRoot = path.join(root, ".worktrees");
+      const worktreeRoot = requireIsolatedPrWorktreeParent(root);
       const resolvedWorktreeRoot = await fs.realpath(worktreeRoot).catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
           throw error;
@@ -224,9 +225,7 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
         return worktreeRoot;
       });
       const destination = path.join(resolvedWorktreeRoot, `pr-${params.pr}`);
-      // Native PR tooling supports a symlinked parent. Keep that path on Git
-      // rather than registering managed templates under an aliased namespace.
-      const native = resolvedWorktreeRoot !== worktreeRoot || (await needsNativeGit(rawGit, env));
+      const native = await needsNativeGit(rawGit, env);
       const gitBytes = await estimateWorktreeGitBytes(root, params.seed, {
         signal: guard.signal,
         assertCurrent,

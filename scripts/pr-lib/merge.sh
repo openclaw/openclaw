@@ -1041,7 +1041,12 @@ merge_run() {
   local root
   root=$(repo_root)
   cd "$root" || return 1
-  cleanup_pr_worktree ".worktrees/pr-$pr" || cleanup_complete=false
+  local cleanup_path
+  if cleanup_path=$(pr_worktree_path "$pr"); then
+    cleanup_pr_worktree "$cleanup_path" || cleanup_complete=false
+  else
+    cleanup_complete=false
+  fi
   if [ "$cleanup_complete" = true ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="complete"')" || return 1
     echo "merge-run complete for PR #$pr"

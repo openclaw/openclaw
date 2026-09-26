@@ -68,6 +68,7 @@ function runValidation(
         REVIEW_SHELL_COMMAND_SURFACE,
         'fixture_root="$2"',
         'common_repo_root() { printf "%s\\n" "$fixture_root"; }',
+        'pr_worktree_path() { printf "%s\\n" "$fixture_root"; }',
         `pr_worktree_state() { printf '{"path":"%s","present":true}\\n' "$fixture_root"; }`,
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',

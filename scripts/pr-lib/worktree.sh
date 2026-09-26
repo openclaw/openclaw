@@ -313,6 +313,28 @@ refresh_main_snapshot() {
   PR_MAIN_SHA="$sha"
 }
 
+pr_worktree_path() {
+  local root helper
+  root=$(repo_root) || return 1
+  helper=$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/worktree-placement.mjs || return 1
+  node "$helper" resolve "$root" "$1"
+}
+
+pr_worktree_paths() {
+  local root helper
+  root=$(repo_root) || return 1
+  helper=$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/worktree-placement.mjs || return 1
+  node "$helper" list "$root"
+}
+
+isolate_pr_worktree() {
+  local root helper
+  root=$(repo_root) || return 1
+  helper=$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/worktree-isolate.mjs || return 1
+  cd "$root" || return 1
+  node "$helper" "$root" "$1" "$2" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
+}
+
 provision_pr_worktree() {
   local root="$1" pr="$2" seed_sha="$3" provisioner_dir
   provisioner_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P) || return 1
@@ -343,22 +365,45 @@ enter_worktree() {
 
   cd "$root" || return 1
   ensure_gh_api_auth || { PR_MAIN_SHA=""; return 1; }
-  # Fetch can launch helpers and mutate Git state even when it fails; leave validation first.
-  mark_pr_operation_side_effects_started || return 1
-
-  local dir="$root/.worktrees/pr-$pr"
+  local dir placement_status
+  # Unresolved placement can carry a retained isolation intent. Do not turn
+  # that refusal into successful validation cleanup while adding cold admission.
+  dir=$(pr_worktree_path "$pr") || {
+    placement_status=$?
+    mark_pr_operation_side_effects_started || return 1
+    return "$placement_status"
+  }
   local resolved_parent resolved_dir state registration initialized_sha=""
-  state=$(pr_worktree_state "$dir" "" entry) || return $?
+  state=$(pr_worktree_state "$dir" "" entry) || {
+    placement_status=$?
+    mark_pr_operation_side_effects_started || return 1
+    return "$placement_status"
+  }
   resolved_dir=$(printf '%s\n' "$state" | jq -r '.path') || return $?
-  registration=$(worktree_registration_state "$resolved_dir") || return $?
+  registration=$(worktree_registration_state "$resolved_dir") || {
+    placement_status=$?
+    mark_pr_operation_side_effects_started || return 1
+    return "$placement_status"
+  }
 
   if [ "$registration" != registered ] ||
     ! printf '%s\n' "$state" | jq -e '.present' >/dev/null; then
     if [ "$registration" = registered ] ||
       printf '%s\n' "$state" | jq -e '.present or .admin != ""' >/dev/null; then
-      echo "Removing exact stale PR worktree .worktrees/pr-$pr"
+      mark_pr_operation_side_effects_started || return 1
+    fi
+    # Refuse an unwritable cold destination before retiring stale state or fetching.
+    local placement_helper
+    placement_helper=$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/worktree-placement.mjs || return 1
+    node "$placement_helper" admit "$root" "cold PR creation" || return 1
+    mark_pr_operation_side_effects_started || return 1
+    if [ "$registration" = registered ] ||
+      printf '%s\n' "$state" | jq -e '.present or .admin != ""' >/dev/null; then
+      echo "Removing exact stale PR worktree $dir"
     fi
     remove_worktree_if_present "$dir" || return $?
+    # A retired legacy checkout is never recreated beneath the owner's install.
+    dir=$(pr_worktree_path "$pr") || return 1
     # Cold bootstrap needs one extra fetch before private FETCH_HEAD exists.
     # Initialize fully before the next network wait so interruption is retryable.
     # The PR lock owns this existing temp branch, not shared origin/main or FETCH_HEAD.
@@ -375,6 +420,8 @@ enter_worktree() {
     [ "$registration" = registered ] || return 1
   fi
 
+  # Warm entry needs no sibling write grant. Fetch still leaves validation first.
+  mark_pr_operation_side_effects_started || return 1
   cd "$resolved_dir" || return 1
 
   # Containment, not repair: every mutation below runs against ambient cwd, so
@@ -526,97 +573,115 @@ write_pr_meta_files() {
     > .local/pr-meta.env
 }
 
-list_pr_worktrees() {
+list_pr_worktrees() (
+  set -o pipefail
   local root
-  root=$(repo_root)
-  cd "$root"
+  root=$(repo_root) || return $?
+  cd "$root" || return $?
 
-  local dir
-  local found=false
-  for dir in .worktrees/pr-*; do
-    [ -d "$dir" ] || continue
-    found=true
-    local pr
-    if ! pr=$(pr_number_from_worktree_dir "$dir"); then
-      printf 'UNKNOWN\t%s\tUNKNOWN\t(unparseable)\t\n' "$dir"
-      continue
+  local dir pr paths
+  # Capture the complete producer before consuming paths. JSON plus NUL framing
+  # preserves newline-bearing roots without hiding a failed listing command.
+  paths=$(pr_worktree_paths) || return $?
+  printf '%s\n' "$paths" | jq -j '.[] | ., "\u0000"' | {
+    local found=false
+    while IFS= read -r -d '' dir; do
+      [ -d "$dir" ] || continue
+      found=true
+      dir=${dir#"$root/"}
+      if ! pr=$(pr_number_from_worktree_dir "$dir"); then
+        printf 'UNKNOWN\t%s\tUNKNOWN\t(unparseable)\t\n' "$dir"
+        continue
+      fi
+      pr_worktree_path "$pr" >/dev/null || return 1
+      local info
+      info=$(pr_gh pr view "$pr" --json state,title,url --jq '[.state, .title, .url] | @tsv') || {
+        [ "$?" -ne 75 ] || return 1
+        info=$'UNKNOWN\t(unavailable)\t'
+      }
+      printf '%s\t%s\t%s\n' "$pr" "$dir" "$info"
+    done
+
+    if [ "$found" = "false" ]; then
+      echo "No PR worktrees found."
     fi
-    local info
-    info=$(pr_gh pr view "$pr" --json state,title,url --jq '[.state, .title, .url] | @tsv') || {
-      [ "$?" -ne 75 ] || return 1
-      info=$'UNKNOWN\t(unavailable)\t'
-    }
-    printf '%s\t%s\t%s\n' "$pr" "$dir" "$info"
-  done
+  }
+)
 
-  if [ "$found" = "false" ]; then
-    echo "No PR worktrees found."
-  fi
-}
-
-gc_pr_worktrees() {
+gc_pr_worktrees() (
+  set -o pipefail
   local dry_run="${1:-false}"
   local root
-  root=$(repo_root)
-  cd "$root"
+  root=$(repo_root) || return $?
+  cd "$root" || return $?
 
-  local dir
-  local removed=0
-  for dir in .worktrees/pr-*; do
-    [ -d "$dir" ] || continue
-    local pr
-    if ! pr=$(pr_number_from_worktree_dir "$dir"); then
-      echo "skipping $dir (could not parse PR number)"
-      continue
-    fi
-    local lock_status=0
-    try_acquire_pr_operation_lock "$pr" || lock_status=$?
-    if [ "$lock_status" -ne 0 ]; then
-      if [ "$lock_status" -eq 1 ]; then
-        echo "skipping $dir (PR #$pr has an active scripts/pr operation)"
-      elif [ -n "$PR_OPERATION_LOCK_BLOCKED_OID" ]; then
-        echo "skipping $dir (PR #$pr operation lock is $PR_OPERATION_LOCK_BLOCKED_REASON)"
-        print_pr_operation_lock_recovery_guidance "$pr"
-      else
-        echo "skipping $dir (PR #$pr operation lock state is indeterminate)"
+  local dir pr paths
+  paths=$(pr_worktree_paths) || return $?
+  printf '%s\n' "$paths" | jq -j '.[] | ., "\u0000"' | {
+    local removed=0
+    while IFS= read -r -d '' dir; do
+      [ -d "$dir" ] || continue
+      dir=${dir#"$root/"}
+      if ! pr=$(pr_number_from_worktree_dir "$dir"); then
+        echo "skipping $dir (could not parse PR number)"
+        continue
       fi
-      continue
-    fi
-    local state
-    state=$(pr_gh pr view "$pr" --json state --jq .state) || {
-      [ "$?" -ne 75 ] || { release_pr_operation_lock; return 1; }
-      state=UNKNOWN
-    }
-    case "$state" in
-      MERGED|CLOSED)
-        if ! require_worktree_cleanup_evidence "$dir"; then
-          echo "skipping $dir (merge evidence preserved)"
-        elif [ "$dry_run" = "true" ]; then
-          if remove_worktree_if_present "$dir" true; then
-            echo "would remove $dir (PR #$pr state=$state)"
+      local lock_status=0
+      try_acquire_pr_operation_lock "$pr" || lock_status=$?
+      if [ "$lock_status" -ne 0 ]; then
+        if [ "$lock_status" -eq 1 ]; then
+          echo "skipping $dir (PR #$pr has an active scripts/pr operation)"
+        elif [ -n "$PR_OPERATION_LOCK_BLOCKED_OID" ]; then
+          echo "skipping $dir (PR #$pr operation lock is $PR_OPERATION_LOCK_BLOCKED_REASON)"
+          print_pr_operation_lock_recovery_guidance "$pr"
+        else
+          echo "skipping $dir (PR #$pr operation lock state is indeterminate)"
+        fi
+        continue
+      fi
+      # Placement belongs to this PR's lock. A partial move retains only that PR;
+      # it must not prevent independent, eligible worktrees from being collected.
+      if ! pr_worktree_path "$pr" >/dev/null; then
+        echo "skipping $dir (PR #$pr placement is unresolved)"
+        release_pr_operation_lock || return 1
+        continue
+      fi
+      local state
+      state=$(pr_gh pr view "$pr" --json state --jq .state) || {
+        [ "$?" -ne 75 ] || { release_pr_operation_lock; return 1; }
+        state=UNKNOWN
+      }
+      case "$state" in
+        MERGED|CLOSED)
+          if ! require_worktree_cleanup_evidence "$dir"; then
+            echo "skipping $dir (merge evidence preserved)"
+          elif [ "$dry_run" = "true" ]; then
+            if remove_worktree_if_present "$dir" true; then
+              echo "would remove $dir (PR #$pr state=$state)"
+              removed=$((removed + 1))
+            else
+              echo "skipping $dir (cleanup incomplete)"
+            fi
+          elif cleanup_pr_worktree "$dir"; then
+            echo "removed $dir (PR #$pr state=$state)"
             removed=$((removed + 1))
           else
             echo "skipping $dir (cleanup incomplete)"
           fi
-        elif cleanup_pr_worktree "$dir"; then
-          echo "removed $dir (PR #$pr state=$state)"
-          removed=$((removed + 1))
-        else
-          echo "skipping $dir (cleanup incomplete)"
-        fi
-        ;;
-    esac
-    release_pr_operation_lock
-  done
+          ;;
+      esac
+      release_pr_operation_lock
+    done
 
-  if [ "$removed" -eq 0 ]; then
-    if [ "$dry_run" = "true" ]; then
-      echo "No merged/closed PR worktrees eligible for removal."
-    else
-      echo "No merged/closed PR worktrees removed."
+    if [ "$removed" -eq 0 ]; then
+      if [ "$dry_run" = "true" ]; then
+        echo "No merged/closed PR worktrees eligible for removal."
+      else
+        echo "No merged/closed PR worktrees removed."
+      fi
     fi
-  fi
-}
+  }
+)
 
 pr_number_from_worktree_dir() {
   local dir="$1"

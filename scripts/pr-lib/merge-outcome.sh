@@ -15,8 +15,9 @@ merge_outcome_stop() {
     [ "$ref_status" -ne 1 ] || ref_state=absent
   fi
   if root=$(repo_root) && [ -d "$root" ]; then
-    local worktree="$root/.worktrees/pr-${MERGE_OUTCOME_REF##*/}"
-    if [ ! -e "$worktree" ] || { [ -r "$worktree/.local" ] && [ -x "$worktree/.local" ]; }; then
+    local worktree
+    if worktree=$(pr_worktree_path "${MERGE_OUTCOME_REF##*/}") &&
+      { [ ! -e "$worktree" ] || { [ -r "$worktree/.local" ] && [ -x "$worktree/.local" ]; }; }; then
       capture_state=absent
       if [ -e "$worktree/.local/merge-output.log" ] || [ -L "$worktree/.local/merge-output.log" ]; then
         capture_state=present
@@ -576,7 +577,9 @@ merge_outcome_cancel_auto() {
     [ -n "$actor" ] || return 1
     local captures=()
     root=$(repo_root) || return 1
-    for capture in "$root/.worktrees/pr-$pr/.local/merge-output.log" "$root/.worktrees/pr-$pr"/.local/merge-output.*.log; do
+    local capture_worktree
+    capture_worktree=$(pr_worktree_path "$pr") || return 1
+    for capture in "$capture_worktree/.local/merge-output.log" "$capture_worktree"/.local/merge-output.*.log; do
       [ -e "$capture" ] || [ -L "$capture" ] || continue
       [ -f "$capture" ] && [ ! -L "$capture" ] || { merge_outcome_stop "cannot retain non-regular capture $capture"; return 1; }
       captures+=("$capture")
@@ -676,11 +679,12 @@ merge_outcome_head_branch() {
 }
 
 merge_outcome_require_cleanup_absent() {
-  local pr="$1" root worktrees branch ref_status=0
+  local pr="$1" root worktrees branch worktree ref_status=0
   root=$(repo_root) || return 1
+  worktree=$(pr_worktree_path "$pr") || return 1
   worktrees=$(pr_git worktree list --porcelain) || return 1
-  if [ -e "$root/.worktrees/pr-$pr" ] || [ -L "$root/.worktrees/pr-$pr" ] ||
-    printf '%s\n' "$worktrees" | grep -Fxq "worktree $root/.worktrees/pr-$pr"; then
+  if [ -e "$worktree" ] || [ -L "$worktree" ] ||
+    printf '%s\n' "$worktrees" | grep -Fxq "worktree $worktree"; then
     echo "Completion requires the native worktree to be absent; inspect its ownership before cleanup." >&2
     return 1
   fi
@@ -750,7 +754,7 @@ merge_outcome_resume() {
   if [ "$phase" = complete ]; then
     echo "merge-run already complete for PR #$pr; no side effects."
   else
-    echo "Merge confirmed; completion pending. Recovery does not repeat comment POST or cleanup. Inspect the completion marker in PR comments and any remaining .worktrees/pr-$pr/local branches; verify their ownership before manual cleanup."
+    echo "Merge confirmed; completion pending. Recovery does not repeat comment POST or cleanup. Inspect the completion marker in PR comments and the native PR worktree/local branches; verify their ownership before manual cleanup."
     echo "After cleanup, explicitly finalize: scripts/pr merge-complete $pr $MERGE_OUTCOME_OID --confirmed-operator-completion"
   fi
 }

@@ -330,7 +330,8 @@ verify_correction_review_snapshot() {
 review_artifact_preflight() (
   local pr="$1" ready="${2:-false}" root state target
   root=$(common_repo_root) || return 1
-  state=$(pr_worktree_state "$root/.worktrees/pr-$pr" "" entry) || return 1
+  target=$(pr_worktree_path "$pr") || return 1
+  state=$(pr_worktree_state "$target" "" entry) || return 1
   target=$(printf '%s\n' "$state" | jq -er 'select(.present == true) | .path') || {
     echo "Missing PR review worktree. Run: scripts/pr review-init $pr"
     return 1

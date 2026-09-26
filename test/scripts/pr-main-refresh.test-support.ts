@@ -40,15 +40,23 @@ function createFixtureGit(root: string) {
     GIT_TERMINAL_PROMPT: "0",
     XDG_CONFIG_HOME: join(home, ".config"),
   };
-  const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  const backendPath = env.PATH;
+  if (!backendPath) {
+    throw new Error("The fixture must retain its original Git search path");
+  }
+  const realGit = spawnSync("which", ["git"], { env, encoding: "utf8" }).stdout.trim();
   function git(cwd: string, ...args: string[]) {
-    const result = spawnSync(realGit, args, { cwd, env, encoding: "utf8" });
+    const result = spawnSync(realGit, args, {
+      cwd,
+      env: { ...env, PATH: backendPath },
+      encoding: "utf8",
+    });
     if (result.status !== 0) {
       throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
     }
     return result.stdout.trim();
   }
-  return { env, realGit, git, handoff };
+  return { env, realGit, backendPath, git, handoff };
 }
 
 function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean) {
@@ -125,10 +133,15 @@ export function createMainRefreshFixture(
   const root = realpathSync(directory);
   const canonical = join(root, "canonical");
   const origin = join(root, "origin.git");
-  const worktree = join(canonical, ".worktrees", "pr-42");
+  const worktree = join(
+    options.precreateWorktree === false
+      ? `${canonical}.pr-worktrees`
+      : join(canonical, ".worktrees"),
+    "pr-42",
+  );
   const bin = join(root, "bin");
   mkdirSync(bin);
-  const { env, realGit, git, handoff } = createFixtureGit(root);
+  const { env, realGit, backendPath, git, handoff } = createFixtureGit(root);
   const privateNodeOptions = env.NODE_OPTIONS;
   const { main, head, sameTreeHead, movedMain, gateMain } = template;
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
@@ -301,6 +314,7 @@ const eventsFile = ${JSON.stringify(eventsFile)};
 const control = JSON.parse(readFileSync(controlFile, 'utf8'));
 const args = process.argv.slice(2);
 const git = ${JSON.stringify(realGit)};
+const backendPath = ${JSON.stringify(backendPath)};
 const origin = ${JSON.stringify(origin)};
 const canonical = ${JSON.stringify(canonical)};
 const movedMain = ${JSON.stringify(movedMain)};
@@ -310,7 +324,7 @@ function event(value) {
 }
 
 function runGit(args, input) {
-  const result = spawnSync(git, args, { encoding: 'utf8', input });
+  const result = spawnSync(git, args, { env: { ...process.env, PATH: backendPath }, encoding: 'utf8', input });
   if (result.status !== 0) throw new Error(result.stderr);
   return result.stdout.trim();
 }
@@ -358,7 +372,7 @@ if (args.includes('push')) {
   }
   event({ kind: 'leased-cleanup', args });
 }
-const result = spawnSync(git, args, { stdio: 'inherit' });
+const result = spawnSync(git, args, { env: { ...process.env, PATH: backendPath }, stdio: 'inherit' });
 if (prFetch && result.status === 0) {
   const prefix = args.slice(0, args.indexOf('fetch'));
   const destination = args.at(-1).split(':')[1];
@@ -391,7 +405,7 @@ if (mainFetch && result.status === 0) {
     kind: 'fetched',
     sha: fetched,
     shared: spawnSync(git, ['-C', canonical, 'rev-parse', '--verify', 'refs/remotes/origin/main'],
-      { encoding: 'utf8' }).stdout.trim(),
+      { env: { ...process.env, PATH: backendPath }, encoding: 'utf8' }).stdout.trim(),
   });
 }
 process.exit(result.status ?? 1);
@@ -416,7 +430,8 @@ fi
 if [ "$decision" = true ]; then
   jq -cn --args '{kind:"git-decision",args:$ARGS.positional}' -- "$@" >> ${shellQuote(eventsFile)} || exit
 fi
-exec ${shellQuote(realGit)} "$@"
+# Keep a PATH-resolving backend from rediscovering this observer.
+PATH=${shellQuote(backendPath)} exec ${shellQuote(realGit)} "$@"
 `,
   );
   writeFileSync(
@@ -647,7 +662,8 @@ if (args[0] === 'pr' && args[1] === 'view') {
   } else if (/^repos\\/(fixture\\/repo|openclaw\\/openclaw)\\/actions\\/runs\\?/.test(endpoint)) {
     if (control.remoteOnlyBase && !control.remoteOnlyBaseMoved) {
       runGit(['-C', origin, 'update-ref', 'refs/heads/main', control.remoteOnlyBase]);
-      const localObject = spawnSync(git, ['-C', canonical, 'cat-file', '-e', control.remoteOnlyBase]);
+      const localObject = spawnSync(git, ['-C', canonical, 'cat-file', '-e', control.remoteOnlyBase],
+        { env: { ...process.env, PATH: backendPath } });
       event({ kind: 'remote-only-base', sha: control.remoteOnlyBase, localObject: localObject.status === 0 });
       control.remoteOnlyBaseMoved = true;
       writeFileSync(controlFile, JSON.stringify(control));
@@ -751,6 +767,8 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     movedMain,
     gateMain,
     env,
+    realGit,
+    backendPath,
     git,
     assertPrivateHandoffVerified: () => handoff.assertProvisionersInjected(),
     metadata,

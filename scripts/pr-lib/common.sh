@@ -434,84 +434,13 @@ resolve_existing_dir_path() {
 }
 
 pr_worktree_state() {
-  local root common_dir
+  local root common_dir placement
   root=$(common_repo_root) || return $?
   common_dir=$(pr_git -C "$root" rev-parse --path-format=absolute --git-common-dir) || return $?
+  placement=$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/worktree-placement.mjs || return 1
   # Git omits damaged admin entries from its listing. Bind the exact backlink
   # separately, and distinguish genuine absence from an unreadable path.
-  node - "$root" "$common_dir" "$1" "${2:-}" "${3:-cleanup}" <<'EOF_NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-const [root, common, requested, previousAdmin, purpose] = process.argv.slice(2);
-function stat(file) {
-  try { return fs.lstatSync(file); } catch (error) {
-    if (error.code === "ENOENT") return undefined;
-    throw error;
-  }
-}
-function read(file) {
-  if (!stat(file)?.isFile()) throw new Error("damaged worktree metadata");
-  return fs.readFileSync(file, "utf8").trimEnd();
-}
-try {
-  const canonicalParent = path.join(fs.realpathSync(root), ".worktrees");
-  const parent = stat(canonicalParent) ? fs.realpathSync(canonicalParent) : canonicalParent;
-  const input = path.resolve(requested);
-  const inputParent = path.dirname(input);
-  const resolvedParent = stat(inputParent) ? fs.realpathSync(inputParent) : inputParent;
-  const leaf = path.basename(input);
-  if (!/^pr-[1-9][0-9]*$/.test(leaf) || resolvedParent !== parent) {
-    throw new Error("non-canonical PR-worktree path");
-  }
-  const target = path.join(parent, leaf);
-  const targetStat = stat(target);
-  if (targetStat && !targetStat.isDirectory()) throw new Error("non-canonical PR-worktree path");
-  const commonDir = fs.realpathSync(common);
-  const adminRoot = path.join(commonDir, "worktrees");
-  const adminStat = stat(adminRoot);
-  if (adminStat && !adminStat.isDirectory()) throw new Error("damaged worktree metadata");
-  const matches = [];
-  let ids;
-  // Reusing a healthy worktree needs its own identity, not proof that unrelated
-  // admin entries are readable. Destruction still requires the complete scan.
-  if (purpose === "entry" && targetStat) {
-    const gitfile = path.join(target, ".git");
-    if (!stat(gitfile)?.isFile()) {
-      throw new Error("unregistered or ambiguous PR worktree; scripts/pr refuses to mutate the shared canonical checkout");
-    }
-    const pointer = read(gitfile);
-    if (!pointer.startsWith("gitdir: ")) throw new Error("damaged worktree metadata");
-    const admin = path.resolve(target, pointer.slice(8));
-    if (path.dirname(admin) !== adminRoot) throw new Error("damaged worktree metadata");
-    ids = [path.basename(admin)];
-  } else {
-    ids = adminStat ? fs.readdirSync(adminRoot) : [];
-  }
-  // Git preserves admin IDs across moves. Only readable, valid backlinks can
-  // attribute entries; an unknown backlink cannot establish target absence.
-  for (const id of ids) {
-    const admin = path.join(adminRoot, id);
-    if (!stat(admin)?.isDirectory()) throw new Error("damaged worktree metadata");
-    const backlink = read(path.join(admin, "gitdir"));
-    if (!backlink.endsWith("/.git")) throw new Error("damaged worktree metadata");
-    if (path.resolve(admin, backlink) !== path.join(target, ".git")) continue;
-    if (path.resolve(admin, read(path.join(admin, "commondir"))) !== commonDir) {
-      throw new Error("damaged worktree metadata");
-    }
-    matches.push(admin);
-  }
-  if (matches.length > 1 || (purpose === "entry" && targetStat && matches.length !== 1)) {
-    throw new Error("ambiguous worktree metadata");
-  }
-  process.stdout.write(JSON.stringify({
-    path: target, present: Boolean(targetStat), admin: matches[0] ?? "", common: commonDir,
-    previousAdminPresent: previousAdmin ? Boolean(stat(previousAdmin)) : false,
-  }) + "\n");
-} catch (error) {
-  console.error(`Refusing PR worktree cleanup: ${error.code ?? error.message}`);
-  process.exitCode = 1;
-}
-EOF_NODE
+  node "$placement" state "$root" "$common_dir" "$1" "${2:-}" "${3:-cleanup}"
 }
 
 has_worktree_merge_output() {

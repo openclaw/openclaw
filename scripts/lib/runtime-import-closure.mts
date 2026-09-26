@@ -13,6 +13,8 @@ import {
 import { visitModuleSpecifiers } from "./ts-guard-utils.mts";
 
 const sourceFilePattern = /\.[cm]?[jt]sx?$/;
+const isDeclaration = (file: string) => /\.d\.[cm]?ts$/.test(file);
+const isExecutableInput = (file: string) => /\.[cm]?[jt]s$/.test(file) && !isDeclaration(file);
 
 type ImportReference = {
   kind: string;
@@ -125,7 +127,6 @@ export function createRuntimeImportGraph(
   });
   const parser = createNativeTypeScriptParser({ cwd: root });
   const references = new Map<string, ImportReference[]>();
-  const isDeclaration = (file: string) => /\.d\.[cm]?ts$/.test(file);
   let session;
   try {
     session = createNativeTypeScriptProject({
@@ -267,14 +268,14 @@ export function collectRuntimeImportClosure(
   }: { includeDynamicImports?: boolean; validatePackages?: boolean } = {},
 ): string[] {
   const closure = new Set(inputs.map((file) => file.split(sep).join("/")));
-  const sourceInputs = inputs.filter((file) => /\.[cm]?[jt]s$/.test(file));
+  const sourceInputs = inputs.filter(isExecutableInput);
   if (sourceInputs.length === 0) {
     return [...closure].toSorted();
   }
   const graph = createRuntimeImportGraph(root, sourceInputs, { includeDynamicImports });
   try {
     for (const file of closure) {
-      if (!/\.[cm]?[jt]s$/.test(file)) {
+      if (!isExecutableInput(file)) {
         continue;
       }
       for (const { specifier, resolvedFileName, isExternalLibraryImport } of graph.dependencies(

@@ -70,7 +70,7 @@ pr_subcommand_classification() {
     ls | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
+    gc | lock-recover | worktree-isolate | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -527,6 +527,10 @@ Usage:
   scripts/pr prepare-push <PR>
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
+  scripts/pr worktree-isolate <PR> <EXPECTED_HEAD>
+    Run from the canonical owner after stopping checkout/admin holders.
+    Preserve the prepared checkout at its isolated native location; never copy or recreate it.
+    Interrupted moves retain their intent and operation lock for exact recovery.
   scripts/pr ci-dispatch <PR> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>]
@@ -639,6 +643,10 @@ main() {
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       ;;
+    worktree-isolate)
+      [ "$#" -eq 2 ] && is_canonical_pr_number "$1" &&
+        [[ "$2" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || { usage; exit 2; }
+      ;;
     merge-complete)
       [ "$#" -eq 3 ] && is_canonical_pr_number "$1" &&
         [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
@@ -749,6 +757,9 @@ main() {
         dry_run=true
       fi
       gc_pr_worktrees "$dry_run"
+      ;;
+    worktree-isolate)
+      isolate_pr_worktree "$1" "$2"
       ;;
     review-init)
       local pr="${1-}"

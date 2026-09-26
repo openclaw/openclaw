@@ -99,7 +99,7 @@ async function fixture(command: CommandFixture) {
     const shell = join(root, "invoke.sh");
     writeFileSync(
       shell,
-      `#!/usr/bin/env bash
+      `${process.platform === "darwin" ? "#!/bin/bash" : "#!/usr/bin/env bash"}
 set -euo pipefail
 script_parent_dir="$FIXTURE_REPO"
 source "$FIXTURE_SCRIPTS/pr-lib/worktree.sh"

@@ -6,11 +6,27 @@ release artifacts under ordinary ship authority.
 
 ## Checkout and source
 
-`scripts/pr` owns review/prepare worktrees under the canonical repository. If that
-location is outside writable scope, use a fresh full ordinary checkout inside the
-allowed workspace before initializing the operation. Preserve complete history
-and blobs for provenance. Do not clone away an active/uncertain operation or use a
-new lock namespace to retry an uncertain merge.
+`scripts/pr` owns review/prepare worktree placement. Use the emitted `worktree=`
+path; do not derive the checkout directory. Cold creation and explicit isolation
+require the physical sibling parent `<canonical-root>.pr-worktrees` to be writable.
+The placement owner creates and removes an owned probe before cold fetch/removal or
+new move intent; a denied probe reports the exact parent and underlying error.
+Failed probe removal retains and names only that probe, not a completed cleanup.
+Healthy registered legacy checkouts do not require this sibling write grant.
+
+Before a restricted Codex CLI session, the operator must provision that exact
+parent in an approved environment and can start with
+`codex --add-dir "<canonical-root>.pr-worktrees"`, retaining the existing sandbox
+and approval policy. This directory grant does not authorize protected Git
+metadata: the canonical `.git`, linked-worktree admin directory and checkout
+`.git` still need their existing authorization. If managed policy denies the
+operation, stop and use an approved maintainer environment; do not disable the
+sandbox, grant full access or fall back to nested placement. These requirements
+are not live sandbox qualification.
+
+Preserve complete history and blobs for
+provenance. Do not clone away an active/uncertain operation or use a new lock
+namespace to retry an uncertain merge.
 
 Run the trusted canonical/origin-main wrapper. Untrusted PR code must not supply
 the local wrapper or execute locally; use the source isolation procedure from
