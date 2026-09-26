@@ -377,26 +377,13 @@ describe("memory host SDK package internals", () => {
     {
       label: "a bare globstar",
       patterns: ["**"],
-      expectedFiles: [
-        "root.md",
-        "notes/team/keep.md",
-        "notes/team/deeper/keep.md",
-        "logs.cache/deep/keep.md",
-        "archive/deep/keep.md",
-        "scratch/deep/keep.md",
-      ],
+      expectedFiles: undefined,
       expectedDirectories: undefined,
     },
     {
       label: "brace alternatives containing separators and extglobs",
       patterns: ["{notes,archive/deep}/**/*.md", "@(logs.cache|scratch)/**/*.md"],
-      expectedFiles: [
-        "notes/team/keep.md",
-        "notes/team/deeper/keep.md",
-        "logs.cache/deep/keep.md",
-        "archive/deep/keep.md",
-        "scratch/deep/keep.md",
-      ],
+      expectedFiles: undefined,
       expectedDirectories: undefined,
     },
     {
@@ -430,7 +417,7 @@ describe("memory host SDK package internals", () => {
     async ({ patterns, expectedFiles, expectedDirectories }) => {
       const workspaceDir = getTmpDir();
       const extraDir = path.join(workspaceDir, "extra");
-      for (const relativeFile of [
+      const fixtureFiles = [
         "root.md",
         "notes/team/keep.md",
         "notes/team/deeper/keep.md",
@@ -438,7 +425,8 @@ describe("memory host SDK package internals", () => {
         "archive/deep/keep.md",
         ".hidden/deep/keep.md",
         "scratch/deep/keep.md",
-      ]) {
+      ];
+      for (const relativeFile of fixtureFiles) {
         const file = path.join(extraDir, relativeFile);
         fsSync.mkdirSync(path.dirname(file), { recursive: true });
         fsSync.writeFileSync(file, "# Memory\n");
@@ -452,7 +440,16 @@ describe("memory host SDK package internals", () => {
 
       expect(
         files.map((file) => path.relative(extraDir, file).replaceAll(path.sep, "/")).toSorted(),
-      ).toEqual(expectedFiles.toSorted());
+      ).toEqual(
+        (
+          expectedFiles ??
+          // Node and Bun differ on dotfiles and extglobs. Pruning must preserve
+          // each runtime's existing exhaustive leaf-match results.
+          fixtureFiles.filter((file) =>
+            patterns.some((pattern) => !pattern || path.posix.matchesGlob(file, pattern)),
+          )
+        ).toSorted(),
+      );
       const scannedDirectories = readdir.mock.calls
         .map(([dir]) => path.resolve(String(dir)))
         .filter((dir) => dir === extraDir || dir.startsWith(`${extraDir}${path.sep}`));
