@@ -49,10 +49,12 @@ test("automatic list and search projection reuse conventional state-directory pr
           metadata,
           async () => {
             const observations = [];
-            const stateDirectoryProbes: Array<{
+            const filesystemProbes: Array<{
+              operation: string;
+              pathname: fsSync.PathLike;
               search: string;
               runtime: string;
-              stack: string | undefined;
+              error: Error;
             }> = [];
             for (const search of [undefined, "unmatched-runtime-search", "openclaw"]) {
               const request = { configuredAgentsOnly: true, includeGlobal: false, search };
@@ -73,25 +75,36 @@ test("automatic list and search projection reuse conventional state-directory pr
                 }
                 const warm = await directSessionReq("sessions.list", request);
                 expect(warm.ok).toBe(true);
-                const existsSync = fsSync.existsSync;
-                const exists = vi.spyOn(fsSync, "existsSync").mockImplementation((pathname) => {
-                  // Retain bounded provenance for probes that only reproduce in shared CI shards.
-                  if (
-                    stateDirectoryProbes.length < 3 &&
-                    (pathname === stateDir || pathname === legacyStateDir)
-                  ) {
-                    stateDirectoryProbes.push({
+                const recordProbe = (operation: string, pathname: fsSync.PathLike) => {
+                  if (filesystemProbes.length < 6) {
+                    filesystemProbes.push({
+                      operation,
+                      pathname,
                       search: search ?? "list",
                       runtime: agentRuntimeOverride ?? "auto",
-                      stack: new Error("Unexpected state-directory probe").stack,
+                      error: new Error("Unexpected filesystem probe"),
                     });
+                  }
+                };
+                const existsSync = fsSync.existsSync;
+                const exists = vi.spyOn(fsSync, "existsSync").mockImplementation((pathname) => {
+                  if (pathname === stateDir || pathname === legacyStateDir) {
+                    recordProbe("exists", pathname);
                   }
                   return existsSync(pathname);
                 });
-                const lstat = vi.spyOn(fsSync, "lstatSync");
+                const lstatSync = fsSync.lstatSync;
+                const lstat = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+                  recordProbe("lstat", args[0]);
+                  return lstatSync(...args);
+                });
                 const readlink = vi.spyOn(fsSync, "readlinkSync");
                 const realpath = vi.spyOn(fsSync.realpathSync, "native");
-                const stat = vi.spyOn(fsSync, "statSync");
+                const statSync = fsSync.statSync;
+                const stat = vi.spyOn(fsSync, "statSync").mockImplementation((...args) => {
+                  recordProbe("stat", args[0]);
+                  return statSync(...args);
+                });
                 const environments = vi.spyOn(runtimePaths, "captureRuntimeStateEnvironment");
                 syncBuiltinESMExports();
                 try {
@@ -127,7 +140,15 @@ test("automatic list and search projection reuse conventional state-directory pr
                 auto: counts[1],
               });
             }
-            expect(observations, JSON.stringify(stateDirectoryProbes, null, 2)).toEqual(
+            // Format stacks after restoring spies: source-map lookup can itself touch the filesystem.
+            const provenance = filesystemProbes.map((probe) => ({
+              operation: probe.operation,
+              pathname: String(probe.pathname).replace(home, "<fixture>"),
+              search: probe.search,
+              runtime: probe.runtime,
+              stack: probe.error.stack,
+            }));
+            expect(observations, JSON.stringify(provenance, null, 2)).toEqual(
               observations.map(({ surface, pinned }) => ({ surface, pinned, auto: pinned })),
             );
           },
