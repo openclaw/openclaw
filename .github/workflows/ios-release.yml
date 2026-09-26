@@ -168,6 +168,23 @@ jobs:
           path: |
             ${{ runner.temp }}/ios-release-recovery/artifacts/*.ipa
             ${{ runner.temp }}/ios-release-recovery/artifacts/*.sha256
+            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/app-store/*.ipa
+            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/app-store/*.sha256
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 30
+
+      - name: Retain sanitized screenshot diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-screenshot-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/screenshots/*.png
+            ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/capture-attempts.json
+            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/fastlane/screenshots/en-US/*.png
+            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/SnapshotTestResults/capture-attempts.json
           if-no-files-found: ignore
           compression-level: 0
           retention-days: 30

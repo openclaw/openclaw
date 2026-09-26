@@ -97,21 +97,40 @@ function bridgeLocalTools(root, source, platform) {
 }
 
 function collectArtifacts(source, recovery, platform) {
-  const directory = path.join(
-    source,
-    "apps",
-    platform,
-    "build",
-    platform === "ios" ? "app-store" : "release-artifacts",
-  );
-  if (!fs.existsSync(directory)) {
-    return;
-  }
-  const destination = path.join(recovery, "artifacts");
-  for (const file of fs.readdirSync(directory)) {
-    if (/\.(ipa|aab|apk|sha256)$/.test(file)) {
+  const groups = [
+    {
+      source: `apps/${platform}/build/${platform === "ios" ? "app-store" : "release-artifacts"}`,
+      destination: "artifacts",
+      filename: /\.(ipa|aab|apk|sha256)$/,
+    },
+    ...(platform === "ios"
+      ? [
+          {
+            source: "apps/ios/fastlane/screenshots/en-US",
+            destination: "screenshot-diagnostics/screenshots",
+            filename: /\.png$/,
+          },
+          {
+            source: "apps/ios/build/SnapshotTestResults",
+            destination: "screenshot-diagnostics",
+            filename: /^capture-attempts\.json$/,
+          },
+        ]
+      : []),
+  ];
+  // Raw Xcode logs and xcresults can contain environment or pairing credentials.
+  for (const group of groups) {
+    const directory = path.join(source, group.source);
+    if (!fs.existsSync(directory)) {
+      continue;
+    }
+    for (const file of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!file.isFile() || !group.filename.test(file.name)) {
+        continue;
+      }
+      const destination = path.join(recovery, group.destination);
       fs.mkdirSync(destination, { recursive: true });
-      fs.copyFileSync(path.join(directory, file), path.join(destination, file));
+      fs.copyFileSync(path.join(directory, file.name), path.join(destination, file.name));
     }
   }
 }

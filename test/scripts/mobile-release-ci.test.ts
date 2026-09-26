@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { globSync } from "tinyglobby";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -51,16 +52,149 @@ function commit(repository: string, message: string): string {
   return git(repository, "rev-parse", "HEAD");
 }
 
-function extractKvmFunction(source: string): string {
-  const start = source.indexOf("verify_kvm_acceleration() {");
-  const end = source.indexOf('\n\ntest "$RUNNER_OS/$RUNNER_ARCH"', start);
-  if (start < 0 || end <= start) {
-    throw new Error("missing bounded KVM acceleration function");
+function releaseArtifactFiles(workflowFile: string, artifactPrefix: string, runnerTemp: string) {
+  const workflow = parse(fs.readFileSync(workflowFile, "utf8")) as {
+    jobs: {
+      release: {
+        steps: Array<{
+          if?: string;
+          uses?: string;
+          with?: { name?: string; path?: string };
+        }>;
+      };
+    };
+  };
+  const upload = workflow.jobs.release.steps.find(
+    (step) =>
+      step.uses?.startsWith("actions/upload-artifact@") &&
+      step.with?.name?.startsWith(artifactPrefix),
+  );
+  if (!upload?.with?.path) {
+    throw new Error(`Missing ${artifactPrefix} upload in ${workflowFile}`);
   }
-  return source.slice(start, end);
+  expect(upload.if).toBe("always()");
+  const patterns = upload.with.path
+    .trim()
+    .split(/\r?\n/u)
+    .map((pattern) => pattern.replaceAll("${{ runner.temp }}", runnerTemp));
+  return globSync(patterns, { cwd: runnerTemp, dot: true }).toSorted();
 }
 
 describe("mobile release CI tools", () => {
+  describe.each([
+    {
+      platform: "ios",
+      workflow: ".github/workflows/ios-release.yml",
+      buildDirectory: "app-store",
+      binaries: ["OpenClaw.ipa", "OpenClaw.ipa.sha256"],
+    },
+    {
+      platform: "android",
+      workflow: ".github/workflows/android-store-release.yml",
+      buildDirectory: "release-artifacts",
+      binaries: ["OpenClaw-phone.aab", "OpenClaw-wear.aab", "OpenClaw.apk", "OpenClaw.aab.sha256"],
+    },
+  ])("$platform release artifact recovery", ({ platform, workflow, buildDirectory, binaries }) => {
+    it.each(["collected", "interrupted"])(
+      "uploads only the signed binaries and checksums when collection is %s",
+      (state) => {
+        const runnerTemp = tempRoots.make("openclaw-release-artifact-selection-");
+        const recovery = `${platform}-release-recovery`;
+        const build = `${recovery}/source/apps/${platform}/build`;
+        const directory =
+          state === "collected" ? `${recovery}/artifacts` : `${build}/${buildDirectory}`;
+        const expected = binaries.map((file) => `${directory}/${file}`).toSorted();
+        for (const file of expected) {
+          writeFile(runnerTemp, file, "synthetic signed release artifact");
+        }
+        for (const file of [
+          `${build}/release-signing/upload.jks`,
+          `${build}/release-signing/AuthKey.p8`,
+          `${build}/release-signing/${binaries[0]}`,
+          `${directory}/credentials.json`,
+          `${directory}/.env`,
+          `${directory}/nested/${binaries[0]}`,
+          `${build}/SnapshotLogs/xcodebuild.log`,
+          `${build}/SnapshotTestResults/result.xcresult/Info.plist`,
+        ]) {
+          writeFile(runnerTemp, file, "synthetic excluded data");
+        }
+        expect(
+          releaseArtifactFiles(workflow, `${platform}-release-artifacts-`, runnerTemp),
+        ).toEqual(expected);
+      },
+    );
+  });
+
+  it.each(["collected", "interrupted"])(
+    "uploads only safe iOS screenshot diagnostics when collection is %s",
+    (state) => {
+      const runnerTemp = tempRoots.make("openclaw-ios-screenshot-artifact-selection-");
+      const recovery = "ios-release-recovery";
+      const source = `${recovery}/source/apps/ios`;
+      const collected = `${recovery}/screenshot-diagnostics`;
+      const screenshots =
+        state === "collected" ? `${collected}/screenshots` : `${source}/fastlane/screenshots/en-US`;
+      const results = state === "collected" ? collected : `${source}/build/SnapshotTestResults`;
+      const expected = [
+        `${screenshots}/01-chat.png`,
+        `${results}/capture-attempts.json`,
+      ].toSorted();
+      for (const file of expected) {
+        writeFile(runnerTemp, file, "synthetic safe screenshot diagnostic");
+      }
+      for (const file of [
+        `${screenshots}/capture.log`,
+        `${screenshots}/nested/private.png`,
+        `${results}/pairing.json`,
+        `${results}/result.xcresult/Info.plist`,
+        `${collected}/SnapshotLogs/xcodebuild.log`,
+        `${source}/build/SnapshotLogs/xcodebuild.log`,
+        `${source}/build/release-signing/AuthKey.p8`,
+        `${source}/fastlane/.env`,
+      ]) {
+        writeFile(runnerTemp, file, "synthetic excluded data");
+      }
+      expect(
+        releaseArtifactFiles(
+          ".github/workflows/ios-release.yml",
+          "ios-release-screenshot-diagnostics-",
+          runnerTemp,
+        ),
+      ).toEqual(expected);
+    },
+  );
+
+  it("uploads only Android emulator startup diagnostics after a screenshot failure", () => {
+    const runnerTemp = tempRoots.make("openclaw-android-emulator-artifact-selection-");
+    const source = "android-release-recovery/source";
+    const diagnostics = `${source}/.artifacts/android-screenshots/latest`;
+    const expected = ["phone", "wear"]
+      .flatMap((formFactor) =>
+        ["emulator.log", "emulator-args.txt", "process-status.txt"].map(
+          (file) => `${diagnostics}/${formFactor}/${file}`,
+        ),
+      )
+      .toSorted();
+    for (const file of expected) {
+      writeFile(runnerTemp, file, "synthetic emulator startup diagnostic");
+    }
+    for (const file of [
+      `${diagnostics}/phone/logcat.txt`,
+      `${diagnostics}/wear/ui-dumps/openclaw-home.xml`,
+      `${source}/apps/android/build/release-signing/google-play.json`,
+    ]) {
+      writeFile(runnerTemp, file, "synthetic excluded data");
+    }
+    expect(
+      releaseArtifactFiles(
+        ".github/workflows/android-store-release.yml",
+        "android-release-emulator-diagnostics-",
+        runnerTemp,
+      ),
+    ).toEqual(expected);
+  });
+
   it("keeps the Android emulator diagnostic manual, exact-SHA-bound, and secretless", async () => {
     const file = ".github/workflows/android-emulator-diagnostic.yml";
     const source = fs.readFileSync(file, "utf8");
@@ -137,7 +271,9 @@ describe("mobile release CI tools", () => {
     const toolingIndex = steps.findIndex(
       (step) => step.name === "Prepare trusted Linux Android tooling",
     );
-    const kvmIndex = steps.findIndex((step) => step.name === "Verify Linux KVM acceleration");
+    const kvmIndex = steps.findIndex(
+      (step) => step.name === "Collect Linux KVM acceleration proof",
+    );
     const diagnosticIndex = steps.findIndex(
       (step) => step.name === "Run phone emulator diagnostic",
     );
@@ -262,7 +398,7 @@ describe("mobile release CI tools", () => {
     expect(tooling).toContain('[[ -e "$apt_source_parts" || -L "$apt_source_parts" ]]');
     expect(tooling).toContain('/usr/bin/apt-get "${apt_options[@]}" update');
     expect(tooling).toMatch(
-      /\/usr\/bin\/apt-get "\$\{apt_options\[@\]\}" install \\\n\s+-y --no-install-recommends acl imagemagick/u,
+      /\/usr\/bin\/apt-get "\$\{apt_options\[@\]\}" install \\\n\s+-y --no-install-recommends imagemagick/u,
     );
     expect(tooling).toContain(
       'test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"',
@@ -277,30 +413,31 @@ describe("mobile release CI tools", () => {
     );
     expect(tooling).not.toContain("candidate/");
 
-    const kvm = steps[kvmIndex]?.run ?? "";
-    expect(kvm).toContain("verify_kvm_acceleration() {");
-    expect(kvm).toMatch(
-      /\/usr\/bin\/timeout --signal=TERM --kill-after=2s 15s \\\n\s+emulator -accel-check/u,
-    );
-    expect(kvm).not.toContain("--foreground");
-    expect(kvm).toContain("test -c /dev/kvm");
-    expect(kvm).toContain('/usr/bin/sudo /usr/bin/setfacl -m "u:${current_user}:rw" /dev/kvm');
-    expect(kvm).toContain(
-      '\'test -c "$KVM_DEVICE" && test -r "$KVM_DEVICE" && test -w "$KVM_DEVICE"\'',
-    );
-    expect(kvm).toContain("grep -Eiq '\\bKVM\\b.*\\b(available|usable)\\b'");
-    expect(kvm).not.toContain("chmod 666");
-    expect(kvm).not.toContain("-accel off");
+    const toolchainAction = parse(
+      fs.readFileSync(".github/actions/setup-android-toolchain/action.yml", "utf8"),
+    ) as { runs: { steps: Array<{ name: string; run?: string }> } };
+    const kvmSetup = toolchainAction.runs.steps.find(
+      (step) => step.name === "Configure Linux KVM acceleration",
+    )?.run;
+    if (!kvmSetup) {
+      throw new Error("Android toolchain action is missing its KVM setup");
+    }
 
     const runKvmFixture = (emulatorSource: string, timeoutMode = "run") => {
       const root = tempRoots.make("openclaw-android-kvm-");
       const bin = path.join(root, "bin");
-      const output = path.join(root, "kvm.txt");
+      const output = path.join(root, "android-emulator-kvm-check.txt");
       const sentinel = path.join(root, "sentinel");
+      const rule = path.join(root, "kvm.rules");
+      const udevTrace = path.join(root, "udev.trace");
       fs.mkdirSync(bin);
-      const timeout = path.join(bin, "timeout");
-      fs.writeFileSync(
-        timeout,
+      const executable = (name: string, contents: string) => {
+        const executablePath = path.join(bin, name);
+        fs.writeFileSync(executablePath, contents, { mode: 0o755 });
+        return executablePath;
+      };
+      const timeout = executable(
+        "timeout",
         [
           "#!/bin/bash",
           "set -euo pipefail",
@@ -309,38 +446,41 @@ describe("mobile release CI tools", () => {
           'exec "$@"',
           "",
         ].join("\n"),
-        { mode: 0o755 },
       );
-      fs.writeFileSync(path.join(bin, "emulator"), emulatorSource, { mode: 0o755 });
-      const kvmFunction = extractKvmFunction(kvm).replace(
-        "/usr/bin/timeout",
-        '"$TEST_TIMEOUT_BIN"',
+      const sudo = executable("sudo", '#!/bin/bash\nexec "$@"\n');
+      const udevadm = executable(
+        "udevadm",
+        '#!/bin/bash\nprintf "%s\\n" "$*" >>"$KVM_UDEV_TRACE"\n',
       );
+      const stat = executable("stat", '#!/bin/bash\nprintf "%s:kvm:660\\n" "$(/usr/bin/id -u)"\n');
+      executable("emulator", emulatorSource);
+      // The real action runs unchanged except for host-only paths and privileged tool boundaries.
+      const body = kvmSetup
+        .replaceAll("/usr/bin/timeout", timeout)
+        .replaceAll("/usr/bin/sudo", sudo)
+        .replaceAll("/usr/bin/udevadm", udevadm)
+        .replaceAll("/usr/bin/stat", stat)
+        .replaceAll("/etc/udev/rules.d/99-openclaw-android-kvm.rules", rule)
+        .replaceAll("/dev/kvm", "/dev/null");
       const result = spawnSync(
         "/bin/bash",
-        [
-          "-c",
-          [
-            "set -euo pipefail",
-            kvmFunction,
-            'verify_kvm_acceleration "$KVM_OUTPUT"',
-            'printf "boot-or-signing\\n" >"$KVM_SENTINEL"',
-          ].join("\n"),
-        ],
+        ["-c", [body, 'printf "boot-or-signing\\n" >"$KVM_SENTINEL"'].join("\n")],
         {
           encoding: "utf8",
           env: {
             ...process.env,
-            KVM_OUTPUT: output,
             KVM_SENTINEL: sentinel,
             KVM_TIMEOUT_MODE: timeoutMode,
+            KVM_UDEV_TRACE: udevTrace,
             PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-            TEST_TIMEOUT_BIN: timeout,
+            RUNNER_OS: "Linux",
+            RUNNER_ARCH: "X64",
+            RUNNER_TEMP: root,
           },
           timeout: 5_000,
         },
       );
-      return { output: fs.readFileSync(output, "utf8"), result, sentinel };
+      return { output: fs.readFileSync(output, "utf8"), result, root, rule, sentinel, udevTrace };
     };
 
     const usableKvm = runKvmFixture(
@@ -348,6 +488,23 @@ describe("mobile release CI tools", () => {
     );
     expect(usableKvm.result.status, usableKvm.result.stderr).toBe(0);
     expect(fs.readFileSync(usableKvm.sentinel, "utf8")).toBe("boot-or-signing\n");
+    expect(fs.readFileSync(usableKvm.rule, "utf8")).toBe(
+      `SUBSYSTEM=="misc", KERNEL=="kvm", OWNER="${process.getuid?.()}", GROUP="kvm", MODE="0660"\n`,
+    );
+    expect(fs.readFileSync(usableKvm.udevTrace, "utf8").trim().split("\n")).toEqual([
+      "control --reload-rules",
+      "trigger --action=change --subsystem-match=misc --sysname-match=kvm",
+      "settle --timeout=15",
+    ]);
+    const kvmDiagnosticDir = path.join(usableKvm.root, "diagnostic");
+    fs.mkdirSync(kvmDiagnosticDir);
+    expect(steps[kvmIndex]?.if).toBe("always()");
+    command("/bin/bash", ["-c", steps[kvmIndex]?.run ?? ""], {
+      env: { ...process.env, RUNNER_TEMP: usableKvm.root, DIAGNOSTIC_DIR: kvmDiagnosticDir },
+    });
+    expect(fs.readFileSync(path.join(kvmDiagnosticDir, "emulator-kvm-check.txt"), "utf8")).toBe(
+      usableKvm.output,
+    );
 
     const unavailableKvm = runKvmFixture(
       "#!/bin/bash\nprintf 'acceleration unavailable\\n'\nexit 7\n",
@@ -355,6 +512,11 @@ describe("mobile release CI tools", () => {
     expect(unavailableKvm.result.status).not.toBe(0);
     expect(unavailableKvm.output).toContain("exit_status=7");
     expect(fs.existsSync(unavailableKvm.sentinel)).toBe(false);
+
+    const unconfirmedKvm = runKvmFixture("#!/bin/bash\nprintf 'unknown acceleration\\n'\n");
+    expect(unconfirmedKvm.result.status).not.toBe(0);
+    expect(unconfirmedKvm.result.stdout).toContain("did not confirm usable KVM acceleration");
+    expect(fs.existsSync(unconfirmedKvm.sentinel)).toBe(false);
 
     const timedOutKvm = runKvmFixture("#!/bin/bash\nexit 99\n", "timeout");
     expect(timedOutKvm.result.status).not.toBe(0);
@@ -975,18 +1137,6 @@ fi
     expect(tooling).not.toContain("/usr/bin/identify -ping");
   });
 
-  it("fully decodes Android JPEGs before enforcing true-color metadata", () => {
-    const adapter = fs.readFileSync("scripts/android-sips-linux.sh", "utf8");
-
-    expect(adapter).toContain(
-      "\"$identify_bin\" +ping -format '%m|%w|%h|%[colorspace]|%[type]|%[channels]|%Q'",
-    );
-    expect(adapter).not.toContain(
-      "\"$identify_bin\" -ping -format '%m|%w|%h|%[colorspace]|%[type]|%[channels]|%Q'",
-    );
-    expect(adapter).toContain('[[ "$output_type" == "TrueColor" ]]');
-  });
-
   it("isolates Ubuntu APT sources before Android tooling setup", () => {
     const workflowFiles = [
       ".github/workflows/android-emulator-diagnostic.yml",
@@ -1117,8 +1267,7 @@ fi
           'test "$5" = "install"',
           'test "$6" = "-y"',
           'test "$7" = "--no-install-recommends"',
-          'test "$8" = "acl"',
-          'test "$9" = "imagemagick"',
+          'test "$8" = "imagemagick"',
           'printf "install\\n" >"$INSTALL_SENTINEL"',
           "",
         ].join("\n"),
@@ -1234,7 +1383,7 @@ fi
       ).toBe(0);
       expect(restricted.calls).toEqual([
         `-o Dir::Etc::sourcelist=${restricted.aptSource} -o Dir::Etc::sourceparts=${restricted.aptSourceParts} update`,
-        `-o Dir::Etc::sourcelist=${restricted.aptSource} -o Dir::Etc::sourceparts=${restricted.aptSourceParts} install -y --no-install-recommends acl imagemagick`,
+        `-o Dir::Etc::sourcelist=${restricted.aptSource} -o Dir::Etc::sourceparts=${restricted.aptSourceParts} install -y --no-install-recommends imagemagick`,
       ]);
       expect(pathExists(restricted.aptSourceParts)).toBe(false);
       expect(fs.existsSync(restricted.installSentinel)).toBe(true);

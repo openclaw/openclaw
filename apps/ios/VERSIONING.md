@@ -221,10 +221,16 @@ are required. A locked version, invalid or expired build, newer selected build,
 or mismatched source stops recovery for human resolution. Partial staging can
 be retried with the same command after the cause is fixed.
 
-The recovery directory contains the saved plan, notes, source bundle, and any
-exported signed binaries under `artifacts/`. CI retains its recovery and binary
-artifacts for 30 days. Keep the original notes artifact for staging recovery;
-a source SHA alone cannot reconstruct the exact reviewed text.
+The recovery directory contains the saved plan and notes, any exported signed
+binaries under `artifacts/`, and screenshot fixture PNGs and the capture-attempt
+ledger under `screenshot-diagnostics/`. Raw Xcode logs and XCTest results are
+excluded because they can contain credentials. Failed local attempts also keep
+their source worktree; staging recovery can restore source from the immutable
+upload ref. CI retains the recovery, binary, and screenshot artifacts for 30 days.
+Binary and screenshot ZIPs can contain their recovery subdirectories or matching
+`source/apps/ios/` build paths when an interrupted command did not finish collection.
+Keep the original notes artifact for staging recovery; a source SHA alone cannot
+reconstruct the exact reviewed text.
 
 If no successful upload ref exists, inspect App Store Connect before taking
 further action. An uncertain upload must not be repeated blindly. A failed ref

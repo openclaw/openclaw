@@ -35,7 +35,7 @@ function fixture(platform = "ios") {
   git(root, "config", "commit.gpgsign", "false");
   write(root, metadataPath, "# iOS releases\n\n## Unreleased\n\nHistorical notes.\n");
   write(root, "README.md", "Original application source.\n");
-  write(root, ".gitignore", "node_modules\n");
+  write(root, ".gitignore", "node_modules\napps/ios/build\napps/ios/fastlane/screenshots\n");
   write(
     root,
     "package.json",
@@ -76,7 +76,16 @@ const sha = git("rev-parse", "HEAD");
 const stageOnly = process.argv.includes("--stage-only");
 const notes = renderMobileReleaseNotes({ rootDir: process.cwd(), platform: "ios", version: "2026.9.20", build: "8", audience: "ios" });
 fs.appendFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify({ sha, stageOnly, notes, stampedSha: process.env.GIT_COMMIT, status: git("status", "--porcelain", "--untracked-files=all"), remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0], metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8") }) + "\\n");
-if (process.env.FIXTURE_UPLOAD_FAIL === "1") throw new Error("Synthetic store upload refused");
+if (process.env.FIXTURE_UPLOAD_FAIL === "1") {
+  fs.mkdirSync("apps/ios/fastlane/screenshots/en-US", { recursive: true });
+  fs.writeFileSync("apps/ios/fastlane/screenshots/en-US/iPhone-01-control-connected.png", "Synthetic fixture screenshot");
+  fs.mkdirSync("apps/ios/build/SnapshotTestResults/failure.xcresult", { recursive: true });
+  fs.writeFileSync("apps/ios/build/SnapshotTestResults/capture-attempts.json", JSON.stringify({ schemaVersion: 1, attempts: [{ deviceName: "iPhone", screenshotName: "02-chat-connected", attempt: 1, captureOutcome: "failed" }] }));
+  fs.writeFileSync("apps/ios/build/SnapshotTestResults/failure.xcresult/pairing.txt", "Synthetic private pairing state");
+  fs.mkdirSync("apps/ios/build/SnapshotLogs", { recursive: true });
+  fs.writeFileSync("apps/ios/build/SnapshotLogs/build.log", "Synthetic private build environment");
+  throw new Error("Synthetic store upload refused");
+}
 if (!stageOnly) git("push", "origin", sha + ":${uploadRef}");
 if (process.env.FIXTURE_STAGE_FAIL === "1") throw new Error("Synthetic metadata stage refused after upload");
 console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accepted");
@@ -285,13 +294,38 @@ describe("mobile release CLI", () => {
     expect(f.audit()).toHaveLength(1);
   });
 
-  it("retains a failed upload attempt and refuses staging without proof of accepted upload", () => {
+  it("retains safe screenshot diagnostics before archive and refuses staging without an upload", () => {
     const f = fixture();
     const result = f.invoke("run", [], { FIXTURE_UPLOAD_FAIL: "1" });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Synthetic store upload refused");
     expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(true);
     expect(fs.existsSync(path.join(f.recovery, "release-notes.json"))).toBe(true);
+    expect(fs.existsSync(path.join(f.recovery, "artifacts"))).toBe(false);
+    const diagnostics = path.join(f.recovery, "screenshot-diagnostics");
+    expect(fs.readdirSync(diagnostics).toSorted()).toEqual([
+      "capture-attempts.json",
+      "screenshots",
+    ]);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(diagnostics, "capture-attempts.json"), "utf8")),
+    ).toEqual({
+      schemaVersion: 1,
+      attempts: [
+        {
+          deviceName: "iPhone",
+          screenshotName: "02-chat-connected",
+          attempt: 1,
+          captureOutcome: "failed",
+        },
+      ],
+    });
+    expect(
+      fs.readFileSync(
+        path.join(diagnostics, "screenshots/iPhone-01-control-connected.png"),
+        "utf8",
+      ),
+    ).toBe("Synthetic fixture screenshot");
     const recovery = f.invoke("stage");
     expect(recovery.status).toBe(1);
     expect(recovery.stderr).toContain("No matching upload record");
