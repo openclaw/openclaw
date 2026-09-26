@@ -9,6 +9,7 @@ import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.j
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
 const telegramInboundInfo = vi.hoisted(() => vi.fn());
+const logVerbose = vi.hoisted(() => vi.fn());
 const sleepWithAbort = vi.hoisted(() =>
   vi.fn<(delayMs: number, signal?: AbortSignal) => Promise<void>>(async () => undefined),
 );
@@ -28,7 +29,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   }),
   computeBackoff: vi.fn((_policy: unknown, attempt: number) => attempt),
   danger: (message: string) => message,
-  logVerbose: vi.fn(),
+  logVerbose,
   shouldLogVerbose: () => false,
   sleepWithAbort,
 }));
@@ -60,6 +61,7 @@ describe("telegram bot message processor", () => {
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();
     telegramInboundInfo.mockClear();
+    logVerbose.mockClear();
     sleepWithAbort.mockReset().mockResolvedValue(undefined);
     upsertChannelPairingRequest.mockClear();
   });
@@ -831,6 +833,9 @@ describe("telegram bot message processor", () => {
     );
     expect(runtimeError).toHaveBeenCalledWith(
       "telegram message processing failed: Error: dispatch exploded",
+    );
+    expect(logVerbose).toHaveBeenCalledWith(
+      "telegram fallback send failed for chat 123: Error: blocked by user",
     );
   });
 });

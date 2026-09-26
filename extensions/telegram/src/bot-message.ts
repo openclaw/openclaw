@@ -302,7 +302,11 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
               "Something went wrong while processing your request. Please try again.",
               buildTelegramThreadParams(context.threadSpec),
             );
-          } catch {}
+          } catch (fallbackError) {
+            logVerbose(
+              `telegram fallback send failed for chat ${context.chatId}: ${String(fallbackError)}`,
+            );
+          }
         }
         const result: TelegramMessageProcessingResult = {
           kind: "failed-retryable",
