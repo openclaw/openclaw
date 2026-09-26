@@ -36,6 +36,35 @@ export type AssembleResult = {
    * legacy per-turn projection behavior.
    */
   contextProjection?: ContextEngineProjection;
+  /**
+   * Trusted context-owner attestation for optional per-turn apply. Every listed
+   * message is discretionary: no active operation, approval state, unresolved
+   * commitment, standing requirement, or task-required identifier depends on it.
+   * Omit this field when the engine cannot establish that boundary. Core's
+   * user/recent/error/atomic-frame protections always override these candidates.
+   */
+  semanticCurationCandidates?: {
+    discretionaryMessageIndexes: number[];
+    requiredIdentifiers: string[];
+  };
+  /** Content-free per-turn observation; never changes the engine's persisted transcript. */
+  semanticCurationObservation?: {
+    mode: "shadow" | "apply";
+    applied?: boolean;
+    projectedNetSavingsMs?: number;
+    reason: string;
+    sourceChars: number;
+    selectedChars: number;
+    sourceEstimatedTokens: number;
+    selectedEstimatedTokens: number;
+    reductionRatio: number;
+    protectedSegments: number;
+    evaluatedSegments: number;
+    uncertainSegments: number;
+    decisionWallMs: number;
+    decisionInputTokens?: number;
+    decisionOutputTokens?: number;
+  };
 };
 
 export type ContextEngineProjection = {

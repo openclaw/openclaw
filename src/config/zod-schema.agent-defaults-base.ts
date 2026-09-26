@@ -73,6 +73,25 @@ export const AgentDefaultsBaseSchema = z
     modelSelectionScope: z.enum(["session", "agent", "global"]).optional(),
     utilityModel: z.string().optional(),
     decisionModel: DecisionModelSchema.optional(),
+    turnContextCuration: z
+      .object({
+        mode: z.enum(["off", "shadow", "apply"]).optional(),
+        minEstimatedTokens: z.number().int().positive().optional(),
+        recentMessages: z.number().int().min(2).max(100).optional(),
+        minDropProbability: z.number().min(0.9).max(1).optional(),
+        economics: z
+          .object({
+            modelId: z.string().min(1),
+            savedMsPerEstimatedToken: z.number().positive(),
+            decisionOverheadMs: z.number().nonnegative(),
+            cachePenaltyMs: z.number().nonnegative(),
+          })
+          .strict()
+          .optional(),
+        timeoutMs: z.number().int().positive().max(5_000).optional(),
+      })
+      .strict()
+      .optional(),
     imageModel: AgentToolModelSchema.optional(),
     mediaModels: z
       .object({
@@ -185,6 +204,16 @@ export const AgentDefaultsBaseSchema = z
             enabled: z.boolean().optional(),
             /** Maximum regeneration retries after a failed quality audit. Default: 1 when enabled. */
             maxRetries: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+        /** Optional typed-decision semantic observation for safeguard compaction. */
+        semanticCuration: z
+          .object({
+            /** Observation mode. Shadow mode never changes summarizer input. */
+            mode: z.enum(["off", "shadow"]).optional(),
+            /** Per-decision deadline in milliseconds. */
+            timeoutMs: z.number().int().positive().max(5000).optional(),
           })
           .strict()
           .optional(),

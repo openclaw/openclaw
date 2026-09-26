@@ -19,6 +19,7 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
+import type { SemanticTurnContextOptions } from "./semantic-turn-context.js";
 
 export {
   buildAfterTurnRuntimeContext as buildHarnessContextEngineRuntimeContext,
@@ -145,6 +146,8 @@ export async function assembleHarnessContextEngine(
     prompt?: string;
     runtimeContext?: ContextEngineRuntimeContext;
     transcriptReadFence?: UserTurnTranscriptAdmissionReceipt;
+    /** Captured run authority; optional for hosts that have not adopted semantic observation. */
+    semanticCuration?: SemanticTurnContextOptions;
   },
 ) {
   if (!params.contextEngine) {
@@ -187,7 +190,24 @@ export async function assembleHarnessContextEngine(
           assemble,
         ),
   );
-  return ensureAssembleResultShape(result, contextEngine.info.id);
+  const assembled = ensureAssembleResultShape(result, contextEngine.info.id);
+  if (
+    !params.semanticCuration ||
+    (params.semanticCuration.config?.mode !== "shadow" &&
+      params.semanticCuration.config?.mode !== "apply") ||
+    !params.semanticCuration.isEligible()
+  ) {
+    return assembled;
+  }
+  const { observeSemanticTurnContext } = await import("./semantic-turn-context.js");
+  return observeSemanticTurnContext(assembled, {
+    ...params.semanticCuration,
+    prompt: params.prompt,
+    modelId: params.modelId,
+    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+    appendOnly:
+      params.appendOnlyRuntimeContext || params.contextEngineHostSupport?.id === "codex-app-server",
+  });
 }
 
 /** Invalid plugin results must fail here so the runner can fall back without poisoning state. */

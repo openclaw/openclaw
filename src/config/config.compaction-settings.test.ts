@@ -30,6 +30,17 @@ describe("config compaction settings", () => {
     expect(materializeCompactionConfig(compaction)).toEqual(compaction);
   });
 
+  it("preserves semantic curation settings with other safeguard settings", () => {
+    const compaction = {
+      mode: "safeguard",
+      identifierPolicy: "strict",
+      qualityGuard: { enabled: true, maxRetries: 2 },
+      semanticCuration: { mode: "shadow", timeoutMs: 600 },
+      midTurnPrecheck: { enabled: true },
+    } as const;
+    expect(materializeCompactionConfig(compaction)).toEqual(compaction);
+  });
+
   it("defaults compaction mode to safeguard", () => {
     const compaction = materializeCompactionConfig({});
 

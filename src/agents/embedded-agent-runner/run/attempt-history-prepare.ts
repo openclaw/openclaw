@@ -1,6 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
 import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
+import { createRuntimeConfigReader } from "../../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
@@ -9,6 +11,8 @@ import {
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { isDecisionAssistanceEligible } from "../../decision-assistance.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -36,6 +40,9 @@ export async function prepareEmbeddedAttemptHistory(
   input: EmbeddedAttemptExecutionPhaseInput,
 ): Promise<PreparedEmbeddedAttemptHistory> {
   const { attempt, activeContextEngine, isRawModelRun } = input;
+  const readDecisionConfig = createRuntimeConfigReader(attempt.config ?? {});
+  // Capture the prepared policy before history/assembly awaits can revoke it.
+  const curationConfig = structuredClone(attempt.config?.agents?.defaults?.turnContextCuration);
   const {
     agentSession: { activeSession, settingsManager, setActiveSessionSystemPrompt },
     boundary: { orphanRepair },
@@ -177,7 +184,43 @@ export async function prepareEmbeddedAttemptHistory(
   let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> = "assembled";
   let contextEngineAssemblySucceeded = false;
   let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
-  if (activeContextEngine) {
+  // Built-in attempts retain internal admitted authority; plugin harnesses use
+  // the separately captured host capability. Never manufacture a no-op binding.
+  const hostCapabilities = attempt.hostCapabilities;
+  const assertCurationActive = attempt.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, input.runAbortController.signal)
+    : hostCapabilities
+      ? () => hostCapabilities.assertActive()
+      : undefined;
+  const isCurationEligible = () => {
+    const currentConfig = readDecisionConfig();
+    return (
+      isDecisionAssistanceEligible(currentConfig, sessionAgentId) &&
+      isDeepStrictEqual(currentConfig.agents?.defaults?.turnContextCuration, curationConfig)
+    );
+  };
+  const semanticCuration =
+    !isRawModelRun &&
+    !isSettledTurnFinalization &&
+    curationConfig &&
+    (curationConfig.mode === "shadow" || curationConfig.mode === "apply") &&
+    isCurationEligible() &&
+    assertCurationActive
+      ? {
+          config: curationConfig,
+          signal: input.runAbortController.signal,
+          assertActive: assertCurationActive,
+          isEligible: isCurationEligible,
+        }
+      : undefined;
+  let assemblyEngine = activeContextEngine;
+  if (!assemblyEngine && semanticCuration) {
+    // Selection normally erases the pass-through legacy engine. Restore only
+    // its assembly boundary for opted-in, admitted observation; off stays exact.
+    const { LegacyContextEngine } = await import("../../../context-engine/legacy.js");
+    assemblyEngine = new LegacyContextEngine();
+  }
+  if (assemblyEngine) {
     try {
       // Assemble may window the input in place. Preserve the original history for
       // the overflow precheck when the engine says preassembly can still overflow.
@@ -201,7 +244,7 @@ export async function prepareEmbeddedAttemptHistory(
       const messageBudget = Math.max(1, promptBudget - renderedPromptTokens);
       const transcriptReadFence = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
       const assembled = await assembleHarnessContextEngine({
-        contextEngine: activeContextEngine,
+        contextEngine: assemblyEngine,
         sessionId: attempt.sessionId,
         sessionKey: attempt.sessionKey,
         agentId: sessionAgentId,
@@ -219,6 +262,7 @@ export async function prepareEmbeddedAttemptHistory(
         fallbackReason: attempt.fallbackReason,
         degradedReason: attempt.degradedReason,
         transcriptReadFence,
+        ...(semanticCuration ? { semanticCuration } : {}),
         ...(attempt.prompt !== undefined ? { prompt } : {}),
       });
       if (!assembled) {
@@ -247,6 +291,8 @@ export async function prepareEmbeddedAttemptHistory(
         );
       }
     } catch (error) {
+      input.runAbortController.signal.throwIfAborted();
+      assertCurationActive?.();
       log.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
     }
   }
