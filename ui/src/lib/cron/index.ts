@@ -32,7 +32,7 @@ import { loadCronJobsPage } from "./jobs.ts";
 import { getCronJobPayload } from "./payload.ts";
 import { cronRunNotStartedMessage } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
-import type { CronFieldErrors, CronFormState, CronState } from "./types.ts";
+import type { CronFieldErrors, CronFormState, CronPendingAction, CronState } from "./types.ts";
 import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 
 export { loadCronScopeStats } from "./scope.ts";
@@ -145,6 +145,7 @@ export function createInitialCronState<Row = CronJob>(
     cronRunsQuery: "",
     cronRunsSortDir: "desc",
     cronBusy: false,
+    cronPendingAction: null,
   };
 }
 
@@ -425,6 +426,7 @@ export function resolveConfiguredCronModelSuggestions(
 async function withCronBusy(
   state: CronState,
   job: Pick<CronJob, "id" | "name" | "displayName"> | undefined,
+  action: CronPendingAction,
   run: (client: GatewayBrowserClient, reportFeedback: (message: string) => void) => Promise<void>,
 ) {
   const client = state.client;
@@ -438,6 +440,9 @@ async function withCronBusy(
   };
   retireCronStatusFeedback(state);
   state.cronBusy = true;
+  // The lock is shared by every mutation, so publish the identity alongside it
+  // and release both from the same finally.
+  state.cronPendingAction = action;
   state.cronError = null;
   try {
     await run(client, reportFeedback);
@@ -446,6 +451,7 @@ async function withCronBusy(
   } finally {
     retireCronStatusFeedback(state);
     state.cronBusy = false;
+    state.cronPendingAction = null;
   }
 }
 
@@ -741,7 +747,7 @@ function extractSavedCronJobId(response: unknown): string | null {
 
 export async function addCronJob(state: CronState): Promise<CronSaveResult> {
   let result: CronSaveResult = { saved: false };
-  await withCronBusy(state, undefined, async (client) => {
+  await withCronBusy(state, undefined, "save", async (client) => {
     const form = normalizeCronFormState(state.cronForm);
     if (form !== state.cronForm) {
       state.cronForm = form;
@@ -926,7 +932,7 @@ export async function toggleCronJob(
   // Report whether the update RPC itself succeeded; the follow-up list reload
   // can be queued or fail without invalidating the confirmed toggle.
   let updated = false;
-  await withCronBusy(state, job, async (client) => {
+  await withCronBusy(state, job, "toggle", async (client) => {
     const updatedJob = await client.request<CronJob>("cron.update", {
       id: job.id,
       expectedConfigRevision: requireCronConfigRevision(job.configRevision),
@@ -950,7 +956,7 @@ export async function runCronJob(state: CronState, jobId: string, mode: "force" 
     state.cronEditingJob?.id === jobId
       ? state.cronEditingJob
       : (state.cronJobs.find((candidate) => candidate.id === jobId) ?? { id: jobId, name: jobId });
-  await withCronBusy(state, job, async (client, reportFeedback) => {
+  await withCronBusy(state, job, "run", async (client, reportFeedback) => {
     const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode });
     if (!result.ok || ("ran" in result && !result.ran)) {
       reportFeedback(cronRunNotStartedMessage(result));
@@ -969,7 +975,7 @@ export async function runCronJob(state: CronState, jobId: string, mode: "force" 
 }
 
 export async function removeCronJob(state: CronState, job: CronJob) {
-  await withCronBusy(state, job, async (client) => {
+  await withCronBusy(state, job, "remove", async (client) => {
     await client.request("cron.remove", { id: job.id });
     const previousLength = state.cronJobs.length;
     state.cronJobs = state.cronJobs.filter((candidate) => candidate.id !== job.id);

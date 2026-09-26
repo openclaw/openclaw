@@ -968,7 +968,12 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
                   ?disabled=${props.busy}
                   @click=${() => props.onRun(selectedJob, "force")}
                 >
-                  ${icon("play")} ${t("cron.actions.runNow")}
+                  ${icon("play")}
+                  ${
+                    props.pendingAction === "run"
+                      ? t("cron.actions.runNowStarting")
+                      : t("cron.actions.runNow")
+                  }
                 </button>
                 ${renderJobMenu(props, selectedJob)}
               `
@@ -1093,7 +1098,9 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
                   @click=${props.onSubmit}
                 >
                   ${
-                    props.busy
+                    // Only a pending save announces a save; the other mutations
+                    // hold the same lock without touching the untouched form.
+                    props.pendingAction === "save"
                       ? t("cron.form.saving")
                       : mode === "job"
                         ? t("cron.form.saveChanges")

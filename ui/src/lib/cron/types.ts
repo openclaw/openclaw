@@ -19,6 +19,13 @@ import type {
 type CronDelivery = NonNullable<CronJob["delivery"]>;
 type CronFormAnnounceDelivery = Extract<CronDelivery, { mode: "announce" }>;
 
+/**
+ * Which cron mutation currently holds the mutation lock. The lock itself
+ * (`cronBusy`) only says that one of them is in flight; the view needs the
+ * identity to announce the right control instead of a generic saving label.
+ */
+export type CronPendingAction = "save" | "run" | "toggle" | "remove";
+
 export type CronFormState = {
   name: string;
   description: string;
@@ -144,4 +151,6 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronRunsQuery: string;
   cronRunsSortDir: CronSortDir;
   cronBusy: boolean;
+  /** Identity of the mutation holding the lock, or null when it is free. */
+  cronPendingAction: CronPendingAction | null;
 };

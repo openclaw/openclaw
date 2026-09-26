@@ -46,6 +46,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     jobsSortDir: "asc",
     error: null,
     busy: false,
+    pendingAction: null,
     form: { ...DEFAULT_CRON_FORM },
     heartbeatScratch: "",
     fieldErrors: {},

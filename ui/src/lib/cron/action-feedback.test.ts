@@ -51,6 +51,7 @@ it.each(
         ? toggleCronJob(state, alpha, false)
         : removeCronJob(state, alpha);
   expect(state.cronBusy).toBe(true);
+  expect(state.cronPendingAction).toBe(action);
   if (selection === "other") {
     startCronEdit(state, beta);
   } else if (selection === "overview") {
@@ -70,6 +71,7 @@ it.each(
   expect(state.cronEditingJob).toBe(selected);
   expect(state.cronForm).toBe(form);
   expect(state.cronBusy).toBe(false);
+  expect(state.cronPendingAction).toBeNull();
   expect(request).toHaveBeenCalledExactlyOnceWith(
     action === "run" ? "cron.run" : action === "toggle" ? "cron.update" : "cron.remove",
     action === "run"

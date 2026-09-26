@@ -688,7 +688,12 @@ describe("cron view editor", () => {
 
   it("locks the editor and back navigation while a save is pending", () => {
     const job = createJob("job-1", { name: "Nightly digest" });
-    const container = renderView({ jobs: [job], editingJob: job, busy: true });
+    const container = renderView({
+      jobs: [job],
+      editingJob: job,
+      busy: true,
+      pendingAction: "save",
+    });
 
     const editor = getElement(container, ".cron-editor", HTMLFieldSetElement);
     const name = getElement(container, "#cron-name", HTMLInputElement);
@@ -701,6 +706,27 @@ describe("cron view editor", () => {
     expect(back.disabled).toBe(true);
     expect(submit.disabled).toBe(true);
     expect(submit.textContent).toContain("Saving");
+  });
+
+  it("keeps the save label idle while a run holds the mutation lock", () => {
+    const job = createJob("job-1", { name: "Nightly digest" });
+    const container = renderView({
+      jobs: [job],
+      editingJob: job,
+      busy: true,
+      pendingAction: "run",
+    });
+
+    const submit = getElement(container, '[data-test-id="cron-submit"]', HTMLButtonElement);
+    const runNow = getElement(container, '[data-test-id="cron-run-now"]', HTMLButtonElement);
+
+    // The lock still disables both controls...
+    expect(submit.disabled).toBe(true);
+    expect(runNow.disabled).toBe(true);
+    // ...but only the pending action announces itself.
+    expect(submit.textContent).toContain("Save changes");
+    expect(submit.textContent).not.toContain("Saving");
+    expect(runNow.textContent).toContain("Starting");
   });
 
   it("shows run history instead of the editor on the history tab", () => {

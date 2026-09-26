@@ -16,6 +16,7 @@ import type {
   CronFieldErrors,
   CronFormState,
   CronJobsLastStatusFilter,
+  CronPendingAction,
 } from "../../lib/cron/types.ts";
 
 export type CronListTab = "tasks" | "activity";
@@ -42,7 +43,10 @@ export type CronProps = {
   jobsSortBy: CronJobsSortBy;
   jobsSortDir: CronSortDir;
   error: string | null;
+  /** Mutation lock shared by save, run, toggle, and remove. */
   busy: boolean;
+  /** Which mutation holds the lock, so a control only announces its own work. */
+  pendingAction: CronPendingAction | null;
   form: CronFormState;
   heartbeatScratch: string;
   fieldErrors: CronFieldErrors;
