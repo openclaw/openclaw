@@ -26,6 +26,8 @@ export function createWorkerMachineCatalog(
     providerDisplayId?: string;
     machines?: readonly WorkerMachineOption[];
     systems?: readonly WorkerOperatingSystem[];
+    machinesRequest?: Promise<readonly WorkerMachineOption[] | undefined>;
+    systemsRequest?: Promise<readonly WorkerOperatingSystem[] | undefined>;
     warmup?: Promise<void>;
   };
   const machineCatalogs = new Map<string, MachineCatalog>();
@@ -81,34 +83,52 @@ export function createWorkerMachineCatalog(
 
   const listMachineOptions = async (profileId: string) => {
     const catalog = machineCatalogFor(profileId);
-    if (!catalog) {
-      return undefined;
+    if (!catalog || catalog.machinesRequest) {
+      return catalog?.machinesRequest;
     }
-    const provider = options.resolveProvider(catalog.providerId);
-    const machines = normalizeWorkerMachineOptions(
-      await provider?.listMachineOptions?.(catalog.settings),
-    );
-    if (!isDeepStrictEqual(catalog.machines, machines)) {
-      catalog.machines = machines;
-      machineCatalogChanged(profileId, catalog);
+    const request = (async () => {
+      const machines = normalizeWorkerMachineOptions(
+        await catalog.provider?.listMachineOptions?.(catalog.settings),
+      );
+      if (!isDeepStrictEqual(catalog.machines, machines)) {
+        catalog.machines = machines;
+        machineCatalogChanged(profileId, catalog);
+      }
+      return machines;
+    })();
+    catalog.machinesRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (catalog.machinesRequest === request) {
+        catalog.machinesRequest = undefined;
+      }
     }
-    return machines;
   };
 
   const listOperatingSystems = async (profileId: string) => {
     const catalog = machineCatalogFor(profileId);
-    if (!catalog) {
-      return undefined;
+    if (!catalog || catalog.systemsRequest) {
+      return catalog?.systemsRequest;
     }
-    const provider = options.resolveProvider(catalog.providerId);
-    const systems = normalizeWorkerOperatingSystems(
-      await provider?.listOperatingSystems?.(catalog.settings),
-    );
-    if (!isDeepStrictEqual(catalog.systems, systems)) {
-      catalog.systems = systems;
-      machineCatalogChanged(profileId, catalog);
+    const request = (async () => {
+      const systems = normalizeWorkerOperatingSystems(
+        await catalog.provider?.listOperatingSystems?.(catalog.settings),
+      );
+      if (!isDeepStrictEqual(catalog.systems, systems)) {
+        catalog.systems = systems;
+        machineCatalogChanged(profileId, catalog);
+      }
+      return systems;
+    })();
+    catalog.systemsRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (catalog.systemsRequest === request) {
+        catalog.systemsRequest = undefined;
+      }
     }
-    return systems;
   };
 
   const loadMachineShape = async (profileId: string): Promise<void> => {
