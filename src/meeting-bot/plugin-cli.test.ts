@@ -49,6 +49,19 @@ describe("meeting plugin CLI options", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it("rejects an explicitly empty timeout before gateway dispatch", async () => {
+    const callGateway = vi.fn();
+    const cli = createCli(callGateway as unknown as typeof callGatewayFromCli);
+
+    await expect(
+      cli.parseAsync(
+        ["testmeetings", "test-listen", "https://meet.example.test/room", "--timeout-ms", ""],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("timeout-ms must be a positive integer");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("sets a failing process exit code for unhealthy setup status", async () => {
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const callGateway = vi.fn(async () => ({ ok: false, checks: [] }));
