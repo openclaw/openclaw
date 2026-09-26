@@ -158,20 +158,12 @@ describe("isSignalSenderAllowed", () => {
 
 describe("probeSignal", () => {
   it("falls back to the direct probe helper when runtime is not initialized", async () => {
-    vi.spyOn(clientModule, "signalCheck")
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        error: null,
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        error: null,
-      });
-    vi.spyOn(clientModule, "signalRpcRequest")
-      .mockResolvedValueOnce({ version: "0.13.22" })
-      .mockResolvedValueOnce({ version: "0.13.22" });
+    vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      error: null,
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({ version: "0.13.22" });
 
     const params = {
       cfg: {} as never,
@@ -193,14 +185,20 @@ describe("probeSignal", () => {
       timeoutMs: 1000,
     };
 
-    const expected = await probeSignal("http://127.0.0.1:8080", 1000);
     const result = await signalPlugin.status!.probeAccount!(params);
 
-    expect(result.ok).toBe(expected.ok);
-    expect(result.status).toBe(expected.status);
-    expect(result.error).toBe(expected.error);
-    expect(result.version).toBe(expected.version);
+    expect(result).toMatchObject({ ok: true, status: 200, error: null, version: "0.13.22" });
     expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(clientModule.signalCheck).toHaveBeenCalledExactlyOnceWith(
+      "http://127.0.0.1:8080",
+      1000,
+      { transportKind: "managed-native" },
+    );
+    expect(clientModule.signalRpcRequest).toHaveBeenCalledExactlyOnceWith("version", undefined, {
+      baseUrl: "http://127.0.0.1:8080",
+      timeoutMs: 1000,
+      transportKind: "managed-native",
+    });
   });
 
   it("extracts version from {version} result", async () => {

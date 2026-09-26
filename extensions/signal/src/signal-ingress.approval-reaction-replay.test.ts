@@ -20,14 +20,10 @@ import { startSignalIngressMonitor } from "./signal-ingress.js";
 
 const resolverMocks = vi.hoisted(() => ({
   resolveSignalApproval: vi.fn(),
-  isApprovalNotFoundError: vi.fn(() => false),
 }));
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolverMocks.resolveSignalApproval,
-}));
-vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
-  isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
 }));
 
 vi.useRealTimers();
@@ -48,8 +44,6 @@ beforeAll(async () => {
 beforeEach(() => {
   clearSignalApprovalReactionTargetsForTest();
   resolverMocks.resolveSignalApproval.mockReset();
-  resolverMocks.isApprovalNotFoundError.mockReset();
-  resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
 });
 
 afterEach(() => {

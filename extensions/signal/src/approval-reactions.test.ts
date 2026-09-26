@@ -17,21 +17,11 @@ import * as signalRuntime from "./runtime.js";
 
 const resolverMocks = vi.hoisted(() => ({
   resolveSignalApproval: vi.fn(),
-  isApprovalNotFoundError: vi.fn(() => false),
 }));
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolverMocks.resolveSignalApproval,
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
-    "openclaw/plugin-sdk/error-runtime",
-  );
-  return {
-    ...actual,
-    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
-  };
-});
 
 const approvalRoute = {
   deliveryMode: "session" as const,
@@ -47,8 +37,6 @@ describe("Signal approval reactions", () => {
       applied: true,
       approval: { status: "allowed", decision: "allow-once" },
     });
-    resolverMocks.isApprovalNotFoundError.mockReset();
-    resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
   });
 
   it("registers delivered structured approval payloads for reactions", async () => {

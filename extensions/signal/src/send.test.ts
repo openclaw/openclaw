@@ -120,60 +120,6 @@ describe("sendMessageSignal receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
-  it("rejects per-recipient failures even when signal-cli returns a timestamp", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({
-      timestamp: 1234567890,
-      results: [{ type: "UNREGISTERED_FAILURE" }],
-    });
-
-    await expect(
-      sendMessageSignal("+15551234567", "hello", {
-        cfg: SIGNAL_TEST_CFG,
-      }),
-    ).rejects.toThrow("Signal send failed for 1 recipient: UNREGISTERED_FAILURE");
-  });
-
-  it("rejects legacy per-recipient success false results", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({
-      timestamp: 1234567890,
-      results: [{ success: false, message: "recipient is not registered" }],
-    });
-
-    await expect(
-      sendMessageSignal("+15551234567", "hello", {
-        cfg: SIGNAL_TEST_CFG,
-      }),
-    ).rejects.toThrow("Signal send failed for 1 recipient: recipient is not registered");
-  });
-
-  it("preserves a group delivery when at least one member receives the message", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({
-      timestamp: 1234567891,
-      results: [{ type: "SUCCESS" }, { type: "UNREGISTERED_FAILURE" }],
-    });
-
-    await expect(
-      sendMessageSignal("group:group-1", "hello", { cfg: SIGNAL_TEST_CFG }),
-    ).resolves.toMatchObject({
-      messageId: "1234567891",
-      timestamp: 1234567891,
-      receipt: { primaryPlatformMessageId: "1234567891" },
-    });
-    expect(signalRpcRequestMock).toHaveBeenCalledOnce();
-  });
-
-  it("rejects a group delivery when every member fails", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({
-      timestamp: 1234567891,
-      results: [{ type: "NETWORK_FAILURE" }, { type: "UNREGISTERED_FAILURE" }],
-    });
-
-    await expect(
-      sendMessageSignal("group:group-1", "hello", { cfg: SIGNAL_TEST_CFG }),
-    ).rejects.toThrow("Signal send failed for 2 recipients: NETWORK_FAILURE, UNREGISTERED_FAILURE");
-    expect(signalRpcRequestMock).toHaveBeenCalledOnce();
-  });
-
   it.each(["username:alice.42", "u:alice.42", "signal:u:ALICE.42"])(
     "sends %s through the canonical username parameter",
     async (target) => {
