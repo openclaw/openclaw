@@ -74,9 +74,9 @@ describe("worker session tool topology", () => {
 
   afterEach(() => resetGlobalHookRunner());
 
-  it.each([false, true])(
-    "reads presence as the original operator only while the worker owner is live (closed=%s)",
-    async (closed) => {
+  it.each(["active", "run-ended", "operator-revoked"] as const)(
+    "reads presence as the original operator only while its authority is live (%s)",
+    async (authorityState) => {
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
       const entered = createDeferred();
@@ -107,12 +107,16 @@ describe("worker session tool topology", () => {
         },
       });
       await entered.promise;
-      if (closed) {
+      if (authorityState === "run-ended") {
         getFixture().closeSourceRun();
+      } else if (authorityState === "operator-revoked") {
+        getFixture().revokeOperatorAuthority();
       }
       release.resolve();
-      if (closed) {
+      if (authorityState === "run-ended") {
         await expect(pending).rejects.toThrow("source worker run ended");
+      } else if (authorityState === "operator-revoked") {
+        await expect(pending).rejects.toThrow(/operator.*(revoked|no longer active)/);
       } else {
         expect(JSON.parse((await pending).resultJson).details).toEqual(snapshot);
         placements.authorizeWorkerTurnTools(sourceClaim, []);
@@ -631,6 +635,77 @@ describe("worker session tool topology", () => {
     expect(gatewayCreate).toHaveBeenCalledOnce();
     expect(gatewayRequest).not.toHaveBeenCalled();
     await expect(placements.releaseTurn(sourceClaim)).resolves.toMatchObject({ turnClaim: null });
+  });
+});
+
+describe.each([
+  {
+    source: "unverified",
+    admissionSource: undefined,
+    operatorProfileId: undefined,
+    operatorScopes: undefined,
+    deniedReason:
+      "Presence requires authenticated Gateway read access or a trusted operator source.",
+  },
+  {
+    source: "authenticated reader",
+    admissionSource: undefined,
+    operatorProfileId: "profile-presence-reader",
+    operatorScopes: ["operator.read"],
+    deniedReason: undefined,
+  },
+  {
+    source: "session-only operator",
+    admissionSource: undefined,
+    operatorProfileId: "profile-session-reader",
+    operatorScopes: ["operator.sessions.read"],
+    deniedReason: "Presence requires operator.read access.",
+  },
+  {
+    source: "operator schedule",
+    admissionSource: "operator-schedule",
+    operatorProfileId: undefined,
+    operatorScopes: undefined,
+    deniedReason: undefined,
+  },
+  {
+    source: "requester schedule",
+    admissionSource: "requester-schedule",
+    operatorProfileId: undefined,
+    operatorScopes: undefined,
+    deniedReason:
+      "Presence requires authenticated Gateway read access or a trusted operator source.",
+  },
+] as const)("worker presence source authorization ($source)", (source) => {
+  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, source);
+
+  it("requires the source's read authority before querying the roster", async () => {
+    const { placements, sourceClaim, setEntry, execute, identity } = getFixture();
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
+    const snapshot = { status: "ok", people: [{ name: "Ada" }] };
+    gatewayRequest.mockResolvedValueOnce(snapshot);
+
+    const pending = execute({
+      identity,
+      toolName: "presence",
+      request: { toolCallId: "source-presence", include: ["network", "location"] },
+    });
+
+    if (source.deniedReason) {
+      await expect(pending).rejects.toThrow(source.deniedReason);
+      expect(gatewayRequest).not.toHaveBeenCalled();
+    } else {
+      expect(JSON.parse((await pending).resultJson).details).toEqual(snapshot);
+      expect(gatewayRequest).toHaveBeenCalledOnce();
+      if (source.admissionSource === "operator-schedule") {
+        getFixture().closeSourceRun();
+        await expect(
+          execute({ identity, toolName: "presence", request: { toolCallId: "closed-schedule" } }),
+        ).rejects.toThrow("worker turn authority changed");
+        expect(gatewayRequest).toHaveBeenCalledOnce();
+      }
+    }
   });
 });
 

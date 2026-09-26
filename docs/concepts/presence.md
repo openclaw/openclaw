@@ -72,8 +72,12 @@ provider are distinct. Time zones remain client-reported; IP geography may
 describe a VPN or network exit. Presence never requests GPS or changes device
 permissions.
 
-The tool requires the same `operator.read` access as the presence roster. It
-does not expose watched-session references or grant device control. Compatible
+Authenticated callers need the same `operator.read` access as the presence
+roster. Trusted local operator turns, configured channel owners, and
+operator-owned scheduled runs can also query presence while their source
+authority remains active. Other channel callers and requester-owned schedules
+without read access cannot query the roster. The tool does not expose
+watched-session references or grant device control. Compatible
 remote workers forward the read to their admitting Gateway; workers connected
 to a Gateway without the presence capability omit the tool.
 

@@ -17,7 +17,7 @@ export function createHostedGatewayTools(
     return [];
   }
   return [
-    createPresenceTool(),
+    createPresenceTool({ runId: options?.runId }),
     createGatewayTool({
       allowConfigReads: options?.gatewayConfigReadAllowed === true,
       senderIsOwner: options?.senderIsOwner,
