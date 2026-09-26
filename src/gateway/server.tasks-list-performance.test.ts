@@ -300,7 +300,7 @@ describe("tasks.list Gateway performance", () => {
           await applyTaskRegistryMaintenanceRetention(
             completed,
             completed.cleanupAfter + 1,
-            new Set(),
+            new Map(),
             () => {},
           ),
         ).toBe("pruned");

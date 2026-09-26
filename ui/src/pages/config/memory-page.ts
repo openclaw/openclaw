@@ -554,18 +554,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
   }
 
-  private configObjectFromController(): Record<string, unknown> | null {
-    return currentConfigObject(this.context.runtimeConfig.state);
-  }
-
   private dreamingPluginId(): string {
-    return resolveConfiguredDreaming(this.configObjectFromController()).pluginId;
-  }
-
-  private dreamingConfig(): Record<string, unknown> | null {
-    const plugins = asConfigRecord(this.configObjectFromController()?.plugins);
-    const entry = asConfigRecord(asConfigRecord(plugins?.entries)?.[this.dreamingPluginId()]);
-    return asConfigRecord(asConfigRecord(entry?.config)?.dreaming);
+    return resolveConfiguredDreaming(currentConfigObject(this.context.runtimeConfig.state))
+      .pluginId;
   }
 
   private syncSupport(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -607,7 +598,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   }
 
   private renderDreamingControls() {
-    const pluginId = this.dreamingPluginId();
+    const config = currentConfigObject(this.context.runtimeConfig.state);
+    const { pluginId } = resolveConfiguredDreaming(config);
+    const plugins = asConfigRecord(config?.plugins);
+    const entry = asConfigRecord(asConfigRecord(plugins?.entries)?.[pluginId]);
     return html`
       <p class="settings-page__intro">
         ${t("memoryPage.dreaming.intro", { plugin: pluginId })}
@@ -617,8 +611,8 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         this.support === "unsupported"
           ? renderDreamingUnsupported(pluginId)
           : renderDreamingSettings({
-              dreaming: this.dreamingConfig(),
-              timezoneDefault: resolveDreamingTimezoneDefault(this.configObjectFromController()),
+              dreaming: asConfigRecord(asConfigRecord(entry?.config)?.dreaming),
+              timezoneDefault: resolveDreamingTimezoneDefault(config),
               disabled: this.mutationDisabled,
               onPatch: (path, value) => this.patchDreaming(path, value),
             })
@@ -639,12 +633,13 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     const activeTab = this.activeTab();
     const agentId = this.selectedAgentId;
     const agentError = agentId ? null : this.context.agents.state.agentsError;
+    const engineState = this.engineState(engineSelection);
     return renderMemory({
       activeTab,
       onTabChange: (tab) => this.navigateTab(tab),
       engineOptions: buildMemoryEngineOptions(this.catalog, engineSelection),
       engineSelection,
-      engineState: this.engineState(engineSelection),
+      engineState,
       engineBusy: this.engineBusy || engineMutationDisabled,
       engineOutcome: this.engineOutcome,
       onEngineChange: (nextEngineId) => void this.changeEngine(nextEngineId, engineSelection),
@@ -666,7 +661,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       overview: renderMemoryOverview({
         agentId,
         engineSelection,
-        engineDisabled: this.engineState(engineSelection) === "disabled",
+        engineDisabled: engineState === "disabled",
         status: agentError ? { kind: "error", message: agentError } : this.overviewStatus,
         probingEmbeddings: this.probingEmbeddings,
         onRefresh: () =>

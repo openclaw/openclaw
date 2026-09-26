@@ -1,4 +1,3 @@
-// Application-owned native draft delivery.
 type WebView2Bridge = {
   postMessage(message: unknown): void;
   addEventListener(type: "message", listener: (event: MessageEvent) => void): void;

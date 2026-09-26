@@ -1,4 +1,3 @@
-// Control UI view renders the Models settings page content.
 import { html, nothing, type TemplateResult } from "lit";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
@@ -33,9 +32,14 @@ import type {
   ProviderOption,
 } from "./data.ts";
 import { renderDefaultModels, type DefaultModelsViewProps } from "./default-models-view.ts";
-import { renderProviderProfiles, type ProviderProfilesViewProps } from "./profiles-view.ts";
+import {
+  apiKeySource,
+  renderProviderProfiles,
+  type ProviderProfilesViewProps,
+} from "./profiles-view.ts";
 import {
   hasVerifiedProvider,
+  hasProviderCredentials,
   renderProviderStatus,
   renderMutationMessage,
   renderModelProviderConnectAction,
@@ -146,14 +150,9 @@ function renderCredentialSummary(card: ModelProviderCard, agentLabel: string) {
   if (tokenCount > 0) {
     parts.push(t("modelProviders.credentials.tokenProfiles", { count: String(tokenCount) }));
   }
-  if (card.apiKey?.source === "config") {
-    parts.push(t("modelProviders.credentials.configKey"));
-  } else if (card.apiKey?.source === "env") {
-    parts.push(
-      card.apiKey.envVar
-        ? t("modelProviders.credentials.envKeyNamed", { name: card.apiKey.envVar })
-        : t("modelProviders.credentials.envKey"),
-    );
+  const source = apiKeySource(card);
+  if (source !== undefined) {
+    parts.push(source);
   } else if (apiProfileCount > 0) {
     parts.push(t("modelProviders.credentials.profileKey", { count: String(apiProfileCount) }));
   }
@@ -259,7 +258,6 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
   const credentialProviders = card.credentialProviderIds.length
     ? card.credentialProviderIds
     : [card.id];
-  const isConfigured = card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
   const probeBusy = Boolean(props.busy[`probe:${card.id}`]);
   const keyBusy = Boolean(props.busy[`key:${card.id}`]);
   const blocked = props.mutationBlockedReason ?? "";
@@ -284,7 +282,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
           : nothing
       }
       ${
-        isConfigured
+        hasProviderCredentials(card)
           ? html`
               <button
                 class="btn btn--sm"
