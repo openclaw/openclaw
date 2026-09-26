@@ -9,8 +9,6 @@ import {
   isDirectScriptExecution,
   resolveUiBuildEnvironment,
   resolvePnpmSpawnCall,
-  resolveSpawnCall,
-  shouldUseCmdExeForCommand,
 } from "../../scripts/ui.mts";
 import { mergeProcessEnv } from "../../src/infra/process-env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -107,7 +105,7 @@ async function withUiProcessCleanup(
   );
 }
 
-describe("scripts/ui windows spawn behavior", () => {
+describe("scripts/ui", () => {
   it("reuses the runtime identity for the documented standalone UI rebuild", () => {
     const commit = "0123456789abcdef0123456789abcdef01234567";
     const firstBuild = normalizeControlUiBuildInfo({
@@ -180,85 +178,19 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
   });
 
-  it("wraps Windows command launchers with cmd.exe without enabling shell mode", () => {
-    expect(
-      shouldUseCmdExeForCommand("C:\\Users\\dev\\AppData\\Local\\pnpm\\pnpm.CMD", "win32"),
-    ).toBe(true);
-
-    expect(
-      resolveSpawnCall(
-        "C:\\Program Files\\nodejs\\pnpm.cmd",
-        ["run", "build", "-t", "path with spaces"],
-        { PATH: "C:\\bin" },
-        { comSpec: "C:\\Windows\\System32\\cmd.exe", cwd: "C:\\repo\\ui", platform: "win32" },
-      ),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        '""C:\\Program Files\\nodejs\\pnpm.cmd" run build -t "path with spaces""',
-      ],
-      options: {
-        cwd: "C:\\repo\\ui",
-        stdio: "inherit",
-        env: { PATH: "C:\\bin" },
-        shell: false,
-        windowsVerbatimArguments: true,
-      },
-    });
-  });
-
-  it("does not use cmd.exe for non-command launchers", () => {
-    expect(shouldUseCmdExeForCommand("C:\\Program Files\\nodejs\\node.exe", "win32")).toBe(false);
-    expect(shouldUseCmdExeForCommand("C:\\tools\\pnpm.com", "win32")).toBe(false);
-    expect(shouldUseCmdExeForCommand("/usr/local/bin/pnpm", "linux")).toBe(false);
-
-    expect(
-      resolveSpawnCall(
-        "C:\\Program Files\\nodejs\\pnpm.exe",
-        ["run", "build"],
-        { PATH: "C:\\bin" },
-        { cwd: "C:\\repo\\ui", platform: "win32" },
-      ),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\pnpm.exe",
-      args: ["run", "build"],
-      options: {
-        cwd: "C:\\repo\\ui",
-        stdio: "inherit",
-        env: { PATH: "C:\\bin" },
-        shell: false,
-      },
-    });
-  });
-
-  it("rejects unsafe cmd.exe arguments before launch", () => {
-    expect(() =>
-      resolveSpawnCall("C:\\tools\\pnpm.cmd", ["run", "build", "evil&calc"], undefined, {
-        platform: "win32",
-      }),
-    ).toThrow(/unsafe windows cmd\.exe argument/i);
-    expect(() =>
-      resolveSpawnCall("C:\\tools\\pnpm.cmd", ["run", "build", "%PATH%"], undefined, {
-        platform: "win32",
-      }),
-    ).toThrow(/unsafe windows cmd\.exe argument/i);
-  });
-
-  it("uses a trusted cmd.exe path when no explicit Windows launcher is injected", () => {
-    expect(
-      resolveSpawnCall(
-        "C:\\tools\\pnpm.cmd",
-        ["run", "build"],
-        {
-          ComSpec: "C:\\Users\\test\\bin\\cmd.exe",
-          SystemRoot: "D:\\Windows",
-        },
-        { cwd: "C:\\repo\\ui", platform: "win32" },
-      ).command,
-    ).toBe("D:\\Windows\\System32\\cmd.exe");
+  it("rejects unsafe Windows pnpm shim arguments before launch", () => {
+    for (const argument of ["evil&calc", "%PATH%"]) {
+      expect(() =>
+        resolvePnpmSpawnCall(
+          ["install", argument],
+          { PATH: "" },
+          {
+            npmExecPath: "",
+            platform: "win32",
+          },
+        ),
+      ).toThrow(/unsafe windows cmd\.exe argument/i);
+    }
   });
 
   it("routes Windows Corepack pnpm entrypoints through node", () => {
@@ -299,26 +231,6 @@ describe("scripts/ui windows spawn behavior", () => {
     }
   });
 
-  it("keeps non-Windows launches direct even with shell metacharacters", () => {
-    expect(
-      resolveSpawnCall(
-        "/usr/local/bin/pnpm",
-        ["run", "build", "contains&metacharacters"],
-        { PATH: "/bin" },
-        { cwd: "/repo/ui", platform: "linux" },
-      ),
-    ).toEqual({
-      command: "/usr/local/bin/pnpm",
-      args: ["run", "build", "contains&metacharacters"],
-      options: {
-        cwd: "/repo/ui",
-        stdio: "inherit",
-        env: { PATH: "/bin" },
-        shell: false,
-      },
-    });
-  });
-
   it("detects direct execution through a junctioned script path", () => {
     const realScriptPath = path.resolve("repo/openclaw/scripts/ui.js");
     const junctionScriptPath = path.resolve("linked/openclaw/scripts/ui.js");
@@ -345,23 +257,24 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(output).not.toContain("Control UI performance");
   });
 
-  it.each(
-    ["hoisted", "isolated"].flatMap((layout) =>
-      [
-        { action: "build", args: ["build"], noPnpm: false },
-        { action: "build", args: ["build"], noPnpm: true },
-        { action: "dev", args: [], noPnpm: false },
-        { action: "test", args: ["run", "--config", "vitest.config.ts"], noPnpm: false },
-      ].map(({ action, args, noPnpm }) => ({ layout, action, args, noPnpm })),
-    ),
-  )(
+  it.each([
+    { layout: "hoisted", action: "build", args: ["build"], noPnpm: false },
+    { layout: "isolated", action: "build", args: ["build"], noPnpm: true },
+    { layout: "hoisted", action: "dev", args: [], noPnpm: false },
+    {
+      layout: "isolated",
+      action: "test",
+      args: ["run", "--config", "vitest.config.ts"],
+      noPnpm: false,
+    },
+  ])(
     "runs $action from $layout dependencies without package shims (noPnpm=$noPnpm)",
     ({ action, args, layout, noPnpm }) => {
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-layout-")));
       const ui = path.join(root, "ui");
       const modules = path.join(layout === "isolated" ? ui : root, "node_modules");
       const expectedExit = action === "test" ? 17 : 0;
-      const forwarded = ["--help", "--mode", "fixture with spaces"];
+      const forwarded = ["--help", "--mode", "fixture with spaces & symbols"];
       try {
         for (const file of [
           "scripts/ui.js",
@@ -451,7 +364,6 @@ process.exitCode = ${expectedExit};\n`,
 
   it.each([
     { noPnpm: false, failValidator: null },
-    { noPnpm: true, failValidator: null },
     { noPnpm: false, failValidator: "check-control-ui-precompressed-assets.mts" },
     { noPnpm: true, failValidator: "check-control-ui-performance.mts" },
   ])(

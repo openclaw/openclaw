@@ -12,7 +12,7 @@ import { abortSessionRunTargetWithOutcome, stopSubagentsForRequester } from "./a
 import { setAbortMemory } from "./abort-primitives.js";
 import { isAbortTrigger } from "./abort-trigger-text.js";
 import { formatAbortReplyText } from "./abort.js";
-import { defineAuthorizedTextCommand } from "./command-gates.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import {
   persistAbortTargetEntry,
   resolveCommandSessionEntryForKey,
@@ -128,12 +128,7 @@ function buildAbortTargetApplyParams(
 export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: "/stop", match: (body) => (body === "/stop" ? true : null) },
   async (params) => {
-    const abortTarget = resolveAbortTarget({
-      ctx: params.ctx,
-      sessionKey: params.sessionKey,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
-    });
+    const abortTarget = resolveAbortTarget(params);
     let abortOutcome = { active: false, aborted: false };
     // Capture child generations before signalling the parent; cleanup must not discover
     // a replacement conversation's children after the original publisher finishes.
@@ -166,10 +161,7 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
 
     const rejectionReason =
       abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
-    return {
-      shouldContinue: false,
-      reply: { text: formatAbortReplyText(stopped, rejectionReason, failed) },
-    };
+    return commandReply(formatAbortReplyText(stopped, rejectionReason, failed));
   },
 );
 
@@ -179,18 +171,10 @@ export const handleAbortTrigger: CommandHandler = defineAuthorizedTextCommand(
     match: (_body, params) => (isAbortTrigger(params.command.rawBodyNormalized) ? true : null),
   },
   async (params) => {
-    const abortTarget = resolveAbortTarget({
-      ctx: params.ctx,
-      sessionKey: params.sessionKey,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
-    });
+    const abortTarget = resolveAbortTarget(params);
     const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
     const rejectionReason =
       abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
-    return {
-      shouldContinue: false,
-      reply: { text: formatAbortReplyText(undefined, rejectionReason) },
-    };
+    return commandReply(formatAbortReplyText(undefined, rejectionReason));
   },
 );

@@ -111,7 +111,7 @@ async function runAdmittedOpenClawStateWorkerOperation<T>(
         operation,
         options?.assertCurrent,
         options?.createAdmission,
-        options?.requireStateLifecycle === true,
+        options?.requireStateLifecycle ?? false,
       );
     } finally {
       // The owner observes retirement; other clients may await this operation's result.

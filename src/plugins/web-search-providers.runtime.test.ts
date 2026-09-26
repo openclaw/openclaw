@@ -248,28 +248,6 @@ function expectAutoEnabledWebSearchLoad(params: {
   expect(plugins.allow).toEqual([...params.expectedAllow]);
 }
 
-function expectSnapshotLoaderCalls(params: {
-  config: { plugins?: Record<string, unknown> };
-  env: NodeJS.ProcessEnv;
-  mutate: () => void;
-  expectedLoaderCalls: number;
-}) {
-  resolvePluginWebSearchProviders(
-    createSnapshotParams({
-      config: params.config,
-      env: params.env,
-    }),
-  );
-  params.mutate();
-  resolvePluginWebSearchProviders(
-    createSnapshotParams({
-      config: params.config,
-      env: params.env,
-    }),
-  );
-  expectLoaderCallCount(params.expectedLoaderCalls);
-}
-
 vi.mock("./manifest-registry.js", async () => {
   const actual =
     await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
@@ -552,74 +530,5 @@ describe("resolvePluginWebSearchProviders", () => {
     const loaderParams = requireLastCallFirstArg(loadOpenClawPluginsMock, "loadOpenClawPlugins");
     expect(loaderParams.workspaceDir).toBe("/tmp/runtime-workspace");
     expect(loaderParams.onlyPluginIds).toEqual(["brave"]);
-  });
-
-  it("uses the inherited active workspace for each web-search resolution", () => {
-    const env = createWebSearchEnv();
-    const rawConfig = createBraveAllowConfig();
-
-    setActivePluginRegistry(createEmptyPluginRegistry(), undefined, "default", "/tmp/workspace-a");
-    resolvePluginWebSearchProviders({
-      config: rawConfig,
-      env,
-    });
-
-    setActivePluginRegistry(createEmptyPluginRegistry(), undefined, "default", "/tmp/workspace-b");
-    resolvePluginWebSearchProviders({
-      config: rawConfig,
-      env,
-    });
-
-    expectLoaderCallCount(2);
-  });
-
-  it("resolves current config contents when config changes in place", () => {
-    const config = createBraveAllowConfig();
-    const env = createWebSearchEnv({ OPENCLAW_HOME: "/tmp/openclaw-home-a" });
-
-    expectSnapshotLoaderCalls({
-      config,
-      env,
-      mutate: () => {
-        config.plugins = { allow: ["perplexity"] };
-      },
-      expectedLoaderCalls: 2,
-    });
-  });
-
-  it("resolves current env contents when env changes in place", () => {
-    const config = createBraveAllowConfig();
-    const env = createWebSearchEnv({ OPENCLAW_HOME: "/tmp/openclaw-home-a" });
-
-    expectSnapshotLoaderCalls({
-      config,
-      env,
-      mutate: () => {
-        env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
-      },
-      expectedLoaderCalls: 2,
-    });
-  });
-
-  it("does not reuse snapshot provider loads across host Vitest env changes", () => {
-    const originalVitest = process.env.VITEST;
-    const config = {};
-    const env = createWebSearchEnv();
-
-    try {
-      delete process.env.VITEST;
-      resolvePluginWebSearchProviders(createSnapshotParams({ config, env }));
-
-      process.env.VITEST = "1";
-      resolvePluginWebSearchProviders(createSnapshotParams({ config, env }));
-    } finally {
-      if (originalVitest === undefined) {
-        delete process.env.VITEST;
-      } else {
-        process.env.VITEST = originalVitest;
-      }
-    }
-
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
   });
 });

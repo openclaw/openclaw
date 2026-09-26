@@ -92,12 +92,24 @@ it.each([
     const result = { ...createResult(plugin), generation: 1 };
     const detail = createDiscoveryDetail(plugin);
     detail.plugin.id = "catalog-workboard";
+    detail.plugin.catalog.categories = ["productivity"];
     const { client, request } = createClient(async (method) => {
       if (method === "plugins.list") {
         return result;
       }
       if (method === "plugins.catalog.browse") {
-        return { items: [detail.plugin] };
+        return {
+          items: [detail.plugin],
+          categories: [
+            {
+              slug: "productivity",
+              label: "Productivity",
+              description: "Work tools",
+              icon: "checkSquare",
+              order: 1,
+            },
+          ],
+        };
       }
       if (method === "plugins.catalog.get") {
         return detail;

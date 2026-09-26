@@ -358,7 +358,6 @@ function createOpusAliasIndex(): ModelAliasIndex {
 function resolveModelSelectionForCommand(params: {
   command: string;
   allowedModelKeys: Set<string>;
-  allowedModelCatalog: Array<{ provider: string; id: string }>;
   cfg?: OpenClawConfig;
   agentId?: string;
 }) {
@@ -374,8 +373,6 @@ function resolveModelSelectionForCommand(params: {
     defaultModel: "claude-opus-4-6",
     aliasIndex: baseAliasIndex(),
     allowedModelKeys: params.allowedModelKeys,
-    allowedModelCatalog: params.allowedModelCatalog,
-    provider: "anthropic",
   });
 }
 
@@ -441,7 +438,6 @@ async function persistModelDirectiveForTest(params: {
       commandBodyNormalized: commandBody,
     },
     directives,
-    messageProviderKey: "telegram",
     elevatedEnabled: false,
     elevatedAllowed: false,
     elevatedFailures: [],
@@ -991,8 +987,6 @@ describe("/model chat UX", () => {
       defaultModel: "claude-opus-4-6",
       aliasIndex: baseAliasIndex(),
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
-      allowedModelCatalog: [{ provider: "anthropic", id: "claude-opus-4-6" }],
-      provider: "anthropic",
     });
 
     expect(resolved.modelSelection).toEqual({
@@ -1007,7 +1001,6 @@ describe("/model chat UX", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model 99",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
-      allowedModelCatalog: [],
     });
 
     expect(resolved.modelSelection).toBeUndefined();
@@ -1019,7 +1012,6 @@ describe("/model chat UX", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model openai/gpt-5.5 --runtime codex",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
-      allowedModelCatalog: [],
     });
 
     expect(resolved.modelSelection).toBeUndefined();
@@ -1035,7 +1027,6 @@ describe("/model chat UX", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model openai/gpt-5.5",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
-      allowedModelCatalog: [],
       cfg: {
         agents: {
           list: [{ id: "ops", modelPolicy: { allow: ["anthropic/*"] } }],
@@ -1053,7 +1044,6 @@ describe("/model chat UX", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model anthropic/claude-opus-4-6",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
-      allowedModelCatalog: [],
     });
 
     expect(resolved.errorText).toBeUndefined();
@@ -1068,7 +1058,6 @@ describe("/model chat UX", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model default",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
-      allowedModelCatalog: [],
     });
 
     expect(resolved.errorText).toBeUndefined();
@@ -1084,7 +1073,6 @@ describe("/model chat UX", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model openrouter/anthropic/claude-opus-4-6",
       allowedModelKeys: new Set(["openrouter/anthropic/claude-opus-4-6"]),
-      allowedModelCatalog: [],
     });
 
     expect(resolved.errorText).toBeUndefined();
@@ -1099,7 +1087,6 @@ describe("/model chat UX", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model openai/@cf/openai/gpt-oss-20b",
       allowedModelKeys: new Set(["openai/@cf/openai/gpt-oss-20b"]),
-      allowedModelCatalog: [],
     });
 
     expect(resolved.errorText).toBeUndefined();
@@ -1116,7 +1103,6 @@ describe("/model chat UX", () => {
     const resolved = resolveModelSelectionForCommand({
       command: `/model custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}`,
       allowedModelKeys: new Set([`custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}`]),
-      allowedModelCatalog: [],
     });
 
     expect(resolved.errorText).toBeUndefined();

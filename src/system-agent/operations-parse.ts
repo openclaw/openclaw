@@ -261,6 +261,17 @@ function parseConfigSetRefCommand(input: string):
   return body.trim() ? { valid: false } : undefined;
 }
 
+/** Stable store entry name for a config key, so replacing a key reuses its entry. */
+export function secretStoreNameForConfigPath(path: string): string {
+  const name = parseConfigSetPath(path)
+    .join("_")
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]+/gu, "_")
+    .replace(/^[^A-Z]+/u, "");
+  return (name || "OPENCLAW_SECRET").slice(0, 128);
+}
+
 /**
  * Parse one user command into OpenClaw's closed operation union. Anything
  * that does not match the anchored grammar exactly returns kind "none" so the
@@ -572,7 +583,9 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
     case "config-set":
       return `set config ${redactSystemAgentConfigPath(operation.path)} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
     case "config-set-ref":
-      return `set config ${redactSystemAgentConfigPath(operation.path)} to ${operation.source} SecretRef <redacted>`;
+      return operation.secret === undefined
+        ? `set config ${redactSystemAgentConfigPath(operation.path)} to ${operation.source} SecretRef <redacted>`
+        : `save the provided secret in the secret store and point config ${redactSystemAgentConfigPath(operation.path)} at it`;
     case "setup":
       return formatSetupPlanDescription(operation);
     case "model-setup":

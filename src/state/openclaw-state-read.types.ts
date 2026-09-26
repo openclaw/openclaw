@@ -126,6 +126,7 @@ export type OpenClawStateReadCommand =
   | { type: "capture.readOnlyBlob"; blobId: string }
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
+  | { type: "acpSessions.list" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
   | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
@@ -243,6 +244,12 @@ export type OpenClawStateReadReply = (
       type: "config.snapshot.read";
       sourceAdmitted: true;
       snapshot: ConfigSnapshotAuditRecord | null;
+    }
+  | {
+      ok: true;
+      type: "acpSessions.list";
+      sourceAdmitted: true;
+      rows: AcpSessionRow[];
     }
   | {
       ok: true;

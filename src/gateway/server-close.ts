@@ -1,8 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { WebSocketServer } from "ws";
-import { getAcpSessionManager } from "../acp/control-plane/manager.js";
-import { disposeAcpSessionManagerInstance } from "../acp/control-plane/manager.lifecycle.js";
+import { disposeAcpSessionManager } from "../acp/control-plane/manager.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
@@ -427,7 +426,7 @@ async function closeGatewayResources(
     await measureCloseStep("acp-session-manager", () =>
       shutdownStep(
         "acp-session-manager",
-        () => disposeAcpSessionManagerInstance(getAcpSessionManager(), "gateway-shutdown"),
+        () => disposeAcpSessionManager("gateway-shutdown"),
         warnings,
       ),
     );

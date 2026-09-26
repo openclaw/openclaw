@@ -1,10 +1,13 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
-import { parseConfigSetPath } from "../cli/config-cli-path.js";
+import { getAtPath, parseConfigSetPath } from "../cli/config-cli-path.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
@@ -299,29 +302,113 @@ export async function applyPersistentOperation(params: {
 export async function runConfigSetOperation(params: {
   operation: Extract<SystemAgentOperation, { kind: "config-set" | "config-set-ref" }>;
   ctx: PersistentApplyContext;
-}): Promise<void> {
+}): Promise<{ storeEntry?: string; storeProvider?: string }> {
   const { operation, ctx } = params;
   const runConfigSet =
     ctx.deps?.runConfigSet ??
     (async (setOpts: Parameters<NonNullable<SystemAgentCommandDeps["runConfigSet"]>>[0]) => {
       const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
-      await importedRunConfigSet({ ...setOpts, runtime: createNoExitRuntime(ctx.runtime) });
+      await importedRunConfigSet({
+        ...setOpts,
+        runtime: createNoExitRuntime(ctx.runtime),
+        throwOnError: operation.kind === "config-set-ref" && operation.secret !== undefined,
+      });
     });
-  await ctx.commit(() =>
-    runConfigSet({
-      path: operation.path,
-      ...(operation.kind === "config-set"
-        ? { value: operation.value, cliOptions: {} }
-        : {
-            cliOptions: {
-              refProvider: operation.provider ?? "default",
-              refSource: operation.source,
-              refId: operation.id,
-            },
-          }),
-      ...(ctx.assertPersistentApply ? { beforePersistentApply: ctx.assertPersistentApply } : {}),
+  const beforePersistentApply = ctx.assertPersistentApply
+    ? { beforePersistentApply: ctx.assertPersistentApply }
+    : {};
+  if (operation.kind === "config-set" || operation.secret === undefined) {
+    await ctx.commit(() =>
+      runConfigSet({
+        path: operation.path,
+        ...(operation.kind === "config-set"
+          ? { value: operation.value, cliOptions: {} }
+          : {
+              cliOptions: {
+                refProvider: operation.provider ?? "default",
+                refSource: operation.source,
+                refId: operation.id,
+              },
+            }),
+        ...beforePersistentApply,
+      }),
+    );
+    return {};
+  }
+  const secret = operation.secret;
+  const snapshot = await readConfigFileSnapshotLazy();
+  const configPath = parseConfigSetPath(operation.path);
+  const currentRef = coerceSecretRef(
+    getAtPath(snapshot.sourceConfig, configPath).value,
+    snapshot.config.secrets?.defaults,
+  );
+  const defaultStoreProvider = resolveDefaultSecretProviderAlias(snapshot.config, "store", {
+    preferFirstProviderForSource: true,
+  });
+  // Rotating a key keeps the store provider it already uses.
+  const refProvider =
+    operation.provider ??
+    (currentRef?.source === "store" &&
+    (currentRef.provider === defaultStoreProvider ||
+      snapshot.config.secrets?.providers?.[currentRef.provider]?.source === "store")
+      ? currentRef.provider
+      : defaultStoreProvider);
+  // The SQLite store stays off the load path of every other config write.
+  const { writeSecretStoreEntryForConfigRef } = await import("../secrets/store/secret-store.js");
+  // Every save gets a fresh entry and no entry is ever overwritten or deleted
+  // here: another config key or auth profile may use, or start using, any
+  // entry at any time. The new ref is picked up by the normal config reload.
+  const storeEntry = await ctx.commit(() =>
+    writeSecretStoreEntryForConfigRef({
+      baseName: operation.id,
+      value: secret,
+      updatedBy: "openclaw",
+      // The worker re-checks the requester at transaction and commit admission.
+      ...(ctx.assertPersistentApply ? { assertCurrent: ctx.assertPersistentApply } : {}),
     }),
   );
+  try {
+    await runConfigSet({
+      path: operation.path,
+      cliOptions: { refProvider, refSource: "store", refId: storeEntry },
+      ...beforePersistentApply,
+    });
+  } catch (error) {
+    // The writer can fail after publication and can decline or fail rollback.
+    // Reconcile persisted source, not the possibly stale active runtime snapshot.
+    const postCommit = error instanceof ConfigWritePostCommitError ? error : undefined;
+    let referenceState = `Could not establish whether ${operation.path} references the saved entry.`;
+    try {
+      const { readConfigFileSnapshot } = await import("../config/config.js");
+      const current = await readConfigFileSnapshot({ observe: false, isolateEnv: true });
+      if (
+        current.path === (postCommit?.configPath ?? snapshot.path) &&
+        current.exists &&
+        current.valid
+      ) {
+        const ref = coerceSecretRef(
+          getAtPath(current.sourceConfig, configPath).value,
+          current.config.secrets?.defaults,
+        );
+        const referencesEntry = ref?.source === "store" && ref.id === storeEntry;
+        referenceState = `At the recovery check, ${operation.path} ${referencesEntry ? "referenced" : "did not reference"} the saved entry.`;
+      }
+    } catch {
+      // An unreadable/invalid config is unknown, never evidence of non-use.
+    }
+    // Even an absent target ref cannot certify non-use by other config/auth
+    // consumers or later writers. Keep the entry and never offer blind cleanup.
+    throw new Error(
+      [
+        `Saved the secret as ${storeEntry}, but ${postCommit ? "config post-write processing" : "the config operation"} failed: ${formatErrorMessage(error)}`,
+        referenceState,
+        "The entry was kept; other config keys or auth profiles may use it. Do not remove it while references are present or uncertain.",
+        "Resolve the config/runtime error and inspect current references before retrying; reuse the saved entry instead of saving the secret again.",
+      ].join(" "),
+      { cause: error },
+    );
+  }
+  return { storeEntry, storeProvider: refProvider };
 }
 
 async function verifyCurrentSetupInference(

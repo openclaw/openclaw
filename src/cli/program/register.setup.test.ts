@@ -383,12 +383,20 @@ describe("registerSetupCommand", () => {
     expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
-  it("runs baseline setup command when --baseline is set", async () => {
-    await runCli(["setup", "--baseline", "--workspace", "/tmp/ws", "--json"]);
+  it.each([false, true])("runs baseline setup with skip-bootstrap=%s", async (skipBootstrap) => {
+    await runCli([
+      "setup",
+      "--baseline",
+      "--workspace",
+      "/tmp/ws",
+      "--json",
+      ...(skipBootstrap ? ["--skip-bootstrap"] : []),
+    ]);
 
     expect(setupCommandMock).toHaveBeenCalledWith(lastSetupOptions(), runtime);
     expect(lastSetupOptions()?.workspace).toBe("/tmp/ws");
     expect(lastSetupOptions()?.json).toBe(true);
+    expect(lastSetupOptions()?.skipBootstrap ?? false).toBe(skipBootstrap);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 

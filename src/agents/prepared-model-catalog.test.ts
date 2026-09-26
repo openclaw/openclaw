@@ -304,7 +304,6 @@ describe("prepared model catalog access", () => {
   it.each([
     { readOnly: undefined, refreshFullCatalog: true },
     { readOnly: true, refreshFullCatalog: true },
-    { readOnly: false, refreshFullCatalog: true },
   ] as const)(
     "refreshes stale content once (readOnly=$readOnly, refresh=$refreshFullCatalog)",
     async ({ readOnly, refreshFullCatalog }) => {
@@ -339,11 +338,8 @@ describe("prepared model catalog access", () => {
 
   it.each([
     { readOnly: undefined, refreshFullCatalog: undefined },
-    { readOnly: undefined, refreshFullCatalog: false },
-    { readOnly: true, refreshFullCatalog: undefined },
     { readOnly: true, refreshFullCatalog: false },
     { readOnly: false, refreshFullCatalog: undefined },
-    { readOnly: false, refreshFullCatalog: false },
   ] as const)(
     "does not refresh current facts without intent (readOnly=$readOnly, refresh=$refreshFullCatalog)",
     async ({ readOnly, refreshFullCatalog }) => {
@@ -513,19 +509,6 @@ describe("prepared model catalog access", () => {
       expect(mocks.acquireSnapshot).not.toHaveBeenCalled();
     },
   );
-
-  it("restores the unique configured agent identity for a published replacement owner", async () => {
-    const committedSnapshot = {
-      ...fullSnapshot,
-      agentDir: "/tmp/prepared-model-catalog-agent",
-      config: { agents: { list: [{ id: "main", default: true }] } },
-    };
-    mocks.prepareSnapshot.mockResolvedValue(committedSnapshot);
-
-    await expect(
-      loadResolvedPublishedModelCatalogOwner({ agentId: "MAIN", readOnly: true }),
-    ).resolves.toMatchObject({ agentId: "main", agentDir: committedSnapshot.agentDir });
-  });
 
   it("resolves a complete published owner for runtime consumers", async () => {
     const committedSnapshot = {

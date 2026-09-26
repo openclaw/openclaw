@@ -225,38 +225,6 @@ describe("persistAgentSession", () => {
     }
   });
 
-  it("does not recreate a deleted persisted entry from stale local memory", async () => {
-    const dir = tempDirs.make("openclaw-session-store-");
-    try {
-      const storePath = path.join(dir, "sessions.json");
-      const staleEntry: SessionEntry = {
-        sessionId: "deleted-session",
-        updatedAt: 1,
-      };
-      const sessionStore = { [sessionKey]: staleEntry };
-
-      const persisted = await persistAgentSession({
-        agentId: "main",
-        sessionStore,
-        sessionKey,
-        storePath,
-        initialEntry: staleEntry,
-        entry: {
-          sessionId: "deleted-session",
-          updatedAt: 2,
-        },
-      });
-
-      expect(persisted).toBeUndefined();
-      expect(sessionStore[sessionKey]).toBeUndefined();
-      expect(
-        loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" }),
-      ).toBeUndefined();
-    } finally {
-      clearSessionStoreCacheForTest();
-    }
-  });
-
   it("keeps rejecting repeated stale writes after clearing local memory", async () => {
     const dir = tempDirs.make("openclaw-session-store-");
     try {

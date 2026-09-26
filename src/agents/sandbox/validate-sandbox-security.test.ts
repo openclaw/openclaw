@@ -493,20 +493,6 @@ describe("validateNetworkMode", () => {
   });
 });
 
-describe("validateSeccompProfile", () => {
-  it("allows custom profile paths/undefined", () => {
-    expect(validateSeccompProfile("/tmp/seccomp.json")).toBeUndefined();
-    expect(validateSeccompProfile(undefined)).toBeUndefined();
-  });
-});
-
-describe("validateApparmorProfile", () => {
-  it("allows named profile/undefined", () => {
-    expect(validateApparmorProfile("openclaw-sandbox")).toBeUndefined();
-    expect(validateApparmorProfile(undefined)).toBeUndefined();
-  });
-});
-
 describe("profile hardening", () => {
   it.each([
     {

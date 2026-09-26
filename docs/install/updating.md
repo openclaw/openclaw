@@ -101,6 +101,22 @@ It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
 
+Service membership uses the running Gateway's process ancestry and native supervisor
+facts. An external terminal that inherited service environment markers can still update after native
+membership is verified as external. Reparented children remain inside when they
+share the Gateway's macOS process group or launchd job, or its systemd unit cgroup.
+Unreadable native membership refuses with `service-membership-unverified`;
+confirmed native membership uses `inside-gateway-service`. Windows currently uses
+verified ancestry and the inherited-marker fallback because job-object membership
+is not available to the runtime. A genuine Gateway descendant must use the managed
+update handoff or an independent terminal.
+Managed-service refusals retain a specific code, such as
+`inside-gateway-process-tree` or `service-definition-changed`, in the failure
+report and `openclaw update status --json`. Shared reports preserve that code and
+recovery guidance while removing private paths and process IDs. These checks run
+in the installed updater: a new candidate cannot repair an older driver's refusal
+before package replacement, or recover detail an older report already discarded.
+
 Control UI updates use a verified helper to stop and restart the managed Gateway.
 On macOS, the helper carries its live update ownership into LaunchAgent activation;
 ordinary commands inside the Gateway still cannot stop their own service. If an

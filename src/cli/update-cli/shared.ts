@@ -568,6 +568,7 @@ export async function tryWriteCompletionCache(
   root: string,
   jsonMode: boolean,
   timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
+  nodeRunner = resolveNodeRunner(),
 ): Promise<"completed" | "failed" | "skipped"> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
@@ -577,7 +578,7 @@ export async function tryWriteCompletionCache(
   let failure: string;
   try {
     const result = await runCommandWithTimeout(
-      [resolveNodeRunner(), binPath, "completion", "--write-state"],
+      [nodeRunner, binPath, "completion", "--write-state"],
       {
         cwd: root,
         env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },

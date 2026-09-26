@@ -5,6 +5,7 @@ import {
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   isPluginStateWorkerCommand,
@@ -134,6 +135,7 @@ function createSharedStateWorkerBackend(
       if (
         commandType === "plugins.metadata.read" ||
         commandType === "database.inspectIdle" ||
+        commandType === "database.walMaintenance" ||
         commandType === "stateLease.acquire" ||
         commandType === "deviceIdentity.read" ||
         commandType === "deviceIdentity.load" ||
@@ -224,6 +226,13 @@ function createSharedStateWorkerBackend(
           command.input.selector,
           { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
           command.input.artifactPreservingReadOnly,
+        );
+      }
+      if (command.type === "database.walMaintenance") {
+        return (
+          open().walMaintenance.maintainPeriodic?.(command.input, (stage) => {
+            requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+          }) ?? { reclaimedPages: 0 }
         );
       }
       if (command.type === "database.inspectIdle") {

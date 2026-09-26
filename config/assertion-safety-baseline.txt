@@ -502,7 +502,6 @@ extensions/imessage/src/probe.ts	1
 extensions/imessage/src/remote-host.ts	1
 extensions/imessage/src/send.ts	2
 extensions/imessage/src/setup-core.ts	1
-extensions/imessage/src/shared.ts	1
 extensions/inworld/tts.ts	2
 extensions/irc/src/channel.ts	5
 extensions/irc/src/inbound.ts	6
@@ -511,7 +510,7 @@ extensions/irc/src/message-adapter.ts	1
 extensions/irc/src/monitor.ts	1
 extensions/irc/src/send.ts	1
 extensions/irc/src/setup-core.ts	6
-extensions/irc/src/setup-surface.ts	31
+extensions/irc/src/setup-surface.ts	25
 extensions/kilocode/provider-models.ts	3
 extensions/kilocode/stream.ts	1
 extensions/kimi-coding/provider-policy-api.ts	2
@@ -628,7 +627,7 @@ extensions/matrix/src/setup-core.ts	5
 extensions/matrix/src/setup-dm-policy.ts	5
 extensions/matrix/src/test-runtime.ts	9
 extensions/matrix/src/tool-actions.ts	1
-extensions/mattermost/src/channel.ts	8
+extensions/mattermost/src/channel.ts	6
 extensions/mattermost/src/gateway-auth-bypass.ts	3
 extensions/mattermost/src/mattermost/client.ts	8
 extensions/mattermost/src/mattermost/directory.ts	2
@@ -744,7 +743,7 @@ extensions/msteams/src/qa/adapter.runtime.ts	2
 extensions/msteams/src/qa/bot-framework-server.ts	3
 extensions/msteams/src/qa/private-runtime.ts	1
 extensions/msteams/src/reply-stream-controller.ts	1
-extensions/msteams/src/sdk-proactive.ts	7
+extensions/msteams/src/sdk-proactive.ts	3
 extensions/msteams/src/sdk.ts	7
 extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
@@ -757,12 +756,12 @@ extensions/nextcloud-talk/src/doctor.ts	2
 extensions/nextcloud-talk/src/gateway.ts	2
 extensions/nextcloud-talk/src/inbound.ts	9
 extensions/nextcloud-talk/src/message-actions.ts	3
-extensions/nextcloud-talk/src/message-adapter.ts	2
+extensions/nextcloud-talk/src/message-adapter.ts	1
 extensions/nextcloud-talk/src/monitor-runtime.ts	1
 extensions/nextcloud-talk/src/monitor.ts	1
 extensions/nextcloud-talk/src/policy.ts	2
 extensions/nextcloud-talk/src/send.ts	1
-extensions/nextcloud-talk/src/setup-core.ts	10
+extensions/nextcloud-talk/src/setup-core.ts	8
 extensions/nextcloud-talk/src/setup-surface.ts	11
 extensions/nostr/index.ts	4
 extensions/nostr/src/channel.setup.ts	2
@@ -838,7 +837,7 @@ extensions/qa-channel/src/channel-actions.ts	2
 extensions/qa-channel/src/channel-base.ts	6
 extensions/qa-channel/src/channel.ts	5
 extensions/qa-channel/src/gateway.ts	2
-extensions/qa-channel/src/inbound.ts	2
+extensions/qa-channel/src/inbound.ts	1
 extensions/qa-channel/src/setup.ts	2
 extensions/qa-lab/src/agentic-parity-report.ts	1
 extensions/qa-lab/src/auth-profile.fixture.ts	3
@@ -933,7 +932,7 @@ extensions/qa-lab/src/runtime-tool-metadata.ts	5
 extensions/qa-lab/src/scenario-catalog.ts	1
 extensions/qa-lab/src/scenario-flow-runner.ts	5
 extensions/qa-lab/src/self-check-scenario.ts	2
-extensions/qa-lab/src/suite-launch.runtime.ts	2
+extensions/qa-lab/src/suite-launch.runtime.ts	1
 extensions/qa-lab/src/suite-planning.ts	2
 extensions/qa-lab/src/suite-run-standard.ts	1
 extensions/qa-lab/src/suite-runtime-agent-media.ts	3
@@ -982,7 +981,6 @@ extensions/signal/src/client.ts	4
 extensions/signal/src/monitor/event-handler.ts	1
 extensions/signal/src/probe.ts	1
 extensions/signal/src/send.ts	1
-extensions/signal/src/shared.ts	1
 extensions/signal/src/signal-ingress.ts	2
 extensions/slack/src/accounts.ts	6
 extensions/slack/src/action-runtime.ts	5
@@ -1148,9 +1146,7 @@ extensions/tlon/src/tlon-api.ts	2
 extensions/tlon/src/types.ts	3
 extensions/tlon/src/urbit/sse-client.ts	4
 extensions/tokenjuice/tool-result-middleware.ts	1
-extensions/twitch/src/actions.ts	1
 extensions/twitch/src/config.ts	10
-extensions/twitch/src/monitor.ts	3
 extensions/twitch/src/outbound.ts	2
 extensions/twitch/src/resolver.ts	1
 extensions/twitch/src/setup-surface.ts	1
@@ -1196,8 +1192,7 @@ extensions/whatsapp/src/channel-outbound.ts	1
 extensions/whatsapp/src/connection-controller-runtime-context.ts	1
 extensions/whatsapp/src/connection-controller.ts	3
 extensions/whatsapp/src/connection-owner.ts	1
-extensions/whatsapp/src/group-config-path.ts	4
-extensions/whatsapp/src/inbound-policy.ts	1
+extensions/whatsapp/src/group-config-path.ts	3
 extensions/whatsapp/src/inbound/durable-payload.ts	2
 extensions/whatsapp/src/inbound/extract.ts	10
 extensions/whatsapp/src/inbound/group-metadata-cache.ts	4
@@ -1258,7 +1253,6 @@ extensions/zai/model-definitions.ts	1
 extensions/zalo/setup-api.ts	3
 extensions/zalo/src/accounts.ts	3
 extensions/zalo/src/proxy.ts	1
-extensions/zalo/src/setup-allow-from.ts	1
 extensions/zalo/src/token.ts	1
 extensions/zalo/src/webhook-spool.ts	1
 extensions/zalouser/src/accounts.ts	1
@@ -1636,7 +1630,7 @@ src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	2
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	6
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
-src/agents/embedded-agent-tool-media.ts	9
+src/agents/embedded-agent-tool-media.ts	8
 src/agents/embedded-agent-tool-results.ts	9
 src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
@@ -1867,7 +1861,6 @@ src/auto-reply/command-turn-context.ts	1
 src/auto-reply/commands-registry.ts	1
 src/auto-reply/heartbeat-filter.ts	4
 src/auto-reply/heartbeat-tool-response.ts	2
-src/auto-reply/reply-payload.ts	2
 src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
 src/auto-reply/reply/acp-reset-target.ts	2
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
@@ -1908,13 +1901,11 @@ src/auto-reply/reply/dispatch-from-config.events.ts	1
 src/auto-reply/reply/dispatch-from-config.prepare-execution.ts	1
 src/auto-reply/reply/elevated-allowlist-matcher.ts	2
 src/auto-reply/reply/followup-delivery-payloads.ts	1
-src/auto-reply/reply/followup-turn-execution.ts	1
 src/auto-reply/reply/get-reply-directives.ts	8
 src/auto-reply/reply/get-reply-exec-overrides.ts	1
 src/auto-reply/reply/get-reply-fast-path.ts	1
 src/auto-reply/reply/get-reply-inline-actions.ts	4
 src/auto-reply/reply/get-reply-run-execute.ts	3
-src/auto-reply/reply/get-reply.ts	2
 src/auto-reply/reply/history.ts	2
 src/auto-reply/reply/inbound-context.ts	8
 src/auto-reply/reply/mentions.ts	1
@@ -2793,7 +2784,7 @@ src/logging/config.ts	2
 src/logging/console.ts	5
 src/logging/diagnostic-run-activity.ts	1
 src/logging/diagnostic-session-recovery-coordinator.ts	1
-src/logging/diagnostic-stability-bundle.ts	11
+src/logging/diagnostic-stability-bundle.ts	9
 src/logging/diagnostic-stability.ts	2
 src/logging/diagnostic-support-log-redaction.ts	1
 src/logging/diagnostic-support-redaction.ts	1
@@ -2916,7 +2907,7 @@ src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
 src/plugin-sdk/runtime-store-registry.ts	1
 src/plugin-sdk/runtime-store.ts	2
-src/plugin-sdk/secret-ref-runtime.ts	3
+src/plugin-sdk/secret-ref-runtime.ts	2
 src/plugin-sdk/session-store-runtime-internal.ts	1
 src/plugin-sdk/session-store-runtime.ts	5
 src/plugin-sdk/session-transcript-runtime.ts	6
