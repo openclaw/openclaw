@@ -11,7 +11,6 @@ import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
@@ -25,7 +24,7 @@ import {
   resolveExplicitSessionName,
   sessionTitleRequests,
 } from "./session-title-state.js";
-import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
@@ -353,30 +352,20 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
 
   return await sessionTitleRequests.run(requestTarget, () =>
     Promise.resolve().then(async () => {
-      const entry = await withSessionEntryReadOnlyInWorker(
-        scope,
-        () => params.commitGuard?.(),
-        async (read) => {
-          if (!read.ok) {
-            throw read.error;
-          }
-          return read.value;
-        },
-      );
+      const entry = loadSessionEntry(scope);
       if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
         return false;
       }
 
       // A retry may be triggered by a later send or by discussion open. Always
       // title the session from its original user message when the transcript owns it.
-      const { firstUserMessage: transcriptSource } =
-        await readSessionTitleFieldsFromTranscriptAsync({
-          agentId: params.agentId,
-          sessionEntry: entry,
-          sessionId: params.sessionId,
-          sessionKey,
-          storePath: params.storePath,
-        });
+      const transcriptSource = readSessionTitleFieldsFromTranscript({
+        agentId: params.agentId,
+        sessionEntry: entry,
+        sessionId: params.sessionId,
+        sessionKey,
+        storePath: params.storePath,
+      }).firstUserMessage;
       const transcriptText = transcriptSource ? stripInboundMetadata(transcriptSource).trim() : "";
       const currentText = params.currentUserMessage?.trim() ?? "";
       // A first-turn transcript may win the persistence race before title work starts.

@@ -26,7 +26,7 @@ it.each([
   { titleSource: undefined, expectedSource: "Original release plan" },
   { titleSource: "Accepted worktree intent", expectedSource: "Accepted worktree intent" },
 ])(
-  "prepares a detached title off-thread from $expectedSource",
+  "prepares one detached title entry from $expectedSource",
   async ({ titleSource, expectedSource }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = {
@@ -73,7 +73,9 @@ it.each([
           identities: [scope.sessionKey, scope.sessionId],
         });
         expect(released).toBeDefined();
-        expect(reads.queries).toEqual([]);
+        expect(
+          reads.queries.filter((sql) => /\b(?:from|join)\s+"?session_nodes\b/u.test(sql)).length,
+        ).toBeLessThanOrEqual(1);
         expect(generate).toHaveBeenCalledOnce();
         expect(generate.mock.calls[0]?.[0].userMessage).toBe(expectedSource);
       } finally {

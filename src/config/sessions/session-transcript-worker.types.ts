@@ -296,7 +296,7 @@ type SessionEntryReadWorkerResult = {
   kind: "session-entry-read";
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
 } & (
-  | { entry: import("./types.js").InternalSessionEntry | undefined; readError?: never }
+  | { entry: import("./types.js").SessionEntry | undefined; readError?: never }
   | {
       entry: undefined;
       readError: import("./session-transcript-worker-error.types.js").SessionTranscriptWorkerReadError;

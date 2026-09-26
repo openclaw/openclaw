@@ -7,10 +7,6 @@ const mocks = vi.hoisted(() => ({
   utility: vi.fn(),
   readTranscript: vi.fn(),
   load: vi.fn(),
-  readEntry:
-    vi.fn<
-      typeof import("../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
-    >(),
   patch: vi.fn(),
 }));
 
@@ -24,11 +20,8 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: mocks.patch,
   loadSessionEntry: mocks.load,
 }));
-vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
-  withSessionEntryReadOnlyInWorker: mocks.readEntry,
-}));
 vi.mock("./session-transcript-title-reader.js", () => ({
-  readSessionTitleFieldsFromTranscriptAsync: mocks.readTranscript,
+  readSessionTitleFieldsFromTranscript: mocks.readTranscript,
 }));
 
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
@@ -100,15 +93,11 @@ beforeEach(() => {
   current = { ...baseEntry };
   mocks.generate.mockReset();
   mocks.utility.mockReset().mockReturnValue(undefined);
-  mocks.readTranscript.mockReset().mockResolvedValue({
+  mocks.readTranscript.mockReset().mockReturnValue({
     firstUserMessage: null,
     lastMessagePreview: null,
   });
   mocks.load.mockReset().mockImplementation(() => ({ ...current }));
-  mocks.readEntry.mockReset().mockImplementation(async (_scope, assertCurrent, consume) => {
-    assertCurrent();
-    return await consume({ ok: true, value: mocks.load() });
-  });
   mocks.patch.mockReset().mockImplementation(async (_scope, update, options) => {
     const patch = await update({ ...current });
     options.assertCommitAllowed?.();

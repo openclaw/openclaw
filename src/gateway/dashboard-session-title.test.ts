@@ -3,14 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 const resolveUtilityModelRefForAgent = vi.hoisted(() => vi.fn());
-const readSessionTitleFieldsFromTranscriptAsync = vi.hoisted(() => vi.fn());
+const readSessionTitleFieldsFromTranscript = vi.hoisted(() => vi.fn());
 const updateSessionEntry = vi.hoisted(() => vi.fn());
 const loadSessionEntry = vi.hoisted(() => vi.fn());
-const readSessionEntry = vi.hoisted(() =>
-  vi.fn<
-    typeof import("../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
-  >(),
-);
 
 vi.mock("../agents/utility-model.js", () => ({ resolveUtilityModelRefForAgent }));
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
@@ -20,12 +15,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: updateSessionEntry,
   loadSessionEntry,
 }));
-vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
-  withSessionEntryReadOnlyInWorker: readSessionEntry,
-}));
-vi.mock("./session-transcript-title-reader.js", () => ({
-  readSessionTitleFieldsFromTranscriptAsync,
-}));
+vi.mock("./session-transcript-title-reader.js", () => ({ readSessionTitleFieldsFromTranscript }));
 
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -40,7 +30,6 @@ import {
 } from "./dashboard-session-title.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
 import { hasExplicitSessionName, resolveExplicitSessionName } from "./session-title-state.js";
-import type { SessionTitleFields } from "./session-utils.types.js";
 
 const cfg = {
   agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -89,12 +78,8 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     resolveUtilityModelRefForAgent.mockReset();
     updateSessionEntry.mockReset();
     loadSessionEntry.mockReset().mockReturnValue(baseEntry);
-    readSessionEntry.mockReset().mockImplementation(async (_scope, assertCurrent, consume) => {
-      assertCurrent();
-      return await consume({ ok: true, value: loadSessionEntry() });
-    });
-    readSessionTitleFieldsFromTranscriptAsync.mockReset();
-    readSessionTitleFieldsFromTranscriptAsync.mockResolvedValue({
+    readSessionTitleFieldsFromTranscript.mockReset();
+    readSessionTitleFieldsFromTranscript.mockReturnValue({
       firstUserMessage: null,
       lastMessagePreview: null,
     });
@@ -344,7 +329,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
   it("retries a historical session from the transcript's first user message", async () => {
     const entry = { ...baseEntry, systemSent: true };
-    readSessionTitleFieldsFromTranscriptAsync.mockResolvedValue({
+    readSessionTitleFieldsFromTranscript.mockReturnValue({
       firstUserMessage: "[Mon 2026-08-10 12:00 UTC] Original release plan",
       lastMessagePreview: "Latest follow-up",
     });
@@ -364,7 +349,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   });
 
   it("preserves attachment-aware input when the first turn is already in the transcript", async () => {
-    readSessionTitleFieldsFromTranscriptAsync.mockResolvedValue({
+    readSessionTitleFieldsFromTranscript.mockReturnValue({
       firstUserMessage: "[Mon 2026-08-10 12:00 UTC] Review this rollout",
       lastMessagePreview: "Review this rollout",
     });
@@ -444,24 +429,20 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(await update?.({ ...baseEntry })).toEqual({ displayName: "Release Planning" });
   });
 
-  it.each([
-    ["manual title", { label: "Manual title" }],
-    ["reset session generation", { sessionId: "session-2" }],
-  ])("preserves a %s added during the transcript read", async (_name, change) => {
-    const readStarted = createDeferredCore();
-    const transcript = createDeferredCore<SessionTitleFields>();
-    readSessionTitleFieldsFromTranscriptAsync.mockImplementationOnce(() => {
-      readStarted.resolve();
-      return transcript.promise;
-    });
-    const request = maybeGenerateDashboardSessionTitle(titleParams());
-    await readStarted.promise;
-    mockSessionUpdate({ ...baseEntry, ...change });
-    transcript.resolve({ firstUserMessage: "Original release plan", lastMessagePreview: null });
+  it("does not overwrite a name added while the model request is running", async () => {
+    mockSessionUpdate({ ...baseEntry, label: "Manual title" });
 
-    await expect(request).resolves.toBe(false);
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(false);
+
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
-    expect(loadSessionEntry()).toEqual({ ...baseEntry, ...change });
+  });
+
+  it("does not write into a reset session generation", async () => {
+    mockSessionUpdate({ ...baseEntry, sessionId: "session-2" });
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(false);
+
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
   });
 
   it("bounds a worktree join without cancelling the canonical background naming request", async () => {
@@ -583,24 +564,24 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(onPersisted).not.toHaveBeenCalled();
   });
 
-  it("joins concurrent title requests while the first transcript read is pending", async () => {
-    const readStarted = createDeferredCore();
-    const transcript = createDeferredCore<SessionTitleFields>();
-    readSessionTitleFieldsFromTranscriptAsync.mockImplementationOnce(() => {
-      readStarted.resolve();
-      return transcript.promise;
-    });
+  it("deduplicates concurrent title requests for one session generation", async () => {
+    let resolveLabel!: (value: string) => void;
+    generateConversationLabelWithFallback.mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveLabel = resolve;
+      }),
+    );
+
     const first = maybeGenerateDashboardSessionTitle(titleParams());
-    await readStarted.promise;
     const duplicate = maybeGenerateDashboardSessionTitle(titleParams());
-    transcript.resolve({ firstUserMessage: "Original release plan", lastMessagePreview: null });
+    resolveLabel("Release Planning");
     await expect(first).resolves.toBe(true);
     await expect(duplicate).resolves.toBe(false);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
     expect(updateSessionEntry).toHaveBeenCalledOnce();
-    expect(readSessionEntry).toHaveBeenCalledOnce();
-    expect(readSessionTitleFieldsFromTranscriptAsync).toHaveBeenCalledOnce();
+    expect(loadSessionEntry).toHaveBeenCalledOnce();
+    expect(readSessionTitleFieldsFromTranscript).toHaveBeenCalledOnce();
   });
 });
 
