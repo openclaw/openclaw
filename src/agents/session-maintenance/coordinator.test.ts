@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
@@ -12,6 +13,141 @@ afterEach(async () => {
 });
 
 describe("session maintenance ownership", () => {
+  it("cancels foreground ownership without releasing the writer or blocking later optional work", async () => {
+    const sessionKey = "session:cancelled-foreground";
+    const finish = createDeferred();
+    const owner = createSessionMaintenanceOwner({ sessionKey });
+    const work = owner.track(finish.promise);
+    const abort = new AbortController();
+    const reason = new Error("user stopped");
+    let cancelled = false;
+    const admission = beginForegroundSessionMaintenance(sessionKey, abort.signal).then(
+      (release) => {
+        release();
+        return undefined;
+      },
+      (error: unknown) => {
+        cancelled = true;
+        return error;
+      },
+    );
+    abort.abort(reason);
+    let readFinished = false;
+    const read = waitForSessionMaintenance(sessionKey).then(() => {
+      readFinished = true;
+    });
+    let optionalRan = false;
+    let optionalWork = Promise.resolve();
+    const optionalAbort = new AbortController();
+    try {
+      await nextTurn();
+      expect(cancelled).toBe(true);
+      expect(await admission).toMatchObject({ name: "AbortError", cause: reason });
+      expect(readFinished).toBe(false);
+      expect(owner.signal.aborted).toBe(false);
+      expect(owner.assertCurrent).not.toThrow();
+      // A real writer may release writes while retaining cleanup ownership.
+      // Optional work can now run, but external readers must still await done.
+      owner.releaseWrites();
+      const optional = createSessionMaintenanceOwner({
+        sessionKey,
+        preemptible: true,
+        abortSignal: optionalAbort.signal,
+      });
+      optionalWork = optional.track(
+        optional.run(async () => {
+          optionalRan = true;
+        }),
+      );
+      await nextTurn();
+      expect(optionalRan).toBe(true);
+      expect(readFinished).toBe(false);
+    } finally {
+      finish.resolve();
+      optionalAbort.abort();
+      await Promise.allSettled([work, read, admission, optionalWork]);
+    }
+    expect(readFinished).toBe(true);
+  });
+
+  it("keeps a second foreground reservation when the first waiter stops", async () => {
+    const sessionKey = "session:two-foreground-waiters";
+    const finish = createDeferred();
+    const owner = createSessionMaintenanceOwner({ sessionKey });
+    const work = owner.track(finish.promise);
+    const abort = new AbortController();
+    const first = beginForegroundSessionMaintenance(sessionKey, abort.signal).then(
+      (release) => {
+        release();
+        return undefined;
+      },
+      (error: unknown) => error,
+    );
+    const second = beginForegroundSessionMaintenance(sessionKey);
+    abort.abort(new Error("first stopped"));
+    let releaseSecond: (() => void) | undefined;
+    let optionalWork = Promise.resolve();
+    const optionalAbort = new AbortController();
+    let optionalRan = false;
+    try {
+      finish.resolve();
+      await work;
+      releaseSecond = await second;
+      const optional = createSessionMaintenanceOwner({
+        sessionKey,
+        preemptible: true,
+        abortSignal: optionalAbort.signal,
+      });
+      optionalWork = optional.track(
+        optional.run(async () => {
+          optionalRan = true;
+        }),
+      );
+      await nextTurn();
+      expect(optionalRan).toBe(false);
+      releaseSecond();
+      await nextTurn();
+      expect(optionalRan).toBe(true);
+      await optionalWork;
+      expect(await first).toMatchObject({ name: "AbortError" });
+    } finally {
+      finish.resolve();
+      (releaseSecond ?? (await second))();
+      optionalAbort.abort();
+      await Promise.allSettled([work, first, optionalWork]);
+    }
+  });
+
+  it("does not preempt maintenance for an already stopped foreground caller", async () => {
+    const sessionKey = "session:preaborted-foreground";
+    const started = createDeferred();
+    const finish = createDeferred();
+    const owner = createSessionMaintenanceOwner({ sessionKey, preemptible: true });
+    const work = owner.track(
+      owner.run(async () => {
+        started.resolve();
+        await finish.promise;
+      }),
+    );
+    await started.promise;
+    const reason = new Error("already stopped");
+    const admission = beginForegroundSessionMaintenance(sessionKey, AbortSignal.abort(reason)).then(
+      (release) => {
+        release();
+        return undefined;
+      },
+      (error: unknown) => error,
+    );
+    try {
+      await nextTurn();
+      expect(owner.signal.aborted).toBe(false);
+    } finally {
+      finish.resolve();
+      await work;
+    }
+    expect(await admission).toMatchObject({ name: "AbortError", cause: reason });
+  });
+
   it("aborts optional work before admitting foreground and waits for its actual cleanup", async () => {
     const started = createDeferred();
     const aborted = createDeferred();

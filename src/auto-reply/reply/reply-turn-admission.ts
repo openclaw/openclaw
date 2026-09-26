@@ -21,7 +21,7 @@ import { loadSessionEntryForAdmission } from "../../config/sessions/session-acce
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -177,10 +177,23 @@ export async function admitReplyTurn(
   params: ReplyTurnAdmissionParams,
 ): Promise<ReplyTurnAdmission> {
   const activeAtAdmission = replyRunRegistry.get(params.sessionKey);
-  const releaseForeground =
-    params.kind === "visible"
-      ? await beginForegroundSessionMaintenance(params.sessionKey)
-      : undefined;
+  let releaseForeground: (() => void) | undefined;
+  if (params.kind === "visible") {
+    try {
+      releaseForeground = await beginForegroundSessionMaintenance(
+        params.sessionKey,
+        params.upstreamAbortSignal,
+      );
+    } catch (error) {
+      // A caller Stop during the maintenance wait ends only this admission; the
+      // maintenance writer keeps its own tracked completion. A genuine
+      // maintenance failure still surfaces.
+      if (!isAbortError(error)) {
+        throw error;
+      }
+      return { status: "skipped", reason: "aborted" };
+    }
+  }
   let foregroundTransferred = false;
   // Maintenance may finish after the observed reply rotates and clears its slot.
   let sessionId = activeAtAdmission?.result ? activeAtAdmission.sessionId : params.sessionId;
