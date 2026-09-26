@@ -30,6 +30,54 @@ describe("toStreamingMarkdownParts", () => {
     }
   });
 
+  it("caches completed lists, code, and tables in the long streamed reply", () => {
+    const sections = Array.from(
+      { length: 28 },
+      (_, index) => `## Section ${index}: measured browser work
+
+A clear explanation with **important details** and an inline \`value\`. The browser should remain responsive as this answer grows. Measure the complete interaction and preserve every message.
+
+- First item with a useful observation
+- Second item with a concrete result
+- Third item with the next action
+
+\`\`\`typescript
+export function sample${index}(value: number): number {
+  const doubled = value * 2;
+  return doubled + ${index};
+}
+\`\`\`
+
+| Metric | Value | Meaning |
+| --- | --- | --- |
+| Frames | 60 | Smooth rendering |
+| Input | 16 | Fast feedback |
+
+`,
+    );
+    const prefixes = sections.map((_, index) => sections.slice(0, index + 1).join(""));
+    const expected = prefixes.map((prefix) => toSanitizedMarkdownHtml(prefix));
+    const sanitize = vi.spyOn(DOMPurify, "sanitize");
+    let offset = 0;
+    try {
+      for (const [index, prefix] of prefixes.entries()) {
+        for (; offset < prefix.length; offset += 24) {
+          toStreamingMarkdownParts(prefix.slice(0, offset), {}, "rich-stream-budget");
+        }
+        expect(toStreamingMarkdownParts(prefix, {}, "rich-stream-budget").join("")).toBe(
+          expected[index],
+        );
+      }
+      const sanitizedChars = sanitize.mock.calls.reduce(
+        (total, [input]) => total + (typeof input === "string" ? input.length : 0),
+        0,
+      );
+      expect(sanitizedChars).toBeLessThan(prefixes.at(-1)!.length * 20);
+    } finally {
+      sanitize.mockRestore();
+    }
+  });
+
   it("retires rendered prefixes when display options, locale, or source change", async () => {
     const key = "rendered-prefix-ownership";
     const source = "![Diagram](https://example.com/image.png)\n\n";
@@ -299,6 +347,10 @@ describe("toStreamingMarkdownParts", () => {
         "",
         "</details>",
       ].join("\n"),
+      "- first\n\n  continuation\n\n# Done\n\n- next\n\n+ changed marker\n\nAfter\n\n",
+      "1. one\n\n    - nested\n\n        code\n\n# Done\n\nAfter\n\n",
+      "- before\n\n~~~\n- ~~~\n*literal\n~~~\n\nAfter\n\n",
+      "- [x] Safe\n\nDone\n\n- [evil](javascript:alert(1))\n\n<script>alert(1)</script>\n\nAfter\n\n",
       "- one\n\n  - nested\n\n[Docs][ref\\]]\n\n[ref\\]]: /docs",
       "`` multiline\n<details> remains code\n``\n\n<details>\n<summary>Real</summary>",
       "- item\n\n    <details>\n    <summary>Logs</summary>\n\n    still inside",

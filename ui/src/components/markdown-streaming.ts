@@ -1,3 +1,4 @@
+import type { Token } from "markdown-it";
 import remend, { type RemendOptions } from "remend";
 import {
   findMarkdownCodeSpans,
@@ -19,7 +20,7 @@ const LINK_REFERENCE_CANDIDATE_RE = /^[ \t]*\[/u;
 const DISCLOSURE_LINE_CANDIDATE_RE = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/iu;
 const STREAMING_CACHE_LIMIT = 8;
 
-type FenceMarker = { length: number; marker: "`" | "~" };
+type FenceMarker = { length: number; marker: "`" | "~"; container: boolean };
 type StrippedMarkdownLine = { content: string; offset: number };
 
 function stripMarkdownContainerPrefixes(line: string): StrippedMarkdownLine {
@@ -37,17 +38,20 @@ function stripMarkdownContainerPrefixes(line: string): StrippedMarkdownLine {
 }
 
 function getFenceMarker(line: string): FenceMarker | null {
-  const content = stripMarkdownContainerPrefixes(line).content;
+  const { content, offset } = stripMarkdownContainerPrefixes(line);
   const match = FENCE_OPEN_RE.exec(content);
   const fence = match?.[1];
   if (!match || !fence || (fence.startsWith("`") && content.slice(match[0].length).includes("`"))) {
     return null;
   }
-  return { length: fence.length, marker: fence.startsWith("`") ? "`" : "~" };
+  return { length: fence.length, marker: fence.startsWith("`") ? "`" : "~", container: offset > 0 };
 }
 
 function isFenceClose(line: string, fence: FenceMarker): boolean {
-  const trimmed = stripMarkdownContainerPrefixes(line).content.replace(/[ \t]+$/u, "");
+  const trimmed = (fence.container ? stripMarkdownContainerPrefixes(line).content : line).replace(
+    /[ \t]+$/u,
+    "",
+  );
   const match = FENCE_OPEN_RE.exec(trimmed);
   const marker = match?.[1];
   if (!match || !marker) {
@@ -130,7 +134,29 @@ function findStreamingCodeSpans(markdown: string, start: number): Array<[number,
   ]);
 }
 
-let rawHtmlParser: ReturnType<typeof createMarkdownParser> | undefined;
+let streamingBlockParser: ReturnType<typeof createMarkdownParser> | undefined;
+
+function retainOpenList(markdown: string, start: number): number | null {
+  // An unfinished line can still become another item or an indented continuation.
+  const source = markdown.slice(start, markdown.lastIndexOf("\n") + 1);
+  const parser = (streamingBlockParser ??= createMarkdownParser());
+  const tokens: Token[] = [];
+  parser.block.parse(source, parser, {}, tokens);
+  const blocks = tokens.filter((token) => token.level === 0 && token.map);
+  const first = blocks[0];
+  const last = blocks.at(-1);
+  if (!first?.type.endsWith("list_open") || !last?.map || first === last) {
+    return start;
+  }
+  if (!last.type.endsWith("list_open")) {
+    return null;
+  }
+  let offset = start;
+  for (let line = 0; line < last.map[0]; line++) {
+    offset = markdown.indexOf("\n", offset) + 1;
+  }
+  return offset;
+}
 
 function createStreamingRawHtmlScanner(
   markdown: string,
@@ -153,7 +179,7 @@ function createStreamingRawHtmlScanner(
     ) {
       ranges = findMarkdownRawHtmlRanges(
         markdown.slice(start),
-        (rawHtmlParser ??= createMarkdownParser()),
+        (streamingBlockParser ??= createMarkdownParser()),
       ).map(([from, to]) => [from + start, to + start]);
     }
     let range = ranges?.[current];
@@ -294,6 +320,11 @@ function scanStableStreamingMarkdown(
         openFence,
       };
     }
+  }
+
+  if (firstListOffset !== null && !hasLinkReferenceDefinition) {
+    firstListOffset = retainOpenList(markdownLocal, firstListOffset);
+    resumeCursor = { ...resumeCursor, firstListOffset };
   }
 
   // A bracket-leading line can start a multiline or escaped reference label.
