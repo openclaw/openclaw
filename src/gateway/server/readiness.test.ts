@@ -51,6 +51,20 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   };
 }
 
+function createHealthyDiscordManager(
+  startedAt: number,
+  lastTransportActivityAt: number,
+): ChannelManager {
+  return createManager(
+    snapshotWith({
+      discord: managedAccount({
+        lastStartAt: startedAt,
+        lastTransportActivityAt,
+      }),
+    }),
+  );
+}
+
 function withReadinessClock(run: () => void) {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
