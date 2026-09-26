@@ -18,6 +18,7 @@ import { applyMobileReleasePlan, planMobileRelease } from "../../scripts/mobile-
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
+import { registerBoundedSignalTests } from "./mobile-release-process.test-support.js";
 
 const REPOSITORY = "openclaw/openclaw";
 const TARGET_REF = "release/2026.9.2-mobile";
@@ -4471,6 +4472,8 @@ fi
     expect(unsafeCommandCount).toBe(0);
   });
 
+  registerBoundedSignalTests();
+
   it("bounds owned child process trees", async () => {
     const runnerTemp = tempRoots.make("openclaw-ios-keychain-process-runner-");
     if (process.platform !== "win32") {
@@ -4515,7 +4518,10 @@ try {
 }
 const processIds = fs.readFileSync(${JSON.stringify(pidFile)}, "utf8").trim().split("\\n").map(Number);
 let processGroupAlive = true;
-try { process.kill(-processIds[0], 0); } catch { processGroupAlive = false; }
+try { process.kill(-processIds[0], 0); } catch (error) {
+  if (error?.code !== "ESRCH") throw error;
+  processGroupAlive = false;
+}
 process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message, processGroupAlive, processIds }));
 `;
         const result = spawnSync(
