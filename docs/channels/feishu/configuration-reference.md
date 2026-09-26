@@ -104,6 +104,8 @@ A shared legacy socket stays open while another account still uses that endpoint
 On account shutdown, authenticated responses may finish for up to five seconds,
 matching the previous listener's close grace period. Unfinished responses close
 at that deadline; other accounts keep their routes and listeners.
+During that grace period, correctly signed callbacks for the stopping account
+receive a retryable `503` unless a live successor already accepts their signature.
 
 On update, the plugin's Doctor migration moves `webhookPort` and `webhookHost`
 into `legacyWebhook: { port, host }`, preserving the effective old defaults when

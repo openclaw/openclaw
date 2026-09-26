@@ -1,5 +1,6 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -66,6 +67,21 @@ describe("Feishu webhook route configuration", () => {
       const abort = new AbortController();
       const invoked = Promise.withResolvers<void>();
       const releaseDispatch = Promise.withResolvers<void>();
+      const peers: { abort: AbortController; monitor: Promise<void> }[] = [];
+      const startPeer = (accountId: string, encryptKey: string, startMonitor = monitorWebhook) => {
+        const peerAbort = new AbortController();
+        peers.push({
+          abort: peerAbort,
+          monitor: startMonitor({
+            account: { ...account, accountId, encryptKey },
+            accountId,
+            abortSignal: peerAbort.signal,
+            eventDispatcher: new Lark.EventDispatcher({ encryptKey }),
+            invokeWebhookEvent: async () => ({ kind: "non-durable", value: { accountId } }),
+            runtime: createRuntimeSpies(),
+          }),
+        });
+      };
       const monitor = monitorWebhook({
         account,
         accountId: account.accountId,
@@ -96,6 +112,24 @@ describe("Feishu webhook route configuration", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(stopped).toBe(false);
         if (ending === "finish") {
+          startPeer("shutdown-sibling", "sibling_key");
+          const retry = await postSignedPayload(`http://127.0.0.1:${port}/hook-shutdown-response`, {
+            schema: "2.0",
+            event: {},
+          });
+          expect(retry.status).toBe(503);
+          expect(retry.headers.get("retry-after")).toBe("1");
+          expect(await retry.text()).toBe("plugin route is restarting; retry");
+          const duplicateTransport = await importFreshModule<
+            typeof import("./monitor.transport.js")
+          >(import.meta.url, "./monitor.transport.js?scope=feishu-webhook-successor");
+          startPeer(account.accountId, "encrypt_key", duplicateTransport.monitorWebhook);
+          const replacement = await postSignedPayload(
+            `http://127.0.0.1:${port}/hook-shutdown-response`,
+            { schema: "2.0", event: {} },
+          );
+          expect(replacement.status).toBe(200);
+          await expect(replacement.json()).resolves.toEqual({ accountId: account.accountId });
           releaseDispatch.resolve();
           await expect(request).resolves.toEqual({ status: 200, body: '{"accepted":true}' });
         } else {
@@ -110,8 +144,12 @@ describe("Feishu webhook route configuration", () => {
         vi.useRealTimers();
         releaseDispatch.resolve();
         abort.abort();
+        for (const peer of peers) {
+          peer.abort.abort();
+        }
         await request;
         await monitor;
+        await Promise.all(peers.map((peer) => peer.monitor));
       }
     },
   );

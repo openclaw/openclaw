@@ -391,9 +391,10 @@ type FeishuWebhookTarget = MonitorTransportParams & {
   preAuthInFlightLimiter: ReturnType<typeof createWebhookInFlightLimiter>;
   pendingResponses: Map<http.ServerResponse, Promise<void>>;
 };
-const webhookTargetsStore = createPluginRuntimeStore<Map<string, FeishuWebhookTarget[]>>(
-  "Feishu webhook routes are not registered",
-);
+const webhookTargetsStore = createPluginRuntimeStore<Map<string, FeishuWebhookTarget[]>>({
+  key: "feishu:webhook-targets",
+  errorMessage: "Feishu webhook routes are not registered",
+});
 
 async function handleFeishuWebhook(
   req: http.IncomingMessage,
@@ -407,7 +408,6 @@ async function handleFeishuWebhook(
     webhookTargets.get(canonicalizeWebhookRouteKey(requestPath ?? "/")) ?? []
   ).filter(
     (target) =>
-      !target.abortSignal?.aborted &&
       (!legacyListener ||
         (target.legacyListener?.port === legacyListener.port &&
           target.legacyListener.host === legacyListener.host)) &&
@@ -517,16 +517,24 @@ async function handleFeishuWebhook(
       }
       rawBody = body.value;
 
+      const matchesSignature = (target: FeishuWebhookTarget) =>
+        isFeishuWebhookSignatureValid({
+          headers: req.headers,
+          rawBody,
+          encryptKey: target.encryptKey,
+        });
       const match = resolveSingleWebhookTarget(
         targets,
-        (target) =>
-          !target.abortSignal?.aborted &&
-          isFeishuWebhookSignatureValid({
-            headers: req.headers,
-            rawBody,
-            encryptKey: target.encryptKey,
-          }),
+        (target) => !target.abortSignal?.aborted && matchesSignature(target),
       );
+      if (
+        match.kind === "none" &&
+        targets.some((target) => target.abortSignal?.aborted && matchesSignature(target))
+      ) {
+        res.setHeader("Retry-After", "1");
+        respondText(res, 503, "plugin route is restarting; retry");
+        return;
+      }
       if (match.kind !== "single") {
         respondText(
           res,
@@ -645,10 +653,14 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
       return pendingDrain;
     }
     cleanupStarted = true;
-    registration.unregister();
     if (
       ![...webhookTargets.values()].some((targets) =>
-        targets.some((target) => target.accountId === accountId),
+        targets.some(
+          (target) =>
+            target !== registration.target &&
+            target.accountId === accountId &&
+            !target.abortSignal?.aborted,
+        ),
       )
     ) {
       clearFeishuBotIdentityState(accountId);
@@ -665,6 +677,7 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
           }
         }
       }
+      registration.unregister();
       unregisterRoute?.();
     })();
     return pendingDrain;
@@ -693,7 +706,7 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
         ? `feishu[${accountId}]: ${pathConflict} The legacy listener keeps the old path working; move the path and callback before setting legacyWebhook:false.`
         : `feishu[${accountId}]: webhook registered on Gateway port ${params.gatewayPort ?? 18789} at ${rawPath}; point the Feishu callback URL or reverse-proxy upstream to this Gateway route. ${legacyListener ? `The legacy listener on ${legacyListener.host}:${legacyListener.port} forwards here; set legacyWebhook:false after verifying delivery through the Gateway to disable legacy forwarding for this account.` : "legacyWebhook:false disables legacy forwarding for this account."}`,
     );
-    // Retire the target and identity before yielding to a successor during drain.
+    // Stopping targets retain only signature recognition until their responses finish.
     await waitUntilAbort(abortSignal, cleanup);
   } finally {
     await cleanup();
