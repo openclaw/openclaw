@@ -105,11 +105,6 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
   };
 }
 
-/**
- * Wakes a top-level or explicitly yielded nested requester once its last child
- * reaches terminal settle. Durable state transitions happen synchronously
- * through lifecycle-owned callbacks before and after every async delivery.
- */
 export async function maybeWakeRequesterAfterAllChildrenSettled(
   params: RequesterSettleWakeBatchCallbacks & {
     requesterSessionKey: string;
@@ -181,11 +176,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     return false;
   }
 
-  const listedRuns = listSubagentRunsForRequester(requesterSessionKey, {
+  const requesterRuns = listSubagentRunsForRequester(requesterSessionKey, {
     requesterAgentId,
     requesterStorePath,
   });
-  const requesterRuns = Array.isArray(listedRuns) ? listedRuns : [];
   const currentSettledEntry = requesterRuns.find(
     (entry) => entry.runId === params.settledEntry.runId,
   );
@@ -213,12 +207,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
           Boolean(entry?.requesterSettleWake) &&
           entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
       );
-    if (
-      settledBatch.some(
-        (entry) => entry.execution.status === "running" || !hasSubagentRunEnded(entry),
-      )
-    ) {
-      return false;
+    for (const entry of settledBatch) {
+      if (entry.execution.status === "running" || !hasSubagentRunEnded(entry)) {
+        return false;
+      }
     }
   } else {
     // An unfrozen wave cannot absorb a different requester-yield generation.
