@@ -19,6 +19,7 @@ import {
 } from "../../scripts/ios-release-e2e.js";
 import { createNativeDependencies } from "../../scripts/lib/ios-release-e2e-native.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 const nativeMocks = vi.hoisted(() => ({
   command: vi.fn(),
@@ -455,19 +456,40 @@ describe("release qualification workflow authority", () => {
     expect(upload.if).toBe("always()");
     expect(upload.with.path).toBe("${{ runner.temp }}/ios-release-e2e-proof.json");
   });
-  it("makes only current-target full-manual qualification a required CI lane", () => {
-    const job = ci.jobs["ios-release-e2e"];
-    expect(job.if).toContain("compatibility_target != 'true'");
-    expect(job.if).toContain("release_scope == 'full'");
-    expect(job.with.target_sha).toBe("${{ needs.preflight.outputs.checkout_revision }}");
-    expect(ci.jobs["ci-gate"].needs).toContain("ios-release-e2e");
-    const gate = ci.jobs["ci-gate"].steps.find(
-      (step: { name: string }) => step.name === "Verify selected CI lanes",
-    );
-    expect(gate.env.JOB_RESULTS).toContain(
-      `ios-release-e2e=\${{ needs.ios-release-e2e.result }}|${job.if}`,
-    );
-  });
+  it.each([
+    ["full", "a".repeat(40), true],
+    ["full", "b".repeat(40), false],
+    ["main", "a".repeat(40), false],
+    ["main", "b".repeat(40), false],
+  ])(
+    "selects %s-tier target %s for required native qualification: %s",
+    (tier, target, selected) => {
+      const job = ci.jobs["ios-release-e2e"];
+      expect(
+        evaluateWorkflowExpression(job.if, {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          sha: "a".repeat(40),
+          preflightOutputs: {
+            validation_tier: tier,
+            checkout_revision: target,
+            release_scope: "full",
+            compatibility_target: "false",
+            run_ios_build: "true",
+          },
+        }),
+      ).toBe(selected);
+      expect(job.with.target_sha).toBe("${{ needs.preflight.outputs.checkout_revision }}");
+      expect(ci.jobs["ci-gate"].needs).toContain("ios-release-e2e");
+      const gate = ci.jobs["ci-gate"].steps.find(
+        (step: { name: string }) => step.name === "Verify selected CI lanes",
+      );
+      expect(gate.env.JOB_RESULTS).toContain(
+        `ios-release-e2e=\${{ needs.ios-release-e2e.result }}|${job.if}`,
+      );
+    },
+  );
   it("uses ad-hoc Debug products, exact destinations and the XCTest result CLI", () => {
     const source = readFileSync("scripts/lib/ios-release-e2e-native.ts", "utf8");
     expect(source).not.toContain('"CODE_SIGNING_ALLOWED=NO"');

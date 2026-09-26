@@ -176,8 +176,10 @@ this is not screenshot mode or a substitute for external-provider validation.
 
 The stock gate is required between beta authorization and release. It checks out
 the exact approved SHA, even when that differs from the workflow SHA, and fails
-if that target lacks the harness. Current-target full-manual CI also requires
-the stock gate. Existing compatibility admission still excludes historical and
+if that target lacks the harness. Manual CI also requires the stock gate when
+`validation_tier=full` and its checkout revision equals the workflow run's SHA.
+Main-tier and alternate-target manual runs retain their existing coverage.
+Existing compatibility admission still excludes historical and
 pinned-target CI paths; this does not claim universal pinned-target FRV coverage.
 Local direct upload behavior is unchanged.
 
