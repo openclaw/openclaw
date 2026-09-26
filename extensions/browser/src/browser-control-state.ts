@@ -33,6 +33,9 @@ function enqueueBrowserControlLifecycle<T>(run: () => Promise<T>): Promise<T> {
 
 /** Queue startup, but never turn a request made during shutdown into a post-stop restart. */
 export function withBrowserControlStart<T>(run: () => Promise<T>): Promise<T> {
+  if (state && !isBrowserRuntimeRunning(state)) {
+    return Promise.reject(new BrowserProfileUnavailableError("Browser runtime is stopping."));
+  }
   const effectiveStopsAtRequest = completedEffectiveStops;
   return enqueueBrowserControlLifecycle(() => {
     if (
