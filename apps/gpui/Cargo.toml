@@ -46,13 +46,16 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAppearance", "NSView"] }
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore"] }
 
-# Local accessibility proof; replace these paths with upstream releases before shipping.
+# Pinned forks retain the tested accessibility and background-activation fixes.
+# GPUI input: https://github.com/longbridge/gpui-kit/pull/3246 (reverted),
+# followed by https://github.com/longbridge/gpui-kit/pull/3254.
+# AccessKit: https://github.com/AccessKit/accesskit/pull/812.
+# Wry: https://github.com/tauri-apps/wry/pull/1866.
 [patch.crates-io]
-wry = { path = "/Users/steipete/Projects/oss/wry" }
-gpui-component = { path = "/Users/steipete/Projects/oss/gpui-kit/crates/component" }
-gpui-base = { path = "/Users/steipete/Projects/oss/gpui-kit/crates/base" }
-gpui-kit-assets = { path = "/Users/steipete/Projects/oss/gpui-kit/crates/assets" }
-gpui-pre-macos = { path = "/Users/steipete/Projects/oss/gpui-pre-macos" }
-accesskit = { path = "/Users/steipete/Projects/oss/accesskit/common" }
-accesskit_consumer = { path = "/Users/steipete/Projects/oss/accesskit/consumer" }
-accesskit_macos = { path = "/Users/steipete/Projects/oss/accesskit/platforms/macos" }
+wry = { git = "https://github.com/steipete/wry", rev = "77d9f7d4f349924aba40c2ade794de65ae700743" }
+gpui-component = { git = "https://github.com/steipete/gpui-kit", rev = "9e8e78db77c97ccde8051ce6946a5e37e914500c" }
+gpui-base = { git = "https://github.com/steipete/gpui-kit", rev = "9e8e78db77c97ccde8051ce6946a5e37e914500c" }
+gpui-kit-assets = { git = "https://github.com/steipete/gpui-kit", rev = "9e8e78db77c97ccde8051ce6946a5e37e914500c" }
+accesskit = { git = "https://github.com/steipete/accesskit", rev = "42d99621d8e7276649442c54967a44153cac6294" }
+accesskit_consumer = { git = "https://github.com/steipete/accesskit", rev = "42d99621d8e7276649442c54967a44153cac6294" }
+accesskit_macos = { git = "https://github.com/steipete/accesskit", rev = "42d99621d8e7276649442c54967a44153cac6294" }

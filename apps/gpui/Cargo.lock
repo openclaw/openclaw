@@ -5,6 +5,7 @@ version = 4
 [[package]]
 name = "accesskit"
 version = "0.24.1"
+source = "git+https://github.com/steipete/accesskit?rev=42d99621d8e7276649442c54967a44153cac6294#42d99621d8e7276649442c54967a44153cac6294"
 dependencies = [
  "enumn",
  "uuid",
@@ -27,6 +28,7 @@ dependencies = [
 [[package]]
 name = "accesskit_consumer"
 version = "0.38.0"
+source = "git+https://github.com/steipete/accesskit?rev=42d99621d8e7276649442c54967a44153cac6294#42d99621d8e7276649442c54967a44153cac6294"
 dependencies = [
  "accesskit",
  "hashbrown 0.16.1",
@@ -35,6 +37,7 @@ dependencies = [
 [[package]]
 name = "accesskit_macos"
 version = "0.26.3"
+source = "git+https://github.com/steipete/accesskit?rev=42d99621d8e7276649442c54967a44153cac6294#42d99621d8e7276649442c54967a44153cac6294"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -2796,6 +2799,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.6.6"
+source = "git+https://github.com/steipete/gpui-kit?rev=9e8e78db77c97ccde8051ce6946a5e37e914500c#9e8e78db77c97ccde8051ce6946a5e37e914500c"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2832,6 +2836,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.6.6"
+source = "git+https://github.com/steipete/gpui-kit?rev=9e8e78db77c97ccde8051ce6946a5e37e914500c#9e8e78db77c97ccde8051ce6946a5e37e914500c"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2884,6 +2889,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.6.6"
+source = "git+https://github.com/steipete/gpui-kit?rev=9e8e78db77c97ccde8051ce6946a5e37e914500c#9e8e78db77c97ccde8051ce6946a5e37e914500c"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -2908,6 +2914,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.6.6"
+source = "git+https://github.com/steipete/gpui-kit?rev=9e8e78db77c97ccde8051ce6946a5e37e914500c#9e8e78db77c97ccde8051ce6946a5e37e914500c"
 dependencies = [
  "anyhow",
  "gpui-pre",
@@ -3105,6 +3112,8 @@ dependencies = [
 [[package]]
 name = "gpui-pre-macos"
 version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "951d17e41a72067ad2d35c60e08a62e8ad7fa9400b41c802e26cfb459f6c05da"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -10088,6 +10097,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 [[package]]
 name = "wry"
 version = "0.57.0"
+source = "git+https://github.com/steipete/wry?rev=77d9f7d4f349924aba40c2ade794de65ae700743#77d9f7d4f349924aba40c2ade794de65ae700743"
 dependencies = [
  "base64 0.22.1",
  "block2 0.6.2",

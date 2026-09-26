@@ -415,36 +415,42 @@ the app. Use an isolated `HOME` and `OPENCLAW_GPUI_STATE_DIR`, and an explicit
 synthetic endpoint such as `--url ws://127.0.0.1:9 --token synthetic`.
 This controls app activation; it does not change macOS accessibility semantics.
 
-The `steipete/gpui-bgtest` branch patches `gpui-component` and `gpui-base` to
-the local `~/Projects/oss/gpui-kit` checkout for accessibility validation.
-The component patch exposes press actions for enabled popup-menu submenus,
-including Appearance, so background automation can navigate them with element
-clicks. Disabled submenu rows remain noninteractive.
-It also patches `accesskit_macos` to `~/Projects/oss/accesskit/platforms/macos`
-to expose each inactive window's internally focused element. The matching
-`accesskit` and `accesskit_consumer` paths keep the adapter's workspace dependencies
-on the same crate identities; their versions and source behavior are unchanged.
-The `gpui-pre-macos` patch at `~/Projects/oss/gpui-pre-macos` attaches the adapter
-to the rendering view that serves as AppKit's first responder.
-The Wry patch at `~/Projects/oss/wry` prevents hidden or unfocused child
-webviews from activating the application during construction.
-These absolute Cargo paths are local proof wiring and must be replaced with
-released dependencies before shipping the app.
+Cargo pins public GPUI Kit, AccessKit, and Wry forks by commit; no local dependency
+checkouts are required. GPUI Kit exposes text-input accessibility actions and
+press actions for enabled popup-menu submenus, including Appearance. Disabled
+submenu rows remain noninteractive. AccessKit exposes each inactive window's
+internally focused element; its matching `accesskit` and `accesskit_consumer`
+patches keep the adapter's workspace dependencies on the same crate identities.
+Wry prevents hidden or unfocused child webviews from activating the application
+during construction. Upstream pull requests and exact revisions are recorded in
+[`Cargo.toml`](Cargo.toml).
+
+An optional local development patch for `gpui-pre-macos` improves application-level
+`AXFocusedUIElement` queries during background automation. In the 0.3.6 registry
+snapshot's `src/window.rs`, it replaces
+`SubclassingAdapter::for_window(native_window, ...)` with
+`SubclassingAdapter::new(native_view, ...)`, attaching accessibility to AppKit's
+rendering view and first responder. Apply this only to a separate local copy of
+the crate and opt in through a local Cargo configuration patch. It is not part
+of the committed dependency graph: the published snapshot is generated from
+[Zed at bcf6582](https://github.com/zed-industries/zed/tree/bcf6582ce3500df93a8a39366640173e6786cea6),
+whose workspace uses different crate names and versions. Record explicitly when
+proof uses this optional patch; unpatched builds do not include its focused-element
+forwarding behavior.
 
 Keep the target window partly visible during background proof. On macOS, GPUI
 stops drawing fully covered windows, which also leaves their accessibility tree
 stale. Moving only the target window into unused desktop space through AXPosition
 restores rendering without focusing or raising it.
 
-Sidebar proof uses the durable directory
-`/Users/steipete/Projects/openclaw-campaign-backup/gpui-proof`, with launchers and
-logs in `sidebar-rig/`, screenshots in `shots-sidebar/`, the source inventory in
-`sidebar-gap-table.md`, and outcomes in `sidebar-report.md`. The earlier task
-scratchpad was removed; its launchers and screenshots are not available.
-No proof artifacts belong in this app directory or `/private/tmp`.
+The historical sidebar rig keeps launchers and logs in `sidebar-rig/`, screenshots
+in `shots-sidebar/`, the source inventory in `sidebar-gap-table.md`, and outcomes
+in `sidebar-report.md`. These helpers are external proof artifacts, not shipped
+app commands. Keep them in a task-owned directory outside this app directory.
 
-Run the retained scripts from the repository root. Set `GPUI_PROOF_DIR` to the
-durable directory and `GPUI_RIG_DIR="$GPUI_PROOF_DIR/sidebar-rig"`. The rig uses
+When using that rig, run its retained scripts from the repository root. Set
+`GPUI_PROOF_DIR` to its directory and
+`GPUI_RIG_DIR="$GPUI_PROOF_DIR/sidebar-rig"`. The rig uses
 this checkout's built Gateway and QA mock model provider, synthetic profiles and
 sessions, free loopback ports, and isolated HOME, XDG, config, Gateway state,
 GPUI state, and temporary directories. `start-people.mts` adds isolated local
