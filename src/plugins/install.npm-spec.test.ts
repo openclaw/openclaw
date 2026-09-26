@@ -1487,6 +1487,59 @@ describe("installPluginFromNpmSpec", () => {
     expect(hasRetainedManagedNpmInstallMarker(legacyPackageDir)).toBe(true);
   });
 
+  it("rejects npm installs when the installed artifact drifts from verified metadata", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const npmProjectRoot = resolvePluginNpmProjectDir({
+      npmDir: npmRoot,
+      packageName: "drift-plugin",
+    });
+    mockNpmViewAndInstall({
+      spec: "drift-plugin@latest",
+      packageName: "drift-plugin",
+      version: "1.0.0",
+      pluginId: "drift-plugin",
+      integrity: "sha512-safe",
+      installedVersion: "1.0.0",
+      installedIntegrity: "sha512-evil",
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+    });
+    const delegate = runCommandWithTimeoutMock.getMockImplementation();
+    if (!delegate) {
+      throw new Error("expected npm mock implementation");
+    }
+    let managedInstallAttempts = 0;
+    runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
+      if (
+        isManagedNpmInstallCommand(argv) &&
+        typeof options?.cwd === "string" &&
+        managedNpmRootHasDependency(options.cwd, "drift-plugin")
+      ) {
+        managedInstallAttempts += 1;
+      }
+      return await delegate(argv, options);
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "drift-plugin@latest",
+      expectedIntegrity: "sha512-safe",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("integrity sha512-evil");
+    expect(result.error).toContain("expected sha512-safe");
+    expect(managedInstallAttempts).toBe(1);
+    expect(
+      fs.existsSync(path.join(path.dirname(npmProjectRoot), "_openclaw-quarantined-npm-projects")),
+    ).toBe(false);
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "drift-plugin"))).toBe(false);
+  });
+
   it("rejects a trusted pin when registry metadata omits integrity before install", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "missing-registry-integrity-plugin";

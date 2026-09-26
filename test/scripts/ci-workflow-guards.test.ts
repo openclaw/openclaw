@@ -11535,6 +11535,18 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(releaseDocs).toMatch(/successful request automatically triggers `Linux App Release`/u);
   expect(releaseDocs).not.toContain("release-publish/");
   expect(linux.permissions).toEqual({});
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.repository.full_name == 'openclaw/openclaw'",
+  );
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.event == 'workflow_dispatch'",
+  );
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.head_branch == 'main'",
+  );
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.conclusion == 'success'",
+  );
   const tauriSigningEnvNames = [
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PATH",

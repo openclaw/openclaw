@@ -1005,9 +1005,16 @@ describe("full release execution plan", () => {
   });
 
   it.each([
+    ["repository", { repository: "other/repository" }],
     ["target", { targetSha: "c".repeat(40) }],
+    ["tooling", { toolingSha: "d".repeat(40) }],
+    ["profile", { releaseProfile: "minimum" }],
+    ["soak", { releaseSoak: false }],
     ["survivor baseline", { upgradeSurvivorBaseline: "openclaw@beta" }],
+    ["survivor scenarios", { upgradeSurvivorScenarios: "base" }],
+    ["frozen-target policy", { allowFrozenTargetScenarioOmissions: true }],
     ["changelog policy", { allowUnreleasedChangelog: true }],
+    ["image policy", { sharedImagePolicy: "existing-only" }],
   ])("cross-binds candidate %s policy during plan build and validation", (_label, override) => {
     const expectedCandidate = candidateBinding();
     const mismatchedCandidate = candidateBinding(override);
@@ -1241,10 +1248,14 @@ describe("full release execution plan", () => {
     });
   });
 
-  it("rejects subprocess candidate target mismatch against trusted plan inputs", () => {
+  it.each([
+    ["target", { targetSha: "c".repeat(40) }],
+    ["tooling", { toolingSha: "d".repeat(40) }],
+    ["profile", { releaseProfile: "minimum" }],
+  ])("rejects subprocess candidate %s mismatch against trusted plan inputs", (_label, override) => {
     const { result } = runPlanSubprocess({
       candidateBindingResult: "success",
-      candidateEvidence: candidateBinding({ targetSha: "c".repeat(40) }),
+      candidateEvidence: candidateBinding(override),
     });
     expect(result.status).toBe(2);
     expect(result.stderr).toContain(

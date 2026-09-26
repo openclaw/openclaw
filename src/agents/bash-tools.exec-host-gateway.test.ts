@@ -2662,42 +2662,45 @@ EOF`,
     expect(text).not.toContain("first line indented last line");
   });
 
-  it("fails closed without spawning when a detached atomic allow-always commit fails", async () => {
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
-    mockDecision({ approvedByAsk: true });
-    commitExecAuthorizationMock.mockRejectedValueOnce(new Error("approval lock unavailable"));
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
-    const captured = captureSecurityEvents();
+  it.each(["allow-once", "allow-always"] as const)(
+    "fails closed without spawning when a detached %s authorization commit fails",
+    async (decision) => {
+      resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(decision);
+      mockDecision({ approvedByAsk: true });
+      commitExecAuthorizationMock.mockRejectedValueOnce(new Error("approval lock unavailable"));
+      buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+      const captured = captureSecurityEvents();
 
-    let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
-    try {
-      result = await runGatewayAllowlist({
-        approvalFollowupMode: "agent",
-        command: "echo approved",
-      });
-      await vi.waitFor(() => {
-        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
-      });
-    } finally {
-      captured.stop();
-    }
+      let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
+      try {
+        result = await runGatewayAllowlist({
+          approvalFollowupMode: "agent",
+          command: "echo approved",
+        });
+        await vi.waitFor(() => {
+          expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+        });
+      } finally {
+        captured.stop();
+      }
 
-    expect(result!.pendingResult?.details.status).toBe("approval-pending");
-    expect(requireSentFollowupText(0)).toContain("approval-state-write-failed");
-    expect(runExecProcessMock).not.toHaveBeenCalled();
-    expect(commitExecAuthorizationMock).toHaveBeenCalledTimes(1);
-    expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authorization: expect.objectContaining({ source: "explicit-approval" }),
-        allowAlwaysDecision: expect.any(Object),
-      }),
-    );
-    expect(captured.events.at(-1)).toMatchObject({
-      action: "exec.approval.denied",
-      outcome: "error",
-      policy: { reason: "approval-state-write-failed" },
-    });
-  });
+      expect(result!.pendingResult?.details.status).toBe("approval-pending");
+      expect(requireSentFollowupText(0)).toContain("approval-state-write-failed");
+      expect(runExecProcessMock).not.toHaveBeenCalled();
+      expect(commitExecAuthorizationMock).toHaveBeenCalledTimes(1);
+      expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authorization: expect.objectContaining({ source: "explicit-approval" }),
+          ...(decision === "allow-always" ? { allowAlwaysDecision: expect.any(Object) } : {}),
+        }),
+      );
+      expect(captured.events.at(-1)).toMatchObject({
+        action: "exec.approval.denied",
+        outcome: "error",
+        policy: { reason: "approval-state-write-failed" },
+      });
+    },
+  );
 
   it("waits inline for cron approvals so the isolated run survives until the decision", async () => {
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");

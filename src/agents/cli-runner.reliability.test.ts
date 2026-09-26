@@ -1128,6 +1128,46 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry context overflow after a confirmed message send", async () => {
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      completeCapturedToolCall(
+        {
+          captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+          toolName: "message",
+          args: {
+            action: "send",
+            channel: "telegram",
+            target: "chat123",
+            message: "sent before overflow",
+          },
+        },
+        { status: "sent" },
+      );
+      return makeManagedRun({
+        exitCode: 1,
+        durationMs: 150,
+        stderr: "Prompt is too long",
+      });
+    });
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:delivered-overflow",
+      runId: "run-delivered-overflow",
+      cliSessionId: "stale-cli-session",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["sent before overflow"]);
+    expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("error");
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves first-turn delivery through cleanup without binding the OpenClaw session id", async () => {
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];

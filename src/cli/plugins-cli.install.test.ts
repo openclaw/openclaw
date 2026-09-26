@@ -2730,6 +2730,12 @@ describe("plugins cli install", () => {
       error: "plugin blocked by security scan",
       flags: ["--dangerously-force-unsafe-install"],
     },
+    {
+      name: "security scan fails under dangerous force unsafe install",
+      code: "security_scan_failed",
+      error: "plugin security scan failed",
+      flags: ["--dangerously-force-unsafe-install"],
+    },
   ] as const)("does not fall back to hook pack for local path when $name", async (testCase) => {
     const localPluginDir = createTempDirectory("openclaw-local-plugin-");
     pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
@@ -2754,6 +2760,13 @@ describe("plugins cli install", () => {
   });
 
   it.each([
+    {
+      name: "dangerous force unsafe install is set",
+      code: "security_scan_blocked",
+      error: "plugin blocked by security scan",
+      spec: "demo",
+      flags: ["--dangerously-force-unsafe-install"],
+    },
     {
       name: "a no-flag security scan blocks",
       code: "security_scan_blocked",
