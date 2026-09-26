@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
@@ -788,6 +789,7 @@ describe("prepared worker reserve lifecycle", () => {
       await release.promise;
     });
     fixture.service = createWorkerEnvironmentService({
+      scheduler: createTestGatewayScheduler(),
       store: fixture.store,
       getConfig: () => fixture.config,
       resolveProvider: () => fixture.provider,
