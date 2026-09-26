@@ -109,7 +109,7 @@ export function createRememberSessionKeyWriter(params: {
   const work = new AsyncWorkScope();
   let failureReported = false;
   return {
-    remember(sessionKey: string): Promise<void> {
+    remember: (sessionKey: string): Promise<void> => {
       const trimmed = sessionKey.trim();
       if (work.isClosing || !trimmed || trimmed === "unknown") {
         return Promise.resolve();
