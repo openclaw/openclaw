@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { isPrExemptRuntimeTestFile } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { createWindowsTestShards } from "../../scripts/lib/ci-windows-test-plan.mts";
 import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
 
@@ -36,6 +37,18 @@ describe("Windows CI whole-file placement", () => {
       ),
     ).toHaveLength(1);
     expect(createWindowsTestShards(packageScripts(inventory.toReversed()))).toEqual(shards);
+    const pr = createWindowsTestShards(scripts, { includePrExemptRuntimeTests: false });
+    expect(pr.flatMap((shard) => shard.targets).toSorted(compareFiles)).toEqual(
+      inventory.filter((file: string) => !isPrExemptRuntimeTestFile(file)).toSorted(compareFiles),
+    );
+    const changed = inventory.find((file: string) => isPrExemptRuntimeTestFile(file));
+    expect(changed).toBeDefined();
+    expect(
+      createWindowsTestShards(scripts, {
+        includePrExemptRuntimeTests: false,
+        changedPaths: [changed],
+      }).flatMap((shard) => shard.targets),
+    ).toContain(changed);
     expect(
       shards.filter((shard) =>
         shard.targets.includes("test/scripts/vitest-worker-artifacts.test.ts"),

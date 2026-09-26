@@ -2,11 +2,20 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import {
+  createChangedExtensionFallbackShards,
   createChangedNodeTestShards,
+  createPrExemptExtensionTestShards,
   hasControlUiPerformanceAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
-import { isReleaseOnlyRuntimeTestFile } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import {
+  createNodeTestShardBundles,
+  createUiTestShardGroups,
+  resolveCanonicalNodeTestConfig,
+} from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  isReleaseOnlyRuntimeTestFile,
+  PR_EXEMPT_RUNTIME_TEST_FILES,
+} from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 
@@ -24,6 +33,93 @@ function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
     ),
   );
 }
+
+it("retains every PR-exempt file in hourly and release plans with its canonical owner", () => {
+  expect(PR_EXEMPT_RUNTIME_TEST_FILES.length).toBeGreaterThan(0);
+  const common = {
+    runnerBackend: "github",
+    includeReleaseOnlyPluginShards: false,
+    includeReleaseOnlyRuntimeTests: false,
+  };
+  const pr = createNodeTestShardBundles({
+    ...common,
+    compactMode: "pull-request",
+    includePrExemptRuntimeTests: false,
+    includeReleaseOnlyToolingShards: true,
+  });
+  const extensionPr = createChangedExtensionFallbackShards(["tsconfig.json"], {
+    includePrExemptRuntimeTests: false,
+  });
+  const retainedExtensions = createPrExemptExtensionTestShards();
+  const hourly = createNodeTestShardBundles({
+    ...common,
+    compactMode: "push",
+    includePrExemptRuntimeTests: true,
+    includeReleaseOnlyToolingShards: false,
+    compactNodeJobCap: 70 - retainedExtensions.filter((job) => !job.requiresDist).length,
+  });
+  const release = createNodeTestShardBundles({
+    ...common,
+    includeReleaseOnlyRuntimeTests: true,
+    includePrExemptRuntimeTests: true,
+    includeReleaseOnlyToolingShards: true,
+  });
+  const uiPr = createUiTestShardGroups({ includePrExemptRuntimeTests: false }).ui[0];
+  const uiHourly = createUiTestShardGroups({ includeReleaseOnlyTests: false }).ui[0];
+  expect(
+    [...hourly, ...retainedExtensions].filter((job) => !job.requiresDist).length,
+  ).toBeLessThanOrEqual(70);
+  const prGroups = [...pr.flatMap((job) => job.groups), ...fallbackGroups(extensionPr)];
+  const hourlyGroups = [
+    ...hourly.flatMap((job) => job.groups),
+    ...fallbackGroups(retainedExtensions),
+  ];
+  const releaseGroups = fallbackGroups([...release, ...retainedExtensions]);
+  for (const file of PR_EXEMPT_RUNTIME_TEST_FILES) {
+    const rawConfig = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
+    const config = resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig;
+    const owners = (groups: typeof prGroups) =>
+      groups.filter(
+        (group) =>
+          group.configs.includes(config) &&
+          (!group.includePatterns ||
+            group.includePatterns.some((pattern) => path.matchesGlob(file, pattern))),
+      );
+    expect(owners(prGroups), file).toHaveLength(0);
+    expect(owners(hourlyGroups), file).toHaveLength(1);
+    expect(owners(releaseGroups), file).toHaveLength(1);
+    if (file.startsWith("ui/")) {
+      expect(uiPr?.includePatterns, file).not.toContain(file);
+      expect(uiHourly?.includePatterns, file).toContain(file);
+    }
+  }
+});
+
+it("opts in a PR-exempt process proof for test and opaque subject edits even on broad fallback", () => {
+  const target = "test/scripts/upgrade-survivor-plugin-registry.test.ts";
+  const source = "scripts/e2e/upgrade-survivor-docker.sh";
+  expect(PR_EXEMPT_RUNTIME_TEST_FILES).toContain(target);
+  const options = {
+    runnerBackend: "github",
+    includeReleaseOnlyRuntimeTests: false,
+    includePrExemptRuntimeTests: false,
+    includeReleaseOnlyToolingShards: false,
+  };
+  for (const changedPath of [target, source]) {
+    const precise = createChangedNodeTestShards([changedPath], options);
+    expect(precise, changedPath).not.toBeNull();
+    expect(selectedFiles(precise), changedPath).toContain(target);
+    const fallback = createNodeTestShardBundles({
+      ...options,
+      compactMode: "pull-request",
+      changedPaths: ["tsconfig.json", changedPath],
+    });
+    expect(
+      fallback.flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? [])),
+      changedPath,
+    ).toContain(target);
+  }
+});
 
 it("keeps precise first-signin targets under exclusive Gateway admission", () => {
   const target = "src/gateway/setup-inference.first-signin.integration.test.ts";

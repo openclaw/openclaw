@@ -1,5 +1,8 @@
 import { matchesGlob } from "node:path";
-import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
+import {
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
+} from "../../test/vitest/vitest.agents-paths.mjs";
 import { getCliVitestProjectOwner } from "../../test/vitest/vitest.cli-paths.mjs";
 import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
 import {
@@ -54,7 +57,37 @@ export function listScopedOwnerTestFiles(owner: {
   );
 }
 
+const runtimeSharedProjectOwners = [
+  {
+    config: "test/vitest/vitest.acp.config.ts",
+    root: "src/acp",
+    include: ["src/acp/**/*.test.ts"],
+    exclude: databaseWorkerCoreTestFiles,
+  },
+  {
+    config: "test/vitest/vitest.shared-core.config.ts",
+    root: "src/shared",
+    include: ["src/shared/**/*.test.ts"],
+    exclude: [],
+  },
+  {
+    config: "test/vitest/vitest.tasks.config.ts",
+    root: "src/tasks",
+    include: ["src/tasks/**/*.test.ts"],
+    exclude: databaseWorkerCoreTestFiles,
+  },
+  {
+    config: "test/vitest/vitest.utils.config.ts",
+    root: "src/utils",
+    include: ["src/utils/**/*.test.ts"],
+    exclude: [],
+  },
+];
+
 const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTestFiles>[0]>([
+  ...[...runtimeSharedProjectOwners, ...embeddedAgentVitestProjectOwners].map(
+    (owner) => [owner.config, owner] as const,
+  ),
   [
     "test/vitest/vitest.gateway-methods.config.ts",
     {
@@ -133,6 +166,20 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
   string,
   { listFiles: () => string[]; splitByFile?: false }
 >([
+  [
+    "core-runtime-shared",
+    {
+      listFiles: () => runtimeSharedProjectOwners.flatMap(listScopedOwnerTestFiles),
+      splitByFile: false,
+    },
+  ],
+  [
+    "agentic-agents-embedded",
+    {
+      listFiles: () => embeddedAgentVitestProjectOwners.flatMap(listScopedOwnerTestFiles),
+      splitByFile: false,
+    },
+  ],
   [
     "core-unit-src-security-support",
     {

@@ -1,4 +1,5 @@
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
+import { isRuntimeTestFileIncluded, type RuntimeTestSelection } from "./ci-node-test-plan.mts";
 import { resolveVitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
 
 export type WindowsTestShard = {
@@ -171,11 +172,14 @@ function readWindowsTargets(scripts: Readonly<Record<string, string | undefined>
 
 export function createWindowsTestShards(
   scripts: Readonly<Record<string, string | undefined>>,
+  options: RuntimeTestSelection = {},
 ): WindowsTestShard[] {
   const envelopes: { targets: string[]; seconds: number }[] = [];
   const projects = new Map<string, { targets: string[]; seconds: number }>();
   const runtime = { targets: [] as string[], seconds: runtimeBuildSeconds };
-  for (const file of readWindowsTargets(scripts).toSorted()) {
+  for (const file of readWindowsTargets(scripts)
+    .filter((target) => isRuntimeTestFileIncluded(target, options))
+    .toSorted()) {
     const seconds = fileSeconds[file] ?? fallbackFileSeconds;
     if (resolveVitestPretestBuildMode([{ includePatterns: [file] }]) !== undefined) {
       // test-projects prepares one runtime before all serial project borrowers.

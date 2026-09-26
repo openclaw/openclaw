@@ -516,8 +516,20 @@ describe("createScopedVitestConfig", () => {
     }
   });
 
-  it("keeps combined media and UI include files inside their owning projects", () => {
+  it("keeps combined runtime include files inside their owning projects", () => {
     const projects = [
+      [createAcpVitestConfig, "src/acp/client.test.ts", "client.test.ts"],
+      [
+        createSharedCoreVitestConfig,
+        "src/shared/freebsd-process-identity.test.ts",
+        "shared/freebsd-process-identity.test.ts",
+      ],
+      [
+        createTasksVitestConfig,
+        "src/tasks/cron-run-continuation-cleanup.test.ts",
+        "tasks/cron-run-continuation-cleanup.test.ts",
+      ],
+      [createUtilsVitestConfig, "src/utils/queue-helpers.test.ts", "utils/queue-helpers.test.ts"],
       [createMediaVitestConfig, "src/media/web-media.test.ts", "media/web-media.test.ts"],
       [
         createMediaUnderstandingVitestConfig,

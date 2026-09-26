@@ -173,16 +173,18 @@ function isNumberedToolingGroup(group: NodeTestShardGroup): boolean {
 }
 
 /** Reuse measured serial placement without replacing the general capacity-pricing owner. */
-export function rebalanceMeasuredHybridJobs(
+export function rebalanceMeasuredSerialJobs(
   jobs: CompactNodeTestShard[],
   options: {
     runner: string;
+    useNativeObservations?: boolean;
     estimateGroup: (group: NodeTestShardGroup) => { seconds: number; complete: boolean };
     canShare: (groups: NodeTestShardGroup[]) => boolean;
   },
 ): CompactNodeTestShard[] {
   const split = jobs.flatMap((job) => {
     if (
+      options.useNativeObservations === false ||
       job.groups.length < 2 ||
       !serialTwoWorkerJob(job, options.runner, true) ||
       job.pretestBuildMode !==
@@ -264,7 +266,7 @@ export function rebalanceMeasuredHybridJobs(
     }
     const prices = job.groups.map((group) => {
       const estimate = options.estimateGroup(group);
-      const observed = toolingWall(group);
+      const observed = options.useNativeObservations === false ? undefined : toolingWall(group);
       return {
         seconds: Math.max(estimate.seconds, observed ?? 0),
         complete: estimate.complete || observed !== undefined,
