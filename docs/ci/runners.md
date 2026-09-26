@@ -109,6 +109,36 @@ registrations or hosted rows. Real-Gateway E2E also retains its 32-class request
 other main CI placements retain the 16-class sizing.
 Native CI must establish the resulting execution and queue times.
 
+The September 23 qualification retained the existing 32-class placements.
+Three original-source 16-class replays of the ten longest 32-class rows from
+main and PR CI showed why a blanket downgrade is unsafe. The requested 32/16
+labels exposed eight/four CPUs and 30.95/15.42 GiB RAM. Memory-gated rows lost
+an eight-worker allowance, and a two-process row became serial and slowed 67.9%.
+Keep resource admission and worker allowances intact when comparing classes.
+
+Serial two-worker Gateway-core rows initially appeared suitable, but later
+qualification rejected their narrower classes too. UI-bearing envelopes reached
+657/623 seconds on PRs and 754 seconds on main, exceeding the 600/720-second
+budgets. A separate original-source non-UI main replay measured 590/463/506
+seconds versus 410 seconds on 32-class: its 23.4% median slowdown exceeded the
+20% limit, even though each row stayed below 720 seconds.
+
+The non-UI PR family had an original-source median of 444 versus 449 seconds,
+but its [last exact-head candidate](https://github.com/openclaw/openclaw/actions/runs/35839629867/job/107114482056)
+passed its assertions in a 654-second job, including 618 seconds of test
+execution. That exceeded the 600-second PR budget. Passing tests or a promising
+historical median alone do not qualify the current placement. No runner,
+worker, inventory, grouping, or deadline change from this experiment was retained.
+
+At the historical $0.064/$0.032 per-minute Linux list rates, halving the runner
+price can reduce dollars while increasing machine-minutes. The experiment did
+not meet the 40% whole-run machine-minute or 15-minute wall targets. Full-run
+comparisons also differed in coverage and source; do not attribute their total
+deltas to sizing. [The qualification report](https://github.com/openclaw/openclaw/pull/156263)
+contains original job IDs, setup and queue times, actual CPU accounting,
+worker ceilings, sampled load, costs, failures, and the rejected candidates.
+Fuller packing and provider changes need their own combined native proof.
+
 Compact groups with a memory-gated worker allowance also request the 32-class,
 including standalone serial bins. The isolated Gateway groups already request
 eight workers with a 28-GiB memory floor and a two-worker fallback. On main run
