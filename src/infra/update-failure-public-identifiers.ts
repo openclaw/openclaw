@@ -10,7 +10,10 @@ import {
   SKIPPED_UPDATE_OUTCOMES,
   UPDATE_ENVIRONMENT_FAILURE_REASONS,
 } from "../shared/update-outcome.js";
-import { UPDATE_PREFLIGHT_DETAILS } from "./update-preflight-details.js";
+import {
+  MANAGED_SERVICE_PREFLIGHT_DETAILS,
+  UPDATE_PREFLIGHT_DETAILS,
+} from "./update-preflight-details.js";
 import { updateRecoverySchema } from "./update-recovery.js";
 import type { UpdateFailureFactSchema } from "./update-run-schema.js";
 import { resolvePublicUpdateStepId } from "./update-step-identity.js";
@@ -65,6 +68,7 @@ const NATIVE_CHECKS = new Set<string>([
 
 const PUBLIC_CODES = new Set<string>([
   ...Object.keys(UPDATE_PREFLIGHT_DETAILS),
+  ...Object.keys(MANAGED_SERVICE_PREFLIGHT_DETAILS),
   ...Object.keys(SKIPPED_UPDATE_OUTCOMES),
   ...Object.values(PLUGIN_INSTALL_ERROR_CODE),
   ...Object.values(CLAWHUB_INSTALL_ERROR_CODE),

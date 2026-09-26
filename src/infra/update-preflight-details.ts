@@ -16,8 +16,33 @@ export const UPDATE_PREFLIGHT_DETAILS = {
     "The cached Git target differs from the current remote target. A dry-run leaves local refs unchanged, so the target remains unresolved. A real openclaw update will fetch and validate the current remote target.",
 } as const;
 
+// Every managed-service refusal shares the managed-service-preflight reason; the code names the
+// check that refused. Fixed text: the live messages carry Gateway PIDs and install paths.
+export const MANAGED_SERVICE_PREFLIGHT_DETAILS = {
+  "gateway-process-tree":
+    "The update ran inside the Gateway process tree, so it could not stop the Gateway. Run openclaw update outside the Gateway, or /update from chat.",
+  "gateway-triage-process-tree":
+    "The update ran inside automatic triage, where stopping the Gateway would cancel the repair. Run openclaw update from a shell outside triage.",
+  "gateway-service-process":
+    "The update ran inside the Gateway service process, which cannot change the installation it serves. Run openclaw update from a terminal outside the service.",
+  "service-foreground-conflict":
+    "Another Gateway service uses this installation and is not verified offline. Stop it through its service owner, then update.",
+  "service-rebind-unwritable":
+    "The Gateway service definition is not writable, so the service cannot be rebound to this installation.",
+  "service-changed-before-admission":
+    "The managed Gateway service changed before database admission. Retry the update.",
+  "service-ownership-unverified":
+    "Gateway service ownership could not be verified or changed during the update. Run openclaw gateway status --deep and retry.",
+  "handoff-ownership-unverified":
+    "The update handoff or the Gateway's current ownership could not be verified. Retry the update from its current owner.",
+} as const;
+
+export type ManagedServicePreflightCode = keyof typeof MANAGED_SERVICE_PREFLIGHT_DETAILS;
+
 export function updatePreflightDetailMessage(code: string): string | undefined {
-  return Object.entries(UPDATE_PREFLIGHT_DETAILS).find(([key]) => key === code)?.[1];
+  return Object.entries({ ...UPDATE_PREFLIGHT_DETAILS, ...MANAGED_SERVICE_PREFLIGHT_DETAILS }).find(
+    ([key]) => key === code,
+  )?.[1];
 }
 
 export function createUpdatePreflightFailure(

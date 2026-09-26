@@ -28,6 +28,7 @@ import {
   startManagedServiceUpdateHandoff,
   transferManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
+import type { ManagedServicePreflightCode } from "../../infra/update-preflight-details.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
@@ -36,6 +37,7 @@ import { printResult } from "./progress.js";
 import { resolveNodeRunner, UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { releaseUpdateCommandPreflightForHandoff } from "./update-command-executor.js";
 import { resolveOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import { managedServiceRefusalFacts } from "./update-command-service-refusal.js";
 
 function parsePositivePid(value: unknown): number | null {
   if (typeof value === "number") {
@@ -70,6 +72,7 @@ ${GATEWAY_ANCESTRY_SHELL_GUIDANCE}`;
 }
 
 const ANCESTRY_BLOCK_MARKER = "inside the gateway process tree";
+const TRIAGE_BLOCK_MARKER = "inside its automatic triage process tree";
 const UPDATE_CHAT_HANDOFF_GUIDANCE =
   "From chat, the OpenClaw owner can start the update with the gateway update action or /update, which hands it to a managed helper.";
 
@@ -85,6 +88,18 @@ export function formatUpdateAncestryBlockMessage(blockMessage: string): string {
   return updateBlockMessage.includes(UPDATE_CHAT_HANDOFF_GUIDANCE)
     ? updateBlockMessage
     : `${updateBlockMessage}\n${UPDATE_CHAT_HANDOFF_GUIDANCE}`;
+}
+
+/** Which check produced a Gateway maintenance block, named in the public failure report. */
+export function managedServiceBlockCode(blockMessage: string): ManagedServicePreflightCode {
+  if (blockMessage.includes(ANCESTRY_BLOCK_MARKER)) {
+    return "gateway-process-tree";
+  }
+  if (blockMessage.includes(TRIAGE_BLOCK_MARKER)) {
+    return "gateway-triage-process-tree";
+  }
+  // The only other block is an unverified service ownership (update-command-service-maintenance).
+  return "service-ownership-unverified";
 }
 
 export function gatewayMaintenanceBlockMessage(
@@ -299,6 +314,7 @@ export async function resolveForegroundUpdateAdmission(params: {
     throw new UpdatePreMutationError(
       "managed-service-preflight",
       "The update handoff metadata or this Gateway's current ownership could not be verified. Retry the update from its current owner.",
+      { failureFacts: managedServiceRefusalFacts("handoff-ownership-unverified") },
     );
   }
   return true;

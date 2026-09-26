@@ -12,6 +12,7 @@ import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import {
   formatUpdateAncestryBlockMessage,
   handoffUpdateFromGateway,
+  managedServiceBlockCode,
 } from "./update-command-handoff.js";
 import {
   captureOwnedManagedUpdateContext,
@@ -30,6 +31,7 @@ import {
   resolvePackageRuntimePreflight,
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
+import { managedServiceRefusalFacts } from "./update-command-service-refusal.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   shouldBlockMutableUpdateFromGatewayServiceEnv,
@@ -195,7 +197,14 @@ export async function finishAlreadyCurrentUpdate(
           stopState.blockMessage ??
             "Run openclaw update from a terminal outside the Gateway service before changing installed plugins.",
         ),
-        { failureFacts: collectServiceInspectionFailureFacts(stopState.serviceUpdateVerdict) },
+        {
+          failureFacts: managedServiceRefusalFacts(
+            stopState.blockMessage
+              ? managedServiceBlockCode(stopState.blockMessage)
+              : "gateway-service-process",
+            collectServiceInspectionFailureFacts(stopState.serviceUpdateVerdict),
+          ),
+        },
       );
     }
     await assertOpenClawStateWriteAllowedAtPath({
