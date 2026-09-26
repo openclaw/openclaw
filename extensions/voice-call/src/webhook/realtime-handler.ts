@@ -61,6 +61,13 @@ const MAX_REALTIME_MESSAGE_BYTES = 256 * 1024;
 const MAX_REALTIME_WS_BUFFERED_BYTES = 1024 * 1024;
 const REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS = 30_000;
 const REALTIME_DISCONNECT_HANGUP_GRACE_MS = 2_000;
+// Assistant audio leaked back through the line can look like caller speech to the local RMS
+// gate. Track the loudest input seen while assistant audio was active (echo) separately from
+// the loudest input seen once the line was quiet (genuine caller speech), and only treat the
+// latter as caller barge-in / a committed transcript.
+const ASSISTANT_SPEECH_TAIL_MS = 400;
+const PHANTOM_GUARD_MAX_AGE_MS = 15_000;
+const PHANTOM_GUARD_MIN_RMS = 0.035;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
@@ -994,6 +1001,10 @@ export class RealtimeCallHandler {
     const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
     let provisionalCloseReason: RealtimeVoiceCloseReason | undefined;
     let sessionClosed = false;
+    let lastAssistantAudioSentAt = 0;
+    let lastLocalAudioAt = 0;
+    let maxRecentInputRms = 0;
+    let maxEchoInputRms = 0;
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
@@ -1093,6 +1104,7 @@ export class RealtimeCallHandler {
         sendAudio: (muLaw, metadata) => {
           harness.recordOutputAudio(muLaw);
           audioPacer.sendAudio(muLaw, metadata);
+          lastAssistantAudioSentAt = Date.now();
         },
         // Telephony pacing knows what actually reached the line; the provider's
         // inbound media clock can run far ahead of playout.
@@ -1173,6 +1185,26 @@ export class RealtimeCallHandler {
             rawPartial: state.rawPartial,
             final: text,
           });
+          // A final user transcript can be conjured entirely from assistant audio leaking back
+          // through the line. Suppress it only when no caller audio was seen for the whole guard
+          // window AND the loudest input that arrived since the last transcript was weak, so a
+          // genuinely loud caller is never discarded on a stale clock.
+          const localAudioAgeMs = lastLocalAudioAt === 0 ? null : Date.now() - lastLocalAudioAt;
+          const staleLocalAudio =
+            lastLocalAudioAt === 0 ||
+            (localAudioAgeMs !== null && localAudioAgeMs > PHANTOM_GUARD_MAX_AGE_MS);
+          const weakInputAudio = maxRecentInputRms < PHANTOM_GUARD_MIN_RMS;
+          if (staleLocalAudio && weakInputAudio) {
+            console.warn(
+              `[voice-call] realtime phantom transcript suppressed callId=${callId} providerCallId=${callSid} chars=${text.trim().length} text=${JSON.stringify(text.trim().slice(0, 120))} maxRecentInputRms=${maxRecentInputRms.toFixed(4)} maxEchoInputRms=${maxEchoInputRms.toFixed(4)} lastLocalAudioAgeMs=${localAudioAgeMs === null ? "none" : localAudioAgeMs} staleLocalAudio=${staleLocalAudio} weakInputAudio=${weakInputAudio}`,
+            );
+            maxRecentInputRms = 0;
+            maxEchoInputRms = 0;
+            this.resetUserTranscriptState(callId, userTranscriptOwner);
+            return;
+          }
+          maxRecentInputRms = 0;
+          maxEchoInputRms = 0;
           this.clearPartialUserTranscript(callId, userTranscriptOwner);
           this.setRecentFinalUserTranscript(callId, userTranscriptOwner, transcript);
           console.log(
@@ -1414,7 +1446,25 @@ export class RealtimeCallHandler {
       if (sessionClosed) {
         return;
       }
-      if (speechDetector.accept({ rms: calculateMulawRms(audio), peak: 0 })) {
+      const inputRms = calculateMulawRms(audio);
+      // Echo accounting: while assistant audio is still draining, any input energy is (at least
+      // partly) our own audio coming back, so it must not count as caller speech. Only energy seen
+      // while the line is quiet can arm the local barge-in gate, and only sustained quiet-line
+      // speech counts.
+      const assistantAudioActive =
+        audioPacer.hasPendingAudio() ||
+        Date.now() - lastAssistantAudioSentAt < ASSISTANT_SPEECH_TAIL_MS;
+      if (assistantAudioActive) {
+        if (inputRms > maxEchoInputRms) {
+          maxEchoInputRms = inputRms;
+        }
+      } else if (inputRms > maxRecentInputRms) {
+        maxRecentInputRms = inputRms;
+      }
+      const sustainedCallerSpeech =
+        !assistantAudioActive && speechDetector.accept({ rms: inputRms, peak: 0 });
+      if (sustainedCallerSpeech) {
+        lastLocalAudioAt = Date.now();
         console.log(
           `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
