@@ -362,7 +362,7 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
       };
     });
     streamMocks.streamSimple.mockImplementation(
-      (model: Model, context: Context, options: SimpleStreamOptions) => {
+      (model: Model, context: Context, options?: SimpleStreamOptions) => {
         requests.push({ ...context, messages: [...context.messages] });
         const requestNumber = requests.length;
         if (requestNumber > (mode === "exhaust" || mode === "cancel-retry" ? 2 : 1)) {
