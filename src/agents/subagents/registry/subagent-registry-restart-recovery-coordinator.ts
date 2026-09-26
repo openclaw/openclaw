@@ -71,7 +71,9 @@ export function createInterruptedRecoveryCoordinator(params: {
       const isCurrent = (targetRunId: string, candidate: SubagentRunRecord) =>
         isGatewayCurrent() && ownsRow(targetRunId, candidate);
       if (!isCurrent(runId, entry)) {
-        return true;
+        attempts.delete(entry);
+        // Superseded rows still belong to the sweeper's ordinary orphan cleanup.
+        return false;
       }
       observe();
       const facts = [
