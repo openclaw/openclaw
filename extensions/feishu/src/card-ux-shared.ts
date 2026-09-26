@@ -16,6 +16,21 @@ export function buildFeishuCardButton(params: {
   };
 }
 
+// Card schema 2.0 uses columns for button rows; legacy action containers are rejected.
+export function buildFeishuCardButtonRow(buttons: ReturnType<typeof buildFeishuCardButton>[]) {
+  return {
+    tag: "column_set",
+    flex_mode: "none",
+    horizontal_spacing: "default",
+    columns: buttons.map((button) => ({
+      tag: "column",
+      width: "auto",
+      vertical_align: "center",
+      elements: [button],
+    })),
+  };
+}
+
 export function buildFeishuCardInteractionContext(params: {
   operatorOpenId: string;
   chatId?: string;
