@@ -140,6 +140,52 @@ suite.define(() => {
     }
   });
 
+  it.each([
+    { width: 844, height: 390 },
+    { width: 932, height: 500 },
+  ])("keeps long landscape drafts inside the editor at $width × $height", async (viewport) => {
+    await suite.withPage({ viewport }, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}new`);
+      const message = page.locator(".new-session-page__message");
+      await message.waitFor();
+      await message.focus();
+      const initialHeight = await message.evaluate((element) => element.clientHeight);
+      const draft = Array.from({ length: 12 }, () => "Draft row").join("\n");
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        for (let line = 0; line < 12; line++) {
+          if (line > 0) {
+            await message.press("Shift+Enter");
+          }
+          await message.pressSequentially("Draft row");
+        }
+        expect(await message.inputValue()).toBe(draft);
+        await expect
+          .poll(() =>
+            message.evaluate((element) => {
+              const surface = element.closest<HTMLElement>(".agent-chat__input")!;
+              return surface.scrollHeight - surface.clientHeight;
+            }),
+          )
+          .toBeLessThanOrEqual(1);
+        const editor = await message.evaluate((element: HTMLTextAreaElement) => ({
+          height: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          focus: document.activeElement === element,
+          caret: element.selectionStart,
+        }));
+        expect(editor.scrollHeight).toBeGreaterThan(editor.height);
+        expect(editor.focus).toBe(true);
+        expect(editor.caret).toBe(draft.length);
+        await message.fill("");
+        await expect
+          .poll(() => message.evaluate((element) => element.clientHeight))
+          .toBe(initialHeight);
+      }
+    });
+  });
+
   it("grows the first prompt downward without moving the identity, then caps at ten lines", async () => {
     await withNewSessionPage(async (page) => {
       const gateway = await installMockGateway(page);
@@ -232,6 +278,54 @@ suite.define(() => {
       });
     });
   });
+
+  it.each(["no-preference", "reduce"] as const)(
+    "restores the first prompt height across rotation (%s)",
+    async (reducedMotion) => {
+      await withNewSessionPage(async (page) => {
+        await installMockGateway(page);
+        await page.emulateMedia({ reducedMotion });
+        await page.setViewportSize({ width: 844, height: 390 });
+        await page.goto(`${suite.server.baseUrl}new`);
+        const message = page.locator(".new-session-page__message");
+        const draft = Array.from({ length: 12 }, () => "Draft row").join("\n");
+        await message.fill(draft);
+
+        const readGeometry = () =>
+          message.evaluate((element: HTMLTextAreaElement) => {
+            const surface = element.closest<HTMLElement>(".agent-chat__input")!;
+            return {
+              editorHeight: element.clientHeight,
+              editorOverflow: element.scrollHeight - element.clientHeight,
+              surfaceOverflow: surface.scrollHeight - surface.clientHeight,
+              focused: document.activeElement === element,
+              caret: element.selectionStart,
+            };
+          });
+
+        for (const viewport of [
+          { width: 844, height: 390 },
+          { width: 390, height: 844 },
+          { width: 844, height: 390 },
+        ]) {
+          await page.setViewportSize(viewport);
+          await expect
+            .poll(async () => (await readGeometry()).surfaceOverflow)
+            .toBeLessThanOrEqual(1);
+          if (viewport.width > viewport.height) {
+            await expect
+              .poll(async () => (await readGeometry()).editorHeight)
+              .toBeLessThanOrEqual(56);
+          } else {
+            await expect.poll(async () => (await readGeometry()).editorHeight).toBeGreaterThan(56);
+          }
+          expect(await message.inputValue()).toBe(draft);
+          expect(await readGeometry()).toMatchObject({ focused: true, caret: draft.length });
+          expect((await readGeometry()).editorOverflow).toBeGreaterThan(0);
+        }
+      });
+    },
+  );
 
   it("pastes an image into the draft and forwards it with the initial turn", async () => {
     await withNewSessionPage(async (page) => {

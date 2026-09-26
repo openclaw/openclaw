@@ -988,15 +988,22 @@ wa-popover.new-session-page__where-popover::part(body) {
   opacity: 0.48;
 }
 
-/* Keep a long first prompt visible before scrolling. The shared auto-height
-   controller measures content; this surface owns its ten-line visual cap. */
 /* No inset of its own: the editor's breathing room is the composer surface's
    decision, and a left-only override here put the draft further from one edge
    than the other while the chat composer stayed symmetric. */
 .new-session-page__composer .new-session-page__message {
-  max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
+  /* Auto-height must read the new cap immediately, including in reduced motion. */
+  transition-property: none;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
+}
+
+/* Keep ten-line growth outside short landscape, where the shared composer
+   owns the compact editor cap along with its outer scrollport. */
+@media not all and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .new-session-page__composer .new-session-page__message {
+    max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
+  }
 }
 
 .new-session-page__composer .new-session-page__message::-webkit-scrollbar-thumb {
