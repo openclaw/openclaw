@@ -319,3 +319,41 @@ export function scanXmlishToolCall(
     return { kind: "invalid", at: markerStart, candidate: candidate(markerStart) };
   }
 }
+
+export type JsonObjectScanState = {
+  depth: number;
+  escaped: boolean;
+  inString: boolean;
+};
+
+/** Continue the same object scan across parser spans or bounded stream chunks. */
+export function scanJsonObject(
+  text: string,
+  start: number,
+  state: JsonObjectScanState = { depth: 0, escaped: false, inString: false },
+): { end: number; kind: "complete" | "prefix"; state: JsonObjectScanState } {
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (state.inString) {
+      if (state.escaped) {
+        state.escaped = false;
+      } else if (char === "\\") {
+        state.escaped = true;
+      } else if (char === '"') {
+        state.inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      state.inString = true;
+    } else if (char === "{") {
+      state.depth += 1;
+    } else if (char === "}") {
+      state.depth -= 1;
+      if (state.depth === 0) {
+        return { kind: "complete", end: index + 1, state };
+      }
+    }
+  }
+  return { kind: "prefix", end: text.length, state };
+}

@@ -1,5 +1,8 @@
-// Collects configured model references from OpenClaw config-shaped objects.
-import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNonArrayRecord,
+  asOptionalRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 
 /** One configured model reference plus its config path and field-owned syntax. */
 export type ConfiguredModelRef = {
@@ -77,21 +80,17 @@ export function collectConfiguredModelRefs(
     for (const capability of ["image", "video", "music"] as const) {
       collectModelConfig(`${path}.mediaModels.${capability}`, mediaModels[capability], "literal");
     }
-    pushModelRef(
-      `${path}.heartbeat.model`,
-      isRecord(agent.heartbeat) ? agent.heartbeat.model : undefined,
-      "selector",
-    );
+    pushModelRef(`${path}.heartbeat.model`, asOptionalRecord(agent.heartbeat)?.model, "selector");
     collectModelConfig(
       `${path}.subagents.model`,
-      isRecord(agent.subagents) ? agent.subagents.model : undefined,
+      asOptionalRecord(agent.subagents)?.model,
       "selector",
     );
     if (isRecord(agent.compaction)) {
       pushModelRef(`${path}.compaction.model`, agent.compaction.model, "selector");
       pushModelRef(
         `${path}.compaction.memoryFlush.model`,
-        isRecord(agent.compaction.memoryFlush) ? agent.compaction.memoryFlush.model : undefined,
+        asOptionalRecord(agent.compaction.memoryFlush)?.model,
         "selector",
       );
     }
@@ -105,12 +104,12 @@ export function collectConfiguredModelRefs(
       const exec = asNonArrayRecord(tools.exec);
       collectModelConfig(
         `${path}.tools.exec.reviewer.model`,
-        isRecord(exec.reviewer) ? exec.reviewer.model : undefined,
+        asOptionalRecord(exec.reviewer)?.model,
         "selector",
       );
       pushModelRef(
         `${path}.tts.summaryModel`,
-        isRecord(agent.tts) ? agent.tts.summaryModel : undefined,
+        asOptionalRecord(agent.tts)?.summaryModel,
         "selector",
       );
     }
@@ -121,14 +120,14 @@ export function collectConfiguredModelRefs(
   const exec = asNonArrayRecord(tools.exec);
   collectModelConfig(
     "tools.exec.reviewer.model",
-    isRecord(exec.reviewer) ? exec.reviewer.model : undefined,
+    asOptionalRecord(exec.reviewer)?.model,
     "selector",
   );
   const media = asNonArrayRecord(tools.media);
   for (const capability of ["image", "audio", "video"] as const) {
     pushModelRef(
       `tools.media.${capability}.preferredModel`,
-      isRecord(media[capability]) ? media[capability].preferredModel : undefined,
+      asOptionalRecord(media[capability])?.preferredModel,
       "literal",
     );
   }
@@ -160,39 +159,23 @@ export function collectConfiguredModelRefs(
   const hooks = asNonArrayRecord(root.hooks);
   if (Array.isArray(hooks.mappings)) {
     for (const [index, mapping] of hooks.mappings.entries()) {
-      pushModelRef(
-        `hooks.mappings.${index}.model`,
-        isRecord(mapping) ? mapping.model : undefined,
-        "selector",
-      );
+      pushModelRef(`hooks.mappings.${index}.model`, asOptionalRecord(mapping)?.model, "selector");
     }
   }
-  pushModelRef(
-    "hooks.gmail.model",
-    isRecord(hooks.gmail) ? hooks.gmail.model : undefined,
-    "selector",
-  );
-  pushModelRef(
-    "tts.summaryModel",
-    isRecord(root.tts) ? root.tts.summaryModel : undefined,
-    "selector",
-  );
+  pushModelRef("hooks.gmail.model", asOptionalRecord(hooks.gmail)?.model, "selector");
+  pushModelRef("tts.summaryModel", asOptionalRecord(root.tts)?.summaryModel, "selector");
   const discord = asNonArrayRecord(asNonArrayRecord(root.channels).discord);
   const collectDiscordVoice = (path: string, value: unknown) => {
     const voice = asNonArrayRecord(value);
     pushModelRef(`${path}.model`, voice.model, "selector");
-    pushModelRef(
-      `${path}.tts.summaryModel`,
-      isRecord(voice.tts) ? voice.tts.summaryModel : undefined,
-      "selector",
-    );
+    pushModelRef(`${path}.tts.summaryModel`, asOptionalRecord(voice.tts)?.summaryModel, "selector");
   };
   collectDiscordVoice("channels.discord.voice", discord.voice);
   if (isRecord(discord.accounts)) {
     for (const [accountId, account] of Object.entries(discord.accounts)) {
       collectDiscordVoice(
         `channels.discord.accounts.${accountId}.voice`,
-        isRecord(account) ? account.voice : undefined,
+        asOptionalRecord(account)?.voice,
       );
     }
   }
