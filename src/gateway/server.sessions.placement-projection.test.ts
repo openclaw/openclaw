@@ -628,7 +628,7 @@ test.each([
       placementGeneration: active.generation,
     };
     if (recovery === "unstaged result") {
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...identity,
         owner: placementTurnOwner(active),
         claimId: "retained-claim",

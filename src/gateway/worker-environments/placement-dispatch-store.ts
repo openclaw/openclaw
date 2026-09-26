@@ -8,13 +8,16 @@ import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-work
 import {
   normalizeIdentity,
   normalizeWorkerPlacementExecutionMode,
+  type WorkerPlacementExecutionMode,
   type WorkerSessionPlacementDispatchIdentity,
+  type WorkerSessionPlacementIdentity,
   type WorkerSessionPlacementRecord,
-  type WorkerSessionTurnClaimFacts,
 } from "./placement-record.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
 
-function readDispatchTurnClaim(value: unknown): WorkerSessionTurnClaimFacts["turnClaim"] {
+type RequestedPlacement = Extract<WorkerSessionPlacementRecord, { state: "requested" }>;
+
+function readDispatchTurnClaim(value: unknown): RequestedPlacement["turnClaim"] {
   if (value === null) {
     return null;
   }
@@ -38,6 +41,56 @@ function readDispatchTurnClaim(value: unknown): WorkerSessionTurnClaimFacts["tur
     runId: value.runId,
     generation: value.generation,
     ownerEpoch: null,
+  };
+}
+
+function readDispatchReceipt(
+  value: unknown,
+  identity: WorkerSessionPlacementIdentity,
+  executionMode: WorkerPlacementExecutionMode,
+): RequestedPlacement {
+  if (
+    !isRecord(value) ||
+    value.state !== "requested" ||
+    value.sessionId !== identity.sessionId ||
+    value.agentId !== identity.agentId ||
+    value.sessionKey !== identity.sessionKey ||
+    value.executionMode !== executionMode
+  ) {
+    throw new Error("Worker placement dispatch receipt has a different identity");
+  }
+  const metadata = {
+    environmentId: null,
+    activeOwnerEpoch: null,
+    workspaceBaseManifestRef: null,
+    remoteWorkspaceDir: null,
+    workerBundleHash: null,
+    lastTranscriptAckCursor: null,
+    lastLiveEventAckCursor: null,
+    recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
+  };
+  if (Object.keys(metadata).some((key) => value[key] !== null)) {
+    throw new Error("Worker placement dispatch receipt retains worker metadata");
+  }
+  const number = (key: string): number => {
+    const field = value[key];
+    if (typeof field !== "number" || !Number.isSafeInteger(field) || field < 0) {
+      throw new Error(`Worker placement dispatch receipt has an invalid ${key}`);
+    }
+    return field;
+  };
+  return {
+    ...identity,
+    ...metadata,
+    state: "requested",
+    executionMode,
+    generation: number("generation"),
+    createdAtMs: number("createdAtMs"),
+    updatedAtMs: number("updatedAtMs"),
+    stateChangedAtMs: number("stateChangedAtMs"),
+    turnClaim: readDispatchTurnClaim(value.turnClaim),
   };
 }
 
@@ -108,8 +161,10 @@ export async function startWorkerPlacementDispatch(
       },
     );
   } catch (error) {
-    if (admission?.committed ?? admission?.settlement?.committed) {
+    const committed = admission?.committed ?? admission?.settlement?.committed;
+    if (committed) {
       publication?.commit();
+      return readDispatchReceipt(committed.facts, identity, executionMode);
     } else if (!commitGranted || admission?.settlement?.kind === "completed") {
       publication?.rollback();
     } else {

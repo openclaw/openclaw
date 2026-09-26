@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { deserialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -37,8 +40,47 @@ describe("failed worker placement redispatch", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("continues a committed dispatch after its real worker reply is corrupted", async () => {
+    const receive = brokerReply.receiveSqliteWorkerReply;
+    let corrupted = 0;
+    vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation(
+      (slot, reply, owner, pumping) => {
+        if (
+          slot.current?.request.type === "execute" &&
+          reply.ok &&
+          !reply.transfer &&
+          !reply.input
+        ) {
+          const value: unknown = deserialize(reply.value);
+          if (
+            isRecord(value) &&
+            value.sessionId === SESSION.sessionId &&
+            value.state === "requested"
+          ) {
+            corrupted += 1;
+            return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner, pumping);
+          }
+        }
+        return receive(slot, reply, owner, pumping);
+      },
+    );
+    const placement = await store.startDispatch(SESSION);
+    expect(corrupted).toBe(1);
+    expect(placement).toEqual(store.get(SESSION.sessionId));
+    expect(
+      store.transition({
+        sessionId: SESSION.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: placement.generation,
+        patch: { environmentId: "environment-after-lost-reply" },
+      }),
+    ).toMatchObject({ state: "provisioning", generation: placement.generation + 1 });
   });
 
   it("uses the canonical generation and identity reset", async () => {
