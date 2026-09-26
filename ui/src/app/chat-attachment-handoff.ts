@@ -16,6 +16,7 @@ type PendingChatAttachmentHandoff = NonNullable<
   ReturnType<ApplicationChatAttachmentHandoff["consume"]>
 > & {
   owner: NonNullable<Parameters<ApplicationChatAttachmentHandoff["prepare"]>[0]["owner"]>;
+  recoveryScope: string | undefined;
   paneId: string;
   scopeKey: string;
   message: string;
@@ -231,6 +232,7 @@ export function createChatAttachmentHandoff(
       }
       pending.set(key, {
         owner,
+        recoveryScope: owner.recoveryScope,
         reviewPrivateDraft,
         isConnectionCurrent: capturePlacementStartupConnection(gateway, {
           gatewayUrl: gateway.connection.gatewayUrl,
@@ -294,12 +296,17 @@ export function createChatAttachmentHandoff(
       }
       return retained;
     },
-    retireScope: (scopeKey, beforeRevision) => {
+    retireScope: (scopeKey, beforeRevision, owner, recoveryScope) => {
       // Optimistic navigation may unmount the pane before deletion confirms.
       // Retire that package without touching a later edit or another session.
       for (const [key, handoff] of pending) {
-        if (handoff.scopeKey === scopeKey && handoff.preparedAt < beforeRevision) {
-          releaseHandoff(take(key));
+        if (
+          handoff.owner === owner &&
+          handoff.recoveryScope === recoveryScope &&
+          handoff.scopeKey === scopeKey &&
+          handoff.preparedAt < beforeRevision
+        ) {
+          releaseHandoff(take(key), retainedPayloadIds());
         }
       }
     },

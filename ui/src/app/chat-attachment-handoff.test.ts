@@ -211,11 +211,16 @@ describe("chat attachment route handoff", () => {
   it("retires deleted-session packages across panes without erasing newer packages or siblings", () => {
     vi.useFakeTimers();
     const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
-    const owner = {} as GatewayBrowserClient;
+    const principal = { recoveryScope: "original" };
+    const owner = principal as GatewayBrowserClient;
+    const otherOwner = { ...principal } as GatewayBrowserClient;
     const scopeKey = "agent:main:deleted";
     const old = storedAttachment("old-deleted", "image/png", false);
+    const unshared = storedAttachment("unshared-deleted", "image/png", false);
     const fresh = storedAttachment("newer-deleted", "image/png", false);
     const sibling = storedAttachment("kept-sibling", "image/png", false);
+    const otherGateway = storedAttachment("kept-gateway", "image/png", false);
+    const otherPrincipal = storedAttachment("kept-principal", "image/png", false);
     try {
       vi.setSystemTime(100);
       handoff.prepare({
@@ -223,7 +228,7 @@ describe("chat attachment route handoff", () => {
         owner,
         paneId: "p1",
         scopeKey,
-        attachments: [old],
+        attachments: [old, unshared],
         fallbacks: {},
       });
       handoff.prepare({
@@ -234,6 +239,24 @@ describe("chat attachment route handoff", () => {
         attachments: [sibling],
         fallbacks: {},
       });
+      handoff.prepare({
+        reviewPrivateDraft: reviewPrivateComposerDraft,
+        owner: otherOwner,
+        paneId: "other-gateway",
+        scopeKey,
+        attachments: [otherGateway, old],
+        fallbacks: {},
+      });
+      principal.recoveryScope = "other";
+      handoff.prepare({
+        reviewPrivateDraft: reviewPrivateComposerDraft,
+        owner,
+        paneId: "other-principal",
+        scopeKey,
+        attachments: [otherPrincipal],
+        fallbacks: {},
+      });
+      principal.recoveryScope = "original";
       vi.setSystemTime(300);
       handoff.prepare({
         reviewPrivateDraft: reviewPrivateComposerDraft,
@@ -243,12 +266,20 @@ describe("chat attachment route handoff", () => {
         attachments: [fresh],
         fallbacks: {},
       });
-      handoff.retireScope(scopeKey, 200);
+      principal.recoveryScope = "other";
+      handoff.retireScope(scopeKey, 200, owner, "original");
       expect(handoff.consume({ owner, paneId: "p1", scopeKey })).toBeNull();
-      expect(getChatAttachmentDataUrl(old)).toBeNull();
+      expect(getChatAttachmentDataUrl(unshared)).toBeNull();
+      expect(getChatAttachmentDataUrl(old)).not.toBeNull();
       expect(handoff.consume({ owner, paneId: "p3", scopeKey })?.attachments).toEqual([fresh]);
       expect(handoff.consume({ owner, paneId: "p2", scopeKey: "sibling" })?.attachments).toEqual([
         sibling,
+      ]);
+      expect(
+        handoff.consume({ owner: otherOwner, paneId: "other-gateway", scopeKey })?.attachments,
+      ).toEqual([otherGateway, old]);
+      expect(handoff.consume({ owner, paneId: "other-principal", scopeKey })?.attachments).toEqual([
+        otherPrincipal,
       ]);
     } finally {
       handoff.dispose();

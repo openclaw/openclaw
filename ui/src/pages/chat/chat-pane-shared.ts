@@ -23,7 +23,12 @@ export type PaneSessionHandoff = {
   mentions?: readonly HumanMention[];
   send?: boolean;
 };
-type PendingPaneSessionHandoff = PaneSessionHandoff & { expiresAt: number; sessionKey: string };
+type PendingPaneSessionHandoff = PaneSessionHandoff & {
+  expiresAt: number;
+  sessionKey: string;
+  owner: GatewayBrowserClient | null;
+  recoveryScope: string | undefined;
+};
 // A retained pane owns one session for life, so creation/fork adoption crosses
 // component instances. The application context scopes that one-shot transfer.
 const PANE_SESSION_HANDOFF_TTL_MS = 30_000;
@@ -76,9 +81,12 @@ export function preparePaneSessionHandoff(
   removePaneSessionHandoffs(pending, (candidate) =>
     areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
   );
+  const owner = context.gateway.snapshot.client;
   const stored = {
     sessionKey,
     ...handoff,
+    owner,
+    recoveryScope: owner?.recoveryScope,
     expiresAt: Date.now() + PANE_SESSION_HANDOFF_TTL_MS,
   };
   pending.push(stored);
@@ -103,7 +111,13 @@ export function consumePaneSessionHandoff(
     return null;
   }
   const handoff = pending.splice(index, 1)[0]!;
-  const { expiresAt: _expiresAt, sessionKey: _sessionKey, ...value } = handoff;
+  const {
+    expiresAt: _expiresAt,
+    sessionKey: _sessionKey,
+    owner: _owner,
+    recoveryScope: _recoveryScope,
+    ...value
+  } = handoff;
   return value;
 }
 
@@ -120,14 +134,20 @@ export function clearPaneSessionHandoff(
 export function retireSessionPaneHandoffs(
   context: ApplicationContext,
   targets: readonly { key: string; retireBeforeRevision: number }[],
+  owner: GatewayBrowserClient,
+  recoveryScope: string | undefined,
 ): void {
   for (const pending of paneSessionHandoffs.get(context)?.values() ?? []) {
-    removePaneSessionHandoffs(pending, (handoff) =>
-      targets.some(
-        ({ key, retireBeforeRevision }) =>
-          areUiSessionKeysEquivalent(handoff.sessionKey, key) &&
-          handoff.expiresAt - PANE_SESSION_HANDOFF_TTL_MS < retireBeforeRevision,
-      ),
+    removePaneSessionHandoffs(
+      pending,
+      (handoff) =>
+        handoff.owner === owner &&
+        handoff.recoveryScope === recoveryScope &&
+        targets.some(
+          ({ key, retireBeforeRevision }) =>
+            areUiSessionKeysEquivalent(handoff.sessionKey, key) &&
+            handoff.expiresAt - PANE_SESSION_HANDOFF_TTL_MS < retireBeforeRevision,
+        ),
     );
   }
 }

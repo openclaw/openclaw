@@ -12,8 +12,16 @@ type DeletedComposerDraftTarget = {
   retireBeforeRevision: number;
 };
 
+type DeletedComposerDraftScope = Parameters<typeof deleteStoredChatSessionSnapshots>[0] & {
+  client: ApplicationContext["gateway"]["snapshot"]["client"];
+  gatewayUrl: string | undefined;
+  recoveryScope: string | undefined;
+  recoveryScopeReady: boolean | undefined;
+};
+
 export async function retireDeletedComposerDrafts(
   context: ApplicationContext,
+  scope: DeletedComposerDraftScope,
   targets: readonly DeletedComposerDraftTarget[],
 ): Promise<void> {
   let failureReported = false;
@@ -23,37 +31,30 @@ export async function retireDeletedComposerDrafts(
       showToast({ message: t("sessionsView.draftCleanupFailed") });
     }
   };
-  void deleteStoredChatSessionSnapshots(
-    {
-      assistantAgentId: context.gateway.snapshot.assistantAgentId,
-      agentsList: context.agents.state.agentsList,
-      hello: context.gateway.snapshot.hello,
-    },
-    targets,
-  ).catch(reportFailure);
+  void deleteStoredChatSessionSnapshots(scope, targets).catch(reportFailure);
   try {
-    const client = context.gateway.snapshot.client;
-    if (!client) {
+    if (!scope.client) {
       reportFailure();
       return;
     }
     const stored = retireStoredComposerDrafts(
-      { settings: { gatewayUrl: client.gatewayUrl } },
+      { settings: { gatewayUrl: scope.gatewayUrl } },
       targets,
     );
-    retireSessionPaneHandoffs(context, targets);
+    retireSessionPaneHandoffs(context, targets, scope.client, scope.recoveryScope);
     for (const retirement of stored.retirements) {
       context.chatAttachmentHandoff.retireScope(
         storedChatOutboxScopeKey(retirement.scope),
         retirement.retireBeforeRevision,
+        scope.client,
+        scope.recoveryScope,
       );
     }
     let failed = stored.storageFailed;
-    if (!client.recoveryScopeReady || !client.recoveryScope) {
+    if (!scope.recoveryScopeReady || !scope.recoveryScope) {
       failed = true;
     } else {
-      // Bind deletion to its scope before the lazy import can yield to a gateway switch.
-      const owner = { gatewayOwner: stored.gatewayOwner, recoveryScope: client.recoveryScope };
+      const owner = { gatewayOwner: stored.gatewayOwner, recoveryScope: scope.recoveryScope };
       const retirements = stored.retirements.map((retirement) => ({
         scopeKey: `chat:v3:${storedChatOutboxScopeKey(retirement.scope)}`,
         minimumRevision: retirement.minimumRevision,

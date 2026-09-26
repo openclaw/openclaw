@@ -568,8 +568,20 @@ class OpenClawShell
     if (deletedSessions.length === 0) {
       return;
     }
+    // Client identity survives reconnects; capture its principal before either import yields.
+    const { client, assistantAgentId, hello } = context.gateway.snapshot;
+    const scope = {
+      client,
+      gatewayUrl: client?.gatewayUrl,
+      recoveryScope: client?.recoveryScope,
+      recoveryScopeReady: client?.recoveryScopeReady,
+      assistantAgentId,
+      hello,
+      agentsList: context.agents.state.agentsList,
+    };
     void import("../lib/chat/composer-draft-retirement.runtime.ts").then(
-      ({ retireDeletedComposerDrafts }) => retireDeletedComposerDrafts(context, deletedSessions),
+      ({ retireDeletedComposerDrafts }) =>
+        retireDeletedComposerDrafts(context, scope, deletedSessions),
       () => showToast({ message: t("sessionsView.draftCleanupFailed") }),
     );
   }
