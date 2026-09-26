@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { zoomMeetingsConfig } from "./config.js";
-import { testZoomMeetingListening } from "./runtime-probes.js";
+import { zoomMeetingsProbes } from "./runtime-probes.js";
 import type { ZoomMeetingsSession } from "./transports/types.js";
 
 const URL = "https://zoom.us/j/12345678902?pwd=probe";
-type ZoomMeetingsProbeContext = Parameters<typeof testZoomMeetingListening>[0];
+type ZoomMeetingsProbeContext = Parameters<typeof zoomMeetingsProbes.testListening>[0];
 
 describe("Zoom meeting runtime probes", () => {
   it.each([
@@ -41,7 +41,7 @@ describe("Zoom meeting runtime probes", () => {
         resolveAgentId: () => "main",
       } satisfies ZoomMeetingsProbeContext;
 
-      const result = await testZoomMeetingListening(context, {
+      const result = await zoomMeetingsProbes.testListening(context, {
         mode: "transcribe",
         timeoutMs: 100,
         url: URL,

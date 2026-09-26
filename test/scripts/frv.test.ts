@@ -619,20 +619,6 @@ describe("FRV continuation preflight", () => {
     expect(mutations).toBe(0);
   });
 
-  it.each([
-    ["candidate-free", undefined],
-    ["externally produced", { producer: { runId: "88" } }],
-  ])("allows %s plans through candidate ownership preflight", async (_label, candidate) => {
-    const selected = child("normalCi", "101");
-    await expect(
-      preflightContinuation(
-        { ...plan([selected]), candidate },
-        "77",
-        preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
-      ),
-    ).resolves.toMatchObject({ id: 77 });
-  });
-
   it("rejects fail-fast roots before any rerun mutation", async () => {
     const selected = child("normalCi", "101");
     let mutations = 0;

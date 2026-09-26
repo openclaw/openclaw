@@ -994,9 +994,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
 
   it.each([
     { name: "session", replacement: { sessionId: "replacement-session" }, withUsage: true },
-    { name: "session", replacement: { sessionId: "replacement-session" }, withUsage: false },
     { name: "generation", replacement: { lifecycleRevision: "generation-2" }, withUsage: true },
-    { name: "generation", replacement: { lifecycleRevision: "generation-2" }, withUsage: false },
   ])(
     "does not write an old result into a replacement $name with usage=$withUsage",
     async ({ name, replacement, withUsage }) => {

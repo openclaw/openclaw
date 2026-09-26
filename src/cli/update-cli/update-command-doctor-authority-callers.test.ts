@@ -87,7 +87,8 @@ vi.mock("../../infra/update-candidate-state.sizes.js", async (importOriginal) =>
 // Package effects and process dispatch are inert. Resume, config preparation,
 // plugin lease, retirement ledger, fresh Doctor and readiness remain real owners.
 vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
-vi.mock("./update-command-runtime.js", () => ({
+vi.mock("./update-command-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-runtime.js")>()),
   completeSourceUpdateRuntime: vi.fn(async () => ({ changed: false })),
 }));
 

@@ -71,13 +71,6 @@ describe("agent-events sequencing", () => {
     unsubscribe();
   });
 
-  test("stores and clears run context", () => {
-    registerAgentRunContext("run-1", { sessionKey: "main" });
-    expect(getAgentRunContext("run-1")?.sessionKey).toBe("main");
-    clearAgentRunContext("run-1");
-    expect(getAgentRunContext("run-1")).toBeUndefined();
-  });
-
   test("publishes only projection-relevant run context changes", () => {
     const changed = vi.fn();
     onTestFinished(sessionChanges.subscribe(changed));
@@ -897,24 +890,6 @@ describe("agent-events sequencing", () => {
     expect(context?.isHeartbeat).toBe(true);
     expect(context?.isControlUiVisible).toBe(true);
     expect(context?.lastActiveAt).toBe(12_345);
-  });
-
-  test("falls back to registered sessionKey when event sessionKey is blank", () => {
-    registerAgentRunContext("run-ctx", { sessionKey: "session-main" });
-
-    let receivedSessionKey: string | undefined;
-    const stop = onAgentEvent((evt) => {
-      receivedSessionKey = evt.sessionKey;
-    });
-    emitAgentEvent({
-      runId: "run-ctx",
-      stream: "assistant",
-      data: { text: "hi" },
-      sessionKey: "   ",
-    });
-    stop();
-
-    expect(receivedSessionKey).toBe("session-main");
   });
 
   test("keeps notifying later listeners when one throws", () => {

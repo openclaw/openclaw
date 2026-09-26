@@ -33,6 +33,14 @@ policy read obtains current rows; it does not retain migration exclusions across
 later operations. The updater and plugin source-cleanup synchronous effect guards
 retain their existing fresh-read contracts in their CLI or child-process owners.
 
+Plugin requirement batches prepare their final installed index through the existing
+metadata worker after installation and compensation settle. Preparation seals
+collection, reads an uncached row from the captured database, and retains the
+original lifecycle lease until the read settles. It rechecks lease ownership and
+batch closure before publishing runtime targets. Synchronous lease primitives and
+repeated source-cleanup reads remain unchanged migration work; this one-shot
+preparation does not replace their fresh authority checks.
+
 Writers use the SQLite worker broker's `state.write` or `agent.write` operation
 through their existing domain adapter, such as
 `runOpenClawStateWorkerOperation`. The connection-bound Kysely kernel and

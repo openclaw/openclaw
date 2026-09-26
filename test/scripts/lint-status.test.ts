@@ -55,6 +55,8 @@ export function waitForFile(file) {
     "lib/check-limits.mts",
     "lib/direct-run.mjs",
     "lib/dist-artifact-ownership.mts",
+    "lib/dist-artifact-lock.mts",
+    "lib/record-shared.mjs",
     "lib/failed-trailer.mts",
     "lib/managed-child-process.mts",
     "lib/vitest-resource-ownership.mts",

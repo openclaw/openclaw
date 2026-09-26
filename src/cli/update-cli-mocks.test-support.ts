@@ -164,7 +164,8 @@ vi.mock("../infra/update-candidate-canary.js", () => ({
 }));
 // Runtime retention and publication have real owner/process coverage; CLI
 // orchestration must not copy or rebuild the checkout behind its simulated updater.
-vi.mock("./update-cli/update-command-runtime.js", () => ({
+vi.mock("./update-cli/update-command-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-cli/update-command-runtime.js")>()),
   completeSourceUpdateRuntime: sourceRuntimeCompletion,
 }));
 vi.mock("../infra/update-retained-runtime.js", async (importOriginal) => {
