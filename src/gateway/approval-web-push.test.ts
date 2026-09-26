@@ -558,8 +558,8 @@ describe("approval Web Push delivery", () => {
         pending: [],
         paired: [pairedOperator("current-device", ["operator.approvals", "operator.read"])],
       });
-      const preparationStarted = createDeferred<void>();
-      const preparationReady = createDeferred<void>();
+      const preparationStarted = createDeferred();
+      const preparationReady = createDeferred();
       const waitForPreparation = async () => {
         preparationStarted.resolve();
         await preparationReady.promise;

@@ -80,7 +80,10 @@ vi.mock("../infra/push-web.js", () => ({
     prepare: (
       subscriptions: BoundWebPushSubscription[],
       assertCurrent: () => void,
-    ) => { start: () => T } | undefined | Promise<{ start: () => T } | undefined>,
+    ) =>
+      | { start: () => T | Promise<T> }
+      | undefined
+      | Promise<{ start: () => T | Promise<T> } | undefined>,
   ) => {
     try {
       return await (
@@ -120,7 +123,7 @@ vi.mock("./session-sharing.js", async (importOriginal) => ({
 }));
 
 const { createEventWebPushDelivery } = await import("./event-web-push.js");
-let authorityCompleted = createDeferred<void>();
+let authorityCompleted = createDeferred();
 
 function boundSubscription(
   deviceId: string,
@@ -187,7 +190,7 @@ describe("event Web Push classification", () => {
     prepareWebPushNotificationSenderMock.mockResolvedValue(preparedWebPushSendMock);
     preparedWebPushSendMock.mockResolvedValue([]);
     prepareDevicePairingMock.mockResolvedValue(undefined);
-    authorityCompleted = createDeferred<void>();
+    authorityCompleted = createDeferred();
     authorityCompletedMock.mockImplementation(() => authorityCompleted.resolve());
     prepareUserProfileCatalogMock.mockResolvedValue({
       readCurrentIdentity: readCurrentProfileIdentityMock,
@@ -534,8 +537,8 @@ describe("event Web Push classification", () => {
   it.each(["unchanged", "preferences changed", "profile merged"] as const)(
     "honors recipient preferences after pairing preparation: %s",
     async (change) => {
-      const pairingStarted = createDeferred<void>();
-      const pairingReady = createDeferred<void>();
+      const pairingStarted = createDeferred();
+      const pairingReady = createDeferred();
       let profileId = "bob";
       let revision = 0;
       listBoundWebPushSubscriptionsMock.mockResolvedValue([
