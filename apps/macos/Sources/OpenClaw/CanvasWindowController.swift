@@ -7,13 +7,12 @@ import WebKit
 @MainActor
 final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     let sessionKey: String
-    private let root: URL
     private let sessionDir: URL
     private let schemeHandler: CanvasSchemeHandler
     let webView: WKWebView
     private let watcher: CanvasFileWatcher
     private let container: HoverChromeContainerView
-    let presentation: CanvasPresentation
+    private let anchorProvider: () -> NSRect?
     var preferredPlacement: CanvasPlacement?
     private var debugStatusEnabled = false
     private var debugStatusTitle: String?
@@ -23,10 +22,9 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
-    init(sessionKey: String, root: URL, presentation: CanvasPresentation) throws {
+    init(sessionKey: String, root: URL, anchorProvider: @escaping () -> NSRect?) throws {
         self.sessionKey = sessionKey
-        self.root = root
-        self.presentation = presentation
+        self.anchorProvider = anchorProvider
 
         canvasWindowLogger.debug("CanvasWindowController init start session=\(sessionKey, privacy: .public)")
         let safeSessionKey = CanvasWindowController.sanitizeSessionKey(sessionKey)
@@ -79,7 +77,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         }
 
         self.container = HoverChromeContainerView(containing: self.webView)
-        let window = Self.makeWindow(for: presentation, contentView: self.container)
+        let window = Self.makePanel(contentView: self.container)
         canvasWindowLogger.debug("CanvasWindowController init makeWindow done")
         super.init(window: window)
 
@@ -105,32 +103,15 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         self.watcher.stop()
     }
 
-    func applyPreferredPlacement(_ placement: CanvasPlacement?) {
-        self.preferredPlacement = placement
-    }
-
     func showCanvas(path: String? = nil) {
-        if case let .panel(anchorProvider) = presentation {
-            presentAnchoredPanel(anchorProvider: anchorProvider)
-            if let path {
-                self.load(target: path)
-            }
-            return
-        }
-
-        // The window is built in init, so skip showWindow(_:); it would make the
-        // window key and steal focus from the user's current window.
-        window?.orderFrontRegardless()
+        self.presentAnchoredPanel(anchorProvider: self.anchorProvider)
         if let path {
             self.load(target: path)
         }
-        self.setCanvasVisible(true)
     }
 
     func hideCanvas() {
-        if case .panel = self.presentation {
-            persistFrameIfPanel()
-        }
+        self.persistFrame()
         window?.orderOut(nil)
         self.setCanvasVisible(false)
     }

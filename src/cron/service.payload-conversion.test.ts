@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
 import { loadCronStore } from "./store.js";
@@ -16,6 +17,8 @@ describe("cron payload conversion", () => {
     async (payload) => {
       const { storePath } = await makeStorePath();
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: false,
         log: logger,

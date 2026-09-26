@@ -327,7 +327,7 @@ struct WatchInboxStoreOperationTests {
             store.voiceTurnState.begin(
                 commandId: attempt.uuidString,
                 nowMs: WatchVoiceTurnState.nowMs() - WatchVoiceTurnState.timeoutMs - 1)
-            store.persistVoiceTurnState()
+            store.persistState()
 
             let observed: WatchInboxStore
             switch observation {

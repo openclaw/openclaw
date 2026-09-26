@@ -259,11 +259,7 @@ final class GatewayConnectionController {
             return .failed("Missing instanceId (node.instanceId). Try restarting the app.")
         }
         // Resolve the service endpoint (SRV/A/AAAA). TXT is unauthenticated; do not route via TXT.
-        let target = if let serviceEndpointResolver {
-            await serviceEndpointResolver(gateway.endpoint)
-        } else {
-            await self.resolveServiceEndpoint(gateway.endpoint)
-        }
+        let target = await self.resolveServiceEndpoint(gateway.endpoint)
         guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return .superseded }
         guard let target else {
             return .failed("Failed to resolve the discovered gateway endpoint.")
@@ -1325,11 +1321,7 @@ extension GatewayConnectionController {
                 GatewayStableIdentifier.matches($0.stableID, stableID)
             }), let fingerprint = GatewayTLSStore.loadFingerprint(stableID: stableID)
             else { return nil }
-            let target = if let serviceEndpointResolver {
-                await serviceEndpointResolver(gateway.endpoint)
-            } else {
-                await self.resolveServiceEndpoint(gateway.endpoint)
-            }
+            let target = await self.resolveServiceEndpoint(gateway.endpoint)
             guard let target,
                   let url = self.buildGatewayURL(host: target.host, port: target.port, useTLS: true)
             else { return nil }
@@ -1513,6 +1505,9 @@ extension GatewayConnectionController {
     }
 
     private func resolveServiceEndpoint(_ endpoint: NWEndpoint) async -> (host: String, port: Int)? {
+        if let serviceEndpointResolver {
+            return await serviceEndpointResolver(endpoint)
+        }
         guard case let .service(name, type, domain, _) = endpoint else { return nil }
         let key = "\(domain)|\(type)|\(name)"
         return await withCheckedContinuation { continuation in

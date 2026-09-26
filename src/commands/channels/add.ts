@@ -315,7 +315,6 @@ async function configureChannelAccount(
       if (committed.movedInstallRecords || pluginRegistrySourceChanged) {
         await refreshPluginRegistryAfterConfigMutation({
           reason: "source-changed",
-          ...(committed.movedInstallRecords ? { installRecords: committed.installRecords } : {}),
           logger: { warn: (message) => runtime.log(message) },
         });
       }

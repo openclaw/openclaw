@@ -19,7 +19,6 @@ import {
 } from "../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "../agents/sessions/agent-session-loop-resource-loader.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import * as announceRetry from "../agents/subagents/announce/subagent-announce-delivery-retry.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -303,9 +302,9 @@ describe("native completion final-effect authority", () => {
     { boundary: "recorder", change: "live" },
     { boundary: "recorder", change: "operator-revoked" },
     { boundary: "recorder", change: "requester-replaced" },
-    { boundary: "compaction retry", change: "live" },
-    { boundary: "compaction retry", change: "operator-revoked" },
-    { boundary: "compaction retry", change: "requester-replaced" },
+    { boundary: "automatic compaction", change: "live" },
+    { boundary: "automatic compaction", change: "operator-revoked" },
+    { boundary: "automatic compaction", change: "requester-replaced" },
   ] as const)(
     "revalidates $change authority after real $boundary",
     async ({ boundary, change }, { signal }) => {
@@ -337,9 +336,19 @@ describe("native completion final-effect authority", () => {
       signal.addEventListener("abort", release, { once: true });
       const sessionManager = SessionManager.open(completion.sessionScope);
       guardSessionManager(sessionManager);
+      if (boundary === "automatic compaction") {
+        appendHistory(
+          sessionManager,
+          createAssistant(testModel, [{ type: "text", text: "Previous result" }]),
+        );
+        appendHistory(
+          sessionManager,
+          createAssistant(testModel, [{ type: "text", text: "Latest result" }]),
+        );
+      }
       const { session } = await createTestSession({
         sessionManager,
-        ...(boundary === "compaction retry"
+        ...(boundary === "automatic compaction"
           ? {
               settingsManager: createAutoCompactionSettings(),
               resourceLoader: createResourceLoader(
@@ -350,7 +359,7 @@ describe("native completion final-effect authority", () => {
                       async () => {
                         compacting.resolve();
                         await resumeCompaction.promise;
-                        // A real compaction owns the subscriber state until this hook cancels it.
+                        // Keep the prompt in automatic compaction while completion authority changes.
                         return { cancel: true };
                       },
                     ],
@@ -371,7 +380,12 @@ describe("native completion final-effect authority", () => {
           stream.push({
             type: "done",
             reason: "stop",
-            message: createAssistant(testModel, [{ type: "text", text: "Ready" }]),
+            message: createAssistant(
+              testModel,
+              [{ type: "text", text: "Ready" }],
+              "stop",
+              boundary === "automatic compaction" ? testModel.contextWindow : 1,
+            ),
           });
           stream.end();
         };
@@ -386,6 +400,8 @@ describe("native completion final-effect authority", () => {
           runId: activeRunId,
           sessionId: completion.sessionScope.sessionId,
           config: context.getRuntimeConfig(),
+          deferTerminalLifecycle: true,
+          onDeferredLifecycleOwner: () => {},
         },
       });
       expect(prepared.queueHandle.messageInjectionV2?.version).toBe(2);
@@ -399,68 +415,43 @@ describe("native completion final-effect authority", () => {
         }
       });
       let prompt: Promise<unknown> | undefined;
-      let compaction: Promise<unknown> | undefined;
       let delivery: ReturnType<typeof completion.deliver> | undefined;
-      try {
-        if (boundary === "compaction retry") {
-          appendHistory(
-            sessionManager,
-            createAssistant(testModel, [{ type: "text", text: "Previous result" }]),
-          );
-          appendHistory(
-            sessionManager,
-            createAssistant(testModel, [{ type: "text", text: "Latest result" }]),
-          );
-          compaction = session.compact();
-          void compaction.catch(() => undefined);
-          await reachBoundary(compacting.promise, compaction);
-          expect(prepared.subscription.isCompacting()).toBe(true);
-          const wait = announceRetry.waitForAnnounceRetryDelay;
-          vi.spyOn(announceRetry, "waitForAnnounceRetryDelay").mockImplementationOnce(
-            async (...args) => {
-              const sleeping = wait(...args);
+      const createRecorder = userTurnTranscript.createUserTurnTranscriptRecorder;
+      vi.spyOn(userTurnTranscript, "createUserTurnTranscriptRecorder").mockImplementation(
+        (params) => {
+          const recorder = createRecorder(params);
+          if (params.input?.idempotencyKey === `${completion.idempotencyKey}:active-wake`) {
+            const resolve = recorder.resolveMessage.bind(recorder);
+            recorder.resolveMessage = async (...args) => {
               entered.resolve();
               await resume.promise;
-              await sleeping;
-            },
-          );
-        } else {
-          const createRecorder = userTurnTranscript.createUserTurnTranscriptRecorder;
-          vi.spyOn(userTurnTranscript, "createUserTurnTranscriptRecorder").mockImplementation(
-            (params) => {
-              const recorder = createRecorder(params);
-              if (params.input?.idempotencyKey === `${completion.idempotencyKey}:active-wake`) {
-                const resolve = recorder.resolveMessage.bind(recorder);
-                recorder.resolveMessage = async (...args) => {
-                  entered.resolve();
-                  await resume.promise;
-                  return await resolve(...args);
-                };
-              }
-              return recorder;
-            },
-          );
-          prompt = session.prompt("Wait for the native child");
-          await reachBoundary(modelEntered.promise, prompt);
+              return await resolve(...args);
+            };
+          }
+          return recorder;
+        },
+      );
+      try {
+        prompt = session.prompt("Wait for the native child");
+        await reachBoundary(modelEntered.promise, prompt);
+        if (boundary === "automatic compaction") {
+          finishModel?.();
+          await reachBoundary(compacting.promise, prompt);
+          expect(prepared.subscription.isCompacting()).toBe(true);
         }
         const before = sessionAccessor.loadTranscriptEventsSync(completion.sessionScope);
         delivery = completion.deliver();
         await reachBoundary(entered.promise, delivery);
+        expect(inject).not.toHaveBeenCalled();
         await completion.changeOwner(change);
-        if (boundary === "compaction retry") {
-          resumeCompaction.resolve();
-          await expect(compaction).rejects.toThrow("Compaction cancelled");
-          expect(prepared.subscription.isCompacting()).toBe(false);
-          if (change === "live") {
-            prompt = session.prompt("Wait for the native child");
-            await reachBoundary(modelEntered.promise, prompt);
-          }
-        }
         resume.resolve();
         if (change === "live") {
           await reachBoundary(queued.promise, delivery);
           expect(inject).toHaveBeenCalledOnce();
-          finishModel?.();
+          resumeCompaction.resolve();
+          if (boundary === "recorder") {
+            finishModel?.();
+          }
           await prompt;
           expect(await delivery).toMatchObject({ delivered: true, path: "steered" });
           expect(sessionManager.getEntries()).toContainEqual(
@@ -475,18 +466,26 @@ describe("native completion final-effect authority", () => {
         } else {
           expect((await delivery).delivered).toBe(false);
           await Promise.allSettled([steering]);
+          resumeCompaction.resolve();
+          if (boundary === "automatic compaction") {
+            await prompt;
+          }
           expect(inject).not.toHaveBeenCalled();
           expect(session.getSteeringMessages()).toEqual([]);
           expect(sessionAccessor.loadTranscriptEventsSync(completion.sessionScope)).toEqual(before);
           expect(listSessionPendingInputs(completion.sessionScope).total).toBe(0);
+        }
+        if (boundary === "automatic compaction") {
+          expect(prepared.subscription.isCompacting()).toBe(false);
         }
         expect(agentCommandMock).not.toHaveBeenCalled();
         expect(context.dedupe.has(`agent:${completion.idempotencyKey}`)).toBe(false);
       } finally {
         release();
         await session.abort();
-        await Promise.allSettled([delivery, steering, prompt, compaction]);
+        await Promise.allSettled([delivery, steering, prompt]);
         unsubscribe();
+        prepared.deferredLifecycleOwner?.discard();
         prepared.subscription.unsubscribe();
         embeddedRuns.clearActiveEmbeddedRun(
           completion.sessionScope.sessionId,

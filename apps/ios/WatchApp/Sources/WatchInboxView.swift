@@ -26,18 +26,11 @@ struct WatchInboxView: View {
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
     var onSendChatMessage: ((String, Bool) async -> String?)?
+    @State private var selectedFace = WatchScreenshotMode.approvals ? 2 : 0
 
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
-            WatchControlSurfaceView(
-                store: self.store,
-                directNode: self.directNode,
-                onAction: self.onAction,
-                onExecApprovalDecision: self.onExecApprovalDecision,
-                onRefreshExecApprovalReview: self.onRefreshExecApprovalReview,
-                onRefreshAppSnapshot: self.onRefreshAppSnapshot,
-                onAppCommand: self.onAppCommand,
-                onSendChatMessage: self.onSendChatMessage)
+            self.controlSurface
                 .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: WatchDestination.self) { destination in
                     switch destination {
@@ -47,20 +40,8 @@ struct WatchInboxView: View {
                 }
         }
     }
-}
 
-private struct WatchControlSurfaceView: View {
-    var store: WatchInboxStore
-    var directNode: WatchDirectNode
-    var onAction: ((WatchPromptAction) -> Void)?
-    var onExecApprovalDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
-    var onRefreshExecApprovalReview: (() -> Void)?
-    var onRefreshAppSnapshot: (() -> Void)?
-    var onAppCommand: ((WatchAppCommand) -> Void)?
-    var onSendChatMessage: ((String, Bool) async -> String?)?
-    @State private var selectedFace = WatchScreenshotMode.approvals ? 2 : 0
-
-    var body: some View {
+    private var controlSurface: some View {
         TabView(selection: self.$selectedFace) {
             self.nowFace
                 .tag(0)
@@ -76,12 +57,8 @@ private struct WatchControlSurfaceView: View {
         .navigationTitle("")
     }
 
-    private var faceCount: Int {
-        4
-    }
-
     private var pageRail: some View {
-        WatchPageRail(selectedIndex: self.selectedFace, pageCount: self.faceCount)
+        WatchPageRail(selectedIndex: self.selectedFace, pageCount: 4)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.bottom, -5)
             .allowsHitTesting(false)
@@ -132,8 +109,8 @@ private struct WatchControlSurfaceView: View {
 
             if self.chatCount > 0 || self.approvalCount > 0 {
                 WatchCompactStatusStrip(
-                    inboxCount: self.chatCountText,
-                    approvalCount: self.approvalCountText,
+                    inboxCount: self.chatCount.formatted(),
+                    approvalCount: self.approvalCount.formatted(),
                     status: self.statusLine)
             }
         }
@@ -443,14 +420,6 @@ private struct WatchControlSurfaceView: View {
         max(self.store.sortedExecApprovals.count, self.store.appSnapshot?.pendingApprovalCount ?? 0)
     }
 
-    private var chatCountText: String {
-        self.chatCount.formatted()
-    }
-
-    private var approvalCountText: String {
-        self.approvalCount.formatted()
-    }
-
     private var connectionLine: String {
         if let snapshot = store.appSnapshot {
             return snapshot.gatewayConnected
@@ -471,10 +440,7 @@ private struct WatchControlSurfaceView: View {
         if let record = store.activeExecApproval {
             return record.approval.commandPreview ?? record.approval.commandText
         }
-        if self.chatCount > 0 {
-            return self.chatItems.last?.text ?? self.store.gatewaySummaryText
-        }
-        return self.store.gatewaySummaryText
+        return self.chatItems.last?.text ?? self.store.gatewaySummaryText
     }
 
     private var primarySubtitle: String {
@@ -1482,13 +1448,7 @@ private struct WatchExecApprovalListView: View {
     }
 
     private func metadataLine(for record: WatchExecApprovalRecord) -> String {
-        var parts: [String] = []
-        if let host = record.approval.host, !host.isEmpty {
-            parts.append(host)
-        }
-        if let nodeId = record.approval.nodeId, !nodeId.isEmpty {
-            parts.append(nodeId)
-        }
+        var parts = [record.approval.host, record.approval.nodeId].compactMap(\.self).filter { !$0.isEmpty }
         if let expiresText = Self.expiresText(record.approval.expiresAtMs) {
             parts.append(expiresText)
         }
@@ -1586,16 +1546,7 @@ private struct WatchExecApprovalDetailView: View {
 
     private var metadataSummary: String {
         let approval = self.currentRecord?.approval ?? self.record.approval
-        var parts: [String] = []
-        if let host = approval.host, !host.isEmpty {
-            parts.append(host)
-        }
-        if let nodeId = approval.nodeId, !nodeId.isEmpty {
-            parts.append(nodeId)
-        }
-        if let agentId = approval.agentId, !agentId.isEmpty {
-            parts.append(agentId)
-        }
+        let parts = [approval.host, approval.nodeId, approval.agentId].compactMap(\.self).filter { !$0.isEmpty }
         return parts.isEmpty
             ? String(localized: "Review command below")
             : parts.joined(separator: " · ")

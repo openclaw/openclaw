@@ -41,6 +41,20 @@ batch closure before publishing runtime targets. Synchronous lease primitives an
 repeated source-cleanup reads remain unchanged migration work; this one-shot
 preparation does not replace their fresh authority checks.
 
+Registry refresh, Doctor repair, and legacy index import hold that same plugin
+lease before reading or deriving replacement rows. Startup acquires plugin
+ownership after startup ownership and rereads metadata after any waiting installer
+settles. A queued refresh therefore keeps the install records committed while it
+waited. Index formats, source cleanup guards, and update behavior are unchanged.
+
+Deferred plugin obligations are recorded through the shared-state writer while
+holding the plugin lifecycle lease. The worker rereads pending rows, checks the
+captured pending generation, and verifies the original lease at transaction and
+commit admission. Doctor awaits recording before rereading config or completing
+repair; post-session completion reacquires the plugin lease after repair hooks
+settle. This preserves migration warnings, input protection, stored rows, and
+update behavior without holding a SQL transaction across package or plugin work.
+
 Writers use the SQLite worker broker's `state.write` or `agent.write` operation
 through their existing domain adapter, such as
 `runOpenClawStateWorkerOperation`. The connection-bound Kysely kernel and
@@ -91,6 +105,16 @@ contract for existing adapters. The factory's inferred return type additionally
 provides the typed single-command `execute` method.
 
 ## Carry facts, publish after commit
+
+Proxy capture sessions, events, payload compression, queries, and purge operations
+execute through the shared-state worker. Bundled HTTP and WebSocket capture
+callers use asynchronous operations. Each accepted capture retains its original
+database admission through response-body finalization, and orderly CLI and Gateway
+shutdown join capture writes before closing the database. Read-only capture
+inspection preserves missing-state and source-artifact behavior. The shipped
+synchronous proxy-capture SDK remains a deprecated compatibility path; bundled
+callers use the worker APIs. Schemas, stored bytes, retention, and update behavior
+are unchanged.
 
 Placement turn claims and releases execute through the shared-state writer,
 including their coordinator acquisition. Local turns retain durable claims:
@@ -287,6 +311,11 @@ restore cold history, while ordinary reads retain their existing restoration
 owner. Process-held incognito data and native callback visitors retain their
 current owners. Schemas, stored bytes, retention, and update behavior are unchanged.
 
+History source discovery retries registry metadata reads up to twice when a
+concurrent agent registration invalidates them. Retries retain the captured
+state admission and source paths; changed lifetimes, physical sources, or
+discovered topology still reject stale reads.
+
 Exact message membership reads for managed attachments also use the history
 worker. The worker validates the entire visible JSON range on every lookup,
 including unchanged projection revisions, and returns only matching messages.
@@ -373,6 +402,15 @@ Bulk hydration, stored parent links, inherited model lookups, and ACP metadata
 also retain qualified stored addresses when main aliases or global scope change.
 Request aliases still follow current configuration; preparing history never
 rekeys an existing row or redirects its stored lineage.
+
+Spawn preparation discovers durable session stores and reads selected listing
+rows through the existing read workers. Candidate selection retains physical
+reader custody and preserves canonical sibling validation, aliases, and deleted
+main owners. Requester generations are captured before child admission, and live
+caller authority is rechecked after awaited preparation. Contributor inheritance
+joins participant recording and reads the full row from the selected physical
+source; skill-selection commit guards retain their current native read. Incognito
+stores remain process-owned. Schemas, retention, and update behavior are unchanged.
 
 Startup/topology hydration, internal synchronous keyed and archived reads, and
 process-held incognito stores remain migration debt. Preserve the

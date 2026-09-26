@@ -2382,7 +2382,7 @@ describe("channelsAddCommand", () => {
       installRecords,
     );
     expect(commitCall.baseHash).toBe("config-1");
-    expect(refreshCall().installRecords).toEqual(installRecords);
+    expect(refreshCall().reason).toBe("source-changed");
   });
 
   it("uses the installed plugin id when channel and plugin ids differ", async () => {

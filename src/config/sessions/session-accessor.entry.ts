@@ -101,10 +101,6 @@ export function resolveAccessStorePath(scope: SessionAccessScope): string {
   return resolveSessionStorePathForScope(scope);
 }
 
-function isStorePathTemplate(store?: string): boolean {
-  return typeof store === "string" && store.includes("{agentId}");
-}
-
 function resolveLogicalSessionStoreCandidates(params: {
   agentId: string;
   cfg: OpenClawConfig;
@@ -118,7 +114,7 @@ function resolveLogicalSessionStoreCandidates(params: {
       env: params.env,
     }),
   };
-  if (!isStorePathTemplate(storeConfig)) {
+  if (typeof storeConfig !== "string" || !storeConfig.includes("{agentId}")) {
     return [defaultTarget];
   }
   const targets = new Map<string, SessionStoreTarget>();

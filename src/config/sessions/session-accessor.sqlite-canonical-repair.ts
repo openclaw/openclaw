@@ -270,11 +270,10 @@ function copySqliteSessionOwnedStateForRepair(params: {
   sourceEntries: readonly SessionEntry[];
   sourceKeys: readonly string[];
 }): void {
-  const storedSourceKeys = uniqueStrings(params.sourceKeys.filter((key) => key.length > 0));
-  if (storedSourceKeys.length === 0) {
+  const sourceKeys = uniqueStrings(params.sourceKeys.filter((key) => key.length > 0));
+  if (sourceKeys.length === 0) {
     return;
   }
-  const sourceKeys = storedSourceKeys;
   const sourceDb = getSessionKysely(params.source.db);
   const destinationDb = getSessionKysely(params.destination.db);
   const entrySessionIds = uniqueStrings(
@@ -428,9 +427,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
         ? { ...preferredWindowProjection, ...preferredWindowProvenance }
         : {}),
     };
-    const { session_id: _sessionId, ...replacement } = {
-      ...canonicalWindow,
-    };
+    const { session_id: _sessionId, ...replacement } = canonicalWindow;
     executeSqliteQuerySync(
       params.destination.db,
       destinationDb

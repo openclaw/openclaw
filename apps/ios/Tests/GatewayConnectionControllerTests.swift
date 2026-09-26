@@ -300,8 +300,8 @@ private func waitUntil(
         }
     }
 
-    @Test @MainActor func `current caps reflect toggles`() {
-        withUserDefaults([
+    @Test @MainActor func `registration preserves capability toggles and command wire order`() async {
+        await withUserDefaults([
             "node.instanceId": "ios-test",
             "node.displayName": "Test Node",
             "camera.enabled": true,
@@ -310,7 +310,8 @@ private func waitUntil(
         ]) {
             let appModel = NodeAppModel()
             let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-            let caps = Set(controller._test_currentCaps())
+            let options = await controller.makeConnectOptions(stableID: nil, deviceAuthGatewayID: nil)
+            let caps = Set(options.caps)
 
             #expect(!caps.contains(OpenClawCapability.canvas.rawValue))
             #expect(caps.contains(OpenClawCapability.screen.rawValue))
@@ -321,8 +322,25 @@ private func waitUntil(
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
             #expect(caps.contains(OpenClawCapability.talk.rawValue))
 
-            let commands = controller._test_currentCommands()
-            #expect(!commands.contains(where: { $0.hasPrefix("canvas.") }))
+            var expectedCommands = [
+                "screen.record", "system.notify", "chat.push",
+                "talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once",
+                "camera.list", "camera.snap", "camera.clip", "location.get", "device.status", "device.info",
+            ]
+            if caps.contains("watch") {
+                expectedCommands += ["watch.status", "watch.notify"]
+            }
+            expectedCommands += [
+                "photos.latest", "contacts.search", "contacts.add", "calendar.events", "calendar.add",
+                "reminders.list", "reminders.add",
+            ]
+            if caps.contains("motion") {
+                expectedCommands += ["motion.activity", "motion.pedometer"]
+            }
+            if caps.contains("health") {
+                expectedCommands += ["health.summary"]
+            }
+            #expect(options.commands == expectedCommands)
         }
     }
 

@@ -68,6 +68,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         input.command.type === "mcpOAuth.pending" ||
         input.command.type === "mcpOAuth.countPrincipals") &&
         typeof input.command.input === "string") ||
+      (input.command.type === "capture.readOnlyEvents" &&
+        typeof input.command.sessionId === "string" &&
+        (input.command.limit === undefined || typeof input.command.limit === "number")) ||
+      (input.command.type === "capture.readOnlyBlob" && typeof input.command.blobId === "string") ||
       isPluginBlobReadCommand(input.command) ||
       isChannelIngressReadCommand(input.command) ||
       (input.command.type === "conversationBindings.inspect" &&

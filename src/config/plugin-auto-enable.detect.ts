@@ -19,7 +19,7 @@ export function detectPluginAutoEnableCandidates(params: {
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): PluginAutoEnableCandidate[] {
   const env = params.env ?? process.env;
-  const config = params.config ?? ({} as OpenClawConfig);
+  const config = params.config ?? {};
   const readiness = resolvePluginAutoEnableReadiness(
     config,
     env,

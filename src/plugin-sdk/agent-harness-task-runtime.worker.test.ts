@@ -12,7 +12,9 @@ import { getDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.
 import { updateTask } from "../tasks/task-registry-mutation.js";
 import { getTaskById } from "../tasks/task-registry-query.js";
 import { prepareTaskRegistryRead } from "../tasks/task-registry-read.js";
+import { transitionTaskRecordsByRunNative } from "../tasks/task-registry-transition.native.js";
 import { getTaskRegistryStore } from "../tasks/task-registry.store.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
@@ -43,7 +45,76 @@ afterEach(() => {
   resetAgentEventsForTest({ preserveListeners: true });
 });
 
-it.each(["terminal", "delivery", "read"] as const)(
+it.each([true, false])(
+  "requires a core projection for custom harness reads (projected: %s)",
+  async (projected) => {
+    await withOpenClawTestState({ layout: "split" }, async () => {
+      const core = getDetachedTaskLifecycleRuntime();
+      let externalTask: TaskRecord | undefined;
+      setDetachedTaskLifecycleRuntime({
+        ...core,
+        createRunningTaskRun(params) {
+          if (projected) {
+            return core.createRunningTaskRun(params);
+          }
+          externalTask = {
+            runtime: params.runtime,
+            taskKind: params.taskKind,
+            runId: params.runId,
+            task: params.task,
+            requesterSessionKey,
+            ownerKey: requesterSessionKey,
+            scopeKind: "session",
+            taskId: "adapter-only-task",
+            status: "running",
+            notifyPolicy: "silent",
+            deliveryStatus: "not_applicable",
+            createdAt: 1,
+          };
+          return externalTask;
+        },
+        findTaskRun(params) {
+          return externalTask?.childSessionKey === params.sessionKey
+            ? externalTask
+            : core.findTaskRun?.(params);
+        },
+        transitionTaskAssignment(params) {
+          return transitionTaskRecordsByRunNative(params.transition, params);
+        },
+      });
+      try {
+        const runtime = createRuntime();
+        runtime.assertTaskAssignmentSupported();
+        const created = await runtime.createRunningTaskRunAsync!({ runId, task: "Adapter-owned" });
+        expect(created.childSessionKey).toBeUndefined();
+        const read = await runtime.prepareTaskRunRead!(runId);
+        if (!projected) {
+          expect(read).toThrow("no prepared core projection");
+          expect(externalTask?.status).toBe("running");
+          return;
+        }
+        expect(read()).toEqual([created]);
+        await expect(
+          runtime.finalizeTaskRunByRunIdAsync!({
+            runId,
+            expectedTask: captureAgentHarnessTaskAssignment(created),
+            status: "succeeded",
+            endedAt: created.createdAt + 1,
+            suppressDelivery: true,
+          }),
+        ).resolves.toMatchObject([{ taskId: created.taskId, status: "succeeded" }]);
+        expect(read()).toMatchObject([{ taskId: created.taskId, status: "succeeded" }]);
+        resetDetachedTaskLifecycleRuntimeForTests();
+        expect(read).toThrow("owner changed");
+      } finally {
+        resetDetachedTaskLifecycleRuntimeForTests();
+        await closeOpenClawStateDatabaseAsync();
+      }
+    });
+  },
+);
+
+it.each(["creation", "terminal", "delivery", "read"] as const)(
   "keeps the event loop progressing through contended harness %s persistence",
   async (operation) => {
     await withOpenClawTestState({ layout: "split" }, async (state) => {
@@ -79,11 +150,22 @@ it.each(["terminal", "delivery", "read"] as const)(
             1000,
           );
           let settled: Promise<PromiseSettledResult<unknown>[]> | undefined;
+          let observedTaskId = task.taskId;
           try {
             await holder.ready;
             const heartbeat = nextTurn().then(() => Atomics.load(holder.released, 0));
             let pending: Promise<unknown>;
-            if (operation === "read") {
+            if (operation === "creation") {
+              pending = runtime.createRunningTaskRunAsync!({
+                runId: "harness:created",
+                task: "Worker-created mirror",
+                notifyPolicy: "silent",
+                deliveryStatus: "not_applicable",
+              }).then((created) => {
+                observedTaskId = created.taskId;
+                return [created];
+              });
+            } else if (operation === "read") {
               emitAgentEvent({
                 runId,
                 stream: "lifecycle",
@@ -104,16 +186,16 @@ it.each(["terminal", "delivery", "read"] as const)(
             holder.release();
             expect(await pending).toMatchObject([
               {
-                taskId: task.taskId,
-                status: "succeeded",
+                taskId: observedTaskId,
+                status: operation === "creation" ? "running" : "succeeded",
                 ...(operation === "delivery" ? { deliveryStatus: "delivered" } : {}),
               },
             ]);
             const snapshot = await getTaskRegistryStore().loadMutationSnapshotAsync(context, {
-              taskId: task.taskId,
+              taskId: observedTaskId,
             });
-            expect(snapshot.tasks.get(task.taskId)).toMatchObject({
-              status: "succeeded",
+            expect(snapshot.tasks.get(observedTaskId)).toMatchObject({
+              status: operation === "creation" ? "running" : "succeeded",
               ...(operation === "delivery" ? { deliveryStatus: "delivered" } : {}),
             });
           } finally {

@@ -12,6 +12,7 @@ import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-h
 import type { CronListPageOptions } from "../cron/service/list-page-types.js";
 import type { CronJobCreate, CronJobPatch } from "../cron/types.js";
 import { defaultRuntime } from "../runtime.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const gatewayRpc = vi.hoisted(() => ({
@@ -180,6 +181,8 @@ describe("scheduled backups", () => {
         throw new Error("Scheduled execution is outside this lookup test");
       });
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: false,
         log: createNoopLogger(),

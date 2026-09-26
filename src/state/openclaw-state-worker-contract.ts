@@ -1,3 +1,4 @@
+import type { ZodIssue } from "zod";
 import type { AuthProfileRowRead, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
 import type { McpOAuthReadOperations } from "../agents/mcp-oauth-store.kernel.js";
@@ -44,6 +45,8 @@ import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-envir
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type {
   DeferredPluginMigration,
+  DeferredPluginMigrationRecordInput,
+  recordDeferredPluginMigrationsInTransaction,
   readDeferredPluginMigrationCompletions,
 } from "../infra/deferred-plugin-migrations.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
@@ -81,6 +84,7 @@ import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-in
 import type { HostedCatalogSnapshotWorkerOperations } from "../plugins/official-external-plugin-catalog-snapshot-store.worker-contract.js";
 import type { PluginSourceAdmissionPublication } from "../plugins/plugin-source-admission.types.js";
 import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
+import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker.js";
@@ -102,13 +106,15 @@ import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.contract.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 
 export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; identityKey: string };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = TuiLastSessionWorkerOperations &
+export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
+  TuiLastSessionWorkerOperations &
   WorktreeRetirementOperations &
   WorktreeRegistryReadOperations &
   SessionStateWorkerOperations &
@@ -273,6 +279,18 @@ export type OpenClawStateWorkerOperations = TuiLastSessionWorkerOperations &
       input: PluginSourceAdmissionPublication;
       output: boolean;
     };
+    "plugins.deferredMigrations.record": {
+      input: Omit<DeferredPluginMigrationRecordInput, "env"> & {
+        identity: OpenClawStateLeaseIdentity;
+      };
+      output:
+        | {
+            kind: "recorded";
+            transitions: ReturnType<typeof recordDeferredPluginMigrationsInTransaction>;
+          }
+        | { kind: "conflict"; pending: readonly DeferredPluginMigration[] }
+        | { kind: "invalid"; issues: ZodIssue[] };
+    };
     "plugins.deferredMigrations.read": {
       input: { artifactPreservingReadOnly: boolean };
       output: readonly DeferredPluginMigration[];
@@ -338,6 +356,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | "database.inspectIdle"
       | "database.walMaintenance"
       | "agentDatabases.releaseExitedLease"
+      | keyof CaptureWorkerOperations
       | keyof PluginStateWorkerOperations
       | keyof OpenClawStateLeaseLifecycleOperations;
   }

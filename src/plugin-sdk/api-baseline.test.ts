@@ -577,9 +577,13 @@ describe("Plugin SDK API baseline", () => {
     expect(fixtureError).not.toContain("return this.status");
   });
 
-  it.each(["source project creation", "declaration emission"])(
-    "rejects source changes after %s while accepting linked external types",
-    async (timing) => {
+  it.each(
+    ["source project creation", "declaration emission"].flatMap((timing) =>
+      [0, 60_000].map((clockSkewMs) => ({ timing, clockSkewMs })),
+    ),
+  )(
+    "rejects source changes after $timing with clock skew $clockSkewMs while accepting linked external types",
+    async ({ timing, clockSkewMs }) => {
       const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-mutation-");
       const external = tempDirs.make("openclaw-plugin-sdk-api-linked-");
       const entry = path.join(repoRoot, "src/plugin-sdk/fixture.ts");
@@ -665,13 +669,23 @@ describe("Plugin SDK API baseline", () => {
           return result;
         });
       }
+      const now = Date.now;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + clockSkewMs);
       try {
-        await expect(render()).rejects.toThrow(/Boundary .*changed during compilation/u);
+        const failure = await render().then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(changed).toBe(true);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toMatchObject({
+          message: expect.stringMatching(/Boundary .*changed during compilation/u),
+        });
       } finally {
+        clock.mockRestore();
         create.mockRestore();
         emit.mockRestore();
       }
-      expect(changed).toBe(true);
       expect(fs.readFileSync(entry, "utf8")).toBe(source("changed"));
       expect(fs.readdirSync(path.join(repoRoot, ".artifacts"))).toEqual([]);
     },
