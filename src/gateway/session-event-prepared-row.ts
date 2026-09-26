@@ -22,7 +22,8 @@ function createPublicationOwner(projection: SessionRowProjection) {
   let started = 0;
   let startedAt = 0;
   let reset: ReturnType<typeof setImmediate> | undefined;
-  let wait: Promise<void> | undefined;
+  let wake: ReturnType<typeof setImmediate> | undefined;
+  const waiting = new Set<() => void>();
   function track<T>(work: Promise<T>): Promise<T> {
     pending.add(work);
     void work.then(
@@ -31,7 +32,22 @@ function createPublicationOwner(projection: SessionRowProjection) {
     );
     return work;
   }
-  function claimTurn() {
+  function wakeNext() {
+    wake ??= setImmediate(() => {
+      wake = undefined;
+      clearImmediate(reset);
+      reset = undefined;
+      const resume = waiting.values().next().value;
+      if (resume) {
+        waiting.delete(resume);
+        resume();
+      }
+      if (waiting.size > 0) {
+        wakeNext();
+      }
+    });
+  }
+  function claimTurn(resumed: boolean) {
     const now = performance.now();
     if (!reset) {
       started = 0;
@@ -41,14 +57,16 @@ function createPublicationOwner(projection: SessionRowProjection) {
       });
       reset.unref?.();
     }
-    if (wait || started >= PUBLICATIONS_PER_TURN || now - startedAt >= PUBLICATION_BUDGET_MS) {
-      // Yield from exhaustion: the earlier reset may precede newly queued I/O.
-      return (wait ??= new Promise<void>((resolve) => {
-        setImmediate(() => {
-          wait = undefined;
-          resolve();
-        });
-      }));
+    if (
+      (!resumed && (wake || waiting.size > 0)) ||
+      started >= PUBLICATIONS_PER_TURN ||
+      now - startedAt >= PUBLICATION_BUDGET_MS
+    ) {
+      // Grant one retry per turn; waking every prepared row repeats their work quadratically.
+      return new Promise<void>((resolve) => {
+        waiting.add(resolve);
+        wakeNext();
+      });
     }
     started++;
     return undefined;
@@ -57,12 +75,13 @@ function createPublicationOwner(projection: SessionRowProjection) {
     withPreparedExactRows(queries, consume, options) {
       return track(
         (async () => {
+          let resumed = false;
           for (;;) {
             let yieldUntil: Promise<void> | undefined;
             const prepared = await projection.withPreparedExactRows(
               queries,
               (read) => {
-                yieldUntil = claimTurn();
+                yieldUntil = claimTurn(resumed);
                 return yieldUntil ? deferred : consume(read);
               },
               options,
@@ -75,6 +94,7 @@ function createPublicationOwner(projection: SessionRowProjection) {
             }
             // Prepared views expire synchronously; reacquire facts and authority after yielding.
             await yieldUntil;
+            resumed = true;
           }
         })(),
       );

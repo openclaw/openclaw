@@ -29,7 +29,9 @@ it.each([0, 7])(
       store: Object.fromEntries(keys.map((key) => [key, { sessionId: key, updatedAt: 1 }])),
     });
     const held = createDeferredCore();
+    let preparations = 0;
     projection.withPreparedExactRows = async (queries, consume) => {
+      preparations++;
       if (queries(cfg)[0]?.key === keys[0]) {
         await held.promise;
       }
@@ -61,6 +63,7 @@ it.each([0, 7])(
       await settled;
       await drainSessionEventPublications(projection);
       expect(published).toEqual([...keys.slice(1), keys[0]]);
+      expect(preparations).toBeLessThanOrEqual(keys.length * 2);
     } finally {
       held.resolve();
       await vi.runAllTimersAsync();
