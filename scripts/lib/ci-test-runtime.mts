@@ -66,6 +66,7 @@ const nativeCompilerTestFiles = [
   "test/scripts/native-typescript.test.ts",
   "test/scripts/nodes-cli-import-closure.test.ts",
   "test/scripts/ts-topology.test.ts",
+  "test/scripts/typecheck-inert.test.ts",
   "test/test-helper-extension-import-boundary.test.ts",
 ];
 // Bun fork 3ff0efc82217775e04094a1d4402d7c6932ecb24 failed or added skips in these files.

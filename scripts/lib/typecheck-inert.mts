@@ -87,7 +87,11 @@ export function findTypecheckInertSources(changes: readonly SourceChange[]): str
         ? [change.path]
         : [];
     });
-  } catch {
+  } catch (error) {
+    // Keep full typechecks, but make an unavailable classifier visible (for example under Bun).
+    console.error(
+      `[check:changed] comment-only classification unavailable; typecheck lanes retained: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return [];
   }
 }
