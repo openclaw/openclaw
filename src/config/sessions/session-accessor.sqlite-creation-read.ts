@@ -34,11 +34,11 @@ export function readSessionCreationSnapshotInDatabase(
         new Map(
           candidates
             .filter((candidate) => keys.includes(candidate.sessionKey))
-            .map(({ sessionKey, entry }) => [sessionKey, entry]),
+            .map(({ sessionKey: key, entry }) => [key, entry]),
         ),
       );
       const resolved = resolveSessionEntryCandidates({
-        entries: Array.from(entries, ([sessionKey, entry]) => ({ sessionKey, entry })),
+        entries: Array.from(entries, ([key, entry]) => ({ sessionKey: key, entry })),
         sessionKey,
         canonicalKeys: true,
       });

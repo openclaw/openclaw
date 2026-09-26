@@ -142,14 +142,14 @@ describe("session creation snapshot", () => {
         { ...scope, sessionKey: sibling },
         { sessionId: "sibling", updatedAt: 1, label: "taken" },
       );
-      for (const [key, label, archivedAt] of [
+      for (const [sessionKey, label, archivedAt] of [
         ["agent:main:archived", "archived", 1],
         ["agent:main:spaced", " padded ", undefined],
         ["agent:main:internal-session-effects:hidden", "hidden", undefined],
       ] as const) {
         replaceSessionEntrySync(
-          { ...scope, sessionKey: key },
-          { sessionId: key, updatedAt: 1, label, archivedAt },
+          { ...scope, sessionKey },
+          { sessionId: sessionKey, updatedAt: 1, label, archivedAt },
         );
       }
       if (cold) {
