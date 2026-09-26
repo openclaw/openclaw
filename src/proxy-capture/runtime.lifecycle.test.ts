@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -12,6 +13,7 @@ import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseByPathAsync,
 } from "../state/openclaw-state-db-cache.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { proxyCaptureNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { observeCaptureWrite, resolveCaptureOwner, resolveRuntimeDeps } from "./runtime-owner.js";
@@ -26,6 +28,11 @@ import {
   prepareHttpCapture,
   type DebugProxyCaptureRuntimeDeps,
 } from "./runtime.js";
+import {
+  listDebugProxyCaptureSessions,
+  readDebugProxyCaptureBlob,
+  readDebugProxyCaptureSessionEvents,
+} from "./store-readonly.js";
 import { acquireDebugProxyCaptureStoreAsync } from "./store.async.js";
 import {
   acquireDebugProxyCaptureStore,
@@ -769,6 +776,69 @@ describe("capture admission generation", () => {
 });
 
 describe("async capture lifecycle", () => {
+  it.skipIf(process.platform === "win32").each([
+    ["SIGINT", 130],
+    ["SIGTERM", 143],
+  ] as const)("drains a queued capture and ends its session on OS %s", (signal, exitCode) => {
+    const root = stateRoot();
+    const settings = captureSettings(root, `signal-${signal}`);
+    const payload = `queued capture before ${signal}`;
+    const runtimeUrl = resolveRuntimeWorkerUrl(proxyCaptureNativeProcessEntrypoints.runtime);
+    const signalUrl = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.signalExitBarrier);
+    const script = `
+      import { initializeDebugProxyCaptureAsync, captureWsEventAsync } from ${JSON.stringify(runtimeUrl.href)};
+      import { installCliSignalExitHandlers } from ${JSON.stringify(signalUrl.href)};
+      installCliSignalExitHandlers();
+      const settings = ${JSON.stringify(settings)};
+      await initializeDebugProxyCaptureAsync("signal-fixture", settings);
+      void captureWsEventAsync({
+        url: "wss://example.test/signal",
+        direction: "outbound",
+        kind: "ws-frame",
+        flowId: "queued-at-signal",
+        payload: ${JSON.stringify(payload)},
+      }, settings);
+      process.kill(process.pid, ${JSON.stringify(signal)});
+      setTimeout(() => process.exit(99), 10_000);
+    `;
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--disable-warning=ExperimentalWarning",
+        ...resolveRuntimeWorkerArgv(runtimeUrl).slice(0, -1),
+        "--input-type=module",
+        "-e",
+        script,
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root, XDG_CACHE_HOME: root },
+        encoding: "utf8",
+        timeout: 20_000,
+      },
+    );
+    expect(child.error, child.stderr).toBeUndefined();
+    expect(child.signal, child.stderr).toBeNull();
+    expect(child.status, child.stderr).toBe(exitCode);
+    const persisted = withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => {
+        const events = readDebugProxyCaptureSessionEvents(db, settings.sessionId);
+        const blobId = events[0]?.dataBlobId;
+        return {
+          session: listDebugProxyCaptureSessions(db).find((row) => row.id === settings.sessionId),
+          events,
+          payload: typeof blobId === "string" ? readDebugProxyCaptureBlob(db, blobId) : undefined,
+        };
+      },
+      { env: { OPENCLAW_STATE_DIR: root } },
+    );
+    expect(persisted?.session?.endedAt).toBeTypeOf("number");
+    expect(persisted?.events).toEqual([
+      expect.objectContaining({ kind: "ws-frame", flowId: "queued-at-signal", dataText: payload }),
+    ]);
+    expect(persisted?.payload).toBe(payload);
+  });
+
   it("prepares immutable HTTP and WebSocket facts and finalizes a redacted prefix while the caller stays open", async () => {
     const root = stateRoot();
     vi.stubEnv("OPENCLAW_STATE_DIR", root);

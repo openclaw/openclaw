@@ -2,6 +2,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
 import { readConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
+import {
+  readDebugProxyCaptureBlob,
+  readDebugProxyCaptureSessionEvents,
+} from "../proxy-capture/store-readonly.js";
 import type {
   OpenClawStateReadCommand,
   OpenClawStateReadReply,
@@ -11,10 +15,26 @@ export function readStateDiagnosticCommand(
   db: DatabaseSync,
   command: Extract<
     OpenClawStateReadCommand,
-    { type: "config.snapshot.read" | "audit.run.inspect" }
+    {
+      type:
+        | "capture.readOnlyEvents"
+        | "capture.readOnlyBlob"
+        | "config.snapshot.read"
+        | "audit.run.inspect";
+    }
   >,
 ): OpenClawStateReadReply {
   const admitted = { ok: true, sourceAdmitted: true } as const;
+  if (command.type === "capture.readOnlyEvents") {
+    return {
+      ...admitted,
+      type: command.type,
+      events: readDebugProxyCaptureSessionEvents(db, command.sessionId, command.limit),
+    };
+  }
+  if (command.type === "capture.readOnlyBlob") {
+    return { ...admitted, type: command.type, blob: readDebugProxyCaptureBlob(db, command.blobId) };
+  }
   if (command.type === "config.snapshot.read") {
     return {
       ...admitted,

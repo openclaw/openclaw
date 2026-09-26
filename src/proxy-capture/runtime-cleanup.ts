@@ -1,9 +1,15 @@
+import { registerSignalExitBarrier } from "../cli/signal-exit-barrier.js";
+
 // Application teardown can drain active capture without loading its storage graph.
 const finalizers = new Set<() => Promise<void>>();
 
 export function registerActiveDebugProxyCapture(finalize: () => Promise<void>): () => void {
   finalizers.add(finalize);
-  return () => finalizers.delete(finalize);
+  const unregisterSignalBarrier = registerSignalExitBarrier(finalize);
+  return () => {
+    finalizers.delete(finalize);
+    unregisterSignalBarrier();
+  };
 }
 
 export async function finalizeActiveDebugProxyCaptures(): Promise<void> {
