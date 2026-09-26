@@ -74,7 +74,7 @@ describe("resolveByteResponse", () => {
     expect(setHeader).toHaveBeenCalledWith("Content-Range", "bytes */10");
   });
 
-  it.each(["bytes=broken", "bytes=0-1,4-5"])(
+  it.each(["bytes=broken", "items=0-1", "bytes=0-1,4-5"])(
     "falls back to a full response for malformed or multipart range %s",
     (rangeHeader) => {
       expect(resolveImmutableResponse({ range: rangeHeader })).toMatchObject({
