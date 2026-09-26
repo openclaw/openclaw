@@ -102,6 +102,13 @@ case "$1" in
 esac
 "$@"`;
 
+const PASSTHROUGH_TIMEOUT_SETUP = `mkdir -p "$TMPDIR/bin"
+cat >"$TMPDIR/bin/timeout" <<'SH'
+${PASSTHROUGH_TIMEOUT_SCRIPT}
+SH
+chmod +x "$TMPDIR/bin/timeout"
+export PATH="$TMPDIR/bin:$PATH"`;
+
 const HELPER_PATH = "scripts/lib/docker-build.sh";
 const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mts";
 const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
@@ -744,6 +751,21 @@ function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string
       },
     },
   );
+}
+
+function expectInvalidDockerEnv(
+  scriptPath: string,
+  envName: string,
+  value: string,
+  env: Record<string, string> = {},
+): string {
+  const result = spawnSync("bash", [scriptPath], {
+    encoding: "utf8",
+    env: { ...process.env, ...env, [envName]: value },
+  });
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
+  return result.stderr;
 }
 
 describe("docker build helper", () => {
@@ -1849,32 +1871,6 @@ set -e
 `,
     },
     {
-      title: "rejects invalid package-backed Docker run pids limits before invoking docker",
-      tempPrefix: "openclaw-docker-package-pids-",
-      scriptSource: (workDir: string) => repoShell(workDir)`
-
-dirname() {
-  /usr/bin/dirname "$@"
-}
-
-docker() {
-  printf invoked >"$TMPDIR/docker-seen"
-}
-export -f docker
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
-
-set +e
-OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
-status="$?"
-set -e
-
-[[ "$status" = "2" ]] || exit 1
-[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]] || exit 1
-[[ ! -e "$TMPDIR/docker-seen" ]] || exit 1
-`,
-    },
-    {
       title: "diagnoses rejected resource limits through the canonical package helper",
       tempPrefix: "openclaw-docker-package-diagnostic-",
       scriptSource: (workDir: string) => repoShell(workDir)`
@@ -2142,12 +2138,7 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
       tempPrefix: "openclaw-docker-package-helper-guard-",
       scriptSource: (workDir: string) => repoShell(workDir)`
 
-mkdir -p "$TMPDIR/bin"
-cat >"$TMPDIR/bin/timeout" <<'SH'
-${PASSTHROUGH_TIMEOUT_SCRIPT}
-SH
-chmod +x "$TMPDIR/bin/timeout"
-export PATH="$TMPDIR/bin:$PATH"
+${PASSTHROUGH_TIMEOUT_SETUP}
 
 docker() {
   printf "%s\\n" "$*" >>"$TMPDIR/docker-run-seen"
@@ -2166,12 +2157,7 @@ docker_e2e_run_detached_with_harness image-name
       tempPrefix: "openclaw-docker-harness-stdin-",
       scriptSource: (workDir: string) => repoShell(workDir)`
 
-mkdir -p "$TMPDIR/bin"
-cat >"$TMPDIR/bin/timeout" <<'SH'
-${PASSTHROUGH_TIMEOUT_SCRIPT}
-SH
-chmod +x "$TMPDIR/bin/timeout"
-export PATH="$TMPDIR/bin:$PATH"
+${PASSTHROUGH_TIMEOUT_SETUP}
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
@@ -2277,12 +2263,7 @@ exit 1
       tempPrefix: "openclaw-docker-e2e-harness-term-cleanup-",
       scriptSource: (workDir: string) => repoShell(workDir)`
 
-mkdir -p "$TMPDIR/bin"
-cat >"$TMPDIR/bin/timeout" <<'SH'
-${PASSTHROUGH_TIMEOUT_SCRIPT}
-SH
-chmod +x "$TMPDIR/bin/timeout"
-export PATH="$TMPDIR/bin:$PATH"
+${PASSTHROUGH_TIMEOUT_SETUP}
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
@@ -2831,79 +2812,6 @@ docker_e2e_docker_run_cmd run demo
     execDockerSnippet(script);
   });
 
-  it("keeps package-backed Docker runs bounded when the package helper is sourced directly", () => {
-    const workDir = tempDirs.make("openclaw-docker-package-timeout-required-");
-    mkdirSync(join(workDir, "bin"));
-    const script = repoShell(workDir)`
-export PATH="$TMPDIR/bin"
-export OPENCLAW_DOCKER_E2E_RUN_TIMEOUT=11s
-
-dirname() {
-  /usr/bin/dirname "$@"
-}
-
-docker() {
-  printf "%s\\n" "$*" >"$TMPDIR/docker-seen"
-}
-export -f docker
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
-
-set +e
-docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
-status="$?"
-set -e
-
-stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "127" ]]
-[[ "$stderr" = *"timeout command not found; cannot bound Docker command after 11s"* ]]
-[[ ! -e "$TMPDIR/docker-seen" ]]
-`;
-
-    execDockerSnippet(script);
-  });
-
-  it("uses gtimeout for package-backed Docker runs sourced through the package helper", () => {
-    const workDir = tempDirs.make("openclaw-docker-package-gtimeout-");
-    writeExecutables(join(workDir, "bin"), {
-      gtimeout: `#!/bin/bash
-set -euo pipefail
-if [[ "$1" = "--kill-after=1s" ]]; then
-  exit 0
-fi
-printf 'gtimeout:%s %s|%s\\n' "$1" "$2" "\${*:3}" >>"$TMPDIR/timeout-seen"
-shift 2
-"$@"
-`,
-    });
-
-    const script = repoShell(workDir)`
-export PATH="$TMPDIR/bin"
-export OPENCLAW_DOCKER_E2E_RUN_TIMEOUT=15s
-export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
-unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
-unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
-
-dirname() {
-  /usr/bin/dirname "$@"
-}
-
-docker() {
-  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
-}
-export -f docker
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
-
-docker_e2e_docker_run_cmd run demo
-
-[[ "$(<"$TMPDIR/timeout-seen")" = "gtimeout:--kill-after=30s 15s|docker run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
-[[ "$(<"$TMPDIR/docker-seen")" = "run -e OPENCLAW_NO_AUTO_UPDATE=1 --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
-`;
-
-    execDockerSnippet(script);
-  });
-
   it("passes plugin lifecycle sampler timeout overrides into Docker", () => {
     const runner = readFileSync(PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH, "utf8");
     expectTextToIncludeAll(runner, [
@@ -2925,18 +2833,13 @@ docker_e2e_docker_run_cmd run demo
   ])(
     "rejects invalid plugin lifecycle Docker %s overrides before package setup",
     (_label, envName, value) => {
-      const result = spawnSync("bash", [PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/openclaw-missing-package.tgz",
-          [envName]: value,
-        },
-      });
-
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-      expect(result.stderr).not.toContain("OpenClaw package tarball does not exist");
+      const stderr = expectInvalidDockerEnv(
+        PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH,
+        envName,
+        value,
+        { OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/openclaw-missing-package.tgz" },
+      );
+      expect(stderr).not.toContain("OpenClaw package tarball does not exist");
     },
   );
 
@@ -5739,18 +5642,10 @@ if (starts === 1) {
     ["probe attempt timeout", "OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS", "0"],
     ["probe body cap", "OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES", "64bytes"],
   ])("rejects invalid upgrade survivor Docker %s before Docker setup", (_label, envName, value) => {
-    const result = spawnSync("bash", [UPGRADE_SURVIVOR_DOCKER_E2E_PATH], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_UPGRADE_SURVIVOR_E2E_SKIP_BUILD: "1",
-        [envName]: value,
-      },
+    const stderr = expectInvalidDockerEnv(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, envName, value, {
+      OPENCLAW_UPGRADE_SURVIVOR_E2E_SKIP_BUILD: "1",
     });
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-    expect(result.stderr).not.toContain("Docker image not found");
+    expect(stderr).not.toContain("Docker image not found");
   });
 
   it("bounds upgrade survivor failure log diagnostics", () => {
@@ -5858,12 +5753,7 @@ ROOT_DIR=${shellQuote(process.cwd())}
 TMPDIR=${shellQuote(workDir)}
 export ROOT_DIR TMPDIR
 
-mkdir -p "$TMPDIR/bin"
-cat >"$TMPDIR/bin/timeout" <<'SH'
-${PASSTHROUGH_TIMEOUT_SCRIPT}
-SH
-chmod +x "$TMPDIR/bin/timeout"
-export PATH="$TMPDIR/bin:$PATH"
+${PASSTHROUGH_TIMEOUT_SETUP}
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
@@ -6052,18 +5942,10 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
   ])(
     "rejects invalid package assertion env before Docker setup for %s",
     (_label, path, envName, value) => {
-      const result = spawnSync("bash", [path], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_SKIP_DOCKER_BUILD: "1",
-          [envName]: value,
-        },
+      const stderr = expectInvalidDockerEnv(path, envName, value, {
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
       });
-
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-      expect(result.stderr).not.toContain("Docker image not found");
+      expect(stderr).not.toContain("Docker image not found");
     },
   );
 
@@ -6283,19 +6165,11 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
   ])(
     "rejects invalid live plugin tool Docker %s values before Docker setup",
     (_label, envName, value) => {
-      const result = spawnSync("bash", [LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_LIVE_PLUGIN_TOOL_HOST_BUILD: "0",
-          OPENCLAW_SKIP_DOCKER_BUILD: "1",
-          [envName]: value,
-        },
+      const stderr = expectInvalidDockerEnv(LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH, envName, value, {
+        OPENCLAW_LIVE_PLUGIN_TOOL_HOST_BUILD: "0",
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
       });
-
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-      expect(result.stderr).not.toContain("Docker image not found");
+      expect(stderr).not.toContain("Docker image not found");
     },
   );
 
@@ -7070,28 +6944,31 @@ process.exit(73);
         clientPath: "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
         distPrefix: "../../dist",
         helperImport: "./lib/temp-state-dir.ts",
+        scenarios: [
+          "success",
+          "missing helper",
+          "archive failure",
+          "empty extraction",
+          "altered extraction",
+        ],
       },
       {
         layout: "July",
         clientPath: "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
         distPrefix: "../../../../dist",
         helperImport: "../../../../scripts/e2e/lib/temp-state-dir.ts",
+        scenarios: ["success"],
       },
     ].flatMap((layout) =>
-      [
-        "success",
-        "missing helper",
-        "archive failure",
-        "empty extraction",
-        "altered extraction",
-        ...(layout.layout === "June" ? ["log removal failure"] : []),
-      ].map((scenario) => ({
-        layout: layout.layout,
-        clientPath: layout.clientPath,
-        distPrefix: layout.distPrefix,
-        helperImport: layout.helperImport,
-        scenario,
-      })),
+      [...layout.scenarios, ...(layout.layout === "June" ? ["log removal failure"] : [])].map(
+        (scenario) => ({
+          layout: layout.layout,
+          clientPath: layout.clientPath,
+          distPrefix: layout.distPrefix,
+          helperImport: layout.helperImport,
+          scenario,
+        }),
+      ),
     ),
   )(
     "stages the committed $layout bundle-MCP client through the real runner: $scenario",
@@ -7417,17 +7294,8 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
     ["gateway", "OPENCLAW_OPENWEBUI_GATEWAY_PORT", "1e3"],
     ["webui", "OPENCLAW_OPENWEBUI_PORT", "65536"],
   ])("rejects invalid Open WebUI Docker %s ports before Docker setup", (_label, envName, value) => {
-    const result = spawnSync("bash", [OPENWEBUI_DOCKER_E2E_PATH], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        [envName]: value,
-      },
-    });
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-    expect(result.stderr).not.toContain("OPENAI_API_KEY is required");
+    const stderr = expectInvalidDockerEnv(OPENWEBUI_DOCKER_E2E_PATH, envName, value);
+    expect(stderr).not.toContain("OPENAI_API_KEY is required");
   });
 
   it.each([
@@ -7436,17 +7304,8 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
   ])(
     "rejects invalid Open WebUI Docker %s timeouts before Docker setup",
     (_label, envName, value) => {
-      const result = spawnSync("bash", [OPENWEBUI_DOCKER_E2E_PATH], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          [envName]: value,
-        },
-      });
-
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-      expect(result.stderr).not.toContain("OPENAI_API_KEY is required");
+      const stderr = expectInvalidDockerEnv(OPENWEBUI_DOCKER_E2E_PATH, envName, value);
+      expect(stderr).not.toContain("OPENAI_API_KEY is required");
     },
   );
 
@@ -7476,35 +7335,18 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
     [OPENAI_CHAT_TOOLS_DOCKER_E2E_PATH, "OPENCLAW_OPENAI_CHAT_TOOLS_PORT", "0"],
     [OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH, "OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_PORT", "18789tcp"],
   ])("rejects invalid Docker E2E ports before setup", (scriptPath, envName, value) => {
-    const result = spawnSync("bash", [scriptPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        [envName]: value,
-      },
-    });
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-    expect(result.stderr).not.toContain("OPENAI_API_KEY was not available");
+    const stderr = expectInvalidDockerEnv(scriptPath, envName, value);
+    expect(stderr).not.toContain("OPENAI_API_KEY was not available");
   });
 
   it.each([
     ["timeout", "OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", "180s"],
     ["log tail cap", "OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES", "64kb"],
   ])("rejects invalid Codex media path Docker %s before Docker setup", (_label, envName, value) => {
-    const result = spawnSync("bash", [CODEX_MEDIA_PATH_DOCKER_E2E_PATH], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        [envName]: value,
-        OPENCLAW_SKIP_DOCKER_BUILD: "1",
-      },
+    const stderr = expectInvalidDockerEnv(CODEX_MEDIA_PATH_DOCKER_E2E_PATH, envName, value, {
+      OPENCLAW_SKIP_DOCKER_BUILD: "1",
     });
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-    expect(result.stderr).not.toContain("Docker image not found");
+    expect(stderr).not.toContain("Docker image not found");
   });
 
   it("forwards Codex media path client limits into Docker", () => {
@@ -7531,19 +7373,11 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
       "64bytes",
     ],
   ])("rejects invalid MCP code-mode client env before setup", (scriptPath, envName, value) => {
-    const result = spawnSync("bash", [scriptPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        [envName]: value,
-        OPENCLAW_SKIP_DOCKER_BUILD: "1",
-      },
+    const stderr = expectInvalidDockerEnv(scriptPath, envName, value, {
+      OPENCLAW_SKIP_DOCKER_BUILD: "1",
     });
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-    expect(result.stderr).not.toContain("Docker image not found");
-    expect(result.stderr).not.toContain("OPENAI_API_KEY was not available");
+    expect(stderr).not.toContain("Docker image not found");
+    expect(stderr).not.toContain("OPENAI_API_KEY was not available");
   });
 
   it.each([MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH, MCP_CODE_MODE_GATEWAY_LIVE_DOCKER_E2E_PATH])(
@@ -7591,18 +7425,10 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
     ["timeout", "OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS", "180s"],
     ["body cap", "OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES", "64kb"],
   ])("rejects invalid OpenAI chat tools Docker %s before auth setup", (_label, envName, value) => {
-    const result = spawnSync("bash", [OPENAI_CHAT_TOOLS_DOCKER_E2E_PATH], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENAI_API_KEY: "",
-        [envName]: value,
-      },
+    const stderr = expectInvalidDockerEnv(OPENAI_CHAT_TOOLS_DOCKER_E2E_PATH, envName, value, {
+      OPENAI_API_KEY: "",
     });
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-    expect(result.stderr).not.toContain("OPENAI_API_KEY was not available");
+    expect(stderr).not.toContain("OPENAI_API_KEY was not available");
   });
 
   it("forwards every OpenAI chat tools runtime env knob into Docker", () => {
@@ -7915,18 +7741,10 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
   ])(
     "rejects invalid gateway network client %s timeout before Docker setup",
     (_label, envName, value) => {
-      const result = spawnSync("bash", [GATEWAY_NETWORK_DOCKER_E2E_PATH], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          [envName]: value,
-          OPENCLAW_SKIP_DOCKER_BUILD: "1",
-        },
+      const stderr = expectInvalidDockerEnv(GATEWAY_NETWORK_DOCKER_E2E_PATH, envName, value, {
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
       });
-
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-      expect(result.stderr).not.toContain("Docker image not found");
+      expect(stderr).not.toContain("Docker image not found");
     },
   );
 
@@ -7988,19 +7806,9 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
   });
 
   it("mounts root helper modules imported by bare Docker E2E scripts", () => {
-    const helper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
-    expectTextToIncludeAll(helper, [
+    expect(readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8")).toContain(
       "--allow-unreleased-changelog",
-      'local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"',
-      '-v "$harness_root/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro"',
-      '-v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"',
-      '-v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"',
-      '-v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"',
-      '-v "$harness_root/tsconfig.json:/app/tsconfig.json:ro"',
-      '-v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"',
-      '-v "$harness_root/test/helpers:/app/test/helpers:ro"',
-    ]);
-
+    );
     const script = repoRootShell`
 export DOCKER_E2E_HARNESS_ROOT_DIR=/trusted-harness
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
@@ -8850,18 +8658,13 @@ bash "$ROOT_DIR/scripts/e2e/doctor-install-switch-docker.sh"
   ])(
     "rejects invalid bundled plugin Docker %s values before Docker setup",
     (_label, envName, value) => {
-      const result = spawnSync("bash", [BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_SKIP_DOCKER_BUILD: "1",
-          [envName]: value,
-        },
-      });
-
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
-      expect(result.stderr).not.toContain("Docker image not found");
+      const stderr = expectInvalidDockerEnv(
+        BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH,
+        envName,
+        value,
+        { OPENCLAW_SKIP_DOCKER_BUILD: "1" },
+      );
+      expect(stderr).not.toContain("Docker image not found");
     },
   );
 

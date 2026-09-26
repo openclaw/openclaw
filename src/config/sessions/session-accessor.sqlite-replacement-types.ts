@@ -17,12 +17,14 @@ export type SessionEntryReplacementCommit = {
   includeLabelOwners?: string;
   validationKeys: string[];
   replacements: SqliteSessionEntryReplacement[];
+  checkPendingArchiveRecovery?: boolean;
   consumePendingReset?: boolean;
   maintenance?: SessionEntryMaintenanceInput;
   ownerAssignment?: { sessionKey: string; owner: SessionOwnerAssignment };
 };
 
 export type SessionEntryReplacementCommitted = {
+  pendingArchiveRecovery: boolean;
   previous: Map<string, SessionEntry>;
   current: Map<string, SessionEntry>;
   maintenancePlans: SessionEntryMaintenancePlan[];

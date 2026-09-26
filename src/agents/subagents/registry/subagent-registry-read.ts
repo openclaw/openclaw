@@ -59,10 +59,13 @@ export {
 export function buildSubagentSessionListReadIndex(
   now = Date.now(),
   sessionKeys?: readonly string[],
+  preparedRuns?: Map<string, SubagentRunReadRecord>,
 ): SubagentRunReadIndex<SubagentRunReadRecord> {
-  const runs = sessionKeys
-    ? getSubagentSessionListRunsSnapshotForSessions(subagentRuns, sessionKeys)
-    : getSubagentSessionListRunsSnapshotForRead(subagentRuns);
+  const runs =
+    preparedRuns ??
+    (sessionKeys
+      ? getSubagentSessionListRunsSnapshotForSessions(subagentRuns, sessionKeys)
+      : getSubagentSessionListRunsSnapshotForRead(subagentRuns));
   return buildSubagentRunReadIndexFromRuns({
     runs,
     inMemoryRuns: sessionKeys

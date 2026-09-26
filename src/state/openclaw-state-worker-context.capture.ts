@@ -6,10 +6,7 @@ import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { captureStateDatabaseCoordinatorRuntime } from "../infra/state-database-coordinator.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
-import {
-  getExistingOpenClawStateSchemaPath,
-  isExistingOpenClawStateSchema,
-} from "./openclaw-state-db-schema-policy.js";
+import { captureOpenClawStateSchemaReadAdmission } from "./openclaw-state-db-schema-policy.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
@@ -21,18 +18,21 @@ export function captureOpenClawStateReadContextWithAdmission(
   OpenClawStateWorkerContext,
   "admission" | "maintenanceScope" | "existingSchemaPath" | "runInCapturedSchemaScope"
 > {
-  const databasePath = path.resolve(pathname);
-  isExistingOpenClawStateSchema(databasePath);
-  const existingSchemaPath = getExistingOpenClawStateSchemaPath();
-  const admission = captureAdmission(databasePath);
+  const schema = captureOpenClawStateSchemaReadAdmission(pathname);
+  const capturedAdmission = captureAdmission(pathname);
+  let admission = capturedAdmission;
   let runInCapturedSchemaScope: OpenClawStateWorkerContext["runInCapturedSchemaScope"];
-  if (existingSchemaPath !== undefined) {
+  if (schema) {
     const inCapturedScope = AsyncLocalStorage.snapshot();
-    const assertCurrent = admission.assertCurrent;
-    admission.assertCurrent = () => {
-      assertCurrent();
-      // Queued dispatch may run outside this caller, but its captured scope must still be active.
-      inCapturedScope(getExistingOpenClawStateSchemaPath);
+    admission = {
+      databasePath: capturedAdmission.databasePath,
+      get identity() {
+        return capturedAdmission.identity;
+      },
+      assertCurrent() {
+        capturedAdmission.assertCurrent();
+        schema.assertCurrent();
+      },
     };
     runInCapturedSchemaScope = (operation) =>
       inCapturedScope(() => {
@@ -43,7 +43,7 @@ export function captureOpenClawStateReadContextWithAdmission(
   return {
     maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     admission,
-    existingSchemaPath,
+    existingSchemaPath: schema?.path,
     runInCapturedSchemaScope,
   };
 }

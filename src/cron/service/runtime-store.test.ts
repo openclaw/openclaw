@@ -12,6 +12,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { CronService } from "../service.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -22,7 +23,6 @@ import {
   finishCronRunReceipt,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronStoredJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
@@ -259,7 +259,7 @@ describe("cron runtime row publication", () => {
         expect.objectContaining({ action: "finished", jobId: job.id, status: "error", error }),
       );
       expect(
-        readCronTaskRunHistoryPage({
+        readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(store.storePath),
           jobId: job.id,
           limit: 1,

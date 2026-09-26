@@ -100,12 +100,15 @@ function rollbackSuccessSummary() {
   };
 }
 
-async function publishSuccess(summary: unknown) {
+async function publishSuccess(summary: unknown, logs: Record<string, unknown> = {}) {
   const root = tempDirs.make("survivor-rollback-publication-");
   const artifacts = join(root, "private");
   const published = join(root, "published");
   mkdirSync(artifacts);
   writeFileSync(join(artifacts, "summary.json"), JSON.stringify(summary));
+  for (const [name, value] of Object.entries(logs)) {
+    writeFileSync(join(artifacts, name), JSON.stringify(value));
+  }
   const { publishDiagnostics } = await import(observer);
   return {
     artifacts,
@@ -813,3 +816,35 @@ if (process.argv[2] === 'update') {
     ]);
   });
 });
+
+it.each([
+  { version: "2026.9.4", mode: "manual" },
+  { version: "2026.9.6", mode: "manual" },
+  { version: "2026.9.6", mode: "auto-auth" },
+])(
+  "publishes Cron readback proof after a successful $version $mode upgrade",
+  async ({ version, mode }) => {
+    const summary = rollbackSuccessSummary();
+    summary.baseline = { spec: `openclaw@${version}`, version };
+    summary.backupRollback.baselineVersion = version;
+    summary.backupRollback.runtime.version = version;
+    summary.updateRestartMode = mode;
+    const proofs = Object.fromEntries(
+      ["post-update", "candidate"].map((stage) => [
+        `legacy-operator-${stage}-cron-history.json`,
+        {
+          status: "passed",
+          stage,
+          source: version === "2026.9.4" ? "legacy-doctor-import" : "published-native-runs",
+          pages: [{ jobId: "synthetic", runId: "retained" }],
+        },
+      ]),
+    );
+    const publication = await publishSuccess(summary, proofs);
+    publication.publish();
+    const result = JSON.parse(readFileSync(join(publication.published, "summary.json"), "utf8"));
+    for (const [name, proof] of Object.entries(proofs)) {
+      expect(JSON.parse(result.logs[name])).toEqual(proof);
+    }
+  },
+);

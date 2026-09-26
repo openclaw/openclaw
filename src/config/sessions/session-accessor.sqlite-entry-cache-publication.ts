@@ -62,6 +62,7 @@ type PlaceholderReceipt = {
 
 export type SessionEntryReplacementPublication = {
   kind: "session-entry-replacements";
+  pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionSharingEntry>;
   changedKeys: string[];
@@ -556,11 +557,10 @@ export function publishSessionSharingEntryChange(
     publishTrackedCacheUpdate(
       database,
       () => {
-        const entries = state.entries;
         if (current !== undefined) {
-          entries.set(update.sessionKey, current);
+          state.entries.set(update.sessionKey, current);
         } else {
-          entries.delete(update.sessionKey);
+          state.entries.delete(update.sessionKey);
         }
       },
       () => stageIncognitoSharingPublication(database.db, update.sessionKey),

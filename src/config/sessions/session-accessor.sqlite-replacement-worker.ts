@@ -245,7 +245,7 @@ export async function commitSessionEntryReplacementsInWorker(
   lifecycle: {
     identityAgentId: string;
     afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
-    onLifecycleCommitted?: () => void;
+    onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   },
   retainedExecution?: OpenClawAgentDatabaseExecution,
 ) {
@@ -272,7 +272,7 @@ export async function commitSessionEntryReplacementsInWorker(
       receipt = prepareSessionEntryReplacementPublication(committed);
     }
     if (receipt) {
-      lifecycle.onLifecycleCommitted?.();
+      lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery);
     }
     const unknown = admitted.admission.settlement?.kind !== "completed" || !receipt;
     const published = publication.settle(receipt, unknown);

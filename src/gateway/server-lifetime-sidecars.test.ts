@@ -6,6 +6,7 @@ import { MessageChannel, Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   getProcessCleanupBudget,
   runWithProcessCleanupBudget,
@@ -18,6 +19,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import {
@@ -104,6 +106,7 @@ describe("gateway lifetime sidecars", () => {
           return result;
         });
       await attachInitialGatewayLifetimeSidecars({
+        scheduler: createTestGatewayScheduler(),
         chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
         gatewayRequestContext: {} as never,
         flushPendingSessionsChangedEvents: vi.fn(),
@@ -240,6 +243,7 @@ describe("gateway lifetime sidecars", () => {
     const owner = createGatewaySidecarStopOwner();
     try {
       await attachInitialGatewayLifetimeSidecars({
+        scheduler: createTestGatewayScheduler(),
         chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
         gatewayRequestContext: context,
         flushPendingSessionsChangedEvents,
@@ -288,6 +292,7 @@ describe("gateway lifetime sidecars", () => {
     const owner = createGatewaySidecarStopOwner();
 
     await attachInitialGatewayLifetimeSidecars({
+      scheduler: createTestGatewayScheduler(),
       chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
       gatewayRequestContext: {} as never,
       flushPendingSessionsChangedEvents: vi.fn(),
@@ -317,6 +322,7 @@ describe("gateway lifetime sidecars", () => {
     const warn = vi.fn();
 
     await attachInitialGatewayLifetimeSidecars({
+      scheduler: createTestGatewayScheduler(),
       chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
       gatewayRequestContext: context as never,
       flushPendingSessionsChangedEvents: vi.fn(),
@@ -326,6 +332,7 @@ describe("gateway lifetime sidecars", () => {
     });
 
     expect(oauth.create).toHaveBeenCalledWith({
+      scheduler: expect.any(GatewayScheduler),
       getConfig: context.getRuntimeConfig,
       getPersistedConfig: expect.any(Function),
       warn,
@@ -369,6 +376,7 @@ describe("gateway lifetime sidecars", () => {
         });
 
         await attachInitialGatewayLifetimeSidecars({
+          scheduler: createTestGatewayScheduler(),
           chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
           gatewayRequestContext: {} as never,
           flushPendingSessionsChangedEvents: vi.fn(),

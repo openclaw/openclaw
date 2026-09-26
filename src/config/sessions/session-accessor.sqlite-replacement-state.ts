@@ -1,4 +1,5 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import {
   projectSessionSharingEntry,
   type SessionEntryReplacementPublication,
@@ -28,6 +29,7 @@ export function prepareSessionEntryReplacementPublication(
 ): SessionEntryReplacementPublication {
   return {
     kind: "session-entry-replacements",
+    pendingArchiveRecovery: result.pendingArchiveRecovery,
     membershipInvalidatedKeys: result.membershipInvalidatedKeys,
     previous: new Map(
       [...result.previous].map(([key, entry]) => [
@@ -132,5 +134,15 @@ export function commitSessionEntryReplacementsInDatabase(
     maintenance && preservation
       ? applySessionEntryMaintenanceInDatabase(database, maintenance, () => preservation)
       : emptySessionEntryMaintenancePlan();
-  return { previous, current, maintenancePlans: [maintenancePlan], membershipInvalidatedKeys };
+  return {
+    // Fresh creation must not retry another session's failed export.
+    pendingArchiveRecovery:
+      input.checkPendingArchiveRecovery === true &&
+      previous.size > 0 &&
+      hasPendingSessionTranscriptArchives(database),
+    previous,
+    current,
+    maintenancePlans: [maintenancePlan],
+    membershipInvalidatedKeys,
+  };
 }

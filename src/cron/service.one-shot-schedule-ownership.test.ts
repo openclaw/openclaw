@@ -7,6 +7,7 @@ import {
 } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronEvent, CronServiceDeps } from "./service/state.js";
@@ -16,7 +17,6 @@ import {
 } from "./service/timer-execution-timeout.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -93,7 +93,7 @@ async function expectFutureOneShot(params: {
   expect(durableJob).toMatchObject(expected);
   expect(durableJob?.state.nextRunAtMs).toBe(params.enabled === false ? undefined : params.atMs);
   expect(durableJob?.state.runningAtMs).toBeUndefined();
-  const history = readCronTaskRunHistoryPage({
+  const history = readCronRunHistoryPageForTests({
     storeKey: cronStoreKey(params.storePath),
     jobId: params.jobId,
   });
@@ -200,7 +200,7 @@ describe("cron one-shot schedule ownership", () => {
             job: expect.objectContaining({ name: "removed original one-shot" }),
           }),
         ]);
-        const history = readCronTaskRunHistoryPage({
+        const history = readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(store.storePath),
           jobId: original.id,
         });

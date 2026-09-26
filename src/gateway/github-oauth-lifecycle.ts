@@ -43,6 +43,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { assertGitHubCliAvailable } from "./github-cli-preflight.js";
 import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-device-flow.js";
@@ -88,7 +89,9 @@ export function createGitHubOAuthLifecycle(params: {
   getConfig: () => OpenClawConfig;
   getPersistedConfig?: () => OpenClawConfig;
   warn: (message: string) => void;
+  scheduler: GatewayScheduler;
 }) {
+  const { scheduler } = params;
   const personal = createPersonalGitHubOAuthLifecycle();
   const deviceController = new AbortController();
   const devicePolls = new Map<string, Promise<ToolsGitHubAuthorizePollResult>>();
@@ -100,7 +103,7 @@ export function createGitHubOAuthLifecycle(params: {
   >();
   const pendingCleanup = new Set<string>();
   let maintenance: Promise<void> | undefined;
-  let interval: ReturnType<typeof setInterval> | undefined;
+  let scheduledMaintenance: GatewayScheduledJob[] | undefined;
   let stopping = false;
 
   const queueDeviceCleanup = (requestId: string) => {
@@ -521,13 +524,6 @@ export function createGitHubOAuthLifecycle(params: {
     return maintenance;
   };
 
-  // Each credential owner singleflights independently: personal file cleanup must not delay System refresh.
-  const maintainAll = async (): Promise<void> => {
-    await Promise.all([maintain(), personal.maintain()]).catch((error: unknown) => {
-      params.warn(`GitHub OAuth maintenance failed; will retry: ${formatErrorMessage(error)}`);
-    });
-  };
-
   return {
     personal,
     startAuthorization: async (input: {
@@ -616,26 +612,47 @@ export function createGitHubOAuthLifecycle(params: {
         identity: { ...identity, kind: "oauth" },
       });
     },
-    maintain: maintainAll,
+    maintain: async () => {
+      await Promise.all([maintain(), personal.maintain()]).catch((error: unknown) => {
+        params.warn(`GitHub OAuth maintenance failed; will retry: ${formatErrorMessage(error)}`);
+      });
+    },
     start: () => {
-      if (stopping) {
+      if (stopping || scheduledMaintenance) {
         return;
       }
-      void maintainAll();
-      interval ??= setInterval(() => void maintainAll(), MAINTENANCE_INTERVAL_MS);
-      interval.unref?.();
+      // Personal file cleanup must not delay System/agent refresh.
+      scheduledMaintenance = [
+        scheduler.schedule({
+          id: "maintenance:github-oauth",
+          atMs: scheduler.now(),
+          everyMs: MAINTENANCE_INTERVAL_MS,
+          run: maintain,
+        }),
+        scheduler.schedule({
+          id: "maintenance:github-personal-oauth",
+          atMs: scheduler.now(),
+          everyMs: MAINTENANCE_INTERVAL_MS,
+          run: () =>
+            personal.maintain().catch((error: unknown) => {
+              params.warn(
+                `GitHub OAuth maintenance failed; will retry: ${formatErrorMessage(error)}`,
+              );
+            }),
+        }),
+      ];
     },
     stop: async () => {
       clearGitHubCredentialVerificationCache();
       stopping = true;
-      if (interval) {
-        clearInterval(interval);
-        interval = undefined;
+      for (const job of scheduledMaintenance ?? []) {
+        job.cancel();
       }
       deviceController.abort();
       const drain = (async () => {
         await Promise.allSettled([
           personal.stop(),
+          ...(scheduledMaintenance ?? []).map((job) => job.stop()),
           ...(maintenance ? [maintenance] : []),
           ...devicePolls.values(),
           ...refreshes.values(),
