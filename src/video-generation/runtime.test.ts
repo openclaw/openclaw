@@ -846,6 +846,94 @@ describe("video-generation runtime", () => {
     expect(result.normalization).toBeUndefined();
   });
 
+  it("reports unparseable video sizes as ignored instead of dropping them silently", async () => {
+    let seenSize: string | undefined;
+    providers = [
+      {
+        id: "minimax",
+        capabilities: {
+          generate: {
+            supportsSize: true,
+            sizes: ["1280x720", "1920x1080"],
+          },
+        },
+        generateVideo: async (req) => {
+          seenSize = req.size;
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "MiniMax-Hailuo-2.3",
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "minimax/MiniMax-Hailuo-2.3" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a lobster",
+      size: "4k",
+    });
+
+    expect(seenSize).toBeUndefined();
+    expect(result.ignoredOverrides).toEqual([{ key: "size", value: "4k" }]);
+    expect(result.normalization).toBeUndefined();
+  });
+
+  it("keeps supported video sizes while reporting only unrecognized overrides", async () => {
+    let seenRequest:
+      | {
+          size?: string;
+          aspectRatio?: string;
+        }
+      | undefined;
+    providers = [
+      {
+        id: "minimax",
+        capabilities: {
+          generate: {
+            supportsSize: true,
+            sizes: ["1280x720", "1920x1080"],
+            supportsAspectRatio: true,
+            aspectRatios: ["16:9"],
+          },
+        },
+        generateVideo: async (req) => {
+          seenRequest = {
+            size: req.size,
+            aspectRatio: req.aspectRatio,
+          };
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "MiniMax-Hailuo-2.3",
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "minimax/MiniMax-Hailuo-2.3" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a lobster",
+      size: "1600x900",
+      aspectRatio: "16:9",
+    });
+
+    expect(seenRequest).toEqual({ size: "1920x1080", aspectRatio: "16:9" });
+    expect(result.ignoredOverrides).toStrictEqual([]);
+    expect(result.normalization?.size?.requested).toBe("1600x900");
+    expect(result.normalization?.size?.applied).toBe("1920x1080");
+  });
+
   it("uses mode-specific capabilities for image-to-video requests", async () => {
     const requests = useCapturingProvider({
       id: "runway",
