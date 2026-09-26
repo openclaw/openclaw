@@ -1,9 +1,9 @@
 // Openai tests cover tts plugin behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
-  finalizeDebugProxyCapture,
-  getDebugProxyCaptureStore,
-  initializeDebugProxyCapture,
+  createDebugProxyCaptureReaderAsync,
+  finalizeDebugProxyCaptureAsync,
+  initializeDebugProxyCaptureAsync,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -403,15 +403,6 @@ describe("openai tts", () => {
         .fn<typeof fetch>()
         .mockResolvedValue(new Response(Buffer.from("audio-bytes"), { status: 200 }));
 
-      const store = getDebugProxyCaptureStore();
-      store.upsertSession({
-        id: "tts-session",
-        startedAt: Date.now(),
-        mode: "test",
-        sourceScope: "openclaw",
-        sourceProcess: "openclaw",
-      });
-
       await openaiTTS({
         text: "hello",
         apiKey: "test-key",
@@ -422,15 +413,15 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      await vi.waitFor(() => {
-        const events = store.getSessionEvents("tts-session", 10);
-        expect(
-          events.some((event) => event.kind === "request" && event.host === "api.openai.com"),
-        ).toBe(true);
-        expect(
-          events.some((event) => event.kind === "response" && event.host === "api.openai.com"),
-        ).toBe(true);
-      });
+      await finalizeDebugProxyCaptureAsync();
+      const reader = createDebugProxyCaptureReaderAsync({ env: process.env });
+      const events = await reader.getSessionEvents("tts-session", 10);
+      expect(
+        events.some((event) => event.kind === "request" && event.host === "api.openai.com"),
+      ).toBe(true);
+      expect(
+        events.some((event) => event.kind === "response" && event.host === "api.openai.com"),
+      ).toBe(true);
     });
 
     it("does not double-capture TTS exchanges when the global fetch patch is installed", async () => {
@@ -442,7 +433,7 @@ describe("openai tts", () => {
         .fn<typeof fetch>()
         .mockResolvedValue(new Response(Buffer.from("audio-bytes"), { status: 200 }));
 
-      initializeDebugProxyCapture("test");
+      await initializeDebugProxyCaptureAsync("test");
 
       await openaiTTS({
         text: "hello",
@@ -454,19 +445,17 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const store = getDebugProxyCaptureStore();
-      let events: Array<Record<string, unknown>> = [];
       try {
-        await vi.waitFor(() => {
-          events = store
-            .getSessionEvents("tts-patched-session", 10)
-            .filter((event) => event.host === "api.openai.com");
-          expect(events).toHaveLength(2);
-        });
+        await finalizeDebugProxyCaptureAsync();
+        const reader = createDebugProxyCaptureReaderAsync({ env: process.env });
+        const events = (await reader.getSessionEvents("tts-patched-session", 10)).filter(
+          (event) => event.host === "api.openai.com",
+        );
+        expect(events).toHaveLength(2);
         const kinds = events.map((event) => String(event.kind)).toSorted();
         expect(kinds).toEqual(["request", "response"]);
       } finally {
-        finalizeDebugProxyCapture();
+        await finalizeDebugProxyCaptureAsync();
       }
     });
   });

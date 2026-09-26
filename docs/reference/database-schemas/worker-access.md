@@ -53,6 +53,16 @@ behavior.
 
 ## Carry facts, publish after commit
 
+Proxy capture sessions, events, payload compression, queries, and purge operations
+execute through the shared-state worker. Bundled HTTP and WebSocket capture
+callers use asynchronous operations. Each accepted capture retains its original
+database admission through response-body finalization, and orderly CLI and Gateway
+shutdown join capture writes before closing the database. Read-only capture
+inspection preserves missing-state and source-artifact behavior. The shipped
+synchronous proxy-capture SDK remains a deprecated compatibility path; bundled
+callers use the worker APIs. Schemas, stored bytes, retention, and update behavior
+are unchanged.
+
 Placement turn claims and releases execute through the shared-state writer,
 including their coordinator acquisition. Local turns retain durable claims:
 cloud dispatch closes admission and joins their settlement before preparing the

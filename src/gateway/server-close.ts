@@ -20,6 +20,7 @@ import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-err
 import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -669,6 +670,7 @@ async function closeGatewayResources(
           // Releasing agent leases still writes shared state; keep its owner alive until then.
           await closeOpenClawAgentDatabasesAsync();
           if (mediaCleanupStopResult !== undefined) {
+            await finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure);
             await closePluginStateDatabaseAsync();
           }
           try {

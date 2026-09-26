@@ -2,29 +2,36 @@
 import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
-import {
-  isHeadersLike,
-  normalizeRequestInitHeadersForFetch,
-  type HeadersLike,
-} from "../infra/fetch-headers.js";
-import { withResponseBodyTimeout } from "../infra/http-response-body-timeout.js";
+import { isHeadersLike } from "../infra/fetch-headers.js";
 import {
   hasRegisteredSecretValuesForRedaction,
   redactRegisteredSecretValues,
 } from "../logging/secret-redaction-registry.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEnabledDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
+import { installDebugProxyGlobalFetchPatch } from "./runtime-fetch-patch.js";
 import {
-  hasDebugProxyFetchPatch,
-  registerDebugProxyFetchPatch,
   reportCapturePersistenceFailure,
+  observeCaptureWrite,
+  getAsyncCaptureStore,
+  recordCaptureEventAsync,
+  sequenceCaptureWrite,
+  runCaptureOperation,
   resolveCaptureOwner,
-  resolveDebugProxyFetchTransport,
+  resolveCaptureOwnerForTransport,
   resolveRuntimeDeps,
-  uninstallDebugProxyGlobalFetchPatch,
   type CaptureOwner,
+  type DebugProxyCaptureAsyncRuntimeDeps,
   type DebugProxyCaptureRuntimeDeps,
 } from "./runtime-owner.js";
+import {
+  readCapturedResponseBodyBounded,
+  type CapturedResponseBodyResult,
+  type HttpCaptureErrorParams,
+  type HttpCaptureParams,
+} from "./runtime-response-body.js";
+import type { AsyncDebugProxyCaptureStore } from "./store.async.js";
 import { safeJsonString } from "./store.sqlite.js";
 import type {
   CaptureDirection,
@@ -35,194 +42,13 @@ import type {
 
 export {
   finalizeDebugProxyCapture,
+  finalizeDebugProxyCaptureAsync,
   isDebugProxyGlobalFetchPatchInstalled,
   resolveDebugProxyFetchTransport,
   type DebugProxyCaptureRuntimeDeps,
 } from "./runtime-owner.js";
 
 const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]", "utf8");
-// Cap captured response bodies so debug proxy capture cannot be turned into an
-// out-of-memory vector. The patched global fetch tees every outbound response
-// through clone(), so a single large (or hostile, effectively endless) provider
-// response would otherwise be buffered fully into memory just to record it.
-const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
-// The byte cap bounds how much a capture can buffer; this bounds how long it can
-// wait for the next byte. Without it a remote that sends headers and then stalls
-// keeps the capture branch of the clone() tee readable forever, and a tee branch
-// only settles once both branches cancel or the source reaches EOF — so the
-// caller's own cancellation, and the transport release that follows it, wait on
-// a diagnostic read. Matches the idle bounds the shared body readers already
-// take (src/infra/http-body.ts).
-const CAPTURED_RESPONSE_BODY_IDLE_TIMEOUT_MS = 10_000;
-
-/** Distinguishes the capture deadline from a genuine response-stream failure. */
-class CaptureReadIdleTimeoutError extends Error {}
-
-type CapturedResponseBodyResult =
-  | { status: "captured"; buffer: Buffer }
-  | { status: "stalled" | "finalized"; buffer: Buffer }
-  | { status: "failed"; buffer: Buffer; error: unknown }
-  | { status: "too-large" | "unavailable" };
-
-// Reads a cloned capture response body under a byte cap. Oversized or
-// non-streaming Response-like bodies return a metadata-only status instead of
-// allocating the full body.
-//
-// Unlike media-core's readResponseWithLimit this never awaits reader.cancel():
-// the body here is one branch of a Response.clone() tee whose sibling (the
-// caller-facing response) is still live, and cancelling such a branch never
-// settles (it only resolves once BOTH branches cancel). Awaiting it would hang
-// the capture pipeline and retain the buffered prefix forever, so we cancel
-// fire-and-forget, mirroring src/agents/tools/web-shared.ts#readResponseText.
-function readCapturedResponseBodyBounded(
-  response: Response,
-  maxBytes: number,
-  owner: CaptureOwner,
-  record: (result: CapturedResponseBodyResult) => void,
-  signal?: AbortSignal,
-): void {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let chunks: Buffer[] = [];
-  let total = 0;
-  let finished = false;
-  let canceled = false;
-  let detachAbort = () => {};
-  const cancel = (reason?: unknown) => {
-    if (!reader || canceled) {
-      return;
-    }
-    canceled = true;
-    // A clone is one tee branch: awaiting cancel can wait for the live caller.
-    try {
-      void reader.cancel(reason).catch(() => undefined);
-    } catch (error) {
-      owner.errors.push(error);
-    }
-  };
-  const release = () => {
-    try {
-      reader?.releaseLock();
-    } catch {
-      // A pending read releases its lock when the canceled read settles.
-    }
-  };
-  const finish = (result: CapturedResponseBodyResult) => {
-    if (finished) {
-      return;
-    }
-    finished = true;
-    detachAbort();
-    owner.pending.delete(finalize);
-    try {
-      if (owner.store.isClosed) {
-        throw new Error("Capture store closed before its response could be finalized.");
-      }
-      record(result);
-    } catch (error) {
-      // Persistence failure is not a second stream error. Preserve it for close.
-      reportCapturePersistenceFailure(owner, error);
-    } finally {
-      chunks = [];
-      cancel();
-      release();
-    }
-  };
-  const finalize = () => finish({ status: "finalized", buffer: Buffer.concat(chunks, total) });
-  owner.pending.add(finalize);
-  if (signal) {
-    const onAbort = () => {
-      // Bun can deliver the caller's abort in the same turn as a clean body
-      // EOF. Give the pending stream read one poll turn to record that EOF.
-      setTimeout(() => {
-        if (finished) {
-          return;
-        }
-        finish({
-          status: "failed",
-          buffer: Buffer.concat(chunks, total),
-          error:
-            signal.reason instanceof Error
-              ? signal.reason
-              : new Error("Response capture aborted", { cause: signal.reason }),
-        });
-      }, 0);
-    };
-    if (signal.aborted) {
-      onAbort();
-    } else {
-      signal.addEventListener("abort", onAbort, { once: true });
-      detachAbort = () => signal.removeEventListener("abort", onAbort);
-    }
-  }
-  if (finished) {
-    return;
-  }
-  void (async () => {
-    try {
-      const clone = response.clone();
-      const body = clone.body;
-      if (!body || typeof body.getReader !== "function") {
-        finish(
-          clone instanceof Response && clone.body === null
-            ? { status: "captured", buffer: Buffer.alloc(0) }
-            : { status: "unavailable" },
-        );
-        return;
-      }
-      reader = body.getReader();
-      for (;;) {
-        if (finished || !owner.active) {
-          return;
-        }
-        const { done, value } = await withResponseBodyTimeout({
-          timeoutMs: CAPTURED_RESPONSE_BODY_IDLE_TIMEOUT_MS,
-          onTimeout: ({ timeoutMs }) =>
-            new CaptureReadIdleTimeoutError(`capture read stalled: no data for ${timeoutMs}ms`),
-          cancel: async (error) => cancel(error),
-          read: () => reader!.read(),
-        });
-        // Finalize may have synchronously recorded and closed this exact store.
-        if (finished || !owner.active) {
-          return;
-        }
-        if (done) {
-          finish({ status: "captured", buffer: Buffer.concat(chunks, total) });
-          return;
-        }
-        if (!value?.length) {
-          continue;
-        }
-        if (total + value.length > maxBytes) {
-          finish({ status: "too-large" });
-          return;
-        }
-        chunks.push(Buffer.from(value));
-        total += value.length;
-      }
-    } catch (error) {
-      if (!finished && owner.active) {
-        finish(
-          error instanceof CaptureReadIdleTimeoutError
-            ? { status: "stalled", buffer: Buffer.concat(chunks, total) }
-            : { status: "failed", buffer: Buffer.concat(chunks, total), error },
-        );
-      }
-    } finally {
-      release();
-    }
-  })();
-}
-
-function parseDeclaredCaptureContentLength(raw: string | null | undefined): bigint | undefined {
-  if (raw === null || raw === undefined) {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return undefined;
-  }
-  return BigInt(trimmed);
-}
 
 function protocolFromUrl(rawUrl: string): CaptureProtocol {
   try {
@@ -240,19 +66,6 @@ function protocolFromUrl(rawUrl: string): CaptureProtocol {
   } catch {
     return "http";
   }
-}
-
-function resolveUrlString(input: RequestInfo | URL): string | null {
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if (typeof input === "string") {
-    return input;
-  }
-  if (typeof Request !== "undefined" && input instanceof Request) {
-    return input.url;
-  }
-  return null;
 }
 
 function redactCaptureUrl(rawUrl: string): string {
@@ -371,95 +184,7 @@ function createHttpCaptureEventBase(params: {
   };
 }
 
-function installDebugProxyGlobalFetchPatch(
-  owner: CaptureOwner,
-  deps: DebugProxyCaptureRuntimeDeps = {},
-): void {
-  const runtime = resolveRuntimeDeps(deps);
-  const admission = owner.admission;
-  const fetchTarget = runtime.fetchTarget;
-  if (typeof fetchTarget.fetch !== "function") {
-    return;
-  }
-  if (hasDebugProxyFetchPatch(fetchTarget, admission)) {
-    return;
-  }
-  uninstallDebugProxyGlobalFetchPatch(deps);
-  // Patch only once per target and keep the original fetch for deterministic
-  // teardown in tests and nested capture sessions.
-  const fetchImpl = fetchTarget.fetch;
-  const originalFetch = resolveDebugProxyFetchTransport(fetchImpl).bind(fetchTarget);
-  const patchedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = resolveUrlString(input);
-    const normalizedInit = normalizeRequestInitHeadersForFetch(init);
-    // Retain admission before awaiting transport; a late result cannot join a
-    // replacement capture session or reopen a store closed during shutdown.
-    const admitted = Boolean(admission.current);
-    let response: Response;
-    try {
-      response = await originalFetch(input, normalizedInit);
-    } catch (error) {
-      const current = admission.current;
-      if (admitted && current && url && /^https?:/i.test(url)) {
-        captureOwnedHttpError(
-          {
-            url,
-            method:
-              (typeof Request !== "undefined" && input instanceof Request
-                ? input.method
-                : undefined) ??
-              normalizedInit?.method ??
-              "GET",
-            error,
-            meta: { captureOrigin: "global-fetch" },
-          },
-          current,
-        );
-      }
-      throw error;
-    }
-    const current = admission.current;
-    if (admitted && current && url && /^https?:/i.test(url)) {
-      captureOwnedHttpExchange(
-        {
-          url,
-          method:
-            (typeof Request !== "undefined" && input instanceof Request
-              ? input.method
-              : undefined) ??
-            normalizedInit?.method ??
-            "GET",
-          requestHeaders:
-            (typeof Request !== "undefined" && input instanceof Request
-              ? input.headers
-              : undefined) ??
-            (normalizedInit?.headers as Headers | Record<string, string> | undefined),
-          requestBody:
-            (typeof Request !== "undefined" && input instanceof Request
-              ? (input as Request & { body?: BodyInit | null }).body
-              : undefined) ??
-            (normalizedInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ??
-            null,
-          response,
-          transport: "http",
-          meta: {
-            captureOrigin: "global-fetch",
-            source: current.settings.sourceProcess,
-          },
-        },
-        current,
-      );
-    }
-    return response;
-  };
-  const mockState = (fetchImpl as typeof globalThis.fetch & { mock?: unknown }).mock;
-  if (typeof mockState === "object" && mockState !== null) {
-    // Preserve Vitest mock metadata when patching mocked fetch targets.
-    (patchedFetch as typeof globalThis.fetch & { mock?: unknown }).mock = mockState;
-  }
-  registerDebugProxyFetchPatch(fetchTarget, originalFetch, patchedFetch, admission);
-}
-
+/** @deprecated Use initializeDebugProxyCaptureAsync for worker-backed capture. */
 export function initializeDebugProxyCapture(
   mode: string,
   resolved?: DebugProxySettings,
@@ -484,22 +209,8 @@ export function initializeDebugProxyCapture(
     sourceProcess: settings.sourceProcess,
     proxyUrl: settings.proxyUrl,
   });
-  installDebugProxyGlobalFetchPatch(owner, deps);
+  installDebugProxyGlobalFetchPatch(owner, captureInstalledFetch, deps);
 }
-
-type HttpCaptureParams = {
-  url: string;
-  method: string;
-  requestHeaders?: HeadersLike | Record<string, string> | undefined;
-  requestBody?: BodyInit | Buffer | string | null;
-  response: Response;
-  signal?: AbortSignal;
-  transport?: "http" | "sse";
-  flowId?: string;
-  meta?: Record<string, unknown>;
-};
-
-type HttpCaptureErrorParams = Omit<HttpCaptureParams, "response"> & { error: unknown };
 
 /** Internal fetch seams retain this admission before awaiting network work. */
 export function prepareHttpCapture(
@@ -517,15 +228,16 @@ export function prepareHttpCapture(
     ? (params: HttpCaptureParams | HttpCaptureErrorParams) => {
         if (admission.current) {
           if ("response" in params) {
-            captureOwnedHttpExchange(params, admission.current);
+            void captureOwnedHttpExchange(params, admission.current);
           } else {
-            captureOwnedHttpError(params, admission.current);
+            void captureOwnedHttpError(params, admission.current);
           }
         }
       }
     : undefined;
 }
 
+/** @deprecated Use captureHttpExchangeAsync and await capture finalization at shutdown. */
 export function captureHttpExchange(
   params: HttpCaptureParams,
   resolved?: DebugProxySettings,
@@ -534,36 +246,115 @@ export function captureHttpExchange(
   prepareHttpCapture(resolved, deps)?.(params);
 }
 
-function captureOwnedHttpError(params: HttpCaptureErrorParams, owner: CaptureOwner): void {
+function captureInstalledFetch(
+  owner: CaptureOwner,
+  params: HttpCaptureParams | HttpCaptureErrorParams,
+) {
+  return runOwnedCapture(owner, owner.usedAsync, (execution) =>
+    "response" in params
+      ? captureOwnedHttpExchange(params, owner, execution)
+      : captureOwnedHttpError(params, owner, execution),
+  );
+}
+
+type CaptureExecution =
+  | { asynchronous: false }
+  | { asynchronous: true; store: AsyncDebugProxyCaptureStore };
+
+function runOwnedCapture(
+  owner: CaptureOwner,
+  asynchronous: boolean,
+  capture: (execution: CaptureExecution) => void | Promise<void>,
+): void | Promise<void> {
+  if (!asynchronous) {
+    try {
+      owner.maintenanceScope?.assertAdmission();
+    } catch (error) {
+      reportCapturePersistenceFailure(owner, error);
+      return;
+    }
+    return capture({ asynchronous: false });
+  }
+  try {
+    owner.maintenanceScope?.assertAdmission();
+    return observeCaptureWrite(
+      owner,
+      runCaptureOperation(owner, async (store) => {
+        await capture({ asynchronous: true, store });
+      }),
+    );
+  } catch (error) {
+    const failed = createDeferredCore();
+    failed.reject(error);
+    return observeCaptureWrite(owner, failed.promise);
+  }
+}
+
+function writeCaptureEvent(
+  owner: CaptureOwner,
+  event: CaptureEventRecord,
+  payload: Parameters<typeof recordCaptureEventAsync>[2],
+  execution: CaptureExecution,
+): void | Promise<void> {
+  if (execution.asynchronous) {
+    return recordCaptureEventAsync(owner, event, payload, execution.store);
+  }
+  const store = owner.store;
+  const fields = payload === undefined ? {} : owner.runtime.persistEventPayload(store, payload);
+  store.recordEvent({ ...event, ...fields });
+}
+
+function captureOwnedHttpError(
+  params: HttpCaptureErrorParams,
+  owner: CaptureOwner,
+  execution: CaptureExecution = { asynchronous: false },
+): void | Promise<void> {
+  const asynchronous = execution.asynchronous;
   try {
     const captureUrl = redactCaptureUrl(params.url);
-    owner.store.recordEvent({
-      ...createHttpCaptureEventBase({
-        settings: owner.settings,
-        rawUrl: captureUrl,
-        url: new URL(captureUrl),
-        transport: params.transport,
-        direction: "local",
-        kind: "error",
-        flowId: params.flowId ?? randomUUID(),
-        method: params.method,
-      }),
-      errorText: redactCaptureText(
-        params.error instanceof Error ? params.error.message : String(params.error),
-      ),
-      metaJson: redactedCaptureJson(params.meta, owner.runtime.safeJsonString),
-    });
+    return writeCaptureEvent(
+      owner,
+      {
+        ...createHttpCaptureEventBase({
+          settings: owner.settings,
+          rawUrl: captureUrl,
+          url: new URL(captureUrl),
+          transport: params.transport,
+          direction: "local",
+          kind: "error",
+          flowId: params.flowId ?? randomUUID(),
+          method: params.method,
+        }),
+        errorText: redactCaptureText(
+          params.error instanceof Error ? params.error.message : String(params.error),
+        ),
+        metaJson: redactedCaptureJson(params.meta, owner.runtime.safeJsonString),
+      },
+      undefined,
+      execution,
+    );
   } catch (error) {
+    if (asynchronous) {
+      throw error;
+    }
     // Diagnostic persistence cannot replace the caller's transport rejection.
     reportCapturePersistenceFailure(owner, error);
   }
 }
 
-function captureOwnedHttpExchange(params: HttpCaptureParams, owner: CaptureOwner): void {
-  const { settings, runtime, store } = owner;
+function captureOwnedHttpExchange(
+  params: HttpCaptureParams,
+  owner: CaptureOwner,
+  execution: CaptureExecution = { asynchronous: false },
+): void | Promise<void> {
+  const asynchronous = execution.asynchronous;
+  const { settings, runtime } = owner;
   const flowId = params.flowId ?? randomUUID();
   const captureUrl = redactCaptureUrl(params.url);
   const url = new URL(captureUrl);
+  const method = params.method;
+  const transport = params.transport;
+  const responseStatus = params.response.status;
   const requestBody =
     typeof params.requestBody === "string" || Buffer.isBuffer(params.requestBody)
       ? params.requestBody
@@ -581,132 +372,170 @@ function captureOwnedHttpExchange(params: HttpCaptureParams, owner: CaptureOwner
       : undefined;
   const responseContentType =
     rawResponseContentType === undefined ? undefined : redactCaptureText(rawResponseContentType);
+  let responseHeadersJson: string | undefined;
+  let metaJson: string | undefined;
+  let meta: unknown;
+  let requestWrite: void | Promise<void>;
   try {
-    const requestPayload = runtime.persistEventPayload(store, {
-      data: redactCapturePayload(requestBody),
-      contentType: requestContentType,
-    });
-    store.recordEvent({
-      ...createHttpCaptureEventBase({
-        settings,
-        rawUrl: captureUrl,
-        url,
-        transport: params.transport,
-        direction: "outbound",
-        kind: "request",
-        flowId,
-        method: params.method,
-      }),
-      contentType: requestContentType,
-      headersJson: runtime.safeJsonString(
-        redactedCaptureHeaders(
-          params.requestHeaders,
-          Array.isArray(params.meta?.sensitiveRequestHeaderNames)
-            ? params.meta.sensitiveRequestHeaderNames.filter(
-                (name): name is string => typeof name === "string",
-              )
-            : undefined,
+    responseHeadersJson =
+      params.response.headers && typeof params.response.headers.entries === "function"
+        ? runtime.safeJsonString(redactedCaptureHeaders(params.response.headers))
+        : undefined;
+    // Metadata must not change while response reading or cold worker admission awaits.
+    metaJson = redactedCaptureJson(params.meta, runtime.safeJsonString);
+    meta = metaJson === undefined ? undefined : JSON.parse(metaJson);
+    requestWrite = writeCaptureEvent(
+      owner,
+      {
+        ...createHttpCaptureEventBase({
+          settings,
+          rawUrl: captureUrl,
+          url,
+          transport,
+          direction: "outbound",
+          kind: "request",
+          flowId,
+          method,
+        }),
+        contentType: requestContentType,
+        headersJson: runtime.safeJsonString(
+          redactedCaptureHeaders(
+            params.requestHeaders,
+            Array.isArray(params.meta?.sensitiveRequestHeaderNames)
+              ? params.meta.sensitiveRequestHeaderNames.filter(
+                  (name): name is string => typeof name === "string",
+                )
+              : undefined,
+          ),
         ),
-      ),
-      metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
-      ...requestPayload,
-    });
+        metaJson,
+      },
+      { data: redactCapturePayload(requestBody), contentType: requestContentType },
+      execution,
+    );
   } catch (error) {
+    if (asynchronous) {
+      throw error;
+    }
     reportCapturePersistenceFailure(owner, error);
     return;
   }
+  const completion = asynchronous ? createDeferredCore() : undefined;
+  const requestSettled = asynchronous ? Promise.resolve(requestWrite) : undefined;
+  if (completion && requestSettled) {
+    void requestSettled.catch(completion.reject);
+  }
   const recordTerminal = (result: CapturedResponseBodyResult) => {
-    const failed = result.status === "failed";
-    // Join first, then redact: secrets and UTF-8 code points can cross chunks.
-    const payload =
-      "buffer" in result
-        ? runtime.persistEventPayload(store, {
-            data: redactCapturePayload(result.buffer),
-            contentType: responseContentType,
-          })
-        : {};
-    store.recordEvent({
-      ...createHttpCaptureEventBase({
-        settings,
-        rawUrl: captureUrl,
-        url,
-        transport: params.transport,
-        direction: failed ? "local" : "inbound",
-        kind: failed ? "error" : "response",
-        flowId,
-        method: params.method,
-      }),
-      status: params.response.status,
-      contentType: responseContentType,
-      headersJson:
-        params.response.headers && typeof params.response.headers.entries === "function"
-          ? runtime.safeJsonString(redactedCaptureHeaders(params.response.headers))
-          : undefined,
-      errorText: failed
-        ? redactCaptureText(
-            result.error instanceof Error ? result.error.message : String(result.error),
-          )
-        : undefined,
-      metaJson: redactedCaptureJson(
-        result.status === "captured"
-          ? params.meta
-          : {
-              ...params.meta,
-              bodyCapture: result.status,
-              ...(failed ? { stage: "response-body" } : {}),
-            },
-        runtime.safeJsonString,
-      ),
-      ...payload,
-    });
-  };
-  const recordMetadata = (status: "unavailable" | "too-large") => {
     try {
-      recordTerminal({ status });
+      const failed = result.status === "failed";
+      const event: CaptureEventRecord = {
+        ...createHttpCaptureEventBase({
+          settings,
+          rawUrl: captureUrl,
+          url,
+          transport,
+          direction: failed ? "local" : "inbound",
+          kind: failed ? "error" : "response",
+          flowId,
+          method,
+        }),
+        status: responseStatus,
+        contentType: responseContentType,
+        headersJson: responseHeadersJson,
+        errorText: failed
+          ? redactCaptureText(
+              result.error instanceof Error ? result.error.message : String(result.error),
+            )
+          : undefined,
+        metaJson:
+          result.status === "captured"
+            ? metaJson
+            : redactedCaptureJson(
+                Object.assign({}, meta, {
+                  bodyCapture: result.status,
+                  ...(failed ? { stage: "response-body" } : {}),
+                }),
+                runtime.safeJsonString,
+              ),
+      };
+      // Join first, then redact: secrets and UTF-8 code points can cross chunks.
+      const payload =
+        "buffer" in result
+          ? { data: redactCapturePayload(result.buffer), contentType: responseContentType }
+          : undefined;
+      if (completion && requestSettled) {
+        // The reader starts promptly; only terminal persistence waits for the request.
+        // A failed request suppresses its terminal event as in the synchronous path.
+        void requestSettled
+          .then(() => writeCaptureEvent(owner, event, payload, execution))
+          .then(completion.resolve, completion.reject);
+      } else {
+        void writeCaptureEvent(owner, event, payload, execution);
+      }
     } catch (error) {
-      reportCapturePersistenceFailure(owner, error);
+      if (completion) {
+        completion.reject(error);
+      } else {
+        throw error;
+      }
     }
   };
-  if (typeof params.response.clone !== "function") {
-    // Some Response-like objects cannot be cloned. Still record status/headers
-    // rather than forcing capture to consume or mutate the original response.
-    recordMetadata("unavailable");
-    return;
-  }
-  // Fast path: when the provider declares an oversized Content-Length, skip the
-  // body entirely instead of buffering it. Missing/chunked lengths fall through
-  // to the bounded streaming read below, which cancels on overflow.
-  const declaredLength = parseDeclaredCaptureContentLength(
-    typeof params.response.headers?.get === "function"
-      ? params.response.headers.get("content-length")
-      : undefined,
-  );
-  if (declaredLength !== undefined && declaredLength > BigInt(MAX_CAPTURED_RESPONSE_BODY_BYTES)) {
-    recordMetadata("too-large");
-    return;
-  }
+  // This starts and clones synchronously, before the caller can consume the response.
   readCapturedResponseBodyBounded(
     params.response,
-    MAX_CAPTURED_RESPONSE_BODY_BYTES,
     owner,
     recordTerminal,
     params.signal,
+    asynchronous,
+  );
+  return completion?.promise;
+}
+
+type WsCaptureParams = {
+  url: string;
+  direction: "outbound" | "inbound" | "local";
+  kind: "ws-open" | "ws-frame" | "ws-close" | "error";
+  flowId: string;
+  payload?: string | Buffer;
+  closeCode?: number;
+  errorText?: string;
+  meta?: Record<string, unknown>;
+};
+
+function captureOwnedWsEvent(
+  params: WsCaptureParams,
+  owner: CaptureOwner,
+  execution: CaptureExecution,
+): void | Promise<void> {
+  const { settings, runtime } = owner;
+  const captureUrl = redactCaptureUrl(params.url);
+  const url = new URL(captureUrl);
+  return writeCaptureEvent(
+    owner,
+    {
+      sessionId: settings.sessionId,
+      ts: Date.now(),
+      sourceScope: "openclaw",
+      sourceProcess: settings.sourceProcess,
+      protocol: protocolFromUrl(captureUrl),
+      direction: params.direction,
+      kind: params.kind,
+      flowId: params.flowId,
+      host: url.host,
+      path: `${url.pathname}${url.search}`,
+      closeCode: params.closeCode,
+      errorText: params.errorText === undefined ? undefined : redactCaptureText(params.errorText),
+      metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
+    },
+    { data: redactCapturePayload(params.payload), contentType: "application/json" },
+    execution,
   );
 }
 
-// Websocket seams call this directly because Node fetch patching cannot observe
-// frame traffic.
+// Websocket seams call this directly because Node fetch patching cannot observe frame traffic.
+/** @deprecated Use captureWsEventAsync and await capture finalization at shutdown. */
 export function captureWsEvent(
-  params: {
-    url: string;
-    direction: "outbound" | "inbound" | "local";
-    kind: "ws-open" | "ws-frame" | "ws-close" | "error";
-    flowId: string;
-    payload?: string | Buffer;
-    closeCode?: number;
-    errorText?: string;
-    meta?: Record<string, unknown>;
-  },
+  params: WsCaptureParams,
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
@@ -717,30 +546,124 @@ export function captureWsEvent(
   const owner = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
     explicit: resolved !== undefined,
   });
+  if (owner) {
+    void captureOwnedWsEvent(params, owner, { asynchronous: false });
+  }
+}
+
+function runAsyncCapture(
+  resolved: DebugProxySettings | undefined,
+  deps: DebugProxyCaptureAsyncRuntimeDeps,
+  capture: (owner: CaptureOwner, execution: CaptureExecution) => void | Promise<void>,
+): Promise<void> {
+  try {
+    const settings = resolveEnabledDebugProxySettings(resolved);
+    if (!settings) {
+      return Promise.resolve();
+    }
+    const owner = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
+      explicit: resolved !== undefined,
+      asynchronous: true,
+    });
+    return owner
+      ? Promise.resolve(runOwnedCapture(owner, true, (execution) => capture(owner, execution)))
+      : Promise.resolve();
+  } catch (error) {
+    // Refusal precedes claim registration; preserve the rejection without an
+    // unhandled EventEmitter return or attaching work to a different claim.
+    const failure = createDeferredCore();
+    failure.reject(error);
+    void failure.promise.catch(() => undefined);
+    return failure.promise;
+  }
+}
+
+export function captureWsEventAsync(
+  params: WsCaptureParams,
+  resolved?: DebugProxySettings,
+  deps: DebugProxyCaptureAsyncRuntimeDeps = {},
+): Promise<void> {
+  return runAsyncCapture(resolved, deps, (owner, execution) =>
+    captureOwnedWsEvent(params, owner, execution),
+  );
+}
+
+export function captureHttpExchangeAsync(
+  params: HttpCaptureParams,
+  resolved?: DebugProxySettings,
+  deps: DebugProxyCaptureAsyncRuntimeDeps = {},
+): Promise<void> {
+  return runAsyncCapture(resolved, deps, (owner, execution) =>
+    captureOwnedHttpExchange(params, owner, execution),
+  );
+}
+
+export async function initializeDebugProxyCaptureAsync(
+  mode: string,
+  resolved?: DebugProxySettings,
+  deps: DebugProxyCaptureAsyncRuntimeDeps = {},
+): Promise<void> {
+  const settings = resolveEnabledDebugProxySettings(resolved);
+  if (!settings) {
+    return;
+  }
+  const owner = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
+    initialize: true,
+    explicit: resolved !== undefined,
+    asynchronous: true,
+  });
   if (!owner) {
     return;
   }
-  const { runtime, store } = owner;
-  const captureUrl = redactCaptureUrl(params.url);
-  const url = new URL(captureUrl);
-  const payload = runtime.persistEventPayload(store, {
-    data: redactCapturePayload(params.payload),
-    contentType: "application/json",
-  });
-  store.recordEvent({
-    sessionId: settings.sessionId,
-    ts: Date.now(),
-    sourceScope: "openclaw",
+  owner.maintenanceScope?.assertAdmission();
+  const session = {
+    id: settings.sessionId,
+    startedAt: Date.now(),
+    mode,
+    sourceScope: "openclaw" as const,
     sourceProcess: settings.sourceProcess,
-    protocol: protocolFromUrl(captureUrl),
-    direction: params.direction,
-    kind: params.kind,
-    flowId: params.flowId,
-    host: url.host,
-    path: `${url.pathname}${url.search}`,
-    closeCode: params.closeCode,
-    errorText: params.errorText === undefined ? undefined : redactCaptureText(params.errorText),
-    metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
-    ...payload,
-  });
+    proxyUrl: settings.proxyUrl,
+  };
+  await observeCaptureWrite(
+    owner,
+    runCaptureOperation(owner, (store) =>
+      sequenceCaptureWrite(owner, store, () => store.upsertSession(session)),
+    ),
+  );
+  if (owner.active) {
+    installDebugProxyGlobalFetchPatch(owner, captureInstalledFetch, deps);
+  }
+}
+
+export function prepareHttpCaptureForTransport() {
+  const owner = resolveCaptureOwnerForTransport(undefined, {}, { asynchronous: true });
+  return owner ? prepareOwnedHttpCapture(owner) : undefined;
+}
+
+function prepareOwnedHttpCapture(owner: CaptureOwner) {
+  const admission = owner.admission;
+  const ready = observeCaptureWrite(
+    owner,
+    getAsyncCaptureStore(owner).then(() => undefined),
+  );
+  // Reservation happens synchronously; a failed reservation must not be retried
+  // by a later transport callback. Commands on an admitted lease await readiness.
+  const reserved = owner.asyncLease !== undefined;
+  const capture = (params: HttpCaptureParams | HttpCaptureErrorParams): Promise<void> => {
+    const current = admission.current;
+    if (!current) {
+      return Promise.resolve();
+    }
+    if (!reserved) {
+      return ready;
+    }
+    return Promise.resolve(
+      runOwnedCapture(current, true, (execution) =>
+        "response" in params
+          ? captureOwnedHttpExchange(params, current, execution)
+          : captureOwnedHttpError(params, current, execution),
+      ),
+    );
+  };
+  return capture;
 }

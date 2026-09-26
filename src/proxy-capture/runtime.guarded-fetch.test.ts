@@ -5,20 +5,24 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "../state/openclaw-state-db-cache.js";
 import { resolveDebugProxySettings } from "./env.js";
-import { finalizeDebugProxyCapture, initializeDebugProxyCapture } from "./runtime.js";
-import { acquireDebugProxyCaptureStore, closeDebugProxyCaptureStore } from "./store.sqlite.js";
+import { finalizeDebugProxyCaptureAsync, initializeDebugProxyCaptureAsync } from "./runtime.js";
+import { createDebugProxyCaptureReaderAsync } from "./store-readonly.async.js";
+import { acquireDebugProxyCaptureStoreAsync } from "./store.async.js";
 
-afterEach(() => {
-  closeDebugProxyCaptureStore();
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function captureRoots() {
+async function captureRoots() {
   const roots = [tempDirs.make("capture-guard-a-"), tempDirs.make("capture-guard-b-")];
   const originalFetch = globalThis.fetch;
   vi.stubGlobal("fetch", originalFetch);
@@ -27,29 +31,41 @@ function captureRoots() {
   vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
   vi.stubEnv("OPENCLAW_STATE_DIR", roots[0]);
   const first = resolveDebugProxySettings();
-  initializeDebugProxyCapture("first", first);
-  const firstLease = acquireDebugProxyCaptureStore();
+  await initializeDebugProxyCaptureAsync("first", first);
+  const firstLease = await acquireDebugProxyCaptureStoreAsync();
   const savedWrapper = globalThis.fetch;
   vi.stubEnv("OPENCLAW_STATE_DIR", roots[1]);
   const second = resolveDebugProxySettings();
-  const secondLease = acquireDebugProxyCaptureStore();
+  const secondLease = await acquireDebugProxyCaptureStoreAsync();
   expect(second.sessionId).toBe(first.sessionId);
   const settings = [first, second];
   const leases = [firstLease, secondLease];
-  const recordings = leases.map(({ store }) => vi.spyOn(store, "recordEvent"));
+  let closing: Promise<void> | undefined;
   return {
     roots,
     settings,
     leases,
-    recordings,
     originalFetch,
     savedWrapper,
+    readEvents: () =>
+      Promise.all(
+        roots.map((root, index) =>
+          createDebugProxyCaptureReaderAsync({
+            env: { ...process.env, OPENCLAW_STATE_DIR: root },
+          })
+            .getSessionEvents(settings[index]!.sessionId)
+            .then((events) => events.toReversed()),
+        ),
+      ),
     close() {
-      for (const [index, lease] of leases.entries()) {
-        finalizeDebugProxyCapture(settings[index]);
-        lease.release();
-        closeOpenClawStateDatabaseByPath(lease.store.dbPath);
-      }
+      closing ??= (async () => {
+        for (const [index, lease] of leases.entries()) {
+          await finalizeDebugProxyCaptureAsync(settings[index]);
+          await lease.release();
+          await closeOpenClawStateDatabaseByPathAsync(lease.store.dbPath);
+        }
+      })();
+      return closing;
     },
   };
 }
@@ -62,11 +78,11 @@ describe("guarded capture ownership", () => {
     "caller-wrapper",
     "capture-disabled",
   ] as const)("uses one capture owner through %s", async (mode) => {
-    const fixture = captureRoots();
+    const fixture = await captureRoots();
     if (mode === "same-owner") {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixture.roots[0]);
     } else if (mode === "saved-wrapper") {
-      initializeDebugProxyCapture("second", fixture.settings[1]);
+      await initializeDebugProxyCaptureAsync("second", fixture.settings[1]);
     }
     const callerFetch = vi.fn<typeof fetch>((input, init) => fixture.originalFetch(input, init));
     try {
@@ -99,10 +115,8 @@ describe("guarded capture ownership", () => {
         },
       );
       // Finalization settles any diagnostic clone before checking all writes.
-      fixture.close();
-      const events = fixture.recordings.map((recording) =>
-        recording.mock.calls.map(([event]) => event),
-      );
+      await fixture.close();
+      const events = await fixture.readEvents();
       // Disabling the guard recorder leaves an installed global recorder in control.
       const expected = mode === "capture-disabled" || mode === "same-owner" ? [2, 0] : [0, 2];
       expect(events.map((rows) => rows.length)).toEqual(expected);
@@ -113,14 +127,14 @@ describe("guarded capture ownership", () => {
       }
       expect(callerFetch).toHaveBeenCalledTimes(mode === "caller-wrapper" ? 1 : 0);
     } finally {
-      fixture.close();
+      await fixture.close();
     }
   });
 
   it.each(["guarded", "global"] as const)(
     "records an active transport rejection once through the %s owner",
     async (mode) => {
-      const fixture = captureRoots();
+      const fixture = await captureRoots();
       const arrived = createDeferredCore<ServerResponse>();
       const controller = new AbortController();
       const secret = "fixture-transport-secret";
@@ -151,10 +165,8 @@ describe("guarded capture ownership", () => {
             expect(completed.value).toBeUndefined();
           },
         );
-        fixture.close();
-        const events = fixture.recordings.map((recording) =>
-          recording.mock.calls.map(([event]) => event),
-        );
+        await fixture.close();
+        const events = await fixture.readEvents();
         expect(events.map((rows) => rows.length)).toEqual(mode === "global" ? [1, 0] : [0, 1]);
         const event = events[mode === "global" ? 0 : 1]![0]!;
         expect(event).toMatchObject({
@@ -165,13 +177,13 @@ describe("guarded capture ownership", () => {
           errorText: "caller abort [REDACTED]",
           ...(mode === "guarded" ? { flowId: "guarded-rejection-flow" } : {}),
         });
-        expect(event.status).toBeUndefined();
-        expect(JSON.parse(event.metaJson!)).toMatchObject({
+        expect(event.status).toBeNull();
+        expect(JSON.parse(String(event.metaJson))).toMatchObject({
           captureOrigin: mode === "global" ? "global-fetch" : "guarded-fetch",
         });
       } finally {
         controller.abort();
-        fixture.close();
+        await fixture.close();
       }
     },
   );
@@ -179,11 +191,11 @@ describe("guarded capture ownership", () => {
   it.each(["response", "abort"] as const)(
     "keeps a delayed caller %s while retired admissions stay fenced",
     async (outcome) => {
-      const fixture = captureRoots();
+      const fixture = await captureRoots();
       const arrived = createDeferredCore<ServerResponse>();
       const controller = new AbortController();
       const reason = new Error("fixture caller abort");
-      let replacement: ReturnType<typeof acquireDebugProxyCaptureStore> | undefined;
+      let replacement: Awaited<ReturnType<typeof acquireDebugProxyCaptureStoreAsync>> | undefined;
       try {
         await withServer(
           (request, response) => {
@@ -201,10 +213,9 @@ describe("guarded capture ownership", () => {
               (error: unknown) => ({ value: undefined, error }),
             );
             const response = await arrived.promise;
-            fixture.close();
-            initializeDebugProxyCapture("replacement", fixture.settings[1]);
-            replacement = acquireDebugProxyCaptureStore();
-            const recordReplacement = vi.spyOn(replacement.store, "recordEvent");
+            await fixture.close();
+            await initializeDebugProxyCaptureAsync("replacement", fixture.settings[1]);
+            replacement = await acquireDebugProxyCaptureStoreAsync();
             if (outcome === "abort") {
               controller.abort(reason);
             }
@@ -220,18 +231,18 @@ describe("guarded capture ownership", () => {
               expect(await completed.value!.response.text()).toBe("late response");
               await completed.value!.release();
             }
-            finalizeDebugProxyCapture(fixture.settings[1]);
-            expect(recordReplacement).not.toHaveBeenCalled();
-            expect(fixture.recordings.map((recording) => recording.mock.calls.length)).toEqual([
-              0, 0,
-            ]);
+            await finalizeDebugProxyCaptureAsync(fixture.settings[1]);
+            expect(
+              await replacement.store.getSessionEvents(fixture.settings[1]!.sessionId),
+            ).toEqual([]);
+            expect((await fixture.readEvents()).map((events) => events.length)).toEqual([0, 0]);
           },
         );
       } finally {
         controller.abort();
-        finalizeDebugProxyCapture(fixture.settings[1]);
-        replacement?.release();
-        fixture.close();
+        await finalizeDebugProxyCaptureAsync(fixture.settings[1]);
+        await replacement?.release();
+        await fixture.close();
       }
     },
   );

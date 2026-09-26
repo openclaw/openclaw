@@ -45,11 +45,8 @@ vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
   };
 });
 
-import {
-  closeDebugProxyCaptureStore,
-  getDebugProxyCaptureStore,
-} from "../proxy-capture/store.sqlite.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import * as proxyCliRuntime from "./proxy-cli.runtime.js";
 
 describe("proxy cli runtime", () => {
@@ -106,9 +103,8 @@ describe("proxy cli runtime", () => {
     spawnMock.mockReset();
   });
 
-  afterEach(() => {
-    closeDebugProxyCaptureStore();
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     vi.restoreAllMocks();
     process.exitCode = undefined;
     for (const key of envKeys) {
@@ -486,10 +482,14 @@ describe("proxy cli runtime", () => {
 
     expect(serverStopSpy).toHaveBeenCalledTimes(1);
 
-    const store = getDebugProxyCaptureStore();
-    const [session] = store.listSessions(5);
-    expect(session?.mode).toBe("proxy-run");
-    expect(session?.endedAt).toBeGreaterThanOrEqual(beforeRun);
+    const lease = await acquireDebugProxyCaptureStoreAsync();
+    try {
+      const [session] = await lease.store.listSessions(5);
+      expect(session?.mode).toBe("proxy-run");
+      expect(session?.endedAt).toBeGreaterThanOrEqual(beforeRun);
+    } finally {
+      await lease.release();
+    }
   });
 
   it.each([

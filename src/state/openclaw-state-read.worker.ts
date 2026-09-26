@@ -81,6 +81,7 @@ import {
 } from "./openclaw-state-db-read-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
+import { readCaptureCommand } from "./openclaw-state-read-capture.js";
 import { readStateDiagnosticCommand } from "./openclaw-state-read-diagnostics.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
@@ -185,6 +186,12 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (
+                  command.type === "capture.readOnlyEvents" ||
+                  command.type === "capture.readOnlyBlob"
+                ) {
+                  return readCaptureCommand(db, command);
+                }
                 if (command.type === "agentDatabaseDeletion.snapshot") {
                   return {
                     ok: true,

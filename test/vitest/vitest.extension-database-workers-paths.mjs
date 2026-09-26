@@ -6,6 +6,9 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/openai/binary-transport.test.ts",
+  "extensions/openai/tts.test.ts",
+  "extensions/microsoft/speech-provider.test.ts",
   "extensions/discord/src/durable-delivery.test.ts",
   "extensions/discord/src/monitor/monitor.test.ts",
   "extensions/imessage/src/test-plugin.test.ts",

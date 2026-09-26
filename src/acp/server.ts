@@ -25,6 +25,7 @@ import { GatewayClient } from "../gateway/client.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
@@ -142,11 +143,23 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     onGatewayReadyReject(err instanceof Error ? err : new Error(String(err)));
   };
   const closeStateDatabase = async () => {
+    const errors: unknown[] = [];
+    try {
+      await finalizeActiveDebugProxyCaptures();
+    } catch (error) {
+      errors.push(error);
+    }
     try {
       await closeOpenClawStateDatabaseAsync();
     } catch (err) {
       console.warn(`acp: state database close failed during shutdown: ${formatErrorMessage(err)}`);
-      throw err;
+      errors.push(err);
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "ACP capture and state database shutdown failed.");
     }
   };
 
