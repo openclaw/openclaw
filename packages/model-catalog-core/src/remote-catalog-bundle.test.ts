@@ -167,7 +167,6 @@ describe("remote model catalog v2", () => {
   it.each([
     ["unknown id", ["missing"]],
     ["duplicate id", ["vendor/model", " vendor/model "]],
-    ["over cap", Array.from({ length: 9 }, (_, index) => `model-${index}`)],
     ["empty id", [" "]],
     ["other provider", ["second-only"]],
   ])("rejects recommended models with %s", (_name, recommendedModels) => {
@@ -177,11 +176,6 @@ describe("remote model catalog v2", () => {
         providers: { first: { recommendedModels }, second: {} },
         models: [
           ...validBundleV2.models,
-          ...Array.from({ length: 9 }, (_, index) => ({
-            id: `model-${index}`,
-            provider: "first",
-            pricing: { status: "unknown" },
-          })),
           { id: "second-only", provider: "second", pricing: { status: "unknown" } },
         ],
       }),

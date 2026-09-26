@@ -124,7 +124,7 @@ Provider fields:
 | `defaultUtilityModel` | `string`                 | Optional provider-recommended small model id for short internal utility tasks (titles, progress narration). Used when `agents.defaults.utilityModel` is unset and this provider serves the agent's primary model. |
 | `models`              | `object[]`               | Required model rows. Rows without an `id` are ignored.                                                                                                                                                            |
 
-`recommendedModels` is an optional ordered shortlist of up to eight distinct model
+`recommendedModels` is an optional ordered shortlist of distinct model
 ids from this provider's `models`. Ids are trimmed and must be non-empty. The field
 is reserved for picker ordering and is not yet used. It is published only in catalog
 v2, never v1. Invalid manifest lists are omitted; invalid remote v2 lists are rejected.

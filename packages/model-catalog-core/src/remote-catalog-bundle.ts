@@ -216,7 +216,6 @@ export const remoteModelCatalogBundleV2Schema = remoteModelCatalogBundleSchema
           defaultUtilityModel: z.string().optional(),
           recommendedModels: z
             .array(z.string().trim().min(1))
-            .max(8)
             .refine((ids) => new Set(ids).size === ids.length, "duplicate recommended model id")
             .optional(),
         })

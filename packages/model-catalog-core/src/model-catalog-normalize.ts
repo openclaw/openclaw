@@ -510,7 +510,6 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
     : [];
   const recommendedModels =
     recommended.length > 0 &&
-    recommended.length <= 8 &&
     new Set(recommended).size === recommended.length &&
     recommended.every((id): id is string => Boolean(id) && models.some((model) => model.id === id))
       ? recommended
