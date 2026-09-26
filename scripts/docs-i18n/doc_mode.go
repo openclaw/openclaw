@@ -121,25 +121,11 @@ func findTaggedBodyEnd(text string, bodyStart int) int {
 	if bodyStart < 0 || bodyStart > len(text) {
 		return -1
 	}
-	search := text[bodyStart:]
-	candidate := -1
-	offset := 0
-	for {
-		index := strings.Index(search[offset:], bodyTagEnd)
-		if index == -1 {
-			return candidate
-		}
-		index += offset
-		absolute := bodyStart + index
-		suffix := strings.TrimSpace(text[absolute+len(bodyTagEnd):])
-		if suffix == "" {
-			candidate = absolute
-		}
-		offset = index + len(bodyTagEnd)
-		if offset >= len(search) {
-			return candidate
-		}
+	end := strings.LastIndex(text[bodyStart:], bodyTagEnd)
+	if end < 0 || strings.TrimSpace(text[bodyStart+end+len(bodyTagEnd):]) != "" {
+		return -1
 	}
+	return bodyStart + end
 }
 
 func trimTagNewlines(value string) string {
@@ -164,7 +150,7 @@ func classifyDocOutput(outputPath string, sourceHash string, targetLang string) 
 	if err := yaml.Unmarshal([]byte(frontMatter), &frontData); err != nil {
 		return docOutputNeedsTranslation, nil
 	}
-	storedHash := extractSourceHash(frontData)
+	storedHash := extractI18NString(frontData, "source_hash")
 	if storedHash == "" {
 		return docOutputNeedsTranslation, nil
 	}
@@ -179,7 +165,7 @@ func classifyDocOutput(outputPath string, sourceHash string, targetLang string) 
 		return docOutputNeedsTranslation, nil
 	}
 
-	postprocessVersion := extractPostprocessVersion(frontData)
+	postprocessVersion := extractI18NString(frontData, "postprocess_version")
 	if strings.EqualFold(postprocessVersion, localizedLinkPostprocessVersion) {
 		return docOutputReady, nil
 	}
@@ -187,47 +173,15 @@ func classifyDocOutput(outputPath string, sourceHash string, targetLang string) 
 }
 
 func extractI18NVersion(frontData map[string]any, field string) int {
-	xi, ok := extractXI18N(frontData)
-	if !ok {
-		return 0
-	}
-	value, ok := xi[field].(int)
-	if !ok {
-		return 0
-	}
+	xi, _ := frontData["x-i18n"].(map[string]any)
+	value, _ := xi[field].(int)
 	return value
 }
 
-func extractSourceHash(frontData map[string]any) string {
-	xi, ok := extractXI18N(frontData)
-	if !ok {
-		return ""
-	}
-	value, ok := xi["source_hash"].(string)
-	if !ok {
-		return ""
-	}
+func extractI18NString(frontData map[string]any, field string) string {
+	xi, _ := frontData["x-i18n"].(map[string]any)
+	value, _ := xi[field].(string)
 	return strings.TrimSpace(value)
-}
-
-func extractPostprocessVersion(frontData map[string]any) string {
-	xi, ok := extractXI18N(frontData)
-	if !ok {
-		return ""
-	}
-	value, ok := xi["postprocess_version"].(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(value)
-}
-
-func extractXI18N(frontData map[string]any) (map[string]any, bool) {
-	xi, ok := frontData["x-i18n"].(map[string]any)
-	if ok {
-		return xi, true
-	}
-	return nil, false
 }
 
 func logDocChunkPlan(relPath string, blocks []string, groups [][]string) {

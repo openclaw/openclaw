@@ -349,19 +349,11 @@ load_artifact() {
   }
   trap cleanup_load EXIT
 
-  EXPECTED_IMAGES_JSON="$(
-    printf '%s\0' "${image_refs[@]}" |
-      node -e '
-        const fs = require("node:fs");
-        const refs = fs.readFileSync(0).toString("utf8").split("\0").filter(Boolean);
-        process.stdout.write(JSON.stringify(refs));
-      '
-  )" node - "$manifest_path" > "$validated_path" <<'NODE'
+  node - "$manifest_path" "${image_refs[@]}" > "$validated_path" <<'NODE'
 const fs = require("node:fs");
 
-const [manifestPath] = process.argv.slice(2);
+const [manifestPath, ...expectedRefs] = process.argv.slice(2);
 const value = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-const expectedRefs = JSON.parse(process.env.EXPECTED_IMAGES_JSON);
 const fail = (message) => {
   throw new Error(`invalid shared Docker image artifact: ${message}`);
 };

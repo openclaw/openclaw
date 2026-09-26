@@ -51,10 +51,6 @@ def message_text(message):
     return content_text(message.get("content") or {})
 
 
-def content_kind(message):
-    return (message.get("content") or {}).get("@type", "")
-
-
 class EventRecorder:
     def __init__(self, client, chat_id, record_path, sut_user_id=None):
         self.client = client
@@ -156,7 +152,7 @@ class EventRecorder:
                     "senderId": sender,
                     "isSut": self.sut_user_id is not None and sender == self.sut_user_id,
                     "isOutgoing": bool(message.get("is_outgoing")),
-                    "contentType": content_kind(message),
+                    "contentType": content.get("@type", ""),
                     "textLen": len(text),
                     "text": text,
                     "richMessageIsFull": rich_message.get("is_full") if isinstance(rich_message, dict) else None,
@@ -214,13 +210,14 @@ class EventRecorder:
             # Ack and status reactions arrive here, on the *user's own* message.
             # A bot reacting to its own message produces no update for the user,
             # so probe this by reacting to a message the QA user sent.
-            reactions = (
-                ((update.get("interaction_info") or {}).get("reactions") or {}).get("reactions") or []
-            )
+            reactions = [
+                reaction
+                for reaction in ((update.get("interaction_info") or {}).get("reactions") or {}).get("reactions") or []
+                if isinstance(reaction, dict)
+            ]
             emojis = "".join(
                 (reaction.get("type") or {}).get("emoji", "")
                 for reaction in reactions
-                if isinstance(reaction, dict)
             )
             yield (
                 "reaction",
@@ -232,11 +229,8 @@ class EventRecorder:
                     "reactionCount": sum(
                         int(reaction.get("total_count") or 0)
                         for reaction in reactions
-                        if isinstance(reaction, dict)
                     ),
-                    "reactionTypes": [
-                        reaction.get("type") for reaction in reactions if isinstance(reaction, dict)
-                    ],
+                    "reactionTypes": [reaction.get("type") for reaction in reactions],
                 },
             )
         elif kind == "updateChatAction":
@@ -306,23 +300,12 @@ class EventRecorder:
                     "elapsedMs": e["elapsedMs"],
                     "kind": e["kind"],
                     "messageId": e["messageId"],
-                    "botApiMessageId": e.get("botApiMessageId"),
-                    "textLen": e.get("textLen"),
-                    "contentType": e.get("contentType"),
-                    "senderId": e.get("senderId"),
-                    "isSut": e.get("isSut"),
-                    "isOutgoing": e.get("isOutgoing"),
-                    "replyToMessageId": e.get("replyToMessageId"),
-                    "quoteText": e.get("quoteText"),
-                    "topicType": e.get("topicType"),
-                    "topicId": e.get("topicId"),
-                    "reactionText": e.get("reactionText"),
-                    "reactionCount": e.get("reactionCount"),
-                    "actionType": e.get("actionType"),
-                    "status": e.get("status"),
-                    "buttonText": e.get("buttonText"),
-                    "durationMs": e.get("durationMs"),
-                    "error": e.get("error"),
+                    **{key: e.get(key) for key in (
+                        "botApiMessageId", "textLen", "contentType", "senderId", "isSut",
+                        "isOutgoing", "replyToMessageId", "quoteText", "topicType", "topicId",
+                        "reactionText", "reactionCount", "actionType", "status", "buttonText",
+                        "durationMs", "error",
+                    )},
                 }
                 for e in self.events
             ],

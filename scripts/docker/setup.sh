@@ -50,12 +50,6 @@ require_cmd() {
   fi
 }
 
-run_docker_build() {
-  # Dockerfile uses BuildKit-only syntax (RUN --mount=type=cache). Force
-  # BuildKit so hosts defaulting to the legacy builder do not fail.
-  docker_build_exec "$@"
-}
-
 run_docker_pull() {
   local image="$1"
   openclaw_host_timeout_cmd "$DOCKER_PULL_TIMEOUT" docker pull "$image"
@@ -598,53 +592,35 @@ COMPOSE_ARGS=()
 write_extra_compose() {
   local home_volume="$1"
   shift
-  local mount
-  local gateway_home_mount
-  local gateway_config_mount
-  local gateway_workspace_mount
-  local gateway_auth_profile_secret_mount
-
-  cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
-services:
-  openclaw-gateway:
-    volumes:
-YAML
+  local mount service
+  local home_mounts=()
 
   if [[ -n "$home_volume" ]]; then
-    gateway_home_mount="${home_volume}:/home/node"
-    gateway_config_mount="${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw"
-    gateway_workspace_mount="${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace"
-    gateway_auth_profile_secret_mount="${OPENCLAW_AUTH_PROFILE_SECRET_DIR}:/home/node/.config/openclaw"
-    validate_mount_spec "$gateway_home_mount"
-    validate_mount_spec "$gateway_config_mount"
-    validate_mount_spec "$gateway_workspace_mount"
-    validate_mount_spec "$gateway_auth_profile_secret_mount"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_home_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_config_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_workspace_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_auth_profile_secret_mount")" >>"$EXTRA_COMPOSE_FILE"
+    home_mounts=(
+      "${home_volume}:/home/node"
+      "${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw"
+      "${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace"
+      "${OPENCLAW_AUTH_PROFILE_SECRET_DIR}:/home/node/.config/openclaw"
+    )
   fi
 
-  for mount in "$@"; do
-    validate_mount_spec "$mount"
-    printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
-  done
-
-  cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
-  openclaw-cli:
-    volumes:
-YAML
-
-  if [[ -n "$home_volume" ]]; then
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_home_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_config_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_workspace_mount")" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$(quote_yaml_string "$gateway_auth_profile_secret_mount")" >>"$EXTRA_COMPOSE_FILE"
-  fi
-
-  for mount in "$@"; do
-    validate_mount_spec "$mount"
-    printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
+  printf 'services:\n' >"$EXTRA_COMPOSE_FILE"
+  for service in openclaw-gateway openclaw-cli; do
+    printf '  %s:\n    volumes:\n' "$service" >>"$EXTRA_COMPOSE_FILE"
+    if [[ -n "$home_volume" ]]; then
+      if [[ "$service" == "openclaw-gateway" ]]; then
+        for mount in "${home_mounts[@]}"; do
+          validate_mount_spec "$mount"
+        done
+      fi
+      for mount in "${home_mounts[@]}"; do
+        printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
+      done
+    fi
+    for mount in "$@"; do
+      validate_mount_spec "$mount"
+      printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
+    done
   done
 
   if [[ -n "$home_volume" && "$home_volume" != *"/"* ]]; then
@@ -783,7 +759,7 @@ elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   if [[ "$BUILD_GIT_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
     PROVENANCE_BUILD_ARGS+=(--build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}")
   fi
-  run_docker_build \
+  docker_build_exec \
     "${PROVENANCE_BUILD_ARGS[@]}" \
     --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
     --build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}" \
@@ -898,7 +874,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
 
   if [[ -n "$SANDBOX_ENABLED" && -z "$OFFLINE_MODE" && -f "$sandbox_dockerfile" ]]; then
     echo "Building sandbox image: $DEFAULT_SANDBOX_IMAGE"
-    run_docker_build \
+    docker_build_exec \
       -t "$DEFAULT_SANDBOX_IMAGE" \
       -f "$sandbox_dockerfile" \
       "$ROOT_DIR"
@@ -945,21 +921,14 @@ fi
 if [[ -n "$SANDBOX_ENABLED" ]]; then
   # Enable sandbox in OpenClaw config.
   sandbox_config_ok=true
-  if ! run_runtime_cli current no-deps \
-    config set agents.defaults.sandbox.mode "non-main" >/dev/null; then
-    echo "WARNING: Failed to set agents.defaults.sandbox.mode" >&2
-    sandbox_config_ok=false
-  fi
-  if ! run_runtime_cli current no-deps \
-    config set agents.defaults.sandbox.scope "agent" >/dev/null; then
-    echo "WARNING: Failed to set agents.defaults.sandbox.scope" >&2
-    sandbox_config_ok=false
-  fi
-  if ! run_runtime_cli current no-deps \
-    config set agents.defaults.sandbox.workspaceAccess "none" >/dev/null; then
-    echo "WARNING: Failed to set agents.defaults.sandbox.workspaceAccess" >&2
-    sandbox_config_ok=false
-  fi
+  for sandbox_setting in mode:non-main scope:agent workspaceAccess:none; do
+    sandbox_path="agents.defaults.sandbox.${sandbox_setting%%:*}"
+    if ! run_runtime_cli current no-deps \
+      config set "$sandbox_path" "${sandbox_setting#*:}" >/dev/null; then
+      echo "WARNING: Failed to set $sandbox_path" >&2
+      sandbox_config_ok=false
+    fi
+  done
 
   if [[ "$sandbox_config_ok" == true ]]; then
     echo "Sandbox enabled: mode=non-main, scope=agent, workspaceAccess=none"

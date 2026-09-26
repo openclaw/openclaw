@@ -733,11 +733,7 @@ async function isPrivilegedTargetAuthor(github, context, target, labelSet, isMai
   if (labelSet.has(maintainerAuthorLabel) || privilegedAuthorAssociations.has(authorAssociation)) {
     return true;
   }
-  if (await isPrivilegedActor(github, context, authorLogin, isMaintainer)) {
-    return true;
-  }
-
-  return false;
+  return isPrivilegedActor(github, context, authorLogin, isMaintainer);
 }
 
 async function countMaintainerMentions(body, authorLogin, isMaintainer, owner) {
@@ -772,15 +768,6 @@ async function countMaintainerMentions(body, authorLogin, isMaintainer, owner) {
   return count;
 }
 
-async function listPullRequestFiles(github, context, pullRequest) {
-  return github.paginate(github.rest.pulls.listFiles, {
-    owner: context.repo.owner,
-    repo: context.repo.repo,
-    pull_number: pullRequest.number,
-    per_page: 100,
-  });
-}
-
 async function addMissingLabels(github, context, core, issueNumber, labels, labelSet) {
   const missingLabels = labels.filter((label) => !labelSet.has(label));
   if (missingLabels.length === 0) {
@@ -803,7 +790,12 @@ function isClawSweeperOwnedLabel(label) {
 }
 
 async function applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet) {
-  const files = await listPullRequestFiles(github, context, pullRequest);
+  const files = await github.paginate(github.rest.pulls.listFiles, {
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    pull_number: pullRequest.number,
+    per_page: 100,
+  });
   const candidateLabelsToApply = classifyPullRequestCandidateLabels(
     {
       ...pullRequest,
@@ -851,10 +843,6 @@ function isClawSweeperProofSufficientLabelEvent(context) {
   );
 }
 
-function isGitHubAppPullRequestAuthor(pullRequest) {
-  return isAutomationUser(pullRequest.user);
-}
-
 function candidateActionRuleForLabelSet(labelSet, preferredLabel = "") {
   const preferredRule = candidateActionRules.find(
     (rule) => rule.label === preferredLabel && labelSet.has(rule.label),
@@ -891,23 +879,29 @@ async function applyPullRequestCandidateAction({
     return false;
   }
 
-  await github.rest.issues.createComment({
+  await applyResponseRule(github, context, pullRequest.number, rule);
+  return true;
+}
+
+async function applyResponseRule(github, context, issueNumber, rule) {
+  const target = {
     owner: context.repo.owner,
     repo: context.repo.repo,
-    issue_number: pullRequest.number,
-    body: rule.message,
-  });
-
+    issue_number: issueNumber,
+  };
+  if (rule.message) {
+    await github.rest.issues.createComment({ ...target, body: rule.message });
+  }
   if (rule.close) {
     await github.rest.issues.update({
-      owner: context.repo.owner,
-      repo: context.repo.repo,
-      issue_number: pullRequest.number,
+      ...target,
       state: "closed",
+      ...(rule.stateReason ? { state_reason: rule.stateReason } : {}),
     });
   }
-
-  return true;
+  if (rule.lock) {
+    await github.rest.issues.lock({ ...target, lock_reason: rule.lockReason ?? "resolved" });
+  }
 }
 
 async function removeLabels(github, context, issueNumber, labels, labelSet) {
@@ -1067,35 +1061,21 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     const title = issue.title ?? "";
     const body = issue.body ?? "";
     const haystack = `${title}\n${body}`.toLowerCase();
-    const hasMoltbookLabel = labelSet.has("r: moltbook");
-    const hasTestflightLabel = labelSet.has("r: testflight");
-    const hasSecurityLabel = labelSet.has("security");
-    if (title.toLowerCase().includes("security") && !hasSecurityLabel) {
+    for (const [label, matches] of [
+      ["security", title.toLowerCase().includes("security")],
+      ["r: testflight", title.toLowerCase().includes("testflight")],
+      ["r: moltbook", haystack.includes("moltbook")],
+    ]) {
+      if (!matches || labelSet.has(label)) {
+        continue;
+      }
       await github.rest.issues.addLabels({
         owner: context.repo.owner,
         repo: context.repo.repo,
         issue_number: issue.number,
-        labels: ["security"],
+        labels: [label],
       });
-      labelSet.add("security");
-    }
-    if (title.toLowerCase().includes("testflight") && !hasTestflightLabel) {
-      await github.rest.issues.addLabels({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        issue_number: issue.number,
-        labels: ["r: testflight"],
-      });
-      labelSet.add("r: testflight");
-    }
-    if (haystack.includes("moltbook") && !hasMoltbookLabel) {
-      await github.rest.issues.addLabels({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        issue_number: issue.number,
-        labels: ["r: moltbook"],
-      });
-      labelSet.add("r: moltbook");
+      labelSet.add(label);
     }
   }
 
@@ -1116,7 +1096,7 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
       return;
     }
 
-    if (isGitHubAppPullRequestAuthor(pullRequest)) {
+    if (isAutomationUser(pullRequest.user)) {
       await removeLabels(github, context, pullRequest.number, [activePrLimitLabel], labelSet);
       core.info(`Skipping active PR limit for GitHub App-authored PR #${pullRequest.number}.`);
     }
@@ -1131,42 +1111,22 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     }
 
     if (labelSet.has(dirtyLabel)) {
-      await github.rest.issues.createComment({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        issue_number: pullRequest.number,
-        body: noisyPrMessage,
-      });
-      await github.rest.issues.update({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        issue_number: pullRequest.number,
-        state: "closed",
+      await applyResponseRule(github, context, pullRequest.number, {
+        message: noisyPrMessage,
+        close: true,
       });
       return;
     }
     if (labelSet.has(spamLabel)) {
-      await github.rest.issues.update({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        issue_number: pullRequest.number,
-        state: "closed",
-      });
-      await github.rest.issues.lock({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        issue_number: pullRequest.number,
-        lock_reason: "spam",
+      await applyResponseRule(github, context, pullRequest.number, {
+        close: true,
+        lock: true,
+        lockReason: "spam",
       });
       return;
     }
     if (labelSet.has(invalidLabel)) {
-      await github.rest.issues.update({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        issue_number: pullRequest.number,
-        state: "closed",
-      });
+      await applyResponseRule(github, context, pullRequest.number, { close: true });
       return;
     }
 
@@ -1184,29 +1144,19 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   }
 
   if (issue && labelSet.has(spamLabel)) {
-    await github.rest.issues.update({
-      owner: context.repo.owner,
-      repo: context.repo.repo,
-      issue_number: issue.number,
-      state: "closed",
-      state_reason: "not_planned",
-    });
-    await github.rest.issues.lock({
-      owner: context.repo.owner,
-      repo: context.repo.repo,
-      issue_number: issue.number,
-      lock_reason: "spam",
+    await applyResponseRule(github, context, issue.number, {
+      close: true,
+      stateReason: "not_planned",
+      lock: true,
+      lockReason: "spam",
     });
     return;
   }
 
   if (issue && labelSet.has(invalidLabel)) {
-    await github.rest.issues.update({
-      owner: context.repo.owner,
-      repo: context.repo.repo,
-      issue_number: issue.number,
-      state: "closed",
-      state_reason: "not_planned",
+    await applyResponseRule(github, context, issue.number, {
+      close: true,
+      stateReason: "not_planned",
     });
     return;
   }
@@ -1214,10 +1164,7 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   if (pullRequest && labelSet.has(activePrLimitOverrideLabel)) {
     labelSet.delete(activePrLimitLabel);
   }
-  if (
-    pullRequest &&
-    (isAutomationPullRequest(pullRequest) || isGitHubAppPullRequestAuthor(pullRequest))
-  ) {
+  if (pullRequest && (isAutomationPullRequest(pullRequest) || isAutomationUser(pullRequest.user))) {
     await removeLabels(github, context, pullRequest.number, [activePrLimitLabel], labelSet);
   }
 
@@ -1226,30 +1173,5 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     return;
   }
 
-  const issueNumber = target.number;
-
-  await github.rest.issues.createComment({
-    owner: context.repo.owner,
-    repo: context.repo.repo,
-    issue_number: issueNumber,
-    body: rule.message,
-  });
-
-  if (rule.close) {
-    await github.rest.issues.update({
-      owner: context.repo.owner,
-      repo: context.repo.repo,
-      issue_number: issueNumber,
-      state: "closed",
-    });
-  }
-
-  if (rule.lock) {
-    await github.rest.issues.lock({
-      owner: context.repo.owner,
-      repo: context.repo.repo,
-      issue_number: issueNumber,
-      lock_reason: rule.lockReason ?? "resolved",
-    });
-  }
+  await applyResponseRule(github, context, target.number, rule);
 }

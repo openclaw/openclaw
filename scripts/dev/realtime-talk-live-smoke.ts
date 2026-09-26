@@ -9,7 +9,6 @@ import {
   previewForDevToolLog,
   redactJsonValueForDevToolLog,
 } from "../lib/dev-tooling-safety.ts";
-import { toErrorObject as toLintErrorObject } from "../lib/error-format.mts";
 
 const OPENAI_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2.1";
@@ -971,7 +970,18 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
               }
             })().catch((error: unknown) => {
               window.clearTimeout(timeout);
-              reject(toLintErrorObject(error, "Non-Error rejection"));
+              // This callback is serialized into the browser without module imports.
+              if (error instanceof Error) {
+                reject(error);
+              } else if (typeof error === "string") {
+                reject(new Error(error));
+              } else {
+                const failure = new Error("Non-Error rejection", { cause: error });
+                if ((typeof error === "object" && error !== null) || typeof error === "function") {
+                  Object.assign(failure, error);
+                }
+                reject(failure);
+              }
             });
           });
           ws.addEventListener("error", () => {
