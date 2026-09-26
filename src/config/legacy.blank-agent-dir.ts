@@ -118,6 +118,36 @@ function migrateBlankAgentDirRaw(
     : { config: raw, changed: false, changes, warnings: [] };
 }
 
+/** In-place removal shared with Doctor so recovery/doctor repair uses exactly
+ * the same traversal and messages as the load/write migration: the keyed
+ * entries map and the legacy list form are both handled. */
+export function applyBlankAgentDirRemoval(raw: Record<string, unknown>, changes: string[]): void {
+  const agents = isRecord(raw.agents) ? (raw.agents as Record<string, unknown>) : undefined;
+  if (!agents) {
+    return;
+  }
+  if (isRecord(agents.entries)) {
+    for (const [key, entry] of Object.entries(agents.entries)) {
+      if (isRecord(entry) && isBlankString(entry.agentDir)) {
+        delete entry.agentDir;
+        changes.push(
+          `Removed blank agents.entries.${key}.agentDir; the default agent directory applies.`,
+        );
+      }
+    }
+  }
+  if (Array.isArray(agents.list)) {
+    for (const [index, entry] of agents.list.entries()) {
+      if (isRecord(entry) && isBlankString(entry.agentDir)) {
+        delete entry.agentDir;
+        changes.push(
+          `Removed blank agents.list[${index}].agentDir; the default agent directory applies.`,
+        );
+      }
+    }
+  }
+}
+
 /** Index every agent agentDir that is blank in the saved source config,
  * normalized across the legacy list and canonical entries roster forms. Only
  * these paths count as "saved blanks" for write-path migration. */
