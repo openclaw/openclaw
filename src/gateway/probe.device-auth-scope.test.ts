@@ -3,6 +3,8 @@ import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createStatusGatewayProbeBudget } from "../commands/status.gateway-probe-budget.js";
+import { resolveGatewayProbeSnapshot } from "../commands/status.scan.shared.js";
 import {
   seedDeviceAuthToken,
   seedOriginDeviceToken,
@@ -77,6 +79,9 @@ class ProbeWebSocket {
 }
 
 vi.mock("../../packages/gateway-client/src/websocket.js", () => ({ WebSocket: ProbeWebSocket }));
+vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: async () => undefined,
+}));
 
 const { probeGateway } = await import("./probe.js");
 
@@ -99,17 +104,15 @@ async function captureProbeConnectFrame(params: {
   originScopedDeviceAuth?: boolean;
   suppressStoredDeviceAuth?: boolean;
 }): Promise<ConnectFrame> {
+  return captureConnectFrame(() =>
+    probeGateway({ ...params, timeoutMs: 2_000, includeDetails: false }),
+  );
+}
+
+async function captureConnectFrame(startProbe: () => Promise<unknown>): Promise<ConnectFrame> {
   const created = createDeferred<ProbeWebSocket>();
   onSocketCreated = created.resolve;
-  const probePromise = probeGateway({
-    url: params.url,
-    auth: params.auth,
-    originScopedDeviceAuth: params.originScopedDeviceAuth,
-    suppressStoredDeviceAuth: params.suppressStoredDeviceAuth,
-    env: params.env,
-    timeoutMs: 2_000,
-    includeDetails: false,
-  });
+  const probePromise = startProbe();
   const endedWithoutConnect = probePromise.then(() => {
     throw new Error("probe ended before its connect frame");
   });
@@ -151,9 +154,71 @@ async function captureProbeConnectFrame(params: {
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
 });
 
 describe("probeGateway device auth scope", () => {
+  it.each([
+    {
+      mode: "local" as const,
+      url: "ws://127.0.0.1:18789",
+      envOverride: false,
+      expectedToken: "scoped-token",
+    },
+    {
+      mode: "remote" as const,
+      url: "ws://127.0.0.1:18789",
+      envOverride: false,
+      expectedToken: undefined,
+    },
+    {
+      mode: "remote" as const,
+      url: "wss://gateway.example",
+      envOverride: false,
+      expectedToken: "scoped-token",
+    },
+    {
+      mode: "local" as const,
+      url: "ws://127.0.0.1:18789",
+      envOverride: true,
+      expectedToken: undefined,
+    },
+  ])(
+    "binds status credentials to the $mode target at $url (env override=$envOverride)",
+    async ({ mode, url, envOverride, expectedToken }) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", envOverride ? url : undefined);
+      await withTempDir("openclaw-status-probe-scope-", async (stateDir) => {
+        const env = createEnv(stateDir);
+        const identity = loadOrCreateDeviceIdentity({ env });
+        const lookup = { deviceId: identity.deviceId, role: "operator", env };
+        seedDeviceAuthToken({ ...lookup, token: "local-token" });
+        seedOriginDeviceToken({
+          ...lookup,
+          gatewayScope: gatewayOriginScope(url),
+          token: "scoped-token",
+        });
+
+        const connect = await captureConnectFrame(() =>
+          resolveGatewayProbeSnapshot({
+            cfg: { gateway: { mode, port: 18789, remote: { url } } },
+            configPath: `${stateDir}/openclaw.json`,
+            env,
+            opts: {
+              ...createStatusGatewayProbeBudget(2_000),
+              detailLevel: "none",
+              localStatusRpcFallback: false,
+            },
+          }),
+        );
+
+        expect(connect.params?.auth).toEqual(
+          expectedToken ? { deviceToken: expectedToken } : undefined,
+        );
+        expect(connect.params?.device?.id).toBe(expectedToken ? identity.deviceId : undefined);
+      });
+    },
+  );
+
   it.each([
     { url: "wss://origin-b.example/rpc", originScopedDeviceAuth: false },
     { url: "ws://127.0.0.1:18789", originScopedDeviceAuth: true },
