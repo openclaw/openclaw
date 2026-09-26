@@ -8,6 +8,10 @@ import type { CliDeps } from "../../cli/deps.types.js";
 import { createLazyGatewayCronState } from "../../gateway/server-cron-lazy.js";
 import type { GatewayCronState } from "../../gateway/server-cron.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "../service.js";
 import { saveCronStore } from "../store.js";
 
@@ -54,7 +58,10 @@ it.each([
         throw new Error("secondary arm failure");
       });
     }
+    const clock = createGatewaySchedulerClock(now);
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const service = new CronService({
+      scheduler,
       storePath,
       cronEnabled: true,
       log,
@@ -72,6 +79,7 @@ it.each([
       reconcileSystemJobs: async () => "converged",
     };
     const { cron } = createLazyGatewayCronState({
+      scheduler,
       cfg: {},
       deps: {} as CliDeps,
       broadcast: vi.fn(),
@@ -91,19 +99,15 @@ it.each([
       database.exec("DROP TRIGGER IF EXISTS reject_startup_terminal_write");
       expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue"]);
       cron.pauseScheduling();
-      await vi.advanceTimersByTimeAsync(1_000);
+      await clock.advanceBy(1_000);
       cron.resumeScheduling();
-      await vi.advanceTimersByTimeAsync(15_000);
-      await vi.waitFor(() =>
-        expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
-          "overdue",
-          "upcoming",
-        ]),
-      );
-      await vi.advanceTimersByTimeAsync(60_000);
+      await clock.advanceBy(15_000);
+      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
+      await clock.advanceBy(60_000);
       expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
     } finally {
       cron.stop();
+      await scheduler.stop();
       database.exec("DROP TRIGGER IF EXISTS reject_startup_terminal_write");
     }
   },
