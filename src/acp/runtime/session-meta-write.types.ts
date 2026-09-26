@@ -15,7 +15,7 @@ export type AcpSessionMutationPreparation = {
   preparedEntry: SessionEntry;
 };
 
-export type AcpSessionMutationSource = {
+type AcpSessionMutationSource = {
   agentId: string;
   path: string;
   identity: DatabasePathIdentity;

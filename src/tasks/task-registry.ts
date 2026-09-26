@@ -20,7 +20,6 @@ export {
 export {
   findTaskByRunId,
   getTaskById,
-  hasActiveTaskForChildSessionKey,
   listFreshTasksForOwnerKey,
   listTaskRecordPage,
   listTaskRecords,

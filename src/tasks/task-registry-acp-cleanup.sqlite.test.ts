@@ -173,7 +173,7 @@ it.each([
             ...(changedIdentity ? { backendSessionId: "new-backend-session" } : {}),
           };
         },
-        runTurn: async function* () {
+        async *runTurn() {
           yield { type: "done" };
         },
         cancel: async () => {},

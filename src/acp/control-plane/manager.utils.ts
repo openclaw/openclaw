@@ -20,7 +20,7 @@ export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "ma
 }
 
 /** Builds the stale-session error shown when ACP metadata is missing. */
-export function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
+function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
   return new AcpRuntimeError(
     "ACP_SESSION_INIT_FAILED",
     `ACP metadata is missing for ${sessionKey}. Recreate this ACP session with /acp spawn and rebind the thread.`,
