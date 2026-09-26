@@ -142,12 +142,7 @@ describe("config observe recovery", () => {
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
-    try {
-      await fsp.stat(targetPath);
-      throw new Error(`Expected ${targetPath} to be missing`);
-    } catch (error) {
-      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    }
+    await expect(fsp.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
   }
 
   function warnMessages(warn: ReturnType<typeof vi.fn>): string[] {
@@ -638,7 +633,6 @@ describe("config observe recovery", () => {
   it("does not auto-restore read snapshots when observation is disabled", async () => {
     await withSuiteHome(async (home) => {
       const { io, configPath } = createTestConfigIO(home, vi.fn(), { observe: false });
-      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
       await seedConfigBackup(configPath, recoverableCoreConfig);
       const clobbered = await writeConfigRaw(configPath, {
         meta: { lastTouchedVersion: "2026.5.28" },
@@ -649,7 +643,9 @@ describe("config observe recovery", () => {
       expect(snapshot.valid).toBe(true);
       expect(snapshot.config.gateway?.mode).toBeUndefined();
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
-      await expectPathMissing(auditPath);
+      expect(listConfigAuditRecordsForTests({ env: { HOME: home }, homedir: () => home })).toEqual(
+        [],
+      );
     });
   });
 
@@ -926,7 +922,7 @@ describe("config observe recovery", () => {
 
   it("does not restore noncritical config edits", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath } = makeDeps(home);
+      const { deps, configPath } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const editedConfig = {
         ...recoverableTelegramConfig,
@@ -938,7 +934,9 @@ describe("config observe recovery", () => {
 
       expect(recovered.parsed).toEqual(editedConfig);
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(edited.raw);
-      await expectPathMissing(auditPath);
+      expect(listConfigAuditRecordsForTests({ env: { HOME: home }, homedir: () => home })).toEqual(
+        [],
+      );
     });
   });
 
@@ -1252,7 +1250,7 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("logs async health-state write failures", async () => {
+  it("writes async health state to SQLite", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, warn } = makeDeps(home);
       const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);

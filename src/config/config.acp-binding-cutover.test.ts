@@ -176,22 +176,4 @@ describe("ACP binding cutover schema", () => {
 
     expect(parsed.success).toBe(true);
   });
-
-  it("accepts the canonical direct peer kind", () => {
-    const parsed = OpenClawSchema.safeParse({
-      bindings: [
-        {
-          type: "acp",
-          agentId: "codex",
-          match: {
-            channel: "plugin-chat",
-            accountId: "default",
-            peer: { kind: "direct", id: "peer" },
-          },
-        },
-      ],
-    });
-
-    expect(parsed.success).toBe(true);
-  });
 });

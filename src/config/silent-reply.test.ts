@@ -24,8 +24,8 @@ describe("silent reply config resolution", () => {
       agents: {
         defaults: {
           silentReply: {
-            group: "disallow",
-            internal: "allow",
+            group: "allow",
+            internal: "disallow",
           },
         },
       },
@@ -37,6 +37,12 @@ describe("silent reply config resolution", () => {
         cfg,
         sessionKey: "agent:main:discord:group:123",
         surface: "discord",
+      }).policy,
+    ).toBe("allow");
+    expect(
+      resolveSilentReplySettings({
+        cfg,
+        sessionKey: "agent:main:subagent:abc",
       }).policy,
     ).toBe("disallow");
   });

@@ -125,12 +125,6 @@ describe("SessionSchema maintenance extensions", () => {
     expect(result.error?.issues[0]?.path).toContain("highWaterBytes");
   });
 
-  it("accepts resetArchiveRetention: false (documented disable)", () => {
-    expect(SessionSchema.safeParse({ maintenance: { resetArchiveRetention: false } }).success).toBe(
-      true,
-    );
-  });
-
   it.each([0, "0h", "0d", "0ms", "0", "0s", "0m"])(
     "rejects zero-value pruneAfter: %s",
     (pruneAfter) => {

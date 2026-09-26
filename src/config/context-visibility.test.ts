@@ -24,8 +24,17 @@ describe("resolveChannelContextVisibilityMode", () => {
   it("prefers explicitly provided mode", () => {
     expect(
       resolveChannelContextVisibilityMode({
-        cfg: {},
+        cfg: {
+          channels: {
+            defaults: { contextVisibility: "allowlist_quote" },
+            slack: {
+              contextVisibility: "all",
+              accounts: { work: { contextVisibility: "all" } },
+            },
+          },
+        },
         channel: "slack",
+        accountId: "work",
         configuredContextVisibility: "allowlist",
       }),
     ).toBe("allowlist");

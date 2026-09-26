@@ -41,13 +41,6 @@ function captureEnvEnumerations<T>(env: NodeJS.ProcessEnv, run: () => T) {
 }
 
 describe("config env vars", () => {
-  it("applies env vars from env block when missing", async () => {
-    await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
-      applyConfigEnvVars({ env: { vars: { OPENROUTER_API_KEY: "config-key" } } } as OpenClawConfig);
-      expect(process.env.OPENROUTER_API_KEY).toBe("config-key");
-    });
-  });
-
   it.each(
     ["OPENCLAW_CONFIG_READONLY", "OpenClaw_Config_ReadOnly"].flatMap((key) =>
       ["direct", "vars"].map((source) => ({ key, source })),

@@ -1,32 +1,13 @@
 // Verifies model-support based plugin auto-enable decisions.
-import { describe, expect, it } from "vitest";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { afterEach, describe, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
-import { makeIsolatedEnv } from "./plugin-auto-enable.test-helpers.js";
+import {
+  makeIsolatedEnv,
+  makeRegistry,
+  resetPluginAutoEnableTestState,
+} from "./plugin-auto-enable.test-helpers.js";
 
-function makeRegistry(
-  plugins: Array<{
-    id: string;
-    modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
-  }>,
-): PluginManifestRegistry {
-  return {
-    plugins: plugins.map((plugin) => ({
-      id: plugin.id,
-      channels: [],
-      providers: [],
-      modelSupport: plugin.modelSupport,
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      origin: "config" as const,
-      rootDir: `/fake/${plugin.id}`,
-      source: `/fake/${plugin.id}/index.js`,
-      manifestPath: `/fake/${plugin.id}/openclaw.plugin.json`,
-    })),
-    diagnostics: [],
-  };
-}
+afterEach(resetPluginAutoEnableTestState);
 
 describe("applyPluginAutoEnable modelSupport", () => {
   it("auto-enables provider plugins from shorthand modelSupport ownership", () => {
@@ -42,6 +23,7 @@ describe("applyPluginAutoEnable modelSupport", () => {
       manifestRegistry: makeRegistry([
         {
           id: "openai",
+          channels: [],
           modelSupport: {
             modelPrefixes: ["gpt-", "o1", "o3", "o4"],
           },
@@ -66,12 +48,14 @@ describe("applyPluginAutoEnable modelSupport", () => {
       manifestRegistry: makeRegistry([
         {
           id: "openai",
+          channels: [],
           modelSupport: {
             modelPrefixes: ["gpt-"],
           },
         },
         {
           id: "proxy-openai",
+          channels: [],
           modelSupport: {
             modelPrefixes: ["gpt-"],
           },

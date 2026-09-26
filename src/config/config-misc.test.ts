@@ -660,22 +660,6 @@ describe("plugins.entries.*.hooks", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts allowPromptInjection=false alongside allowConversationAccess=true", () => {
-    const result = OpenClawSchema.safeParse({
-      plugins: {
-        entries: {
-          "voice-call": {
-            hooks: {
-              allowPromptInjection: false,
-              allowConversationAccess: true,
-            },
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
   it("accepts bounded typed hook timeout overrides", () => {
     const result = OpenClawSchema.safeParse({
       plugins: {

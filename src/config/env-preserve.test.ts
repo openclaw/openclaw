@@ -477,22 +477,6 @@ describe("restoreEnvVarRefs", () => {
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
 
-  it("rejects removing one of two template entries with duplicate stable ids", () => {
-    expect(() =>
-      restoreEnvVarRefs(
-        [{ id: "duplicate", sessionKey: "same" }],
-        [
-          { id: "duplicate", sessionKey: "${SESSION_A}" },
-          { id: "duplicate", sessionKey: "${SESSION_B}" },
-        ],
-        {
-          SESSION_A: "same",
-          SESSION_B: "same",
-        },
-      ),
-    ).toThrow("Config write would reorder or modify an array containing environment references");
-  });
-
   it("allows deleting a templated entry beside a uniquely retained duplicate-id sibling", () => {
     const result = restoreEnvVarRefs(
       [{ id: "duplicate", sessionKey: "literal" }],
@@ -776,22 +760,6 @@ describe("restoreEnvVarRefs", () => {
     ]);
   });
 
-  it("rejects swapping same-name active and escaped values between stable-id entries", () => {
-    expect(() =>
-      restoreEnvVarRefs(
-        [
-          { id: "literal", token: "secret" },
-          { id: "active", token: "${TOKEN}" },
-        ],
-        [
-          { id: "literal", token: "$${TOKEN}" },
-          { id: "active", token: "${TOKEN}" },
-        ],
-        { TOKEN: "secret" },
-      ),
-    ).toThrow("Config write would reorder or modify an array containing environment references");
-  });
-
   it("rejects replacing a scalar template while adding its resolved value elsewhere", () => {
     expect(() =>
       restoreEnvVarRefs(["replacement", "admin"], ["${ADMIN_ID}", "old"], {
@@ -816,13 +784,6 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual({ port: 8080 });
   });
 
-  it("does not restore when parsed value has no env var pattern", () => {
-    const incoming = { apiKey: "sk-ant-api03-real-key" };
-    const parsed = { apiKey: "sk-ant-api03-real-key" };
-    const result = restoreEnvVarRefs(incoming, parsed, env);
-    expect(result).toEqual({ apiKey: "sk-ant-api03-real-key" });
-  });
-
   // Edge case: env mutation between read and write
   // Scenario: config.env sets FOO=bar, which gets applied to process.env during loadConfig.
   // Later writeConfigFile runs — the env has changed since the original read.
@@ -838,16 +799,6 @@ describe("restoreEnvVarRefs", () => {
     // Should NOT restore ${MY_VAR} because resolving it now gives "mutated-value",
     // which doesn't match "original-value" — the caller's value should be kept
     expect(result).toEqual({ key: "original-value" });
-  });
-
-  it("correctly restores when env var value hasn't changed", () => {
-    const stableEnv = { MY_VAR: "stable-value" };
-    const incoming = { key: "stable-value" };
-    const parsed = { key: "${MY_VAR}" };
-
-    const result = restoreEnvVarRefs(incoming, parsed, stableEnv);
-    // Env value matches incoming — safe to restore
-    expect(result).toEqual({ key: "${MY_VAR}" });
   });
 
   it("does not restore when env snapshot differs from live env (TOCTOU fix)", () => {

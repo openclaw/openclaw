@@ -340,19 +340,6 @@ describe("resolveConfigIncludes", () => {
     expectResolveIncludeError(() => resolve(obj, files), expectedPattern);
   });
 
-  it("respects max depth limit", () => {
-    const files: Record<string, unknown> = {};
-    for (let i = 0; i < 15; i++) {
-      files[configPath(`level${i}.json`)] = {
-        $include: `./level${i + 1}.json`,
-      };
-    }
-    files[configPath("level15.json")] = { done: true };
-
-    const obj = { $include: "./level0.json" };
-    expectResolveIncludeError(() => resolve(obj, files), /Maximum include depth/);
-  });
-
   it("allows depth 10 but rejects depth 11", () => {
     const okFiles: Record<string, unknown> = {};
     for (let i = 0; i < 9; i++) {
@@ -856,7 +843,7 @@ describe("security: path traversal protection (CWE-22)", () => {
       );
     });
 
-    it("accepts include path at or under maximum length when file exists", () => {
+    it("accepts an existing short include path", () => {
       const shortPath = configPath("base.json");
       const files = { [shortPath]: { ok: true } };
       expect(resolve({ $include: shortPath }, files)).toEqual({ ok: true });

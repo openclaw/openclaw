@@ -1,87 +1,34 @@
 // Covers MCP config normalization, validation, and serialization.
 import fs from "node:fs/promises";
-import path from "node:path";
-import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { listConfiguredMcpServers, mcpConfigInternal } from "./mcp-config.js";
 import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 
 const { set: setConfiguredMcpServer, unset: unsetConfiguredMcpServer } = mcpConfigInternal;
 
-function validationOk(raw: unknown) {
-  return { ok: true as const, config: raw, warnings: [] };
-}
-
-const mockReadSourceConfigSnapshot = vi.hoisted(() => async () => {
-  const fsValue = await import("node:fs/promises");
-  const pathValue = await import("node:path");
-  const configPath = pathValue.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
-  try {
-    const raw = await fsValue.readFile(configPath, "utf-8");
-    const parsed = JSON.parse(raw);
-    return {
-      valid: true,
-      path: configPath,
-      sourceConfig: parsed,
-      resolved: parsed,
-      hash: "test-hash",
-    };
-  } catch {
-    return {
-      valid: false,
-      path: configPath,
-    };
-  }
-});
-
-const mockReplaceConfigFile = vi.hoisted(
-  () =>
-    async ({ sourceConfig }: { sourceConfig: unknown }) => {
-      const fsLocal = await import("node:fs/promises");
-      const pathLocal = await import("node:path");
-      const configPath = pathLocal.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
-      await fsLocal.writeFile(configPath, JSON.stringify(sourceConfig, null, 2), "utf-8");
-      return { nextConfig: sourceConfig };
-    },
-);
-
-vi.mock("./io.js", () => ({
-  readSourceConfigSnapshot: mockReadSourceConfigSnapshot,
-  readSourceConfigSnapshotForWrite: async () => ({
-    snapshot: await mockReadSourceConfigSnapshot(),
-    writeOptions: {},
-  }),
-}));
-
-vi.mock("./mutate.js", () => ({
-  replaceConfigFile: mockReplaceConfigFile,
-}));
-
-vi.mock("./validation.js", () => ({
-  validateConfigObjectWithPlugins: validationOk,
-  validateConfigObjectRawWithPlugins: validationOk,
-}));
+const fixtureLifetime = createFixtureLifetime();
+afterEach(() => fixtureLifetime.cleanup());
 
 async function withMcpConfigHome<T>(
   config: unknown,
   fn: (params: { configPath: string }) => Promise<T>,
 ) {
-  return await withTempHome(
-    async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
-      return await fn({ configPath });
-    },
-    {
-      prefix: "openclaw-mcp-config-",
-      skipSessionCleanup: true,
-      env: {
-        OPENCLAW_CONFIG_PATH: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+  return await fixtureLifetime.run(() =>
+    withOpenClawTestState(
+      {
+        prefix: "openclaw-mcp-config-",
+        env: {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        },
       },
-    },
+      async (state) => {
+        await state.writeConfig(config);
+        return await fn({ configPath: state.configPath });
+      },
+    ),
   );
 }
 
@@ -199,6 +146,28 @@ describe("config mcp config", () => {
       }
       expect(loaded.path).toBe(configPath);
     });
+  });
+
+  it("rejects an invalid MCP server without changing the config file", async () => {
+    await withMcpConfigHome(
+      { mcp: { servers: { fixture: { command: "node" } } } },
+      async ({ configPath }) => {
+        const before = await fs.readFile(configPath, "utf-8");
+        const result = await setConfiguredMcpServer({
+          name: "invalid",
+          server: { url: "file:///tmp/mcp", transport: "streamable-http" },
+        });
+        expect(result).toEqual({
+          ok: false,
+          path: configPath,
+          error:
+            "Config invalid after MCP set (mcp.servers.invalid.url: Expected http:// or https:// URL).",
+        });
+        expect(await fs.readFile(configPath, "utf-8")).toBe(before);
+        const loaded = await listConfiguredMcpServers();
+        expect(loaded.ok && loaded.mcpServers).toEqual({ fixture: { command: "node" } });
+      },
+    );
   });
 
   it("accepts SSE MCP configs with headers at the config layer", async () => {
