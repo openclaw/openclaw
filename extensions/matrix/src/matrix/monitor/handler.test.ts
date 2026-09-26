@@ -2844,7 +2844,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 describe("matrix monitor handler draft streaming", () => {
   type DeliverFn = (payload: ReplyPayload, info: { kind: string }) => Promise<unknown>;
 
-  async function sendPreview(opts: ReplyOpts, text: string, expectedSends = 1) {
+  async function sendPreview(opts: GetReplyOptions, text: string, expectedSends = 1) {
     await opts.onPartialReply?.({ text });
     await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(expectedSends);
@@ -3931,78 +3931,86 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("preserves queued block boundaries across assistant message start", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
     const { deliver, opts, finish } = await dispatch();
 
-    await sendPreview(opts, "Alpha");
+    try {
+      await sendPreview(opts, "Alpha");
 
-    await opts.onBlockReplyQueued?.({ text: "Alpha" });
-    await opts.onAssistantMessageStart?.();
-    await opts.onPartialReply?.({ text: "Beta" });
+      await opts.onBlockReplyQueued?.({ text: "Alpha" });
+      await opts.onAssistantMessageStart?.();
+      await opts.onPartialReply?.({ text: "Beta" });
 
-    await waitForMatrixState(() => {
+      // Drive the draft throttle before checking queued-block ordering.
+      await vi.advanceTimersByTimeAsync(1_000);
       expectMatrixEdit("!room:example.org", "$draft1", "Beta");
-    });
 
-    sendSingleTextMessageMatrixMock.mockClear();
-    editMessageMatrixMock.mockClear();
-    sendSingleTextMessageMatrixMock.mockResolvedValueOnce({
-      messageId: "$draft2",
-      roomId: "!room",
-    });
-    await deliver({ text: "Alpha" }, { kind: "block" });
+      sendSingleTextMessageMatrixMock.mockClear();
+      editMessageMatrixMock.mockClear();
+      sendSingleTextMessageMatrixMock.mockResolvedValueOnce({
+        messageId: "$draft2",
+        roomId: "!room",
+      });
+      await deliver({ text: "Alpha" }, { kind: "block" });
 
-    expectMatrixEdit("!room:example.org", "$draft1", "Alpha");
-    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
-    expect(redactEventMock).not.toHaveBeenCalled();
-    await waitForMatrixState(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
-    expect(singleTextMessageBody()).toBe("Beta");
+      expectMatrixEdit("!room:example.org", "$draft1", "Alpha");
+      expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+      expect(redactEventMock).not.toHaveBeenCalled();
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+      expect(singleTextMessageBody()).toBe("Beta");
 
-    await deliver({ text: "Beta" }, { kind: "final" });
+      await deliver({ text: "Beta" }, { kind: "final" });
 
-    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
-    expect(redactEventMock).not.toHaveBeenCalled();
-    await finish();
+      expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+      expect(redactEventMock).not.toHaveBeenCalled();
+    } finally {
+      await finish();
+    }
   });
 
   it("queues late block boundaries against the source assistant message", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
     const { deliver, opts, finish } = await dispatch();
 
-    await opts.onAssistantMessageStart?.();
-    await sendPreview(opts, "Alpha");
+    try {
+      await opts.onAssistantMessageStart?.();
+      await sendPreview(opts, "Alpha");
 
-    await opts.onAssistantMessageStart?.();
-    await opts.onBlockReplyQueued?.({ text: "Alpha" }, { assistantMessageIndex: 1 });
-    await opts.onPartialReply?.({ text: "Beta" });
+      await opts.onAssistantMessageStart?.();
+      await opts.onBlockReplyQueued?.({ text: "Alpha" }, { assistantMessageIndex: 1 });
+      await opts.onPartialReply?.({ text: "Beta" });
 
-    await waitForMatrixState(() => {
+      // Drive the draft throttle before checking queued-block ordering.
+      await vi.advanceTimersByTimeAsync(1_000);
       expectMatrixEdit("!room:example.org", "$draft1", "Beta");
-    });
 
-    sendSingleTextMessageMatrixMock.mockClear();
-    editMessageMatrixMock.mockClear();
-    sendSingleTextMessageMatrixMock.mockResolvedValueOnce({
-      messageId: "$draft2",
-      roomId: "!room",
-    });
-    await deliver({ text: "Alpha" }, { kind: "block" });
+      sendSingleTextMessageMatrixMock.mockClear();
+      editMessageMatrixMock.mockClear();
+      sendSingleTextMessageMatrixMock.mockResolvedValueOnce({
+        messageId: "$draft2",
+        roomId: "!room",
+      });
+      await deliver({ text: "Alpha" }, { kind: "block" });
 
-    expectMatrixEdit("!room:example.org", "$draft1", "Alpha");
-    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
-    expect(redactEventMock).not.toHaveBeenCalled();
-    await waitForMatrixState(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
-    expect(singleTextMessageBody()).toBe("Beta");
+      expectMatrixEdit("!room:example.org", "$draft1", "Alpha");
+      expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+      expect(redactEventMock).not.toHaveBeenCalled();
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+      expect(singleTextMessageBody()).toBe("Beta");
 
-    await deliver({ text: "Beta" }, { kind: "final" });
+      await deliver({ text: "Beta" }, { kind: "final" });
 
-    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
-    expect(redactEventMock).not.toHaveBeenCalled();
-    await finish();
+      expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+      expect(redactEventMock).not.toHaveBeenCalled();
+    } finally {
+      await finish();
+    }
   });
 
   it("keeps queued block boundaries ordered while Matrix deliveries drain", async () => {
