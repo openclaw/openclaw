@@ -132,7 +132,15 @@ describe("TUI local CLI subprocess owner", () => {
     expect(h.runner.cancel()).toBe(true);
     await expect(running).resolves.toEqual({ ok: false, reason: "cancelled" });
     expect(h.runner.cancel()).toBe(false);
-    await h.runner.runJson(["browser", "extension", "setup"]);
+    h.spawn.mockImplementationOnce(async (input) => {
+      input.assertCurrent?.();
+      input.onStdout?.('{"safe":true}');
+      return { ...h.run, runId: "later-inspect", wait: async () => exit };
+    });
+    await expect(h.runner.runJson(["browser", "extension", "setup"])).resolves.toEqual({
+      ok: true,
+      value: { safe: true },
+    });
     expect(h.spawn).toHaveBeenCalledTimes(2);
     await h.runner.shutdown();
   });

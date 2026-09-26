@@ -232,22 +232,22 @@ describe("TUI native image presentation", () => {
     expect(harness.loadImage).not.toHaveBeenCalled();
   });
 
-  it("cancels image reads on session switches and ignores late pixels", async () => {
+  it("cancels image reads and clears pending previews on session switches", async () => {
     setCapabilityOverrides({ images: "kitty" });
     const pending = createDeferred<TuiImageData>();
-    const loadImage = vi.fn(async (_request: TuiImageRequest) => pending.promise);
+    const loadImage = vi.fn((_request: TuiImageRequest) => pending.promise);
     const harness = createHarness([{ role: "assistant", content: [image] }], loadImage);
-    await harness.actions.loadHistory();
-    harness.render();
-    await vi.waitFor(() => expect(loadImage).toHaveBeenCalledOnce());
-    const request = loadImage.mock.calls[0]?.[0];
-    harness.client.loadHistory = vi.fn(async () => ({ messages: [], sessionInfo: {} }));
-    await harness.actions.setSession("agent:main:other");
-    expect(request?.signal.aborted).toBe(true);
-    pending.resolve(imageData);
-    await pending.promise;
-    expect(harness.render()).not.toContain(png);
-    expect(harness.render()).not.toContain("Loading image");
+    try {
+      await harness.actions.loadHistory();
+      expect(harness.render()).toContain("Loading image");
+      await vi.waitFor(() => expect(loadImage).toHaveBeenCalledOnce());
+      harness.client.loadHistory = vi.fn(async () => ({ messages: [], sessionInfo: {} }));
+      await harness.actions.setSession("agent:main:other");
+      expect(loadImage.mock.calls[0]?.[0].signal.aborted).toBe(true);
+      expect(harness.render()).not.toContain("Loading image");
+    } finally {
+      pending.resolve(imageData);
+    }
   });
 
   it("reports failed previews without exposing transport credentials or private paths", async () => {

@@ -250,7 +250,7 @@ describe("TuiSessionRunCoordinator", () => {
       message: { content: [{ type: "text", text: "persisted reply" }] },
     };
 
-    void coordinator.queueHistoryReload(["run-first"], ["run-first"]);
+    const drain = coordinator.queueHistoryReload(["run-first"], ["run-first"]);
     coordinator.deferHistoryRunEvent(deferredEvent);
     void coordinator.queueHistoryReload();
     expect(loadHistory).toHaveBeenCalledTimes(1);
@@ -265,6 +265,7 @@ describe("TuiSessionRunCoordinator", () => {
     expect(replayHistoryRunEvent).toHaveBeenCalledWith(deferredEvent);
 
     resolveHistory?.(completedHistory);
+    await expect(drain).resolves.toBe(true);
   });
 
   it.each([false, true])("awaits the complete history drain across a reset: %s", async (reset) => {
@@ -350,12 +351,9 @@ describe("TuiSessionRunCoordinator", () => {
   ])(
     "preserves newer $observation without finalizing older history (tracked=$tracked)",
     async ({ tracked, observation }) => {
-      let resolveHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
+      const history = createDeferred<TuiHistoryLoadResult>();
       const { coordinator, finalizeHistoryOwnedRun, replayHistoryRunEvent } = createCoordinator({
-        loadHistory: () =>
-          new Promise((resolve) => {
-            resolveHistory = resolve;
-          }),
+        loadHistory: () => history.promise,
       });
       if (tracked) {
         coordinator.noteSessionRun("run-live", { protectStream: true });
@@ -378,7 +376,7 @@ describe("TuiSessionRunCoordinator", () => {
       if (tracked) {
         expect(coordinator.sessionRuns.has("run-live")).toBe(true);
       }
-      resolveHistory?.(completedHistory);
+      history.resolve(completedHistory);
 
       await vi.waitFor(() => expect(coordinator.isHistoryReloadingRun("run-live")).toBe(false));
       if (observation === "delta") {
@@ -445,22 +443,18 @@ describe("TuiSessionRunCoordinator", () => {
   );
 
   it("discards a stale in-flight reload when the selected session resets", async () => {
-    let resolveHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
+    const history = createDeferred<TuiHistoryLoadResult>();
     const { coordinator, finalizeHistoryOwnedRun, replayHistoryRunEvent } = createCoordinator({
-      loadHistory: () =>
-        new Promise<TuiHistoryLoadResult>((resolve) => {
-          resolveHistory = resolve;
-        }),
+      loadHistory: () => history.promise,
     });
 
-    void coordinator.queueHistoryReload(["run-stale"], ["run-stale"]);
+    const drain = coordinator.queueHistoryReload(["run-stale"], ["run-stale"]);
     coordinator.clear();
-    resolveHistory?.(completedHistory);
+    history.resolve(completedHistory);
 
-    await vi.waitFor(() => {
-      expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
-      expect(replayHistoryRunEvent).not.toHaveBeenCalled();
-    });
+    await expect(drain).resolves.toBe(false);
+    expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
+    expect(replayHistoryRunEvent).not.toHaveBeenCalled();
     expect(coordinator.isHistoryReloadingRun("run-stale")).toBe(false);
   });
 });

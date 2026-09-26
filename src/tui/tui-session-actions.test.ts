@@ -367,10 +367,8 @@ describe("tui session actions", () => {
         activeChatRunId: null,
         pendingSubmit: null,
         historyLoaded: false,
-        sessionInfo: {},
       });
-      expect(state.sessionInfo.thinkingLevel).toBeUndefined();
-      expect(state.sessionInfo.verboseLevel).toBeUndefined();
+      expect(state.sessionInfo).toStrictEqual({});
       expect(state.sessionProjection?.entries).toEqual([]);
       expect(invalidateRunOwnership).toHaveBeenCalledOnce();
       expect(clearLocalRunIds).toHaveBeenCalledOnce();
@@ -427,23 +425,13 @@ describe("tui session actions", () => {
   });
 
   it("queues session refreshes and applies the latest result", async () => {
-    let resolveFirst: ((value: unknown) => void) | undefined;
-    let resolveSecond: ((value: unknown) => void) | undefined;
+    const firstResult = createDeferred<TuiSessionDescription>();
+    const secondResult = createDeferred<TuiSessionDescription>();
 
     const describeSession = vi
       .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveFirst = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveSecond = resolve;
-          }),
-      );
+      .mockReturnValueOnce(firstResult.promise)
+      .mockReturnValueOnce(secondResult.promise);
 
     const state = createBaseState();
 
@@ -472,7 +460,7 @@ describe("tui session actions", () => {
       sessionKey: "agent:main:main",
     });
 
-    resolveFirst?.({
+    firstResult.resolve({
       defaults: {},
       session: {
         key: "agent:main:main",
@@ -488,7 +476,7 @@ describe("tui session actions", () => {
 
     expect(describeSession).toHaveBeenCalledTimes(2);
 
-    resolveSecond?.({
+    secondResult.resolve({
       defaults: {},
       session: {
         key: "agent:main:main",
@@ -508,23 +496,13 @@ describe("tui session actions", () => {
   });
 
   it("coalesces refresh bursts into a single follow-up lookup", async () => {
-    let resolveFirst: ((value: unknown) => void) | undefined;
-    let resolveSecond: ((value: unknown) => void) | undefined;
+    const firstResult = createDeferred<TuiSessionDescription>();
+    const secondResult = createDeferred<TuiSessionDescription>();
 
     const describeSession = vi
       .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveFirst = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveSecond = resolve;
-          }),
-      );
+      .mockReturnValueOnce(firstResult.promise)
+      .mockReturnValueOnce(secondResult.promise);
     const { refreshSessionInfo } = createTestSessionActions({
       client: makeTuiBackend({ describeSession }),
     });
@@ -538,7 +516,7 @@ describe("tui session actions", () => {
     });
     expect(describeSession).toHaveBeenCalledTimes(1);
 
-    resolveFirst?.({
+    firstResult.resolve({
       defaults: {},
       session: { key: "agent:main:main", updatedAt: 1 },
     });
@@ -547,7 +525,7 @@ describe("tui session actions", () => {
     });
     expect(describeSession).toHaveBeenCalledTimes(2);
 
-    resolveSecond?.({
+    secondResult.resolve({
       defaults: {},
       session: { key: "agent:main:main", updatedAt: 2 },
     });
@@ -806,7 +784,6 @@ describe("tui session actions", () => {
 
     await expect(loading).resolves.toMatchObject({ loaded: true });
     const rendered = chatLog.render(120).join("\n");
-    expect(rendered).toContain("Browser prompt received during refresh");
     expect(rendered.match(/Browser prompt received during refresh/g)).toHaveLength(1);
     expect(rendered).toContain("History completed");
     expect(rendered.indexOf("Browser prompt received during refresh")).toBeLessThan(
@@ -1070,7 +1047,6 @@ describe("tui session actions", () => {
 
     await switching;
     const rendered = chatLog.render(120).join("\n");
-    expect(rendered).toContain("Browser prompt in selected session");
     expect(rendered.match(/Browser prompt in selected session/g)).toHaveLength(1);
     expect(rendered).toContain("Other session reply");
     expect(rendered.indexOf("Browser prompt in selected session")).toBeLessThan(
@@ -1880,28 +1856,9 @@ describe("tui session actions", () => {
       session: null,
     });
 
-    const state: TuiStateAccess = {
-      agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
-      sessionScope: "global",
-      agents: [],
-      currentAgentId: "main",
+    const state = createBaseState({
       currentSessionKey: "agent:main:brand-new",
-      currentSessionId: null,
-      activeChatRunId: null,
-      pendingSubmit: null,
-      historyLoaded: false,
-      sessionInfo: {},
-      initialSessionApplied: true,
-      isConnected: true,
-      autoMessageSent: false,
-      toolsExpanded: false,
-      showThinking: false,
-      connectionStatus: "connected",
-      activityStatus: "idle",
-      statusTimeout: null,
-      lastCtrlCAt: 0,
-    };
+    });
 
     const { refreshSessionInfo } = createSessionActions({
       client: makeTuiBackend({ describeSession }),
@@ -2467,15 +2424,8 @@ describe("tui session actions", () => {
   });
 
   it("drops a queued row that terminalizes while session abort is pending", async () => {
-    let resolveAbort:
-      | ((value: { ok: boolean; aborted: boolean; runIds: string[] }) => void)
-      | undefined;
-    const abortChat = vi.fn().mockImplementation(
-      () =>
-        new Promise<{ ok: boolean; aborted: boolean; runIds: string[] }>((resolve) => {
-          resolveAbort = resolve;
-        }),
-    );
+    const abortResult = createDeferred<{ ok: boolean; aborted: boolean; runIds: string[] }>();
+    const abortChat = vi.fn(() => abortResult.promise);
     const dropPendingUser = vi.fn();
     const state = createBaseState({
       activeChatRunId: "run-active",
@@ -2494,7 +2444,7 @@ describe("tui session actions", () => {
     const pendingAbort = abortActive();
     await vi.waitFor(() => expect(abortChat).toHaveBeenCalledOnce());
     state.pendingSubmit = null;
-    resolveAbort?.({ ok: true, aborted: true, runIds: ["run-active", "run-queued"] });
+    abortResult.resolve({ ok: true, aborted: true, runIds: ["run-active", "run-queued"] });
     await pendingAbort;
 
     expect(dropPendingUser).toHaveBeenCalledTimes(1);

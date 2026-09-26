@@ -57,52 +57,34 @@ describe("TUI PTY test support", () => {
     });
   });
 
-  it("applies fixture-specific terminal dimensions", () => {
+  it.each([
+    {
+      name: "applies fixture-specific terminal dimensions",
+      cols: "72",
+      rows: "20",
+      expected: { cols: 72, rows: 20 },
+    },
+    {
+      name: "falls back when fixture-specific terminal dimensions are invalid",
+      cols: "0",
+      rows: "not-a-number",
+      expected: { cols: 100, rows: 30 },
+    },
+  ])("$name", ({ cols, rows, expected }) => {
     nodePtyMocks.spawn.mockReturnValue(createMockPty());
 
     const run = startPty("node", [], {
       cwd: process.cwd(),
       env: {
-        OPENCLAW_TUI_PTY_COLS: "72",
-        OPENCLAW_TUI_PTY_ROWS: "20",
+        OPENCLAW_TUI_PTY_COLS: cols,
+        OPENCLAW_TUI_PTY_ROWS: rows,
       },
       exitTimeoutMs: 1_000,
       outputTimeoutMs: 1_000,
     });
 
-    expect(nodePtyMocks.spawn).toHaveBeenCalledWith(
-      "node",
-      [],
-      expect.objectContaining({
-        cols: 72,
-        rows: 20,
-      }),
-    );
-    expect(run).toMatchObject({ cols: 72, rows: 20 });
-  });
-
-  it("falls back when fixture-specific terminal dimensions are invalid", () => {
-    nodePtyMocks.spawn.mockReturnValue(createMockPty());
-
-    const run = startPty("node", [], {
-      cwd: process.cwd(),
-      env: {
-        OPENCLAW_TUI_PTY_COLS: "0",
-        OPENCLAW_TUI_PTY_ROWS: "not-a-number",
-      },
-      exitTimeoutMs: 1_000,
-      outputTimeoutMs: 1_000,
-    });
-
-    expect(nodePtyMocks.spawn).toHaveBeenCalledWith(
-      "node",
-      [],
-      expect.objectContaining({
-        cols: 100,
-        rows: 30,
-      }),
-    );
-    expect(run).toMatchObject({ cols: 100, rows: 30 });
+    expect(nodePtyMocks.spawn).toHaveBeenCalledWith("node", [], expect.objectContaining(expected));
+    expect(run).toMatchObject(expected);
   });
 
   it.each([

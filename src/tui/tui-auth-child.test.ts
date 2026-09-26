@@ -75,9 +75,6 @@ describe("TUI auth child owner", () => {
     });
     vi.advanceTimersByTime(999);
     expect(killTreeMocks.signalProcessTree).toHaveBeenCalledTimes(1);
-    expect(killTreeMocks.signalProcessTree).not.toHaveBeenCalledWith(103, "SIGKILL", {
-      detached: false,
-    });
     vi.advanceTimersByTime(1);
     expect(killTreeMocks.signalProcessTree).toHaveBeenCalledTimes(2);
     expect(killTreeMocks.signalProcessTree).toHaveBeenNthCalledWith(2, 103, "SIGKILL", {

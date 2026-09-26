@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { withEmbeddedTuiStateLock } from "./tui.js";
 
 function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
@@ -44,18 +45,9 @@ function createSignalProcess() {
   };
 }
 
-async function withTempState<T>(run: (stateDir: string) => Promise<T>): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tui-state-lock-"));
-  try {
-    return await run(stateDir);
-  } finally {
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
-}
-
 describe("embedded TUI state ownership", () => {
   it("refuses local startup while a live Gateway owns the state directory", async () => {
-    await withTempState(async (stateDir) => {
+    await withTempDir("openclaw-tui-state-lock-", async (stateDir) => {
       const lockOptions = createGatewayLockOptions(stateDir);
       const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
       expect(gatewayLock).not.toBeNull();
@@ -77,7 +69,7 @@ describe("embedded TUI state ownership", () => {
   });
 
   it("holds and releases embedded state ownership for the local TUI lifetime", async () => {
-    await withTempState(async (stateDir) => {
+    await withTempDir("openclaw-tui-state-lock-", async (stateDir) => {
       const lockOptions = createGatewayLockOptions(stateDir);
       const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
 
@@ -97,17 +89,14 @@ describe("embedded TUI state ownership", () => {
   });
 
   it("releases embedded state ownership when the local TUI receives SIGTERM", async () => {
-    await withTempState(async (stateDir) => {
+    await withTempDir("openclaw-tui-state-lock-", async (stateDir) => {
       const lockOptions = createGatewayLockOptions(stateDir);
       const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
       const signals = createSignalProcess();
-      let markStarted!: () => void;
-      const started = new Promise<void>((resolve) => {
-        markStarted = resolve;
-      });
+      const started = createDeferred<void>();
       const run = withEmbeddedTuiStateLock(
         async (signal) => {
-          markStarted();
+          started.resolve();
           return await new Promise<never>((_, reject) => {
             signal.addEventListener("abort", () => reject(new Error("local TUI interrupted")), {
               once: true,
@@ -116,8 +105,15 @@ describe("embedded TUI state ownership", () => {
         },
         { gatewayLockOptions: lockOptions, process: signals.processLike },
       );
-      await started;
-      signals.emit("SIGTERM");
+      const settledRun = Promise.allSettled([run]);
+      try {
+        await expect(
+          Promise.race([started.promise.then(() => "started"), run.then(() => "completed")]),
+        ).resolves.toBe("started");
+      } finally {
+        signals.emit("SIGTERM");
+        await settledRun;
+      }
 
       await expect(run).rejects.toThrow("local TUI interrupted");
       await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
