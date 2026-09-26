@@ -368,9 +368,6 @@ Set `OPENCLAW_GPUI_BACKGROUND=1` to open or reuse windows without activating
 the app. Use an isolated `HOME` and `OPENCLAW_GPUI_STATE_DIR`, and an explicit
 synthetic endpoint such as `--url ws://127.0.0.1:9 --token synthetic`.
 This controls app activation; it does not change macOS accessibility semantics.
-On macOS, background mode also leaves embedded webviews unconstructed: Wry
-activates the application when creating even an unfocused child view. Native
-chat controls remain available; embedded pages show an unavailable message.
 
 The `steipete/gpui-bgtest` branch patches `gpui-component` and `gpui-base` to
 the local `~/Projects/oss/gpui-kit` checkout for accessibility validation.
@@ -380,6 +377,8 @@ to expose each inactive window's internally focused element. The matching
 on the same crate identities; their versions and source behavior are unchanged.
 The `gpui-pre-macos` patch at `~/Projects/oss/gpui-pre-macos` attaches the adapter
 to the rendering view that serves as AppKit's first responder.
+The Wry patch at `~/Projects/oss/wry` prevents hidden or unfocused child
+webviews from activating the application during construction.
 These absolute Cargo paths are local proof wiring and must be replaced with
 released dependencies before shipping the app.
 

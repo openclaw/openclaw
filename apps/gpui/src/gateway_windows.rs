@@ -14,7 +14,7 @@ use crate::gateway::{
 
 /// `OPENCLAW_GPUI_BACKGROUND=1` opens and reuses windows without activating the
 /// app, so UI automation (Peekaboo background input) never steals focus.
-pub(crate) fn activates() -> bool {
+fn activates() -> bool {
     std::env::var_os("OPENCLAW_GPUI_BACKGROUND").as_deref() != Some(std::ffi::OsStr::new("1"))
 }
 

@@ -396,18 +396,6 @@ impl WebViewSurface {
     }
 
     pub fn element(&self) -> AnyElement {
-        #[cfg(target_os = "macos")]
-        if !crate::gateway_windows::activates() {
-            // Wry activates NSApplication even for hidden, unfocused child
-            // views. Enforce the no-activation contract before construction.
-            return if self.0.borrow().spec.background {
-                div().into_any_element()
-            } else {
-                div().size_full().p_4().child(
-                    "Embedded pages are unavailable in background mode because the webview engine activates the app.",
-                ).into_any_element()
-            };
-        }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             if let Some(error) = self.0.borrow().error.clone() {
