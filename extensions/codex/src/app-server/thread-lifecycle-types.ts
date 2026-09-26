@@ -151,6 +151,7 @@ export type CodexThreadResumePreparation = {
   assertConfigured: () => void;
   assertCurrent: () => void;
   dispose: () => void;
+  subscriptionMayExist: boolean;
   settledSystemError: boolean;
 };
 
@@ -163,7 +164,10 @@ export type CodexResumeThreadContext = CodexThreadRequestContext & {
   ) => Promise<CodexPluginThreadConfig | undefined>;
   prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult;
   prepareResume: () => Promise<CodexThreadResumePreparation>;
-  releaseRetainedThread: (assertCurrent: () => void) => Promise<void>;
+  releaseRetainedThread: (
+    assertCurrent: () => void,
+    subscriptionMayExist: boolean,
+  ) => Promise<void>;
 };
 
 export type CodexStartThreadContext = CodexThreadRequestContext & {

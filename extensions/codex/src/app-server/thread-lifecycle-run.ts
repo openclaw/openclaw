@@ -129,6 +129,7 @@ export async function startOrResumeThread(
       threadId: string,
       ownerClientId = initialBoundClientId,
       assertCurrent?: () => void,
+      releaseUntrackedSubscription = false,
     ) =>
       releaseCodexBoundLiveThread({
         client: params.client,
@@ -138,6 +139,7 @@ export async function startOrResumeThread(
         lifecycleTiming,
         threadId,
         assertCurrent,
+        releaseUntrackedSubscription,
       });
     if (binding?.pendingSupervisionBranch) {
       const requestContext = await prepareRequestContext();
@@ -678,11 +680,12 @@ export async function startOrResumeThread(
             prebuiltPluginThreadConfig,
             buildLoadedPluginThreadConfig,
             prepareResume: () => prepareCodexThreadResume(params, resumeBinding, requestContext),
-            releaseRetainedThread: async (assertCurrent) => {
+            releaseRetainedThread: async (assertCurrent, subscriptionMayExist) => {
               await releaseRetainedThread(
                 resumeBinding.threadId,
                 resumeBinding.clientId,
                 assertCurrent,
+                subscriptionMayExist,
               );
             },
           });
