@@ -29,7 +29,7 @@ TARBALL="$(env -i HOME="$SCRATCH/home" PATH="$PATH" TMPDIR="$SCRATCH" \
   OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS="${OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS:-}" \
   OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS="${OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS:-}" \
   node "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" \
-  --skip-build --pnpm-pack --allow-unreleased-changelog --output-dir "$SCRATCH/package" \
+  --skip-build --pnpm-pack --runtime-only --allow-unreleased-changelog --output-dir "$SCRATCH/package" \
   --output-name openclaw.tgz)"
 [[ -f "$TARBALL" ]] || { echo "ERROR: Canonical worker package missing" >&2; exit 1; }
 
