@@ -39,6 +39,7 @@ import {
   TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER,
   type TelegramIngressWorkerMessage,
 } from "./telegram-ingress-worker.js";
+import { createTestLifetime } from "./test-lifetime.test-support.js";
 import { createTelegramUpdateOffsetPersistence } from "./update-offset-persistence.js";
 
 async function waitForTelegramTestState<T>(assertion: () => T | Promise<T>): Promise<T> {
@@ -326,8 +327,9 @@ function createIdleIngressWorker() {
 
 function createListeningIngressWorker() {
   let listener: WorkerMessageListener | undefined;
-  const idle = createIdleIngressWorker();
+  const listening = createDeferred<void>();
   const firstAck = createDeferred<void>();
+  const idle = createIdleIngressWorker();
   const ackSpooledUpdate = vi.fn(() => firstAck.resolve());
   const createWorker = vi.fn(() => {
     const worker = idle.createWorker();
@@ -336,6 +338,7 @@ function createListeningIngressWorker() {
       ackSpooledUpdate,
       onMessage: vi.fn((nextListener: WorkerMessageListener) => {
         listener = nextListener;
+        listening.resolve();
         return () => undefined;
       }),
     };
@@ -346,6 +349,7 @@ function createListeningIngressWorker() {
     createWorker,
     emit: (message: TestWorkerMessage) => listener?.(message as TelegramIngressWorkerMessage),
     hasListener: () => listener !== undefined,
+    listening: listening.promise,
     stop: idle.stop,
     workerStop: idle.workerStop,
   };
@@ -503,7 +507,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it.each([
+  it.for([
     {
       name: "preserves a cached bot without making another getMe request",
       seeded: true,
@@ -520,7 +524,7 @@ describe("TelegramPollingSession", () => {
     },
   ])(
     "shares the installed grammY bot capability snapshot: $name",
-    async ({ seeded, topicsEnabled, expectedGetMeCalls, expectedLaneKey }) => {
+    async ({ seeded, topicsEnabled, expectedGetMeCalls, expectedLaneKey }, context) => {
       await withTempSpool(async (tempDir) => {
         const abort = new AbortController();
         const worker = createListeningIngressWorker();
@@ -535,12 +539,11 @@ describe("TelegramPollingSession", () => {
         const getMe = vi.spyOn(bot.api, "getMe").mockResolvedValue(botInfo);
         vi.spyOn(bot.api, "deleteWebhook").mockResolvedValue(true);
         vi.spyOn(bot, "stop").mockResolvedValue(undefined);
-        let releaseHandler: (() => void) | undefined;
-        const handlerCompleted = new Promise<void>((resolve) => {
-          releaseHandler = resolve;
-        });
+        const handlerStarted = createDeferred<void>();
+        const handlerCompleted = createDeferred<void>();
         const handleUpdate = vi.spyOn(bot, "handleUpdate").mockImplementation(async () => {
-          await handlerCompleted;
+          handlerStarted.resolve();
+          await handlerCompleted.promise;
         });
         createTelegramBotMock.mockReturnValueOnce(bot);
         const session = createPollingSession({
@@ -553,8 +556,13 @@ describe("TelegramPollingSession", () => {
           },
         });
         const runPromise = session.runUntilAbort();
+        const lifetime = createTestLifetime(context, async () => {
+          handlerCompleted.resolve();
+          abort.abort();
+          await runPromise;
+        });
         try {
-          await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
+          await lifetime.wait(worker.listening);
           worker.emit({
             type: "update",
             requestId: "topic-capability-1",
@@ -568,12 +576,13 @@ describe("TelegramPollingSession", () => {
             },
             queued: 1,
           });
-          await worker.firstAck;
+          await lifetime.wait(worker.firstAck);
           expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("topic-capability-1", {
             ok: true,
             updateId: 143,
           });
-          await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
+          await lifetime.wait(handlerStarted.promise);
+          expect(handleUpdate).toHaveBeenCalledOnce();
           const { database, kysely } = openTelegramSpoolTestKysely(tempDir);
           const rows = executeSqliteQuerySync(
             database.db,
@@ -586,15 +595,13 @@ describe("TelegramPollingSession", () => {
           expect(getMe).toHaveBeenCalledTimes(expectedGetMeCalls);
           expect(bot.botInfo).toBe(botInfo);
         } finally {
-          releaseHandler?.();
-          abort.abort();
-          await runPromise;
+          await lifetime.close();
         }
       });
     },
   );
 
-  it("spools, persists the actual update id, then acknowledges", async () => {
+  it("spools, persists the actual update id, then acknowledges", async (context) => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const persistUpdateId = vi.fn(async (updateId: number) => {
@@ -611,8 +618,12 @@ describe("TelegramPollingSession", () => {
         getCommittedUpdateId: () => 40,
         persistUpdateId,
       });
+      const lifetime = createTestLifetime(context, async () => {
+        abort.abort();
+        await runPromise;
+      });
       try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
+        await lifetime.wait(worker.listening);
         const update = directUpdate(42, 123, "hello");
         worker.emit({
           type: "update",
@@ -620,7 +631,7 @@ describe("TelegramPollingSession", () => {
           update,
           queued: 1,
         });
-        await worker.firstAck;
+        await lifetime.wait(worker.firstAck);
         expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-gap", {
           ok: true,
           updateId: 42,
@@ -631,13 +642,12 @@ describe("TelegramPollingSession", () => {
           expectDefined(worker.ackSpooledUpdate.mock.invocationCallOrder[0], "worker ack order"),
         );
       } finally {
-        abort.abort();
-        await runPromise;
+        await lifetime.close();
       }
     });
   });
 
-  it("acknowledges a durable update when offset persistence fails", async () => {
+  it("acknowledges a durable update when offset persistence fails", async (context) => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const log = vi.fn();
@@ -652,8 +662,12 @@ describe("TelegramPollingSession", () => {
           throw new Error("offset store unavailable");
         }),
       });
+      const lifetime = createTestLifetime(context, async () => {
+        abort.abort();
+        await runPromise;
+      });
       try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
+        await lifetime.wait(worker.listening);
         const update = directUpdate(43, 123, "hello");
         worker.emit({
           type: "update",
@@ -661,34 +675,44 @@ describe("TelegramPollingSession", () => {
           update,
           queued: 1,
         });
-        await worker.firstAck;
+        await lifetime.wait(worker.firstAck);
         expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-failure", {
           ok: true,
           updateId: 43,
         });
         expectLogIncludes(log, "isolated polling offset persist failed updateId=43");
       } finally {
-        abort.abort();
-        await runPromise;
+        await lifetime.close();
       }
     });
   });
 
-  it("keeps isolated intake moving while the durable offset catches up", async () => {
+  it("keeps isolated intake moving while the durable offset catches up", async (context) => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const offsetWrite = createDeferred<void>();
-      const handleUpdate = vi.fn(async () => undefined);
+      let offsetPersisted = false;
+      const persistUpdateId = vi.fn(async () => {
+        await offsetWrite.promise;
+        offsetPersisted = true;
+      });
+      const handled = createDeferred<void>();
+      const handleUpdate = vi.fn(async () => handled.resolve());
       const worker = createListeningIngressWorker();
       const { runPromise } = startIsolatedIngressSession({
         abort,
         stateDir: tempDir,
         handleUpdate,
         createWorker: worker.createWorker,
-        persistUpdateId: vi.fn(async () => await offsetWrite.promise),
+        persistUpdateId,
+      });
+      const lifetime = createTestLifetime(context, async () => {
+        offsetWrite.resolve();
+        abort.abort();
+        await runPromise;
       });
       try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
+        await lifetime.wait(worker.listening);
         const update = directUpdate(44, 123, "hello");
         worker.emit({
           type: "update",
@@ -696,21 +720,23 @@ describe("TelegramPollingSession", () => {
           update,
           queued: 1,
         });
-        await worker.firstAck;
+        await lifetime.wait(worker.firstAck);
         expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-catching-up", {
           ok: true,
           updateId: 44,
         });
-        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
+        expect(persistUpdateId).toHaveBeenCalledWith(44);
+        expect(offsetPersisted).toBe(false);
+        await lifetime.wait(handled.promise);
+        expect(handleUpdate).toHaveBeenCalledOnce();
+        expect(offsetPersisted).toBe(false);
       } finally {
-        offsetWrite.resolve();
-        abort.abort();
-        await runPromise;
+        await lifetime.close();
       }
     });
   });
 
-  it("recovers offset persistence and suppresses restart replay", async () => {
+  it("recovers offset persistence and suppresses restart replay", async (context) => {
     await withTempSpool(async (tempDir) => {
       let durableUpdateId = 40;
       const writeUpdateId = vi
@@ -736,15 +762,20 @@ describe("TelegramPollingSession", () => {
         persistUpdateId: firstOffsetPersistence.persistUpdateId,
       });
       const update = directUpdate(42, 123, "hello");
+      const firstLifetime = createTestLifetime(context, async () => {
+        firstAbort.abort();
+        await firstSession.runPromise;
+        await firstOffsetPersistence.stop();
+      });
       try {
-        await waitForTelegramTestState(() => expect(firstWorker.hasListener()).toBe(true));
+        await firstLifetime.wait(firstWorker.listening);
         firstWorker.emit({
           type: "update",
           requestId: "first-delivery",
           update,
           queued: 1,
         });
-        await firstWorker.firstAck;
+        await firstLifetime.wait(firstWorker.firstAck);
         expect(firstWorker.ackSpooledUpdate).toHaveBeenCalledWith("first-delivery", {
           ok: true,
           updateId: 42,
@@ -757,9 +788,7 @@ describe("TelegramPollingSession", () => {
           expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
         );
       } finally {
-        firstAbort.abort();
-        await firstSession.runPromise;
-        await firstOffsetPersistence.stop();
+        await firstLifetime.close();
       }
 
       expect(writeUpdateId).toHaveBeenCalledTimes(2);
@@ -782,15 +811,20 @@ describe("TelegramPollingSession", () => {
         getCommittedUpdateId: restartedOffsetPersistence.getCommittedUpdateId,
         persistUpdateId: restartedOffsetPersistence.persistUpdateId,
       });
+      const restartedLifetime = createTestLifetime(context, async () => {
+        restartAbort.abort();
+        await restartedSession.runPromise;
+        await restartedOffsetPersistence.stop();
+      });
       try {
-        await waitForTelegramTestState(() => expect(restartWorker.hasListener()).toBe(true));
+        await restartedLifetime.wait(restartWorker.listening);
         restartWorker.emit({
           type: "update",
           requestId: "restart-replay",
           update,
           queued: 1,
         });
-        await restartWorker.firstAck;
+        await restartedLifetime.wait(restartWorker.firstAck);
         expect(restartWorker.ackSpooledUpdate).toHaveBeenCalledWith("restart-replay", {
           ok: true,
           updateId: 42,
@@ -798,14 +832,12 @@ describe("TelegramPollingSession", () => {
         expect(handleUpdate).toHaveBeenCalledOnce();
         expect(restartWriteUpdateId).not.toHaveBeenCalled();
       } finally {
-        restartAbort.abort();
-        await restartedSession.runPromise;
-        await restartedOffsetPersistence.stop();
+        await restartedLifetime.close();
       }
     });
   });
 
-  it("does not persist or acknowledge success when spooling fails", async () => {
+  it("does not persist or acknowledge success when spooling fails", async (context) => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const persistUpdateId = vi.fn(async () => undefined);
@@ -817,28 +849,31 @@ describe("TelegramPollingSession", () => {
         createWorker: worker.createWorker,
         persistUpdateId,
       });
+      const lifetime = createTestLifetime(context, async () => {
+        abort.abort();
+        await runPromise;
+      });
       try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
+        await lifetime.wait(worker.listening);
         worker.emit({
           type: "update",
           requestId: "spool-failure",
           update: { message: { text: "missing update id" } },
           queued: 1,
         });
-        await worker.firstAck;
+        await lifetime.wait(worker.firstAck);
         expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("spool-failure", {
           ok: false,
           message: "Telegram update missing numeric update_id.",
         });
         expect(persistUpdateId).not.toHaveBeenCalled();
       } finally {
-        abort.abort();
-        await runPromise;
+        await lifetime.close();
       }
     });
   });
 
-  it("drains worker-spooled updates without waiting for the next drain interval", async () => {
+  it("drains worker-spooled updates without waiting for the next drain interval", async (context) => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const handleUpdate = vi.fn(async () => abort.abort());
@@ -851,15 +886,19 @@ describe("TelegramPollingSession", () => {
         createWorker: worker.createWorker,
         drainIntervalMs: 60_000,
       });
+      const lifetime = createTestLifetime(context, async () => {
+        abort.abort();
+        await runPromise;
+      });
       try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
+        await lifetime.wait(worker.listening);
         worker.emit({
           type: "update",
           requestId: "write-1",
           update,
           queued: 1,
         });
-        await worker.firstAck;
+        await lifetime.wait(worker.firstAck);
         expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("write-1", {
           ok: true,
           updateId: 42,
@@ -870,8 +909,7 @@ describe("TelegramPollingSession", () => {
           expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
         );
       } finally {
-        abort.abort();
-        await runPromise;
+        await lifetime.close();
       }
     });
   });

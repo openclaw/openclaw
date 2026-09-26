@@ -67,6 +67,7 @@ export type SessionChangedEventInfo = {
   status: SessionRunStatus | null;
   archived: boolean | null;
   isChatTurn: boolean;
+  isAncestorReference: boolean;
 };
 
 function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
@@ -213,6 +214,23 @@ type ParsedSessionChangedEvent = readonly [
   reason: string | null,
 ];
 
+type AncestorReferences = typeof import("./session-ancestor-references.runtime.ts");
+let ancestorReferences: AncestorReferences | undefined;
+let ancestorReferencesLoading: Promise<AncestorReferences> | undefined;
+
+function rememberAncestor(row: GatewaySessionRow, offered: GatewaySessionRow, revision: string) {
+  if (ancestorReferences) {
+    ancestorReferences.remember(row, offered, revision);
+  } else {
+    void (ancestorReferencesLoading ??= import("./session-ancestor-references.runtime.ts").then(
+      (runtime) => (ancestorReferences = runtime),
+    ))
+      .then((runtime) => runtime.remember(row, offered, revision))
+      // Unavailable reference support retains the authoritative refresh path.
+      .catch(() => undefined);
+  }
+}
+
 export function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent | null {
   const event = recordOrNull(payload);
   if (!event) {
@@ -290,6 +308,7 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
         phase === "error" ||
         reason === "send" ||
         reason === "steer",
+      isAncestorReference: event.ancestorSessionRef === true,
     },
     event,
     source,
@@ -305,7 +324,12 @@ export function sessionChangedSnapshots(payload: unknown): unknown[] {
   }
   return [
     payload,
-    ...event.ancestorSessions.flatMap((value) => {
+    ...[
+      ...event.ancestorSessions.map((value) => [value, false] as const),
+      ...(Array.isArray(event.ancestorSessionRefs)
+        ? event.ancestorSessionRefs.map((value) => [value, true] as const)
+        : []),
+    ].flatMap(([value, reference]) => {
       const row = recordOrNull(value);
       const key = stringValue(row?.key);
       if (!row || !key) {
@@ -317,6 +341,7 @@ export function sessionChangedSnapshots(payload: unknown): unknown[] {
           agentId: stringValue(row.agentId) ?? parseAgentSessionKey(key)?.agentId,
           ts: event.ts,
           ancestorSessions: [],
+          ...(reference ? { ancestorSessionRef: true } : {}),
         },
       ];
     }),
@@ -453,9 +478,20 @@ export function reconcileSessionChangedRow(
   }
   const [info, event, source, reason] = parsed;
   const { key } = info;
+  if (info.isAncestorReference) {
+    return (
+      ancestorReferences?.reconcile(existing, info, source, options, project) ?? {
+        applied: false,
+        key,
+        row: existing,
+      }
+    );
+  }
   const {
     agentId: _agentId,
+    ancestorRevision: _ancestorRevision,
     ancestorSessions: _ancestorSessions,
+    ancestorSessionRefs: _ancestorSessionRefs,
     catalogChanged: _catalogChanged,
     clientRunId: _clientRunId,
     compacted: _compacted,
@@ -566,6 +602,9 @@ export function reconcileSessionChangedRow(
       : undefined,
   );
   const previousOwner = existing.owner?.actor;
+  if (typeof source.ancestorRevision === "string" && reduced.admittedRow) {
+    rememberAncestor(reduced.admittedRow, sanitizeSessionRow(offered), source.ancestorRevision);
+  }
   const nextOwner = reduced.admittedRow?.owner?.actor;
   const ownershipChanged =
     Boolean(reduced.admittedRow) &&
