@@ -133,7 +133,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
             frame = requestAnimationFrame(() => {
               // Let the input frame finish before Lit resumes transcript layout.
               channel = new MessageChannel();
-              channel.port1.onmessage = resume;
+              channel.port1.addEventListener("message", resume, { once: true });
+              channel.port1.start();
               channel.port2.postMessage(null);
             });
           }
