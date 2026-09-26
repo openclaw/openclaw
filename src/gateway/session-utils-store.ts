@@ -37,11 +37,7 @@ import type { SessionEntryListScope } from "../config/sessions/session-accessor.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
-import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { listAgentProvenance } from "../state/agent-provenance.js";
@@ -52,13 +48,10 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-ag
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import {
   type GatewaySessionStoreDiscoveryCache,
-  prepareGatewaySessionStoreTargetAsync,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
-import { loadGatewaySessionStoreReadsAsync } from "./session-utils-store-read.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
-import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
 import type { GatewayAgentRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
@@ -165,16 +158,8 @@ function loadSessionEntryWithMode(
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
   });
-  return selectGatewaySessionEntry(cfg, target, readOnly, opts?.clone !== false);
-}
-
-function selectGatewaySessionEntry(
-  cfg: OpenClawConfig,
-  target: GatewaySessionStoreTargetWithStore,
-  readOnly: boolean,
-  clone: boolean,
-) {
-  const { storePath, store } = target;
+  const storePath = target.storePath;
+  const store = target.store;
   if (!readOnly) {
     for (const storeKey of target.storeKeys) {
       if (isInternalSessionEffectsKey(storeKey)) {
@@ -185,7 +170,7 @@ function selectGatewaySessionEntry(
   const canonicalMatch = findCanonicalStoreMatch(store, target.storeKeys);
   const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
   const entry =
-    readOnly && clone && canonicalMatch?.entry
+    readOnly && opts?.clone !== false && canonicalMatch?.entry
       ? structuredClone(canonicalMatch.entry)
       : canonicalMatch?.entry;
   return {
@@ -220,39 +205,6 @@ export function loadGatewaySessionEntryReadOnly(
   cfg?: OpenClawConfig,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true, cfg);
-}
-
-export function loadGatewaySessionEntryReadOnlyAsync(
-  sessionKey: string,
-  opts?: Pick<SessionEntryListScope, "agentId" | "env">,
-  cfg?: OpenClawConfig,
-) {
-  return loadSessionEntryAsync(sessionKey, opts, true, cfg);
-}
-
-export function loadGatewaySessionEntryAsync(
-  sessionKey: string,
-  opts?: Pick<SessionEntryListScope, "agentId" | "env">,
-  cfg?: OpenClawConfig,
-) {
-  return loadSessionEntryAsync(sessionKey, opts, false, cfg);
-}
-
-async function loadSessionEntryAsync(
-  sessionKey: string,
-  opts: Pick<SessionEntryListScope, "agentId" | "env"> | undefined,
-  readOnly: boolean,
-  cfg: OpenClawConfig = getRuntimeConfig(),
-) {
-  // Incognito metadata remains with its process-held database owner.
-  if (isIncognitoSessionKey(sessionKey)) {
-    return loadSessionEntryWithMode(sessionKey, opts, readOnly, cfg);
-  }
-  const target = await prepareGatewaySessionStoreTargetAsync(
-    { cfg, key: sessionKey, ...opts, projection: "full", readOnly },
-    (reads) => loadGatewaySessionStoreReadsAsync(reads, opts?.env),
-  );
-  return selectGatewaySessionEntry(cfg, target, readOnly, false);
 }
 
 export function resolveCanonicalSessionEntryFromStoreKeys(

@@ -25,7 +25,7 @@ import type {
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
@@ -33,11 +33,6 @@ import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
-import {
-  loadGatewaySessionEntryAsync,
-  loadGatewaySessionEntryReadOnlyAsync,
-} from "../session-utils-store.js";
 import {
   loadSessionEntry,
   resolveDeletedAgentIdFromSessionKey,
@@ -94,7 +89,7 @@ export function prepareChatSendSessionEntry(params: {
   };
 }
 
-async function loadChatSendSessionContext(params: {
+function loadChatSendSessionContext(params: {
   request: NormalizedChatSendRequest;
   context: GatewayRequestHandlerOptions["context"];
 }) {
@@ -108,7 +103,6 @@ async function loadChatSendSessionContext(params: {
   const clientRunId = p.idempotencyKey;
   const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
   const runtimeConfig = context.getRuntimeConfig();
-  const assertRoutingCurrent = captureSessionMutationRouting(runtimeConfig);
   const requestedAgent = resolveRequestedSessionAgentId(
     runtimeConfig,
     rawSessionKey,
@@ -127,9 +121,9 @@ async function loadChatSendSessionContext(params: {
       : rawSessionKey;
   const sessionLoadOptions = { agentId: requestedAgentId };
   const sessionLoadStartedAtMs = performance.now();
-  const sessionLoadResult = await measureDiagnosticsTimelineSpan(
+  const sessionLoadResult = measureDiagnosticsTimelineSpanSync(
     "gateway.chat_send.load_session",
-    () => loadGatewaySessionEntryAsync(sessionLoadKey, sessionLoadOptions, runtimeConfig),
+    () => loadSessionEntry(sessionLoadKey, sessionLoadOptions, runtimeConfig),
     {
       phase: "agent-turn",
       attributes: {
@@ -139,7 +133,6 @@ async function loadChatSendSessionContext(params: {
       },
     },
   );
-  assertRoutingCurrent(context.getRuntimeConfig());
   const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
   const { cfg, agentId, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
   const expectedSessionRoutingContract = normalizeOptionalChatText(
@@ -182,12 +175,12 @@ async function loadChatSendSessionContext(params: {
 }
 
 /** Load and validate the session/model facts shared by later admission and dispatch phases. */
-export async function prepareChatSendSession(params: {
+export function prepareChatSendSession(params: {
   request: NormalizedChatSendRequest;
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
 }) {
-  const loaded = await loadChatSendSessionContext(params);
+  const loaded = loadChatSendSessionContext(params);
   if (!loaded.ok) {
     return loaded;
   }
@@ -269,7 +262,7 @@ export async function prepareChatSendSession(params: {
 }
 
 export type LoadedChatSendSession = Extract<
-  Awaited<ReturnType<typeof prepareChatSendSession>>,
+  ReturnType<typeof prepareChatSendSession>,
   { ok: true }
 >["value"];
 
@@ -303,18 +296,11 @@ export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedC
 }
 
 /** Admission reloads once, retaining the original physical choice and logical identity. */
-export async function loadCurrentChatSendSession(
-  session: PreparedChatSendSession,
-  getRuntimeConfig: () => OpenClawConfig,
-) {
-  const cfg = getRuntimeConfig();
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
-  const latest = await loadGatewaySessionEntryReadOnlyAsync(
-    session.sessionLoadKey,
-    session.sessionLoadOptions,
-    cfg,
-  );
-  assertRoutingCurrent(getRuntimeConfig());
+export function loadCurrentChatSendSession(session: PreparedChatSendSession) {
+  const latest = loadSessionEntry(session.sessionLoadKey, {
+    ...session.sessionLoadOptions,
+    clone: false,
+  });
   if (session.sessionRoutingChanged(latest.cfg)) {
     throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
   }

@@ -387,16 +387,19 @@ export function resolveGatewaySessionStoreTargetWithStore(
 }
 
 /** Worker readers fill the same ordered lookup plan before its synchronous selection. */
-export async function prepareGatewaySessionStoreTargetAsync(
-  params: GatewaySessionStoreLookupParams,
+export async function prepareGatewaySessionStoreTargetReadOnly(
+  params: GatewaySessionStoreLookupParams & {
+    agentId: string;
+    targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
+  },
   prepareReads: (reads: readonly GatewaySessionStoreRead[]) => Promise<void>,
 ): Promise<GatewaySessionStoreTargetWithStore> {
   const normalized = {
     ...params,
     key: normalizeOptionalString(params.key) ?? "",
     exactRead: true,
-    readOnly: params.readOnly ?? true,
-    projection: params.projection ?? ("list" as const),
+    readOnly: true,
+    projection: "list" as const,
   };
   const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
     await prepareReads(plan.reads);

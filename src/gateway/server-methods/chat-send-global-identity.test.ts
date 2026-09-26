@@ -17,12 +17,15 @@ import { readSessionPendingInputByKey } from "../../config/sessions/session-acce
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+} from "../../state/openclaw-agent-db.js";
 import * as profileReader from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import * as sessionUtils from "../session-utils-store.js";
+import * as sessionUtils from "../session-utils.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import type { GatewayClient } from "./types.js";
@@ -234,7 +237,7 @@ it.each<{
     const originalPath = state.path("original.sqlite");
     const replacementPath = state.path("replacement.sqlite");
     if (scenario.replaceDatabase === "symlink") {
-      await closeOpenClawAgentDatabaseByPathAsync(storePath);
+      closeOpenClawAgentDatabaseByPath(storePath);
       fs.renameSync(storePath, originalPath);
       fs.copyFileSync(originalPath, replacementPath);
       fs.symlinkSync(originalPath, storePath);
@@ -331,29 +334,27 @@ it.each<{
           })
       : undefined;
     let databaseReplaced = false;
-    const loadSessionEntry = sessionUtils.loadGatewaySessionEntryAsync;
+    const loadSessionEntry = sessionUtils.loadSessionEntry;
     const replaceAfterSelection = scenario.replaceDatabase
-      ? vi
-          .spyOn(sessionUtils, "loadGatewaySessionEntryAsync")
-          .mockImplementation(async (...args) => {
-            const loaded = await loadSessionEntry(...args);
-            if (!databaseReplaced) {
-              const source = loaded.readSource;
-              if (!source) {
-                throw new Error("Expected the selected physical database before replacement");
-              }
-              await closeOpenClawAgentDatabaseByPathAsync(source.path);
-              if (scenario.replaceDatabase === "copy") {
-                fs.renameSync(source.path, originalPath);
-                fs.copyFileSync(originalPath, source.path);
-              } else {
-                fs.unlinkSync(storePath);
-                fs.symlinkSync(replacementPath, storePath);
-              }
-              databaseReplaced = true;
+      ? vi.spyOn(sessionUtils, "loadSessionEntry").mockImplementation((...args) => {
+          const loaded = loadSessionEntry(...args);
+          if (!databaseReplaced) {
+            const source = loaded.readSource;
+            if (!source) {
+              throw new Error("Expected the selected physical database before replacement");
             }
-            return loaded;
-          })
+            closeOpenClawAgentDatabaseByPath(source.path);
+            if (scenario.replaceDatabase === "copy") {
+              fs.renameSync(source.path, originalPath);
+              fs.copyFileSync(originalPath, source.path);
+            } else {
+              fs.unlinkSync(storePath);
+              fs.symlinkSync(replacementPath, storePath);
+            }
+            databaseReplaced = true;
+          }
+          return loaded;
+        })
       : undefined;
     try {
       const respond = vi.fn();

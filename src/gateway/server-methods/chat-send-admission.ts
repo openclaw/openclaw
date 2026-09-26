@@ -196,8 +196,7 @@ export async function admitChatSend(
   let runInterruptTarget: ReturnType<typeof replyRunRegistry.resolveCurrentInterruptTarget>;
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
-  const commitChatWorkAdmission = async () => {
-    const latestSession = await loadCurrentChatSendSession(session, context.getRuntimeConfig);
+  const commitChatWorkAdmission = () => {
     params.assertCurrent?.();
     const retainedRequestConflict = resolveChatSendRequestConflict(params);
     if (retainedRequestConflict) {
@@ -243,7 +242,7 @@ export async function admitChatSend(
       });
       return;
     }
-    assertSessionTargetCurrent();
+    const latestSession = loadCurrentChatSendSession(session);
     const latestEntry = latestSession.entry;
     const requestConflict = resolveChatSendRequestConflict({
       ...params,
