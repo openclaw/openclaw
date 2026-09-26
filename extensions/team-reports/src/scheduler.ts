@@ -2,18 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { TeamReportsConfig } from "./config.js";
 import { DAY_MS, describePeriod } from "./periods.js";
-import {
-  createReportSources,
-  generateReportPeriods,
-  runPeriods,
-  type ReportSourceFactory,
-  type ResolvedTeamReportsConfig,
-} from "./run.js";
+import { REPORT_RUN_TIMEOUT_MS, type ReportRunRequest } from "./run-worker-contract.js";
+import type { ResolvedTeamReportsConfig } from "./run.js";
 import type { TeamReportsStore } from "./store.js";
 import type { SummaryLlm } from "./summaries.js";
 import type { Person, PeriodDescriptor, SourceStatus } from "./types.js";
 
-const RUN_DEADLINE_MS = 45 * 60_000;
 const STOP_TIMEOUT_MS = 30_000;
 type RunKind = "closed-day" | "intraday" | "manual";
 type ActiveRun = { id: string; controller: AbortController; done: Promise<void> };
@@ -42,6 +36,19 @@ function nextIntradayDue(nowMs: number, everyHours: number): number | undefined 
   return today + Math.min(DAY_MS, (Math.floor((nowMs - today) / interval) + 1) * interval);
 }
 
+function runPeriods(config: TeamReportsConfig, days: PeriodDescriptor[]): PeriodDescriptor[] {
+  const periods = new Map(days.map((day) => [`day/${day.key}`, day]));
+  for (const day of days) {
+    for (const period of ["week", "month"] as const) {
+      if (period === "week" ? config.schedule.weekly : config.schedule.monthly) {
+        const descriptor = describePeriod(period, day.sinceMs);
+        periods.set(`${period}/${descriptor.key}`, descriptor);
+      }
+    }
+  }
+  return [...periods.values()];
+}
+
 export class TeamReportsScheduler {
   private accepting = false;
   private closed = false;
@@ -61,7 +68,8 @@ export class TeamReportsScheduler {
       store: TeamReportsStore;
       llm: SummaryLlm;
       context: Pick<OpenClawPluginServiceContext, "logger" | "serviceHealth">;
-      sources?: ReportSourceFactory;
+      runReports: (params: ReportRunRequest) => Promise<Record<string, SourceStatus>>;
+      closeRunner: () => Promise<void>;
     },
   ) {
     this.roster = options.resolved.people;
@@ -177,6 +185,7 @@ export class TeamReportsScheduler {
     } finally {
       clearTimeout(timeout);
       this.closed = true;
+      await this.options.closeRunner();
       await this.options.store.close();
     }
   }
@@ -253,7 +262,7 @@ export class TeamReportsScheduler {
       kind === "closed-day"
         ? [describePeriod("day", now - DAY_MS), describePeriod("day", now)]
         : [describePeriod("day", now)];
-    await this.begin(kind, days);
+    await this.begin(kind, days, catchUp);
   }
 
   private async closedDayCompleted(key: string): Promise<boolean> {
@@ -266,7 +275,11 @@ export class TeamReportsScheduler {
     );
   }
 
-  private async begin(kind: RunKind, days: PeriodDescriptor[]): Promise<string> {
+  private async begin(
+    kind: RunKind,
+    days: PeriodDescriptor[],
+    reuseCollectedDays = false,
+  ): Promise<string> {
     if (!this.accepting) {
       throw new Error("Team Reports service is not running");
     }
@@ -284,7 +297,7 @@ export class TeamReportsScheduler {
     });
     const deadline = setTimeout(
       () => controller.abort(new Error("Team Reports run exceeded its 45-minute deadline")),
-      RUN_DEADLINE_MS,
+      REPORT_RUN_TIMEOUT_MS,
     );
     const done = Promise.resolve().then(async () => {
       let stats: Record<string, SourceStatus> | undefined;
@@ -293,12 +306,10 @@ export class TeamReportsScheduler {
         await started;
         recorded = true;
         controller.signal.throwIfAborted();
-        stats = await generateReportPeriods({
+        stats = await this.options.runReports({
           ...this.options,
           periods,
-          sources:
-            this.options.sources ??
-            ((runtime) => createReportSources(runtime, Boolean(this.options.resolved.discord))),
+          reuseCollectedDays,
           runtime: { logger: this.options.context.logger, signal: controller.signal },
           onRoster: (people) => {
             this.roster = people;

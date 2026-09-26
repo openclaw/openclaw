@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { applyEdits, format } from "jsonc-parser";
 import { parseMarkdownJson } from "../../components/markdown-json.ts";
@@ -29,16 +30,8 @@ export function toolOutputSourceLabel(card: ToolCard): string {
   );
 }
 
-function parseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-}
-
 function formatResponseText(text: string): string {
-  const value = parseJson(text);
+  const value = safeParseJson(text);
   const execution =
     isRecord(value) &&
     typeof value.wall_time_seconds === "number" &&
@@ -74,7 +67,7 @@ export function formatToolOutput(card: ToolCard): string | undefined {
   ) {
     return text;
   }
-  const parts = parseJson(text);
+  const parts = safeParseJson(text);
   if (
     !Array.isArray(parts) ||
     parts.length === 0 ||

@@ -141,6 +141,7 @@ runbook. Former section links below lead to their corresponding procedures.
 
 <a id="monthly-gateway-extended-stable-publication" />
 <a id="prepare-and-stabilize-the-candidate" />
+<a id="publish-the-npm-packages" />
 <a id="publish-the-release" />
 
 [Extended-stable preparation and publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md).

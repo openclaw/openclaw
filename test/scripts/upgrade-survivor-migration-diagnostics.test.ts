@@ -20,6 +20,15 @@ const baselineGatewayLogs = [
   "missing-load-path/baseline-gateway.log",
   "missing-load-path/baseline-gateway-convergence-refusal.log",
 ];
+const cronCliLogs = [
+  ...["default", "ops"].flatMap((owner) =>
+    ["out", "err"].map((extension) => `legacy-operator-run-survivor-${owner}-owner.${extension}`),
+  ),
+  "legacy-operator-post-update-transcript-0.out",
+  "legacy-operator-post-update-transcript-0.err",
+  "legacy-operator-candidate-transcript-1-earlier.out",
+  "legacy-operator-candidate-transcript-1-earlier.err",
+];
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
 function fixture() {
@@ -69,6 +78,133 @@ function capture(f: ReturnType<typeof fixture>, outcome: "failed" | "passed" = "
   expect(text).not.toContain(privateBody);
   return JSON.parse(text);
 }
+
+function pluginPolicyReceipt() {
+  return {
+    baselineVersion: "2026.9.2",
+    candidateVersion: "2026.9.6",
+    oldAllowlist: ["webhooks"],
+    baselineEnabledPlugins: ["memory-core", "telegram"],
+    candidateEnabledPlugins: ["memory-core", "telegram"],
+    activePlugins: ["memory-core"],
+    configuredChannelPlugin: "telegram",
+    selectedMemoryPlugin: "memory-core",
+    deniedPlugins: ["device-pair"],
+    ordinaryHooksPreserved: true,
+    hooksSha256: "a".repeat(64),
+    hookUnauthorizedStatus: 401,
+  };
+}
+
+function policySuccessSummary(pluginPolicy: unknown) {
+  return {
+    status: "passed",
+    baseline: { spec: "openclaw@2026.9.2", version: "2026.9.2" },
+    candidate: { kind: "tarball", version: "2026.9.6" },
+    scenario: "legacy-operator-state",
+    installedVersion: "2026.9.6",
+    candidateInstallMode: "updater",
+    updateRestartMode: "manual",
+    updateOutcome: "success",
+    phases: [],
+    pluginPolicy,
+  };
+}
+
+it("preserves historical success receipts without adopting policy sidecars", () => {
+  const f = fixture();
+  write(path.join(f.artifacts, "summary.json"), policySuccessSummary(undefined));
+  write(path.join(f.artifacts, "webhooks-only-policy/result.json"), { privateBody });
+  const report = capture(f, "passed");
+  expect(report).not.toHaveProperty("pluginPolicy");
+  expect(report.logs).not.toHaveProperty("webhooks-only-policy/result.json");
+});
+
+it("requires policy evidence when a successful receipt records the completed probe", () => {
+  const f = fixture();
+  write(path.join(f.artifacts, "summary.json"), {
+    ...policySuccessSummary(undefined),
+    phases: [
+      { phase: "verify-sole-plugin-policy", status: "passed", at: "2026-09-25T12:00:00.000Z" },
+    ],
+  });
+  expect(() =>
+    publishDiagnostics(f.artifacts, path.join(f.root, "public"), redactSensitiveText, "passed"),
+  ).toThrow("Missing sole-plugin policy evidence after completed probe");
+});
+
+it("publishes bounded redacted sole-policy success evidence without private configuration", () => {
+  const f = fixture();
+  const policy = pluginPolicyReceipt();
+  write(path.join(f.artifacts, "summary.json"), policySuccessSummary({ ...policy, privateBody }));
+  write(path.join(f.artifacts, "webhooks-only-policy/result.json"), policy);
+  write(path.join(f.artifacts, "webhooks-only-policy/update.json"), {
+    status: "ok",
+    before: { version: "2026.9.2" },
+    after: { version: "2026.9.6" },
+    warning: `token=${secret}`,
+  });
+  write(path.join(f.artifacts, "webhooks-only-policy/candidate-runtime.out"), {
+    plugins: [{ id: "telegram", enabled: true, runtime: { state: "unloaded" } }],
+    warning: `token=${secret}`,
+  });
+  write(path.join(f.artifacts, "webhooks-only-policy/baseline-runtime.out"), {
+    plugins: [{ id: "telegram", installed: true, enabled: true, state: "enabled" }],
+  });
+  write(path.join(f.artifacts, "webhooks-only-policy/openclaw.json"), { privateBody, secret });
+  const report = capture(f, "passed");
+  expect(report.pluginPolicy).toEqual(policy);
+  expect(JSON.parse(report.logs["webhooks-only-policy/result.json"])).toEqual(policy);
+  expect(JSON.parse(report.logs["webhooks-only-policy/update.json"])).toMatchObject({
+    before: { version: "2026.9.2" },
+    after: { version: "2026.9.6" },
+  });
+  expect(JSON.parse(report.logs["webhooks-only-policy/candidate-runtime.out"]).plugins).toEqual([
+    { id: "telegram", enabled: true, runtime: { state: "unloaded" } },
+  ]);
+  expect(JSON.parse(report.logs["webhooks-only-policy/baseline-runtime.out"]).plugins).toEqual([
+    { id: "telegram", installed: true, enabled: true, state: "enabled" },
+  ]);
+  expect(report.logs).not.toHaveProperty("webhooks-only-policy/openclaw.json");
+});
+
+it("keeps policy log limits and symlink protections on successful publication", () => {
+  const f = fixture();
+  write(path.join(f.artifacts, "summary.json"), policySuccessSummary(pluginPolicyReceipt()));
+  const policyRoot = path.join(f.artifacts, "webhooks-only-policy");
+  fs.mkdirSync(policyRoot);
+  const outside = path.join(f.root, "outside.json");
+  write(outside, { privateBody });
+  fs.symlinkSync(outside, path.join(policyRoot, "result.json"));
+  fs.writeFileSync(path.join(policyRoot, "update.json"), "x".repeat(256 * 1024 + 1));
+  const report = capture(f, "passed");
+  expect(report.logs["webhooks-only-policy/result.json"]).toBeNull();
+  expect(report.omissions["webhooks-only-policy/result.json"]).toBe("missing or unsafe file");
+  expect(report.logs["webhooks-only-policy/update.json"]).toBeNull();
+  expect(report.omissions["webhooks-only-policy/update.json"]).toBe(
+    "input exceeds cap; omitted whole",
+  );
+});
+
+it.each([
+  { candidateVersion: "2026.9.5" },
+  { activePlugins: ["device-pair"] },
+  { candidateEnabledPlugins: ["memory-core", "telegram", "unrelated"] },
+  { candidateEnabledPlugins: ["telegram"] },
+  { baselineEnabledPlugins: [] },
+  { hookUnauthorizedStatus: 200 },
+  { hooksSha256: "invalid" },
+  { ordinaryHooksPreserved: false },
+])("rejects inconsistent sole-policy success receipts: %j", (patch) => {
+  const f = fixture();
+  write(
+    path.join(f.artifacts, "summary.json"),
+    policySuccessSummary({ ...pluginPolicyReceipt(), ...patch }),
+  );
+  expect(() =>
+    publishDiagnostics(f.artifacts, path.join(f.root, "public"), redactSensitiveText, "passed"),
+  ).toThrow("Invalid sole-plugin policy evidence");
+});
 
 it.each(["failed", "passed"] as const)(
   "retains redacted sibling refusal evidence after a %s attempt",
@@ -282,11 +418,26 @@ it.each(["input", "output", "entries", "symlink", "directory-symlink", "malforme
   },
 );
 
-it("publishes redacted baseline Gateway and agent-turn failures", () => {
+it("publishes bounded and redacted Gateway, Cron run, agent-turn, and update no-op failures", () => {
   const f = fixture();
+  write(path.join(f.artifacts, "update-noop.json"), {
+    status: "error",
+    reason: "second update failed",
+    warning: `token=${secret}`,
+  });
+  fs.writeFileSync(
+    path.join(f.artifacts, "update-noop.err"),
+    `No-op update refused: token=${secret}\n` + "Update diagnostic line\n".repeat(1000),
+  );
   fs.mkdirSync(path.join(f.artifacts, "missing-load-path"));
   for (const name of baselineGatewayLogs) {
     fs.writeFileSync(path.join(f.artifacts, name), `Baseline startup failed: token=${secret}\n`);
+  }
+  for (const name of cronCliLogs) {
+    fs.writeFileSync(
+      path.join(f.artifacts, name),
+      `Published Cron run failed: token=${secret}\n` + "Cron run diagnostic line\n".repeat(1000),
+    );
   }
   for (const stage of ["baseline", "candidate"]) {
     fs.writeFileSync(
@@ -299,8 +450,24 @@ it("publishes redacted baseline Gateway and agent-turn failures", () => {
     );
   }
   const report = capture(f);
+  expect(JSON.parse(report.logs["update-noop.json"])).toMatchObject({
+    status: "error",
+    reason: "second update failed",
+  });
+  expect(report.logs["update-noop.err"]).toContain("No-op update refused");
+  expect(Buffer.byteLength(JSON.stringify(report.logs["update-noop.err"]))).toBeLessThanOrEqual(
+    16 * 1024,
+  );
+  expect(report.omissions["update-noop.err"]).toBe(
+    "redacted output truncated at a complete line (16 KiB)",
+  );
   for (const name of baselineGatewayLogs) {
     expect(report.logs[name]).toContain("Baseline startup failed");
+  }
+  for (const name of cronCliLogs) {
+    expect(report.logs[name]).toContain("Published Cron run failed");
+    expect(Buffer.byteLength(JSON.stringify(report.logs[name]))).toBeLessThanOrEqual(16 * 1024);
+    expect(report.omissions[name]).toBe("redacted output truncated at a complete line (16 KiB)");
   }
   for (const stage of ["baseline", "candidate"]) {
     expect(report.logs[`legacy-operator-${stage}-turn.err`]).toContain(
@@ -621,6 +788,8 @@ it("omits unsafe migration files and oversized registration collections without 
   fs.symlinkSync(f.root, path.join(f.artifacts, "missing-load-path"));
   fs.symlinkSync(outside, path.join(f.artifacts, "backup-rollback-create.json"));
   fs.writeFileSync(path.join(f.artifacts, "backup-rollback.json"), "x".repeat(262145));
+  fs.symlinkSync(outside, path.join(f.artifacts, "update-noop.json"));
+  fs.writeFileSync(path.join(f.artifacts, "update-noop.err"), "x".repeat(262145));
   fs.writeFileSync(
     path.join(f.artifacts, "sibling-registrations.jsonl"),
     Array.from({ length: 129 }, () =>
@@ -638,6 +807,10 @@ it("omits unsafe migration files and oversized registration collections without 
   expect(report.omissions["backup-rollback-create.json"]).toBe("missing or unsafe file");
   expect(report.logs["backup-rollback.json"]).toBeNull();
   expect(report.omissions["backup-rollback.json"]).toBe("input exceeds cap; omitted whole");
+  expect(report.logs["update-noop.json"]).toBeNull();
+  expect(report.omissions["update-noop.json"]).toBe("missing or unsafe file");
+  expect(report.logs["update-noop.err"]).toBeNull();
+  expect(report.omissions["update-noop.err"]).toBe("input exceeds cap; omitted whole");
   for (const section of ["sessions", "archives", "sibling", "doctor"]) {
     expect(report.migration[section].availability).toBe("unavailable");
   }
@@ -659,7 +832,10 @@ it("does not reuse sibling or startup observations when an attempt fails before 
     ["out", "err"].map((extension) => `legacy-operator-${stage}-turn.${extension}`),
   );
   const logs = [
+    "update-noop.json",
+    "update-noop.err",
     ...turnLogs,
+    ...cronCliLogs,
     ...baselineGatewayLogs,
     "sibling-refusal-update.json",
     "sibling-refusal-status.json",

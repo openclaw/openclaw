@@ -92,6 +92,7 @@ export type PrepareAgentRunDispatchParams = {
   settleWakeReplay?: RequesterSettleWakeReplay;
   runId: string;
   agentDedupeKeys: readonly string[];
+  getOwnedAgentDedupeKeys: () => readonly string[];
   context: AgentTurnContext;
   client: AgentTurnPrincipal | null;
   io: AgentTurnIo;

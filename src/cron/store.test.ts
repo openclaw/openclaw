@@ -23,7 +23,6 @@ import {
   CronJobsStoreChangedError,
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
-  loadCronJobsStoreSync,
   loadCronQuarantinedJobs,
   loadCronStore,
   resolveCronStorePath,
@@ -32,6 +31,7 @@ import {
   saveCronStore,
 } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
+import { loadCronStoreFromDatabase } from "./store/load.kernel.js";
 import type { CronStoreFile } from "./types.js";
 
 let fixtureRoot = "";
@@ -313,13 +313,13 @@ describe("cron store", () => {
     expect(loaded.jobs[1]?.enabled).toBe(false);
   });
 
-  it("does not load legacy top-level array stores synchronously from core", async () => {
+  it("does not load legacy top-level array stores from core", async () => {
     const store = await makeStorePath();
-    const job = makeStore("legacy-array-sync", true).jobs[0];
+    const job = makeStore("legacy-array-core", true).jobs[0];
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify([job], null, 2), "utf-8");
 
-    const loaded = loadCronJobsStoreSync(store.storePath);
+    const loaded = await loadCronStore(store.storePath);
 
     expect(loaded.jobs).toHaveLength(0);
   });
@@ -418,9 +418,9 @@ describe("cron store", () => {
     await expectPathMissing(`${store.storePath}.migrated`);
   });
 
-  it("does not synchronously import legacy files from core reads", async () => {
+  it("does not import legacy files from core reads", async () => {
     const store = await makeStorePath();
-    const valid = makeStore("job-valid-sync-unarchived", true).jobs[0];
+    const valid = makeStore("job-valid-core-unarchived", true).jobs[0];
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(
       store.storePath,
@@ -428,7 +428,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = loadCronJobsStoreSync(store.storePath);
+    const loaded = await loadCronStore(store.storePath);
 
     expect(loaded.jobs.map((job) => job.id)).toEqual([]);
     expect(await fs.stat(store.storePath)).toBeTruthy();
@@ -575,18 +575,6 @@ describe("cron store", () => {
         job: expect.objectContaining({ id: malformed.id }),
       }),
     ]);
-  });
-
-  it("loads split cron state synchronously for task reconciliation", async () => {
-    const { storePath } = await makeStorePath();
-    await saveCronStore(storePath, makeStore("job-sync", true));
-
-    const loaded = loadCronJobsStoreSync(storePath);
-
-    expect(loaded.jobs).toHaveLength(1);
-    expect(loaded.jobs[0]?.id).toBe("job-sync");
-    expect(loaded.jobs[0]?.state).toStrictEqual({});
-    expect(loaded.jobs[0]?.updatedAtMs).toBeTypeOf("number");
   });
 
   it("loads split cron state for legacy jobId rows during doctor migration", async () => {
@@ -1500,9 +1488,9 @@ describe("cron store", () => {
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
   });
 
-  it("does not synchronously import stale split runtime nextRunAtMs from legacy files", async () => {
+  it("does not import stale split runtime nextRunAtMs from legacy files", async () => {
     const { storePath } = await makeStorePath();
-    const payload = makeStore("job-sync-restart-drift", true);
+    const payload = makeStore("job-core-restart-drift", true);
     const staleNextRunAtMs =
       expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").createdAtMs + 3_600_000;
     expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").schedule = {
@@ -1532,7 +1520,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = loadCronJobsStoreSync(storePath);
+    const loaded = await loadCronStore(storePath);
 
     expect(loaded.jobs).toEqual([]);
   });
@@ -1879,7 +1867,7 @@ describe("cron jobs fingerprint guard", () => {
           sql.startsWith("select ") && sql.includes('from "cron_jobs"') ? "jobs" : null,
         );
         try {
-          expect(loadCronJobsStoreSync(storePath)).toEqual(loaded.store);
+          expect(loadCronStoreFromDatabase(db, storeKey).store).toEqual(loaded.store);
           expect(loaded.jobsFingerprint).toBe(fingerprint);
           expect(loaded.store.jobs.map((job) => job.id)).toEqual(["z", "\u{10000}", "\ue000"]);
           expect(loaded.invalidConfigRows).toHaveLength(1);

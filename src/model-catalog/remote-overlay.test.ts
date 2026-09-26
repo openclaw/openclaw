@@ -52,6 +52,11 @@ describe("remote model catalog overlay", () => {
     const snapshot = captureRemoteModelCatalogStartupSnapshot();
     const overlay = getRemoteModelCatalogProviderOverlay({}, "anthropic");
     const pricing = getRemoteModelCatalogPricing({});
+    expect(overlay?.models).toEqual([{ id: "new" }]);
+    expect(pricing?.["openai/gpt-external"]).toEqual({
+      cost: { input: 2.5, output: 10 },
+      explicit: false,
+    });
     expect(checkRemoteModelCatalogUpdate({}, { sourceUrl, generatedAt: 200 })).toBe("unchanged");
     expect(mocks.read).toHaveBeenCalledOnce();
 
@@ -212,16 +217,6 @@ describe("remote model catalog overlay", () => {
       cost: { input: 5, output: 20 },
       explicit: false,
     });
-  });
-
-  it("loads a newer compatible bundle once", () => {
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toHaveProperty("models");
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toHaveProperty("models");
-    expect(getRemoteModelCatalogPricing({})?.["openai/gpt-external"]).toEqual({
-      cost: { input: 2.5, output: 10 },
-      explicit: false,
-    });
-    expect(mocks.read).toHaveBeenCalledOnce();
   });
 
   it("keeps startup rows and prices when the configured source changes", () => {

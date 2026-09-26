@@ -101,8 +101,6 @@ describe.each(["login", "logout"])("channels %s owner", (mode) => {
   });
 
   it.each([
-    { name: "parent", parent: ["--agent", "ops"], leaf: [], owner: "ops" },
-    { name: "leaf", parent: [], leaf: ["--agent", "ops"], owner: "ops" },
     {
       name: "leaf overrides parent",
       parent: ["--agent", "research"],

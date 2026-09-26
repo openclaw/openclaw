@@ -29,7 +29,6 @@ import {
   getCommandPaletteModelItems,
   getStaticCommandPaletteCatalogItems,
   loadCommandPaletteCatalogItems,
-  toCommandPaletteItems,
   type CommandPaletteItem,
 } from "./command-palette-catalog-search.ts";
 import {
@@ -43,8 +42,6 @@ import {
 } from "./command-palette-session-search.ts";
 import { renderCommandPalette, type PaletteFilter } from "./command-palette-view.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.ts";
-
-type PaletteItem = CommandPaletteItem;
 
 const SEARCH_DEBOUNCE_MS = 200;
 const SESSION_SEARCH_MIN_CHARS = 2;
@@ -129,8 +126,8 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @state() private searchQuery = "";
   @state() private promptMode = false;
   @state() private activeId: string | null = null;
-  @state() private sessionItems: readonly PaletteItem[] = [];
-  @state() private catalogItems: readonly PaletteItem[] = [];
+  @state() private sessionItems: readonly CommandPaletteItem[] = [];
+  @state() private catalogItems: readonly CommandPaletteItem[] = [];
   @state() private sessionSearchPending = false;
   @state() private sessionSearchFailed = false;
   @state() private sessionSearchPartial = false;
@@ -422,7 +419,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         this.context?.agentSelection === context.agentSelection &&
         gateway.snapshot.client === client
       ) {
-        this.catalogItems = toCommandPaletteItems(items);
+        this.catalogItems = items;
         this.catalogLoad = { ...this.catalogLoad, loadedAt: Date.now() };
       }
     });
@@ -640,14 +637,12 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
           : null,
       primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
       catalogItems: [
-        ...toCommandPaletteItems(
-          getStaticCommandPaletteCatalogItems(
-            hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
-            this.context?.nativeDeviceSettings,
-          ),
+        ...getStaticCommandPaletteCatalogItems(
+          hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
+          this.context?.nativeDeviceSettings,
         ),
         ...this.catalogItems,
-        ...toCommandPaletteItems(getCommandPaletteModelItems(models)),
+        ...getCommandPaletteModelItems(models),
       ],
       sessionSearchPending: this.sessionSearchPending,
       catalogSearchPending: Boolean(

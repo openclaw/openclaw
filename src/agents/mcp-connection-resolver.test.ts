@@ -13,6 +13,7 @@ import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
@@ -335,6 +336,7 @@ describe("mcp connection resolver helpers", () => {
         sourceDigests: {},
       };
       const gatewayReload = createGatewayReloadHandlers({
+        scheduler: createTestGatewayScheduler(),
         deps: {},
         broadcast() {},
         getState: () => gatewayState,
@@ -700,23 +702,5 @@ describe("mcp connection resolver helpers", () => {
       { url: "https://live.example/sse-case" },
     );
     expect(sseCase.transport).toBe("sse");
-  });
-
-  it("builds stable requester cache keys", () => {
-    expect(
-      buildMcpRequesterRuntimeCacheKey({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
-    ).toBe(
-      JSON.stringify({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
-    );
   });
 });

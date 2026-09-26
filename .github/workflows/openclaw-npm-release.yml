@@ -69,7 +69,7 @@ on:
         required: false
         type: string
       release_candidate_branch:
-        description: Canonical extended-stable branch when protected release tooling or trusted-main recovery promotes its immutable tag
+        description: Canonical extended-stable branch when protected release tooling promotes its immutable tag
         required: false
         default: ""
         type: string
@@ -132,6 +132,8 @@ jobs:
       actions: read
       attestations: read
       contents: read
+    outputs:
+      parent_approval: ${{ steps.receipt.outputs.parent_approval }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -165,19 +167,14 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          tideclaw_alpha_publish=false
-          extended_stable_publish=false
-          sha_pinned_release_publish=false
           release_candidate_branch="${RELEASE_CANDIDATE_BRANCH:-}"
-          if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            tideclaw_alpha_publish=true
-          fi
-          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && "${WORKFLOW_REF}" == refs/heads/extended-stable/* ]]; then
-            extended_stable_publish=true
+          if [[ ! "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
+            echo "Real npm publish requires a protected release-publish/<sha12>-<n> tooling tag. Mint one with pnpm release:publish-preflight / ensureReleasePublishToolingTag, then dispatch with --ref release-publish/.... Use preflight_only=true for branch validation." >&2
+            exit 1
           fi
           if [[ -n "${release_candidate_branch}" ]]; then
-            if [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" ]] || { [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; }; then
-              echo "release_candidate_branch requires extended-stable publication from trusted main or protected release-publish tooling." >&2
+            if [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" ]]; then
+              echo "release_candidate_branch requires extended-stable publication from protected release-publish tooling." >&2
               exit 1
             fi
             if [[ ! "${RELEASE_TAG}" =~ ^v([0-9]{4})\.([1-9][0-9]*)\.[1-9][0-9]*$ ]]; then
@@ -189,7 +186,6 @@ jobs:
               echo "release_candidate_branch must be ${expected_candidate_branch} for ${RELEASE_TAG}." >&2
               exit 1
             fi
-            extended_stable_publish=true
           fi
           if [[ "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
             workflow_sha_prefix="${BASH_REMATCH[1]}"
@@ -206,11 +202,6 @@ jobs:
               echo "SHA-pinned release-publish tag does not resolve to the OpenClaw npm workflow SHA." >&2
               exit 1
             }
-            sha_pinned_release_publish=true
-          fi
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ "${tideclaw_alpha_publish}" != "true" ]] && [[ "${extended_stable_publish}" != "true" ]] && [[ "${sha_pinned_release_publish}" != "true" ]]; then
-            echo "Real publish runs must be dispatched from main, release/YYYY.M.PATCH, a protected SHA-pinned release-publish tag, the exact validated extended-stable branch, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
-            exit 1
           fi
 
       - name: Require preflight artifact promotion on real publish
@@ -315,10 +306,17 @@ jobs:
           RUN_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" --jq '{workflowName: .name, headBranch: .head_branch, headSha: .head_sha, event, status, conclusion, url: .html_url, runAttempt: .run_attempt, repository: .repository.full_name, path}')"
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
+      - name: Checkout trusted approval verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-workflow
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
       - name: Verify release approval receipt
         id: receipt
-        # The extended-stable route checks out the release tag, not this tooling.
-        if: inputs.release_candidate_branch == ''
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
@@ -334,7 +332,7 @@ jobs:
             echo "Direct dispatch keeps this workflow's environment gate; no parent receipt consumed."
             exit 0
           fi
-          node scripts/release-approval-receipt.mjs verify \
+          node trusted-workflow/scripts/release-approval-receipt.mjs verify \
             --output "$RUNNER_TEMP/openclaw-release-approval/approval.json"
           gh attestation verify "$RUNNER_TEMP/openclaw-release-approval/approval.json" \
             --repo "$GITHUB_REPOSITORY" \
@@ -344,13 +342,24 @@ jobs:
             --source-ref "$EXPECTED_WORKFLOW_FULL_REF" \
             --deny-self-hosted-runners
 
+  approve_openclaw_npm_release:
+    needs: validate_publish_request
+    if: ${{ !inputs.preflight_only && needs.validate_publish_request.result == 'success' && needs.validate_publish_request.outputs.parent_approval != 'receipt' }}
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+    steps:
+      - name: Approve OpenClaw npm release
+        run: echo "Approved direct OpenClaw npm release."
+
   publish_openclaw_npm:
     # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
     # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
-    needs: [validate_publish_request]
-    if: ${{ !inputs.preflight_only }}
+    needs: [validate_publish_request, approve_openclaw_npm_release]
+    if: ${{ always() && !cancelled() && !inputs.preflight_only && needs.validate_publish_request.result == 'success' && (needs.approve_openclaw_npm_release.result == 'success' || (needs.approve_openclaw_npm_release.result == 'skipped' && needs.validate_publish_request.outputs.parent_approval == 'receipt')) }}
     runs-on: ubuntu-latest
-    environment: npm-release
+    environment: npm-publish
     permissions:
       actions: read
       attestations: read
@@ -383,28 +392,6 @@ jobs:
           # Frozen preflight evidence already binds the exact release SHA and
           # tarball, so real publishes do not need the repository's full history.
           fetch-depth: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 0 || (inputs.preflight_run_id != '' && 1 || 0) }}
-
-      - name: Validate Tideclaw alpha publish target
-        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-          WORKFLOW_REF: ${{ github.ref }}
-        run: |
-          set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" == *"-alpha."* ]]; then
-            echo "Tideclaw alpha publish runs must target an alpha prerelease tag." >&2
-            exit 1
-          fi
-          if [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            echo "Tideclaw alpha publish runs must run from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
-            exit 1
-          fi
-          alpha_branch="${WORKFLOW_REF#refs/heads/}"
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
-          if ! git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
-            echo "Alpha publish tag must be reachable from ${alpha_branch}." >&2
-            exit 1
-          fi
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -538,7 +525,7 @@ jobs:
               exit 1
             }
             workflow_tag="${WORKFLOW_REF#refs/tags/}"
-            # The npm-release environment can wait after request validation.
+            # Direct dispatch can wait for npm-release approval after request validation.
             # Re-read the tag here so a later move cannot authorize publication.
             remote_workflow_sha="$(
               gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${workflow_tag}" \
@@ -931,6 +918,15 @@ jobs:
         id: previous_extended_stable
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
         run: node scripts/openclaw-npm-extended-stable-release.mjs capture-selector
+
+      - name: Wait for the release parent's npm authorization
+        if: needs.validate_publish_request.outputs.parent_approval == 'receipt'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: node trusted-workflow/scripts/release-approval-receipt.mjs wait-npm-authorization
 
       - name: Publish
         id: publish

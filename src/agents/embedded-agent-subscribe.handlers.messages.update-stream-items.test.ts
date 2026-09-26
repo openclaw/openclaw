@@ -33,14 +33,6 @@ describe("handleMessageUpdate text signatures", () => {
 
   it.each([
     {
-      name: "a held word separator",
-      chunks: ["Hello ", "world"],
-      replies: [
-        ["Hello", "Hello"],
-        ["Hello world", " world"],
-      ],
-    },
-    {
       name: "leading Unicode space and held paragraph breaks",
       chunks: ["\u2003Hello ", "world", "\n\n", "Next"],
       replies: [

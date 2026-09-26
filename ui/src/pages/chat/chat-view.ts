@@ -104,8 +104,6 @@ export type ChatProps = Omit<
     ) => Promise<boolean>;
     presented?: boolean;
     historyState?: ChatState;
-    onSessionKeyChange: (next: string) => void;
-    thinkingLevel: string | null;
     startupStatus?: ChatRunStartupStatus | null;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     providerReviewNotice?: TemplateResult | typeof nothing;
@@ -129,7 +127,6 @@ export type ChatProps = Omit<
     onRefresh: () => void;
     onToggleFocusMode?: () => void;
     onDismissError?: () => void;
-    onClearHistory?: () => void;
     agentsList: {
       agents: Array<{
         id: string;
@@ -138,8 +135,6 @@ export type ChatProps = Omit<
       }>;
       defaultId?: string;
     } | null;
-    onAgentChange: (agentId: string) => void;
-    onNavigateToAgent?: () => void;
     onSessionSelect?: (sessionKey: string) => void;
     onRevealWorkspaceFile?: (path: string) => void;
     header?: TemplateResult | typeof nothing;

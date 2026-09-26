@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -5,7 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
+  captureAgentDatabaseAdmission,
+  createAgentDatabaseInspectionRefusal,
   evaluateAgentDatabaseAdmissions,
+  preparePendingAgentDatabase,
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "./agent-database-admission.js";
@@ -29,6 +33,49 @@ afterEach(() => {
 });
 
 describe("agent database admission", () => {
+  it("retains its selected agent and state while observing current refusal publications", () => {
+    const stateDir = tempDirs.make("openclaw-prepared-admission-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const assertAdmitted = captureAgentDatabaseAdmission("  MAIN  ", { env });
+    expect(assertAdmitted).not.toThrow();
+    env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-other-admission-");
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const refusal = createAgentDatabaseInspectionRefusal({
+      agentId: "main",
+      paths: [],
+      reason: "Original admission refused",
+    });
+    recordAgentDatabaseAdmissions([refusal], options);
+    expect(assertAdmitted).toThrow(expect.objectContaining({ refusal }));
+    expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
+    const replacement = { ...refusal, reason: "Replacement admission refused" };
+    recordAgentDatabaseAdmissions([replacement], options);
+    expect(assertAdmitted).toThrow(expect.objectContaining({ refusal: replacement }));
+    recordAgentDatabaseAdmissions([], options);
+    expect(assertAdmitted).not.toThrow();
+  });
+
+  it("uses the current preparation scope and refuses an escaped scope after preparation ends", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-prepared-admission-scope-") };
+    const assertAdmitted = captureAgentDatabaseAdmission("main", { env });
+    const refusal = createAgentDatabaseInspectionRefusal({
+      agentId: "main",
+      paths: [],
+      reason: "Preparation owns pending admission",
+      pending: true,
+    });
+    recordAgentDatabaseAdmissions([refusal], { env });
+    expect(assertAdmitted).toThrow(expect.objectContaining({ refusal }));
+    let inPreparation = () => {};
+    await preparePendingAgentDatabase(refusal, { env, assertCurrent() {} }, async () => {
+      expect(assertAdmitted).not.toThrow();
+      const runInScope = AsyncLocalStorage.snapshot();
+      inPreparation = () => runInScope(assertAdmitted);
+    });
+    expect(assertAdmitted).not.toThrow();
+    expect(inPreparation).toThrow("Agent database preparation has ended: main");
+  });
+
   it.each([
     { role: "secondary", agentId: "cleaner", isolate: true },
     { role: "registered secondary", agentId: "cleaner", isolate: true },

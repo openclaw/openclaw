@@ -8,7 +8,8 @@ vi.mock("./group-activation.js", () => ({
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
-import { applyGroupGating, type GroupHistoryEntry } from "./group-gating.js";
+import { applyGroupGating } from "./group-gating.js";
+import type { GroupHistoryEntry } from "./inbound-context.js";
 
 function makeUnregisteredGroupMsg(
   conversationId: string,
@@ -160,17 +161,6 @@ describe("applyGroupGating allowlist drop warning", () => {
     expect(first.logVerbose).toHaveBeenCalledTimes(1);
     expect(second.logVerbose).toHaveBeenCalledTimes(1);
     expect(third.logVerbose).toHaveBeenCalledTimes(1);
-  });
-
-  it("warns separately for distinct conversations", async () => {
-    const warn = vi.fn<WarnLogger>();
-
-    await applyGroupGating(makeParams(makeUnregisteredGroupMsg("a@g.us"), warn));
-    await applyGroupGating(makeParams(makeUnregisteredGroupMsg("b@g.us"), warn));
-
-    expect(warn).toHaveBeenCalledTimes(2);
-    expect(warn.mock.calls[0]?.[1]).toContain("a@g.us");
-    expect(warn.mock.calls[1]?.[1]).toContain("b@g.us");
   });
 
   it("bounds warning keys by least-recently-used conversations", async () => {

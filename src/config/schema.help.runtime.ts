@@ -165,7 +165,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Collector-mode subagent orchestration. Enabled by default; set false to opt out. Tool permissions still apply to agents_wait and swarm spawn options.",
   "tools.swarm.enabled":
     "Enables collector-mode subagents and agents_wait. Default is on; set false to opt out.",
-  "tools.swarm.maxConcurrent": "Maximum concurrently running collector children per swarm group.",
+  "tools.swarm.maxConcurrent":
+    "Maximum running collector children in each swarm group's separate execution lane (default: 32), independent of ordinary subagent concurrency. Each running child uses one model stream and one Code Mode worker isolate. Group admission limits still apply.",
   "tools.swarm.maxChildrenPerGroup": "Maximum live collector children per swarm group.",
   "tools.swarm.maxTotalPerGroup": "Maximum lifetime collector spawns per swarm group.",
   "tools.swarm.waitTimeoutSecondsMax": "Maximum timeout accepted by agents_wait, in seconds.",

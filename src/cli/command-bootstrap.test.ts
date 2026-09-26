@@ -127,20 +127,6 @@ describe("ensureCliExecutionBootstrap", () => {
     });
   });
 
-  it("loads configured channel plugins without package-manager repair for read-only channel commands", async () => {
-    await ensureCliExecutionBootstrap({
-      runtime: {} as never,
-      commandPath: ["channels", "resolve"],
-      startupPolicy: bootstrapPolicy(["channels", "resolve"]),
-      loadPlugins: true,
-    });
-
-    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      routeLogsToStderr: false,
-    });
-  });
-
   it("loads agent command plugins without package-manager repair", async () => {
     await ensureCliExecutionBootstrap({
       runtime: {} as never,

@@ -1,8 +1,10 @@
 /** Gateway-backed archive and delete commands for stored sessions. */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   PreservedSessionWorktree,
   SessionRow,
   SessionsDeleteResult,
+  SessionsPatchResult,
   WorktreePreservationReason,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
@@ -54,12 +56,6 @@ type SessionsDescribeResult = {
   session: SessionsListRow | null;
 };
 
-type SessionsPatchResult = {
-  ok?: boolean;
-  key?: string;
-  entry?: { archivedAt?: number };
-};
-
 type SessionsLifecycleRpcOptions = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
 function resolveLifecycleAgentId(rawAgent: string | undefined): string | undefined {
@@ -98,7 +94,7 @@ async function listRequestedSessions(
   rpcOptions: SessionsLifecycleRpcOptions,
 ): Promise<Map<string, SessionsListRow>> {
   const found = new Map<string, SessionsListRow>();
-  for (const key of new Set(keys)) {
+  for (const key of keys) {
     const response = (await callGatewayFromCliWithTransport(
       "sessions.describe",
       rpcOptions,
@@ -194,7 +190,7 @@ async function runSessionsLifecycleCommand(
   opts: SessionsLifecycleCliOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const keys = opts.keys.map((key) => key.trim());
+  const keys = uniqueStrings(opts.keys.map((key) => key.trim()));
   const rpcOptions: SessionsLifecycleRpcOptions = {
     url: opts.url,
     token: opts.token,
@@ -303,7 +299,7 @@ async function runSessionsLifecycleCommand(
           },
           { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
         )) as SessionsPatchResult;
-        if (response?.ok !== true || response.entry?.archivedAt === undefined) {
+        if (!response?.ok || response.entry?.archivedAt === undefined) {
           throw new Error("Gateway did not confirm that the session was archived.");
         }
         results[index] = { key: response.key ?? session.key, ok: true, status: "archived" };

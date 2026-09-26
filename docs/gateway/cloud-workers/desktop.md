@@ -52,6 +52,17 @@ machine is disposable: save required outputs before stopping it. Attaching a
 machine does not automatically synchronize the primary workspace; the agent
 must copy the required files or prepare the project on the machine.
 
+If stopping a conversation environment fails, cleanup retries with exponential
+backoff from 30 seconds to five minutes, on the next reconciliation sweep.
+After ten attempts or one hour, whichever comes first, cleanup is parked for
+the rest of that Gateway process. Environment status reports an error with the
+lease ID, last failure, and recovery instructions; the lease stays owned and
+blocks replacement until cleanup is confirmed. For Crabbox, inspect it with
+`crabbox leases list` and run `crabbox stop <lease>` as needed, then retry Stop
+in the conversation. An explicit Stop or Gateway restart starts a fresh retry
+budget. A text-only 404 from Crabbox is an unknown cleanup outcome, not proof
+that the lease was released.
+
 Stop attached machines before downgrading to a build without conversation
 attachments. Older builds can read the database, but they treat these machines
 as ordinary unassigned environments and do not maintain conversation activity

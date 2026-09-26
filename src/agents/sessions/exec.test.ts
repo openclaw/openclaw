@@ -3,6 +3,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { execCommand, type ExecOptions } from "./exec.js";
 
 const {
   completionMock,
@@ -82,6 +83,14 @@ function createStubChild(): StubChild {
   return child;
 }
 
+function startCommand(options?: ExecOptions) {
+  const child = createStubChild();
+  const wait = createDeferred<number | null>();
+  spawnMock.mockReturnValue(child);
+  completionMock.mockReturnValue(wait.promise);
+  return { child, wait, resultPromise: execCommand("cmd", [], "/tmp", options) };
+}
+
 describe("execCommand", () => {
   beforeEach(() => {
     createTerminationControllerMock.mockReset();
@@ -108,13 +117,7 @@ describe("execCommand", () => {
   it("bounds retained stdout and stderr independently", async () => {
     // stdout and stderr are separate buffers; a noisy stream must not evict the
     // diagnostic tail from the other stream.
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
-
-    const resultPromise = execCommand("cmd", [], "/tmp", { maxOutputChars: 256 });
+    const { child, wait, resultPromise } = startCommand({ maxOutputChars: 256 });
     child.stdout.emit("data", Buffer.from(`${"a".repeat(300)}stdout-tail`));
     child.stderr.emit("data", Buffer.from(`${"b".repeat(300)}stderr-tail`));
     wait.resolve(0);
@@ -142,7 +145,6 @@ describe("execCommand", () => {
     spawnMock.mockReturnValue(child);
     completionMock.mockReturnValue(completion.promise);
     waitForSpawnMock.mockReturnValue(spawned.promise);
-    const { execCommand } = await import("./exec.js");
 
     const result = execCommand("cmd", [], "/tmp");
     child.pid = 1234;
@@ -165,7 +167,6 @@ describe("execCommand", () => {
     const wait = createDeferred<number | null>();
     spawnMock.mockReturnValue(child);
     completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
 
     const resultPromise = execCommand("cmd", ["arg"], "/tmp");
     wait.resolve(0);
@@ -194,7 +195,6 @@ describe("execCommand", () => {
     const wait = createDeferred<number | null>();
     spawnMock.mockReturnValue(child);
     completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
 
     const resultPromise = execCommand("cmd", [], "/tmp", { maxOutputChars: 3 });
     child.stdout.emit("data", Buffer.from("abcdef"));
@@ -207,13 +207,7 @@ describe("execCommand", () => {
   });
 
   it("keeps caller-capped retained output UTF-16 safe", async () => {
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
-
-    const resultPromise = execCommand("cmd", [], "/tmp", { maxOutputChars: 2 });
+    const { child, wait, resultPromise } = startCommand({ maxOutputChars: 2 });
     child.stdout.emit("data", Buffer.from("A😀B"));
     child.stderr.emit("data", Buffer.from("C😀D"));
     wait.resolve(0);
@@ -226,13 +220,7 @@ describe("execCommand", () => {
   });
 
   it("preserves UTF-8 characters split across stdout and stderr chunks", async () => {
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
-
-    const resultPromise = execCommand("cmd", [], "/tmp");
+    const { child, wait, resultPromise } = startCommand();
     const stdout = Buffer.from("stdout-😀-complete", "utf8");
     const stderr = Buffer.from("stderr-😀-complete", "utf8");
     child.stdout.emit("data", stdout.subarray(0, 9));
@@ -247,13 +235,7 @@ describe("execCommand", () => {
   });
 
   it("preserves leading UTF-8 BOMs in stdout and stderr", async () => {
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
-
-    const resultPromise = execCommand("cmd", [], "/tmp");
+    const { child, wait, resultPromise } = startCommand();
     const stdout = Buffer.from("\uFEFFstdout", "utf8");
     const stderr = Buffer.from("\uFEFFstderr", "utf8");
     child.stdout.emit("data", stdout.subarray(0, 1));
@@ -271,13 +253,7 @@ describe("execCommand", () => {
 
   it("decodes split GBK stdout on legacy-codepage Windows", async () => {
     windowsLegacyOutput.enabled = true;
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
-
-    const resultPromise = execCommand("cmd", [], "/tmp");
+    const { child, wait, resultPromise } = startCommand();
     child.stdout.emit("data", Buffer.from([0xb2]));
     child.stdout.emit("data", Buffer.from([0xe2, 0xca]));
     child.stdout.emit("data", Buffer.from([0xd4]));
@@ -288,13 +264,7 @@ describe("execCommand", () => {
 
   it("decodes split GBK stderr on legacy-codepage Windows", async () => {
     windowsLegacyOutput.enabled = true;
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
-
-    const resultPromise = execCommand("cmd", [], "/tmp");
+    const { child, wait, resultPromise } = startCommand();
     child.stderr.emit("data", Buffer.from([0xc4]));
     child.stderr.emit("data", Buffer.from([0xe3, 0xba]));
     child.stderr.emit("data", Buffer.from([0xc3]));
@@ -305,13 +275,7 @@ describe("execCommand", () => {
 
   it("preserves split UTF-8 output on legacy-codepage Windows", async () => {
     windowsLegacyOutput.enabled = true;
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
-
-    const resultPromise = execCommand("cmd", [], "/tmp");
+    const { child, wait, resultPromise } = startCommand();
     const stdout = Buffer.from("测试", "utf8");
     child.stdout.emit("data", stdout.subarray(0, 1));
     child.stdout.emit("data", stdout.subarray(1, 3));
@@ -322,13 +286,7 @@ describe("execCommand", () => {
   });
 
   it("flushes incomplete UTF-8 sequences when the process exits", async () => {
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
-
-    const resultPromise = execCommand("cmd", [], "/tmp");
+    const { child, wait, resultPromise } = startCommand();
     child.stdout.emit("data", Buffer.from([0xe2, 0x82]));
     child.stderr.emit("data", Buffer.from([0xf0, 0x9f, 0x98]));
     wait.resolve(0);
@@ -339,13 +297,7 @@ describe("execCommand", () => {
   });
 
   it("fails instead of silently truncating default exec output", async () => {
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
-
-    const resultPromise = execCommand("cmd", [], "/tmp");
+    const { child, wait, resultPromise } = startCommand();
     child.stdout.emit("data", Buffer.from(`${"x".repeat(16 * 1024 * 1024 - 1)}😀`));
     wait.resolve(0);
 
@@ -369,7 +321,6 @@ describe("execCommand", () => {
     const wait = createDeferred<number | null>();
     spawnMock.mockReturnValue(child);
     completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
 
     const resultPromise = execCommand("cmd", [], "/tmp", { timeout: 10 });
     await vi.advanceTimersByTimeAsync(10);
@@ -393,7 +344,6 @@ describe("execCommand", () => {
       spawnMock.mockReturnValue(child);
       completionMock.mockReturnValue(completion.promise);
       waitForSpawnMock.mockReturnValue(started.promise);
-      const { execCommand } = await import("./exec.js");
       const result = execCommand("cmd", [], "/tmp", {
         signal: controller.signal,
         ...(reason === "timeout" ? { timeout: 10 } : {}),
@@ -428,15 +378,9 @@ describe("execCommand", () => {
 
   it("does not resolve a killed command until process-tree cleanup settles", async () => {
     vi.useFakeTimers();
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
     const cleanup = createDeferred();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
     settleTerminationMock.mockReturnValue(cleanup.promise);
-    const { execCommand } = await import("./exec.js");
-
-    const resultPromise = execCommand("cmd", [], "/tmp", { timeout: 10 });
+    const { wait, resultPromise } = startCommand({ timeout: 10 });
     await vi.advanceTimersByTimeAsync(10);
     wait.resolve(null);
     let resolved = false;
@@ -451,13 +395,7 @@ describe("execCommand", () => {
   });
 
   it("does not crash when stdout or stderr emit an error event", async () => {
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
-
-    const resultPromise = execCommand("cmd", [], "/tmp");
+    const { child, wait, resultPromise } = startCommand();
     child.stdout.emit("error", new Error("EPIPE"));
     child.stderr.emit("error", new Error("EIO"));
     wait.resolve(0);

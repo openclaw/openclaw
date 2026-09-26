@@ -24,7 +24,6 @@ import type {
   CommandArgs,
   NativeCommandSpec,
 } from "./commands-registry.types.js";
-import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 
 export {
   isCommandEnabled,
@@ -361,15 +360,9 @@ function resolveDefaultCommandContext(cfg?: OpenClawConfig): {
 export type ResolvedCommandArgChoice = { value: string; label: string };
 
 /** Resolves static or context-aware choices for one command argument. */
-export function resolveCommandArgChoices(params: {
-  command: ChatCommandDefinition;
-  arg: CommandArgDefinition;
-  cfg?: OpenClawConfig;
-  provider?: string;
-  model?: string;
-  agentRuntime?: string;
-  catalog?: ThinkingCatalogEntry[];
-}): ResolvedCommandArgChoice[] {
+export function resolveCommandArgChoices(
+  params: CommandArgChoiceContext,
+): ResolvedCommandArgChoice[] {
   const { command, arg, cfg } = params;
   if (!arg.choices) {
     return [];
@@ -416,16 +409,12 @@ export function canResolveCommandArgMenu<
 }
 
 /** Resolves the next argument menu to show for commands with selectable choices. */
-export function resolveCommandArgMenu(params: {
-  command: ChatCommandDefinition;
-  args?: CommandArgs;
-  cfg?: OpenClawConfig;
-  provider?: string;
-  model?: string;
-  agentRuntime?: string;
-  catalog?: ThinkingCatalogEntry[];
-  session?: { agentId: string; sessionKey: string };
-}): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
+export function resolveCommandArgMenu(
+  params: Omit<CommandArgChoiceContext, "arg"> & {
+    args?: CommandArgs;
+    session?: { agentId: string; sessionKey: string };
+  },
+): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
   if (!canResolveCommandArgMenu(params)) {
     return null;
   }

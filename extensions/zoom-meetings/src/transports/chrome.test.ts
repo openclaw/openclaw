@@ -35,7 +35,7 @@ vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
   };
 });
 
-import { launchZoomMeetingInChrome, launchZoomMeetingOnNode } from "./chrome.js";
+import { zoomMeetingsChrome } from "./chrome.js";
 
 const URL = "https://zoom.us/j/12345678905?pwd=rollback";
 
@@ -47,8 +47,8 @@ describe("Zoom meeting Chrome startup cleanup", () => {
     nodeCommand: "zoommeetings.chrome",
     preserveTrackedBrowser: true,
     resolveConfig: resolveZoomMeetingsConfig,
-    launchInChrome: launchZoomMeetingInChrome,
-    launchOnNode: launchZoomMeetingOnNode,
+    launchInChrome: zoomMeetingsChrome.launchInChrome,
+    launchOnNode: zoomMeetingsChrome.launchOnNode,
     engineMocks,
   });
 });

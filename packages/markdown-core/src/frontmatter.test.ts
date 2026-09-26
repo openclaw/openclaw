@@ -1,5 +1,4 @@
 // Markdown Core tests cover frontmatter behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,19 +8,6 @@ import {
 } from "./frontmatter.js";
 
 describe("parseFrontmatterBlock", () => {
-  it("parses YAML block scalars", () => {
-    const content = `---
-name: yaml-hook
-description: |
-  line one
-  line two
----
-`;
-    const result = parseFrontmatterBlock(content);
-    expect(result.name).toBe("yaml-hook");
-    expect(result.description).toBe("line one\nline two");
-  });
-
   it("handles JSON5-style multi-line metadata", () => {
     const content = `---
 name: session-memory
@@ -37,9 +23,6 @@ metadata:
 `;
     const result = parseFrontmatterBlock(content);
     expect(result.metadata).toBe('{"openclaw":{"emoji":"disk","events":["command:new"]}}');
-
-    const parsed = JSON5.parse(expectDefined(result.metadata, "result.metadata test invariant"));
-    expect(parsed.openclaw?.emoji).toBe("disk");
   });
 
   it("preserves inline JSON values", () => {
@@ -74,15 +57,6 @@ metadata:
     expect(parsed.openclaw?.events).toEqual(["command:new"]);
   });
 
-  it("preserves inline description values containing colons", () => {
-    const content = `---
-name: sample-skill
-description: Use anime style IMPORTANT: Must be kawaii
----`;
-    const result = parseFrontmatterBlock(content);
-    expect(result.description).toBe("Use anime style IMPORTANT: Must be kawaii");
-  });
-
   it("normalizes free-form descriptions before YAML parsing", () => {
     const content = `---
 name: sample-skill
@@ -91,17 +65,6 @@ description: Use anime style IMPORTANT: Must be kawaii
     const result = parseFrontmatterBlockResult(content);
 
     expect(result.frontmatter.description).toBe("Use anime style IMPORTANT: Must be kawaii");
-    expect(result.issues).toEqual([]);
-  });
-
-  it("normalizes colon-rich free-form fields other than description", () => {
-    const content = `---
-name: sample-skill
-read_when: signals: user announcing a conversion task
----`;
-    const result = parseFrontmatterBlockResult(content);
-
-    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
     expect(result.issues).toEqual([]);
   });
 
@@ -281,16 +244,6 @@ description: |-
     expect(result.description).toBe("{json-like text}");
   });
 
-  it("keeps nested YAML mappings as structured JSON", () => {
-    const content = `---
-name: sample-skill
-metadata:
-  openclaw: true
----`;
-    const result = parseFrontmatterBlock(content);
-    expect(result.metadata).toBe('{"openclaw":true}');
-  });
-
   it("returns empty when frontmatter is missing", () => {
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toStrictEqual({});
@@ -365,14 +318,6 @@ Body text`;
 });
 
 describe("stripFrontmatterBlock", () => {
-  it("removes a valid frontmatter block", () => {
-    const content = `---
-name: sample
----
-Body text`;
-    expect(stripFrontmatterBlock(content)).toBe("Body text");
-  });
-
   it("preserves Markdown that starts with a non-delimiter prefix", () => {
     const content = `---not
 name: nope

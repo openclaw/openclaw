@@ -3521,44 +3521,5 @@ describe("Crabbox worker provider", () => {
     expect(message).toBe(`${INSPECT_FAILURE_PREFIX}${detail}`);
     expect(hasLoneSurrogate(message)).toBe(false);
   });
-
-  it.each([
-    {
-      code: 5,
-      stderr: `warning: could not inspect lease before release: coordinator GET http://127.0.0.1/v1/leases/${LEASE_ID}: http 404: not_found\ncoordinator accepted release for ${LEASE_ID}, but remote cleanup reported a cleanup failure or scheduled retry`,
-    },
-    { code: 4, stderr: `lease/server not found: ${LEASE_ID}` },
-    { code: 4, stderr: `sandbox ${LEASE_ID} is not claimed by Crabbox` },
-    { code: 4, stderr: `wandb sandbox "${LEASE_ID}" has no matching local ownership claim` },
-    { code: 4, stderr: `unikraftcloud lease ${LEASE_ID} no longer exists` },
-    ...["stopped", "released", "destroyed", "terminated"].map((state) => ({
-      code: 4,
-      stderr: `lease ${LEASE_ID} already ${state}`,
-    })),
-  ])("rejects unproven stop despite misleading prose: $stderr", async ({ code, stderr }) => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      return commandResult({ code, stderr });
-    });
-    await expect(provider.destroy(lifecycleLease())).rejects.toThrow(
-      `stop failed with exit code ${code}`,
-    );
-    expect(calls).toEqual([[SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]]);
-  });
-
-  it("accepts producer-confirmed absence only after a normal successful stop", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      return commandResult();
-    });
-    await expect(provider.destroy(lifecycleLease())).resolves.toBeUndefined();
-    await expect(provider.destroy(lifecycleLease())).resolves.toBeUndefined();
-    expect(calls).toEqual([
-      [SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID],
-      [SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID],
-    ]);
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

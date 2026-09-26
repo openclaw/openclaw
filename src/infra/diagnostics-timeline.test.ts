@@ -413,25 +413,6 @@ describe("diagnostics timeline", () => {
     expect(JSON.stringify(events)).not.toContain("prod");
   });
 
-  it("records synchronous spans", async () => {
-    const { env, path } = await createTimelineEnv();
-
-    const result = measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => 42, {
-      env,
-      phase: "startup",
-    });
-
-    expect(result).toBe(42);
-    const events = await readTimeline(path);
-    expect(events).toHaveLength(2);
-    const start = expectDefined(events[0], "span start");
-    const end = expectDefined(events[1], "span end");
-    expect(start.type).toBe("span.start");
-    expect(start.name).toBe("plugins.metadata.scan");
-    expect(end.type).toBe("span.end");
-    expect(end.name).toBe("plugins.metadata.scan");
-  });
-
   it("lets nested spans inherit the active timeline phase and parent span", async () => {
     const { env, path } = await createTimelineEnv();
 

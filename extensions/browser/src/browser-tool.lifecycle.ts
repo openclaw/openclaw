@@ -1,4 +1,3 @@
-/** Browser tool lifecycle and host-local profile discovery/import actions. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import { resolveBrowserBaseUrl } from "./browser-tool.routing.js";

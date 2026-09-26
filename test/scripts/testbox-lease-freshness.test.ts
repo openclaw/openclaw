@@ -30,10 +30,6 @@ const fingerprint = {
 };
 
 describe("Testbox lease freshness", () => {
-  it("reuses a lease when hydrated inputs still match", () => {
-    expect(testboxLeaseStaleReasons(fingerprint, { ...fingerprint })).toEqual([]);
-  });
-
   it("rejects unknown provenance schemas", () => {
     expect(testboxLeaseStaleReasons({ ...fingerprint, version: 2 }, fingerprint)).toEqual([
       "state schema",

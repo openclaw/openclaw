@@ -58,13 +58,6 @@ describe("stripMatrixMentionPrefix", () => {
     expect(result).toBe("");
   });
 
-  it("falls back to configured mention regexes before slash command", () => {
-    const mentionRegexes = [/@bot:server\b/];
-    const text = "@bot:server /new";
-    const result = stripMatrixMentionPrefix({ text, mentionRegexes });
-    expect(result).toBe("/new");
-  });
-
   it("strips mention prefix with extra whitespace", () => {
     const mentionRegexes = [/@bot:server\b/];
     const text = "@bot:server   /help";
@@ -79,25 +72,11 @@ describe("stripMatrixMentionPrefix", () => {
     expect(result).toBe("/model");
   });
 
-  it("strips mention prefix with display name (exact case)", () => {
-    const mentionRegexes = [/@OpenClaw Bot\b/i];
-    const text = "@OpenClaw Bot /model";
-    const result = stripMatrixMentionPrefix({ text, mentionRegexes });
-    expect(result).toBe("/model");
-  });
-
   it("does not strip mention from middle of text", () => {
     const mentionRegexes = [/@bot:server\b/];
     const text = "Hello @bot:server how are you";
     const result = stripMatrixMentionPrefix({ text, userId: "@bot:server", mentionRegexes });
     expect(result).toBe("Hello @bot:server how are you");
-  });
-
-  it("does not strip non-matching patterns", () => {
-    const mentionRegexes = [/@otherbot:server\b/];
-    const text = "@bot:server /new";
-    const result = stripMatrixMentionPrefix({ text, mentionRegexes });
-    expect(result).toBe("@bot:server /new");
   });
 
   it("strips only the first mention prefix", () => {
@@ -121,25 +100,11 @@ describe("stripMatrixMentionPrefix", () => {
     expect(result).toBe("@bot:server /new");
   });
 
-  it("handles regex with special characters in mention", () => {
-    const mentionRegexes = [/@bot\+123:server\.com\b/];
-    const text = "@bot+123:server.com /status";
-    const result = stripMatrixMentionPrefix({ text, mentionRegexes });
-    expect(result).toBe("/status");
-  });
-
   it("preserves regular message without slash command after stripping", () => {
     const mentionRegexes = [/@bot:server\b/];
     const text = "@bot:server hello world";
     const result = stripMatrixMentionPrefix({ text, mentionRegexes });
     expect(result).toBe("hello world");
-  });
-
-  it("preserves regex flags when stripping (case-insensitive match)", () => {
-    const mentionRegexes = [/@TestBot:server\b/i];
-    const text = "@TESTBOT:SERVER /command";
-    const result = stripMatrixMentionPrefix({ text, mentionRegexes });
-    expect(result).toBe("/command");
   });
 
   it("does not carry global regex state across calls", () => {

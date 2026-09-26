@@ -31,6 +31,7 @@ import {
 } from "../secrets/runtime.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayPluginReloadResult } from "./server-reload-contracts.js";
 import {
@@ -131,6 +132,7 @@ function startManagedGatewayConfigReloader(
     cronState: createTestCronState(),
   };
   return startManagedGatewayConfigReloaderImpl({
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     getPluginRegistry: requireActivePluginChannelRegistry,
     minimalTestGateway: false,
     initialPluginInstallRecords: {},

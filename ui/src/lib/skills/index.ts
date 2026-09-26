@@ -1,4 +1,8 @@
-import type { SkillsDetailResult, SkillsSecurityVerdictsResult } from "@openclaw/gateway-protocol";
+import type {
+  SkillsDetailResult,
+  SkillsSecurityVerdictsResult,
+  SkillsSkillCardResult,
+} from "@openclaw/gateway-protocol";
 import { readClawHubTrustErrorDetails } from "../../../../packages/gateway-protocol/src/clawhub-trust-error-details.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -100,7 +104,7 @@ function getClawHubTrustDetailsFromError(err: unknown) {
   if (!err || typeof err !== "object" || !("details" in err)) {
     return undefined;
   }
-  return readClawHubTrustErrorDetails((err as { details?: unknown }).details);
+  return readClawHubTrustErrorDetails(err.details);
 }
 
 const formatClawHubInstallMessage = (message: string, warning?: string): string =>
@@ -338,13 +342,10 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   const { [skillKey]: _previousError, ...nextErrors } = state.skillCardErrors;
   state.skillCardErrors = nextErrors;
   try {
-    const response = await state.client.request<{
-      schema: "openclaw.skills.skill-card.v1";
-      skillKey: string;
-      path: string;
-      sizeBytes: number;
-      content: string;
-    }>("skills.skillCard", requestParams);
+    const response = await state.client.request<SkillsSkillCardResult>(
+      "skills.skillCard",
+      requestParams,
+    );
     if (
       isSkillsAgentScopeCurrent(state, agentScope) &&
       response?.skillKey === skillKey &&
@@ -380,10 +381,10 @@ export async function loadClawHubSecurityVerdicts(state: SkillsState, report: Sk
   state.clawhubVerdictsLoading = true;
   state.clawhubVerdictsError = null;
   try {
-    const response = await client.request<{
-      schema: "openclaw.skills.security-verdicts.v1";
-      items: ClawHubSkillSecurityVerdict[];
-    }>("skills.securityVerdicts", stateSkillsAgentParams(state));
+    const response = await client.request<SkillsSecurityVerdictsResult>(
+      "skills.securityVerdicts",
+      stateSkillsAgentParams(state),
+    );
     if (!isSkillsAgentScopeCurrent(state, agentScope)) {
       return;
     }

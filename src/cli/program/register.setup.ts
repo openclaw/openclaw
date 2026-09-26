@@ -16,7 +16,7 @@ import {
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
-const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "json"]);
+const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "skipBootstrap", "json"]);
 
 type SetupRoute = "onboarding" | "system-agent";
 
@@ -70,7 +70,11 @@ async function runOnboardingEntry(
     }
     const { setupCommand } = await import("../../commands/setup.js");
     await setupCommand(
-      { workspace: readStringValue(options.workspace), json: Boolean(options.json) },
+      {
+        workspace: readStringValue(options.workspace),
+        skipBootstrap: options.skipBootstrap === true,
+        json: Boolean(options.json),
+      },
       runtime,
     );
     return;

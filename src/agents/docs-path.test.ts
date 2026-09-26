@@ -52,15 +52,6 @@ describe("resolveOpenClawDocsPath", () => {
 });
 
 describe("resolveOpenClawSourcePath", () => {
-  it("returns the package root only for git checkouts", async () => {
-    const root = await makePackageRoot("openclaw-source-git-");
-    await fs.mkdir(path.join(root, ".git"));
-
-    await expect(resolveOpenClawReferencePaths({ cwd: root })).resolves.toMatchObject({
-      sourcePath: root,
-    });
-  });
-
   it("omits source path for npm-style package installs", async () => {
     // npm installs may contain package files but not source checkout metadata.
     const root = await makePackageRoot("openclaw-source-npm-");

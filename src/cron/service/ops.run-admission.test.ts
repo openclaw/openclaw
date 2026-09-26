@@ -18,6 +18,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import { loadCronStoreFromDatabase } from "../store/load.kernel.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
@@ -744,14 +745,14 @@ describe("cron service run admission", () => {
           return;
         }
         edited = true;
-        persistedStatusAtEvent = cronStoreModule
-          .loadCronJobsStoreSync(store.storePath)
-          .jobs.find((entry) => entry.id === job.id)?.state.lastRunStatus;
-        openOpenClawStateDatabase()
-          .db.prepare(
-            "UPDATE cron_jobs SET name = ?, job_json = json_set(job_json, '$.name', ?), updated_at = updated_at + 1 WHERE store_key = ? AND job_id = ?",
-          )
-          .run(editedName, editedName, cronStoreKey(store.storePath), job.id);
+        const db = openOpenClawStateDatabase().db;
+        persistedStatusAtEvent = loadCronStoreFromDatabase(
+          db,
+          cronStoreKey(store.storePath),
+        ).store.jobs.find((entry) => entry.id === job.id)?.state.lastRunStatus;
+        db.prepare(
+          "UPDATE cron_jobs SET name = ?, job_json = json_set(job_json, '$.name', ?), updated_at = updated_at + 1 WHERE store_key = ? AND job_id = ?",
+        ).run(editedName, editedName, cronStoreKey(store.storePath), job.id);
       },
     });
 

@@ -269,19 +269,6 @@ describe("post-plugin update readiness", () => {
     },
   );
 
-  it.each([undefined, 5_000])("propagates the primary Doctor timeout %s", async (timeoutMs) => {
-    await runUpdateFinalizationDoctorInFreshProcess({
-      ...updateOptions,
-      phase: "pre-plugin",
-      timeoutMs,
-    });
-    expect(mocks.runExec).toHaveBeenCalledExactlyOnceWith(
-      "/usr/bin/node",
-      expect.arrayContaining(["doctor", "--repair"]),
-      expect.objectContaining({ timeoutMs }),
-    );
-  });
-
   it.each([undefined, 5_000])(
     "bounds post-plugin checks separately from Doctor (%s)",
     async (timeoutMs) => {
@@ -398,22 +385,6 @@ describe("post-plugin update readiness", () => {
     } finally {
       enumeration.mockRestore();
     }
-  });
-
-  it("runs updated readiness checks even when no plugin package changed", async () => {
-    const beforeDoctor = vi.fn(async () => undefined);
-    await completePostCorePluginUpdate({
-      ...updateOptions,
-      pluginUpdate: { ...pluginUpdate, changed: false },
-      freshDoctorRequired: false,
-      beforeDoctor,
-    });
-
-    expect(beforeDoctor).not.toHaveBeenCalled();
-    expect(mocks.runExec.mock.calls.map(([, args]) => args)).toEqual([
-      ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
-    ]);
-    expect(mocks.runUtf8).toHaveBeenCalledOnce();
   });
 
   it("runs recorded deferred retirement when the published driver flag is false", async () => {
@@ -688,12 +659,15 @@ describe("post-plugin update readiness", () => {
   });
 
   it("uses target validation when the unchanged-plugin parent retains an older schema", async () => {
+    const beforeDoctor = vi.fn(async () => undefined);
     mocks.readConfig.mockResolvedValue({ ...validConfigSnapshot, valid: false });
     const result = await completePostCorePluginUpdate({
       ...updateOptions,
       pluginUpdate: { ...pluginUpdate, changed: false },
       freshDoctorRequired: false,
+      beforeDoctor,
     });
+    expect(beforeDoctor).not.toHaveBeenCalled();
     expect(result.pluginUpdate.status).toBe("ok");
     expect(result.configSnapshot.valid).toBe(false);
     expect(mocks.runExec.mock.calls.map(([, args]) => args)).toEqual([

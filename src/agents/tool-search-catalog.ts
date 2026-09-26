@@ -1,4 +1,5 @@
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { generateSecureHex } from "../infra/secure-random.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
@@ -38,23 +39,24 @@ let nextUntrustedSchemaIdentity = 1;
 
 function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): string {
   return entries
-    .map((entry) =>
-      stableStringify([
-        entry.id,
-        entry.source,
-        entry.sourceName ?? "",
-        entry.mcp,
-        entry.name,
-        entry.label ?? "",
-        entry.description,
-        entry.directVisible === true,
-        entry.source === "openclaw"
-          ? stableStringify(entry.parameters)
-          : untrustedSchemaFingerprint(entry.parameters),
-        entry.source === "openclaw"
-          ? stableStringify(entry.outputSchema)
-          : untrustedSchemaFingerprint(entry.outputSchema),
-      ]),
+    .map(
+      (entry) =>
+        sha256StableValue([
+          entry.id,
+          entry.source,
+          entry.sourceName ?? "",
+          entry.mcp,
+          entry.name,
+          entry.label ?? "",
+          entry.description,
+          entry.directVisible === true,
+          entry.source === "openclaw"
+            ? entry.parameters
+            : untrustedSchemaFingerprint(entry.parameters),
+          entry.source === "openclaw"
+            ? entry.outputSchema
+            : untrustedSchemaFingerprint(entry.outputSchema),
+        ]).digest,
     )
     .toSorted()
     .join("\n");

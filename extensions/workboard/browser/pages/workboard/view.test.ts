@@ -165,31 +165,6 @@ describe("nextWorkboardCardPosition", () => {
 
   it.each([
     {
-      name: "starts an empty board column at the canonical position",
-      card: opsCard,
-      cards: [],
-      position: 1000,
-    },
-    {
-      name: "appends after cards on the same board",
-      card: opsCard,
-      cards: [
-        createWorkboardCard({
-          id: "ops-running",
-          status: "running",
-          position: 2000,
-          metadata: { automation: { boardId: "ops" } },
-        }),
-      ],
-      position: 3000,
-    },
-    {
-      name: "does not count a card dropped back into its own empty column",
-      card: runningOpsCard,
-      cards: [runningOpsCard],
-      position: 1000,
-    },
-    {
       name: "appends a same-column drop after its other cards only",
       card: runningOpsCard,
       cards: [
@@ -202,32 +177,6 @@ describe("nextWorkboardCardPosition", () => {
         }),
       ],
       position: 3000,
-    },
-    {
-      name: "ignores larger positions on another board",
-      card: opsCard,
-      cards: [
-        createWorkboardCard({
-          id: "product-running",
-          status: "running",
-          position: 9000,
-          metadata: { automation: { boardId: "product" } },
-        }),
-      ],
-      position: 1000,
-    },
-    {
-      name: "preserves archived positions on the same board",
-      card: opsCard,
-      cards: [
-        createWorkboardCard({
-          id: "archived-ops-running",
-          status: "running",
-          position: 3000,
-          metadata: { archivedAt: 10, automation: { boardId: "ops" } },
-        }),
-      ],
-      position: 4000,
     },
     {
       name: "ignores a larger position in another status",
@@ -1080,28 +1029,21 @@ describe("renderWorkboard", () => {
       ],
     });
     state.cards = [
-      {
+      createWorkboardCard({
         id: "ready",
         title: "Ready card",
         status: "ready",
-        priority: "normal",
-        labels: [],
         agentId: "workboard-dispatcher",
-        position: 1000,
-        createdAt: 1,
         updatedAt: new Date("2026-06-03T18:47:00Z").getTime(),
-      },
-      {
+      }),
+      createWorkboardCard({
         id: "running",
         title: "Running card",
         status: "running",
         priority: "high",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
         updatedAt: new Date("2026-06-03T19:12:00Z").getTime(),
         sessionKey: "agent:main:dashboard:1",
-      },
+      }),
     ];
     renderView();
 
@@ -1159,14 +1101,10 @@ describe("renderWorkboard", () => {
     const { state, container, renderView } = createWorkboardView();
     state.detailCardId = "card-1";
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Timestamped card",
         status: "running",
         priority: "high",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
         updatedAt: new Date("2026-06-03T18:47:00Z").getTime(),
         metadata: {
           workerProtocol: {
@@ -1174,7 +1112,7 @@ describe("renderWorkboard", () => {
             updatedAt: new Date("2026-06-03T19:12:00Z").getTime(),
           },
         },
-      },
+      }),
     ];
     renderView();
 
@@ -1229,19 +1167,14 @@ describe("renderWorkboard", () => {
       ],
     });
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Wire dashboard tab",
         notes: "Call plugin gateway methods from the Workboard page.",
-        status: "todo",
         priority: "high",
         labels: ["ui"],
         agentId: "main",
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
         sessionKey: "agent:main:dashboard:1",
-      },
+      }),
     ];
     renderView();
 
@@ -1837,17 +1770,13 @@ describe("renderWorkboard", () => {
         status: "ready",
         agentId: "writer",
       }),
-      {
+      createWorkboardCard({
         id: "ops-card",
         title: "Ops card",
         status: "ready",
-        priority: "normal",
-        labels: [],
         position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
         agentId: "ops",
-      },
+      }),
     ];
     renderView();
 
@@ -2025,14 +1954,8 @@ describe("renderWorkboard", () => {
   it("does not render Invalid Date for Date-invalid card timestamps", () => {
     const { state, container, renderView } = createWorkboardView();
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Bad timestamp card",
-        status: "todo",
-        priority: "normal",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
         updatedAt: 8_640_000_000_000_001,
         events: [{ id: "event-1", kind: "edited", at: 8_640_000_000_000_001 }],
         metadata: {
@@ -2054,7 +1977,7 @@ describe("renderWorkboard", () => {
             },
           ],
         },
-      },
+      }),
     ];
     renderView();
 
@@ -2312,19 +2235,14 @@ describe("renderWorkboard", () => {
         id: "parent-1",
         title: "Finish art pass",
       }),
-      {
+      createWorkboardCard({
         id: "child-1",
         title: "Ship game shell",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
         metadata: {
           links: [{ id: "link-1", type: "parent", targetCardId: "parent-1", createdAt: 1 }],
         },
-      },
+      }),
     ];
     renderView();
 
@@ -3171,14 +3089,9 @@ describe("renderWorkboard", () => {
       onRequestUpdate: () => undefined,
     });
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Tracked task",
         status: "review",
-        priority: "normal",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
         updatedAt: 2,
         events: [
           { id: "event-1", kind: "moved", at: 1, fromStatus: "triage", toStatus: "backlog" },
@@ -3189,7 +3102,7 @@ describe("renderWorkboard", () => {
           { id: "event-6", kind: "moved", at: 6, fromStatus: "running", toStatus: "review" },
           { id: "event-7", kind: "moved", at: 7, fromStatus: "review", toStatus: "done" },
         ],
-      },
+      }),
     ];
     renderView();
 
@@ -3238,17 +3151,12 @@ describe("renderWorkboard", () => {
           stale: { detectedAt: 6, reason: "No recent activity." },
         },
       }),
-      {
+      createWorkboardCard({
         id: "card-2",
         title: "Archived task",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
         metadata: { archivedAt: 7 },
-      },
+      }),
     ];
     renderView();
 
@@ -3329,17 +3237,12 @@ describe("renderWorkboard", () => {
         id: "card-default",
         title: "Default work",
       }),
-      {
+      createWorkboardCard({
         id: "card-ops",
         title: "Ops work",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
         metadata: { automation: { boardId: "ops" } },
-      },
+      }),
     ];
     renderView();
     const boardFilter = filterPicker(container, "Filter by board");
@@ -3409,39 +3312,22 @@ describe("renderWorkboard", () => {
     };
     const { state, container, renderView } = createWorkboardView({ agentsList });
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Main work",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         agentId: "main",
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-      {
+      }),
+      createWorkboardCard({
         id: "card-2",
         title: "Ops work",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         agentId: "ops",
         position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-      {
+      }),
+      createWorkboardCard({
         id: "card-3",
         title: "Dispatcher work",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         agentId: "workboard-dispatcher",
         position: 3000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
+      }),
     ];
     renderView();
 
@@ -3486,17 +3372,10 @@ describe("renderWorkboard", () => {
     state.draftTitle = "Assign me";
     state.draftAgentId = "workboard-dispatcher";
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Assign me",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         agentId: "workboard-dispatcher",
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
+      }),
     ];
     renderView();
 
@@ -3594,17 +3473,10 @@ describe("renderWorkboard", () => {
     });
     state.detailCardId = "card-1";
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "ACP-backed work",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         agentId: "main",
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
+      }),
     ];
     renderView();
 
@@ -4416,20 +4288,14 @@ describe("renderWorkboard", () => {
   it("opens an edit modal and submits card updates", async () => {
     const { host, state } = createLoadedWorkboardState();
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Rename me",
         notes: "Old notes",
-        status: "todo",
-        priority: "normal",
         labels: ["ui"],
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
         metadata: {
           comments: [{ id: "comment-1", body: "Needs owner check", createdAt: 2 }],
         },
-      },
+      }),
     ];
     const request = vi.fn(async (method: string) =>
       method === "workboard.cards.comment"

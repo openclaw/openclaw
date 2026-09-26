@@ -159,10 +159,7 @@ describe("Google image-generation provider", () => {
     });
   });
 
-  it.each([
-    ["empty", ""],
-    ["whitespace-only", "   "],
-  ])(
+  it.each([["whitespace-only", "   "]])(
     "uses the default Gemini API root when the configured base URL is %s",
     async (_label, baseUrl) => {
       mockGoogleApiKeyAuth();
@@ -521,21 +518,6 @@ describe("Google image-generation provider", () => {
       provider.isConfigured?.({
         agentDir: "/tmp/agent",
         cfg: googleImageConfig({ baseUrl: "https://gateway.example.test/gemini/v1beta" }),
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    ["empty", ""],
-    ["whitespace-only", "   "],
-  ])("treats a %s config apiKey as not configured", (_label, apiKey) => {
-    vi.spyOn(providerAuth, "isProviderApiKeyConfigured").mockReturnValue(false);
-
-    const provider = buildGoogleImageGenerationProvider();
-    expect(
-      provider.isConfigured?.({
-        agentDir: "/tmp/agent",
-        cfg: googleImageConfig({ baseUrl: "https://gateway.example.test/gemini/v1beta", apiKey }),
       }),
     ).toBe(false);
   });

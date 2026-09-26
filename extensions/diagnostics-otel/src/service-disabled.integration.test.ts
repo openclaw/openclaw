@@ -36,13 +36,13 @@ const PROPAGATION_ROUNDTRIP_CASES = [
   },
   {
     label: "B3",
-    value: "b3",
+    value: "B3",
     incoming: { b3: `${TRACE_ID}-${SPAN_ID}-1` },
     outgoing: { b3: `${TRACE_ID}-${SPAN_ID}-1` },
   },
   {
     label: "B3MULTI",
-    value: "b3multi",
+    value: "B3MULTI",
     incoming: {
       "x-b3-traceid": TRACE_ID,
       "x-b3-spanid": SPAN_ID,
@@ -56,7 +56,7 @@ const PROPAGATION_ROUNDTRIP_CASES = [
   },
   {
     label: "Jaeger",
-    value: "jaeger",
+    value: "JaEgEr",
     incoming: { "uber-trace-id": `${TRACE_ID}:${SPAN_ID}:0:1` },
     outgoing: { "uber-trace-id": `${TRACE_ID}:${SPAN_ID}:0:01` },
   },
@@ -266,23 +266,6 @@ test.each(["true", "false"] as const)(
 
 test.each([
   {
-    value: "tracecontext,baggage",
-    fields: ["traceparent", "tracestate", "baggage"],
-  },
-  {
-    value: "B3",
-    fields: ["b3"],
-  },
-  {
-    value: "B3MULTI",
-    fields: ["x-b3-traceid", "x-b3-spanid", "x-b3-flags", "x-b3-sampled", "x-b3-parentspanid"],
-  },
-  {
-    value: "JaEgEr",
-    fields: ["uber-trace-id"],
-    warning: JAEGER_DEPRECATION_WARNING,
-  },
-  {
     value: "NoNe",
     fields: [],
   },
@@ -333,6 +316,11 @@ test.each(PROPAGATION_ROUNDTRIP_CASES)(
       });
 
       expect(outgoing).toEqual(expectedOutgoing);
+      if (value === "JaEgEr") {
+        expect(ctx.logger.warn).toHaveBeenCalledWith(JAEGER_DEPRECATION_WARNING);
+      } else {
+        expect(ctx.logger.warn).not.toHaveBeenCalled();
+      }
       expect(trace.getSpanContext(propagation.extract(ROOT_CONTEXT, outgoing))).toEqual(
         PROPAGATED_SPAN_CONTEXT,
       );
@@ -378,22 +366,3 @@ test("cleans disabled ownership before a fresh enabled private-provider generati
     await receiver.close();
   }
 }, 30_000);
-
-test("warns through the plugin logger for an invalid disabled value", async () => {
-  process.env.OTEL_SDK_DISABLED = "invalid";
-  const loggerProviderBefore = logs.getLoggerProvider();
-  const { service, ctx } = await startOtelService({
-    traces: false,
-    metrics: false,
-    logs: false,
-  });
-
-  try {
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "diagnostics-otel: invalid OTEL_SDK_DISABLED value; expected true or false, using false",
-    );
-    expect(logs.getLoggerProvider()).toBe(loggerProviderBefore);
-  } finally {
-    await service.stop?.(ctx);
-  }
-});

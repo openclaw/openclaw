@@ -15,19 +15,6 @@ async function loadSplitCommandLine(): Promise<SplitCommandLine> {
 }
 
 describe("mcp-command-line", () => {
-  it("parses quoted Windows executable paths without dropping backslashes", async () => {
-    const splitCommandLine = await loadSplitCommandLine();
-    const parsed = splitCommandLine(
-      '"C:\\Program Files\\Claude\\claude.exe" --stdio --flag "two words"',
-      "win32",
-    );
-
-    expect(parsed).toEqual({
-      command: "C:\\Program Files\\Claude\\claude.exe",
-      args: ["--stdio", "--flag", "two words"],
-    });
-  });
-
   it("parses unquoted Windows executable paths without mangling backslashes", async () => {
     const splitCommandLine = await loadSplitCommandLine();
     const parsed = splitCommandLine("C:\\Users\\alerl\\.local\\bin\\claude.exe --version", "win32");
@@ -38,16 +25,16 @@ describe("mcp-command-line", () => {
     });
   });
 
-  it("preserves unquoted Windows path arguments after the executable", async () => {
+  it("preserves quoted and unquoted Windows arguments after a quoted executable", async () => {
     const splitCommandLine = await loadSplitCommandLine();
     const parsed = splitCommandLine(
-      '"C:\\Program Files\\Claude\\claude.exe" --config C:\\Users\\me\\cfg.json',
+      '"C:\\Program Files\\Claude\\claude.exe" --config C:\\Users\\me\\cfg.json --flag "two words"',
       "win32",
     );
 
     expect(parsed).toEqual({
       command: "C:\\Program Files\\Claude\\claude.exe",
-      args: ["--config", "C:\\Users\\me\\cfg.json"],
+      args: ["--config", "C:\\Users\\me\\cfg.json", "--flag", "two words"],
     });
   });
 

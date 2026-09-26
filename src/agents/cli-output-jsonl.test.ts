@@ -5,7 +5,15 @@ import { parseCliOutput } from "./cli-output.js";
 
 type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
 
-function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], providerId: string) {
+function parseCliJsonl(
+  raw: string,
+  backend: ParseCliOutputParams["backend"] = {
+    command: "claude",
+    output: "jsonl",
+    sessionIdFields: ["session_id"],
+  },
+  providerId = "claude-cli",
+) {
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
 }
 
@@ -60,33 +68,9 @@ function normalizedUsage(values: {
 }
 
 describe("parseCliJsonl", () => {
-  it.each([
-    {
-      name: "parses Claude stream-json result events",
-      command: "claude",
-      jsonlDialect: undefined,
-      providerId: "claude-cli",
-      frames: [
-        { type: "init", session_id: "session-123" },
-        {
-          type: "result",
-          session_id: "session-123",
-          result: "Claude says hello",
-          usage: { input_tokens: 12, output_tokens: 3, cache_read_input_tokens: 4 },
-        },
-      ],
-      expected: {
-        text: "Claude says hello",
-        sessionId: "session-123",
-        usage: normalizedUsage({ input: 12, output: 3, cacheRead: 4 }),
-      },
-    },
-    {
-      name: "parses Claude stream-json result events for an explicit backend dialect",
-      command: "local-cli",
-      jsonlDialect: "claude-stream-json" as const,
-      providerId: "local-cli",
-      frames: [
+  it("parses Claude stream-json result events for an explicit backend dialect", () => {
+    const result = parseCliJsonl(
+      joinJsonlFrames(
         { type: "init", session_id: "session-dialect" },
         {
           type: "result",
@@ -94,58 +78,37 @@ describe("parseCliJsonl", () => {
           result: "dialect says hello",
           usage: { input_tokens: 5, output_tokens: 2 },
         },
-      ],
-      expected: {
-        text: "dialect says hello",
-        sessionId: "session-dialect",
-        usage: normalizedUsage({ input: 5, output: 2 }),
-      },
-    },
-  ])("$name", ({ command, jsonlDialect, providerId, frames, expected }) => {
-    const result = parseCliJsonl(
-      joinJsonlFrames(...frames),
+      ),
       {
-        command,
+        command: "local-cli",
         output: "jsonl",
-        ...(jsonlDialect ? { jsonlDialect } : {}),
+        jsonlDialect: "claude-stream-json",
         sessionIdFields: ["session_id"],
       },
-      providerId,
+      "local-cli",
     );
-
-    expect(result).toEqual(expected);
+    expect(result).toEqual({
+      text: "dialect says hello",
+      sessionId: "session-dialect",
+      usage: normalizedUsage({ input: 5, output: 2 }),
+    });
   });
 
   it("keeps streamed pre-tool text over the final-message result in transcript reparses", () => {
     const result = parseCliJsonl(
-      [
-        JSON.stringify({ type: "init", session_id: "session-reparse" }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Marker caribou-lampion-473 explanation." },
-          },
+      joinJsonlFrames(
+        { type: "init", session_id: "session-reparse" },
+        claudeMessageStart(),
+        claudeTextDelta("Marker caribou-lampion-473 explanation."),
+        claudeStreamEvent({
+          type: "content_block_start",
+          content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
         }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
-          },
-        }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "TEST DONE" },
-          },
-        }),
-        JSON.stringify({ type: "result", session_id: "session-reparse", result: "TEST DONE" }),
-      ].join("\n"),
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeMessageStart(),
+        claudeTextDelta("TEST DONE"),
+        { type: "result", session_id: "session-reparse", result: "TEST DONE" },
+      ),
       {
         command: "local-cli",
         output: "jsonl",
@@ -164,49 +127,28 @@ describe("parseCliJsonl", () => {
 
   it("continues transcript reparses past an interim result", () => {
     const result = parseCliJsonl(
-      [
-        JSON.stringify({ type: "init", session_id: "session-interim-reparse" }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Interim answer." },
-          },
-        }),
-        JSON.stringify({
+      joinJsonlFrames(
+        { type: "init", session_id: "session-interim-reparse" },
+        claudeMessageStart(),
+        claudeTextDelta("Interim answer."),
+        {
           type: "result",
           session_id: "session-interim-reparse",
           result: "Interim answer.",
+        },
+        claudeMessageStart(),
+        claudeTextDelta("Pre-tool follow-up."),
+        claudeStreamEvent({
+          type: "content_block_start",
+          content_block: { type: "tool_use", id: "tool-2", name: "session_status" },
         }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Pre-tool follow-up." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "tool_use", id: "tool-2", name: "session_status" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "DONE" },
-          },
-        }),
-        JSON.stringify({
+        claudeTextDelta("DONE"),
+        {
           type: "result",
           session_id: "session-interim-reparse",
           result: "DONE",
-        }),
-      ].join("\n"),
+        },
+      ),
       {
         command: "local-cli",
         output: "jsonl",
@@ -360,9 +302,9 @@ describe("parseCliJsonl", () => {
 
   it("preserves Claude cache creation tokens instead of flattening them to zero", () => {
     const result = parseCliJsonl(
-      [
-        JSON.stringify({ type: "init", session_id: "session-cache-123" }),
-        JSON.stringify({
+      joinJsonlFrames(
+        { type: "init", session_id: "session-cache-123" },
+        {
           type: "result",
           session_id: "session-cache-123",
           result: "Claude says hello",
@@ -372,14 +314,8 @@ describe("parseCliJsonl", () => {
             cache_read_input_tokens: 4,
             cache_creation_input_tokens: 7,
           },
-        }),
-      ].join("\n"),
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
-      },
-      "claude-cli",
+        },
+      ),
     );
 
     expect(result).toEqual({
@@ -397,35 +333,29 @@ describe("parseCliJsonl", () => {
 
   it("does not let cumulative Claude result usage overwrite assistant usage", () => {
     const result = parseCliJsonl(
-      [
-        JSON.stringify({ type: "init", session_id: "session-stream" }),
-        JSON.stringify({
+      joinJsonlFrames(
+        { type: "init", session_id: "session-stream" },
+        {
           type: "assistant",
           message: {
             id: "msg-1",
             usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
           },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "assistant",
           message: {
             id: "msg-2",
             usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
           },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           session_id: "session-stream",
           result: "done",
           usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
-        }),
-      ].join("\n"),
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
-      },
-      "claude-cli",
+        },
+      ),
     );
 
     expect(result?.usage).toEqual({
@@ -439,9 +369,9 @@ describe("parseCliJsonl", () => {
 
   it("captures the last Claude assistant transcript UUID as a resume checkpoint", () => {
     const result = parseCliJsonl(
-      [
-        JSON.stringify({ type: "system", subtype: "init", session_id: "session-checkpoint" }),
-        JSON.stringify({
+      joinJsonlFrames(
+        { type: "system", subtype: "init", session_id: "session-checkpoint" },
+        {
           type: "assistant",
           uuid: "assistant-checkpoint-1",
           message: {
@@ -449,8 +379,8 @@ describe("parseCliJsonl", () => {
             role: "assistant",
             content: [{ type: "text", text: "first" }],
           },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "assistant",
           uuid: "assistant-checkpoint-2",
           message: {
@@ -458,8 +388,8 @@ describe("parseCliJsonl", () => {
             role: "assistant",
             content: [{ type: "text", text: "done" }],
           },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "assistant",
           uuid: "subagent-checkpoint",
           parent_tool_use_id: "tool-use-1",
@@ -468,19 +398,13 @@ describe("parseCliJsonl", () => {
             role: "assistant",
             content: [{ type: "text", text: "nested" }],
           },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           session_id: "session-checkpoint",
           result: "done",
-        }),
-      ].join("\n"),
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
-      },
-      "claude-cli",
+        },
+      ),
     );
 
     expect(result?.resumeCheckpointId).toBe("assistant-checkpoint-2");
@@ -562,11 +486,7 @@ describe("parseCliJsonl", () => {
       expected: { text: "done", sessionId: "session-999", usage: undefined },
     },
   ])("$name", ({ raw, expected }) => {
-    const result = parseCliJsonl(
-      raw,
-      { command: "claude", output: "jsonl", sessionIdFields: ["session_id"] },
-      "claude-cli",
-    );
+    const result = parseCliJsonl(raw);
 
     expect(result).toEqual(expected);
   });
@@ -577,21 +497,15 @@ describe("parseCliJsonl", () => {
     // result event. First-wins capture would bind to the ephemeral id whose
     // transcript JSONL never lands on disk; last-wins captures the canonical id.
     const result = parseCliJsonl(
-      [
-        JSON.stringify({ type: "system", subtype: "init", session_id: "session-ephemeral" }),
-        JSON.stringify({ type: "system", subtype: "init", session_id: "session-canonical" }),
-        JSON.stringify({
+      joinJsonlFrames(
+        { type: "system", subtype: "init", session_id: "session-ephemeral" },
+        { type: "system", subtype: "init", session_id: "session-canonical" },
+        {
           type: "result",
           session_id: "session-canonical",
           result: "rotated reply",
-        }),
-      ].join("\n"),
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
-      },
-      "claude-cli",
+        },
+      ),
     );
 
     expect(result?.sessionId).toBe("session-canonical");

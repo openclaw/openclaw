@@ -11,6 +11,7 @@ import {
   type Model,
   type ProviderStreamOptions,
 } from "openclaw/plugin-sdk/llm";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
@@ -72,18 +73,10 @@ function resolveAnthropicVertexMaxTokens(params: {
   modelMaxTokens: number | undefined;
   requestedMaxTokens: number | undefined;
 }): number | undefined {
-  const modelMax =
-    typeof params.modelMaxTokens === "number" &&
-    Number.isFinite(params.modelMaxTokens) &&
-    params.modelMaxTokens > 0
-      ? Math.floor(params.modelMaxTokens)
-      : undefined;
-  const requested =
-    typeof params.requestedMaxTokens === "number" &&
-    Number.isFinite(params.requestedMaxTokens) &&
-    params.requestedMaxTokens > 0
-      ? Math.floor(params.requestedMaxTokens)
-      : undefined;
+  const modelLimit = asPositiveFiniteNumber(params.modelMaxTokens);
+  const requestedLimit = asPositiveFiniteNumber(params.requestedMaxTokens);
+  const modelMax = modelLimit === undefined ? undefined : Math.floor(modelLimit);
+  const requested = requestedLimit === undefined ? undefined : Math.floor(requestedLimit);
 
   if (modelMax !== undefined && requested !== undefined) {
     return Math.min(requested, modelMax);
@@ -204,7 +197,7 @@ function resolveAnthropicVertexSdkBaseUrl(baseUrl?: string): string | undefined 
   try {
     const url = new URL(trimmed);
     const normalizedPath = url.pathname.replace(/\/+$/, "");
-    if (!normalizedPath || normalizedPath === "") {
+    if (!normalizedPath) {
       url.pathname = "/v1";
       return url.toString().replace(/\/$/, "");
     }

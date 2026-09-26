@@ -19,6 +19,7 @@ describe("@openclaw/plugin-package-contract", () => {
       "context",
       "voice",
       "web",
+      "computer-use",
       "media",
       "security",
       "integrations",

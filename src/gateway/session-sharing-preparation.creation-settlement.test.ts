@@ -26,7 +26,7 @@ it.each([
   { native: "unknown", broker: "unknown" },
   { native: "missing", broker: "completed" },
 ] as const)(
-  "publishes a committed header with native $native and broker $broker settlement",
+  "publishes a committed creation with native $native and broker $broker settlement",
   async ({ native, broker }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -65,8 +65,8 @@ it.each([
           }
         }
       });
-      const deliveryFailure = new Error("Committed transcript header reply was lost");
-      let committedHeaders = 0;
+      const deliveryFailure = new Error("Committed creation reply was lost");
+      let committedCreations = 0;
       const restoreNativeSettlements: Array<() => void> = [];
       const original = workerStore.runSqliteWorkerStoreOperation;
       const observer = vi
@@ -87,21 +87,21 @@ it.each([
               (worker) =>
                 operation({
                   execute: async (command, options) => {
-                    initializing = command.type === "session.transcript.initialize";
+                    initializing = command.type === "session.entries.replace";
                     const result = await worker.execute(command, options);
                     if (initializing) {
                       if (!initializationAdmission) {
-                        throw new Error("Header command did not retain its real admission");
+                        throw new Error("Creation command did not retain its real admission");
                       }
                       // Drain the real receipt before reading or faulting native settlement.
                       const committed = initializationAdmission.committed;
                       if (!committed) {
-                        throw new Error("Header command did not retain its real COMMIT receipt");
+                        throw new Error("Creation command did not retain its real COMMIT receipt");
                       }
                       expect(committed.facts).toMatchObject({
-                        kind: "session-transcript-initialized",
-                        sessionKey,
-                        placeholder: { sessionId },
+                        kind: "session-entry-replacements",
+                        changedKeys: [sessionKey],
+                        pendingArchiveRecovery: false,
                       });
                       expect(initializationAdmission.settlement?.kind).toBe("completed");
                       if (native !== "completed") {
@@ -112,7 +112,7 @@ it.each([
                           );
                         restoreNativeSettlements.push(() => fault.mockRestore());
                       }
-                      committedHeaders++;
+                      committedCreations++;
                       throw deliveryFailure;
                     }
                     return result;
@@ -153,18 +153,14 @@ it.each([
           (value) => ({ kind: "returned" as const, value }),
           (error: unknown) => ({ kind: "failed" as const, error }),
         );
-        expect(committedHeaders).toBe(1);
+        expect(committedCreations).toBe(1);
         expect(observed).toHaveLength(1);
-        if (native === "completed") {
-          expect(observed).toEqual([null]);
-        } else {
-          expect(observed[0]).toBeInstanceOf(Error);
-          expect(observed[0]).toHaveProperty("message", unavailableMessage);
-        }
+        expect(observed[0]).toBeInstanceOf(Error);
+        expect(observed[0]).toHaveProperty("message", unavailableMessage);
         if (native === "completed") {
           expect(outcome).toEqual({
-            kind: "returned",
-            value: { ok: false, phase: "transcript", error: deliveryFailure.message },
+            kind: "failed",
+            error: deliveryFailure,
           });
         } else {
           expect(outcome.kind).toBe("failed");
@@ -184,7 +180,7 @@ it.each([
       const header = readTranscriptStorageRows(database, sessionId);
       expect(header).toHaveLength(1);
       expect(JSON.parse(header[0]!.eventJson)).toMatchObject({ type: "session", id: sessionId });
-      expect(readExactSessionEntryRow(database, sessionKey)).toBeUndefined();
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(sessionId);
       const fresh = await prepareSessionMutationFacts({
         cfg,
         sessionKey,
@@ -192,14 +188,7 @@ it.each([
         allowMissing: true,
       });
       try {
-        expect(fresh.readCurrent(cfg).target).toBeNull();
-        await expect(
-          createSessionEntryWithTranscript(
-            scope,
-            () => ({ ok: true, entry: { sessionId, updatedAt: 2 } }),
-            { bindCreation: fresh.bindCreation, commitGuard: () => storage.assertCurrent() },
-          ),
-        ).resolves.toMatchObject({ ok: true, entry: { sessionId } });
+        expect(fresh.readCurrent(cfg).target?.entry.sessionId).toBe(sessionId);
         expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(sessionId);
         expect(readTranscriptStorageRows(database, sessionId)).toEqual(header);
       } finally {

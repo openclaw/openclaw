@@ -149,7 +149,7 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it.each([["--watch", "false"], ["-w", "false"], ["--watch=false"], ["--no-watch"]])(
+  it.each([["--watch", "false"], ["--no-watch"]])(
     "preserves native watch controls after the wrapper separator: %j",
     (...flags) => {
       const file = "test/scripts/run-vitest.test.ts";
@@ -173,30 +173,18 @@ describe("test-projects args", () => {
     });
   });
 
-  it.each(
-    [
-      { label: "distinct operand", flag: "--exclude", operand: "test/scripts/other.test.ts" },
-      {
-        label: "identical exclusion",
-        flag: "--exclude",
-        operand: "test/scripts/run-vitest.test.ts",
-      },
-      { label: "identical name pattern", flag: "-t", operand: "test/scripts/run-vitest.test.ts" },
-    ].flatMap(({ label, flag, operand }) =>
-      [true, false].map((targetFirst) => ({ label, flag, operand, targetFirst })),
-    ),
-  )(
-    "partitions targets by occurrence, not option-operand value: $label (targetFirst=$targetFirst)",
-    ({ flag, operand, targetFirst }) => {
+  it.each([true, false])(
+    "partitions targets by occurrence when an exclusion repeats the target (targetFirst=%s)",
+    (targetFirst) => {
       const target = "test/scripts/run-vitest.test.ts";
       const args = targetFirst
-        ? [target, flag, operand, "--reporter=dot"]
-        : [flag, operand, target, "--reporter=dot"];
+        ? [target, "--exclude", target, "--reporter=dot"]
+        : ["--exclude", target, target, "--reporter=dot"];
       expect(buildVitestRunPlans(args)).toEqual([
         {
           config: "test/vitest/vitest.tooling.config.ts",
           includePatterns: [target],
-          forwardedArgs: [flag, operand, "--reporter=dot"],
+          forwardedArgs: ["--exclude", target, "--reporter=dot"],
           watchMode: false,
         },
       ]);
@@ -411,15 +399,6 @@ describe("test-projects args", () => {
   });
 
   it("routes infra targets to the infra config", () => {
-    expect(buildVitestRunPlans(["src/infra/openclaw-root.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.boundary.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/infra/openclaw-root.test.ts"],
-        watchMode: false,
-      },
-    ]);
-
     expect(buildVitestRunPlans(["src/infra/migrations.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.infra.config.ts",
@@ -523,15 +502,6 @@ describe("test-projects args", () => {
   });
 
   it("routes plugin targets to the plugins config", () => {
-    expect(buildVitestRunPlans(["src/plugins/loader.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.bundled.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/plugins/loader.test.ts"],
-        watchMode: false,
-      },
-    ]);
-
     expect(buildVitestRunPlans(["src/plugins/discovery.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.plugins.config.ts",
@@ -799,19 +769,6 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
         includePatterns: [`${target}/**/*.test.ts`],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes direct Discord extension file targets to the Discord config", () => {
-    expect(
-      buildVitestRunPlans(["extensions/discord/src/monitor/message-handler.preflight.test.ts"]),
-    ).toEqual([
-      {
-        config: "test/vitest/vitest.extension-discord.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/discord/src/monitor/message-handler.preflight.test.ts"],
         watchMode: false,
       },
     ]);

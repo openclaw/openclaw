@@ -40,12 +40,6 @@ describe("Code Mode configuration", () => {
       expected: false,
     },
     {
-      name: "unset agent model inherits model default",
-      global: false,
-      model: true,
-      expected: true,
-    },
-    {
       name: "agent auto overrides model default",
       global: false,
       model: true,

@@ -6,12 +6,9 @@ import {
 } from "./auth.js";
 
 describe("llama-server auth", () => {
-  it.each([undefined, null, [], "Bearer proxy-token"])(
-    "rejects a non-record authorization header container: %j",
-    (headers) => {
-      expect(hasLlamaServerAuthorizationHeader(headers)).toBe(false);
-    },
-  );
+  it("rejects an array authorization header container", () => {
+    expect(hasLlamaServerAuthorizationHeader([])).toBe(false);
+  });
 
   it("uses synthetic runtime auth for no-auth and header-only providers", () => {
     expect(

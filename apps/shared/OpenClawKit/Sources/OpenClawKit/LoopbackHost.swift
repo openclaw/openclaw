@@ -7,16 +7,7 @@ public enum LoopbackHost {
     }
 
     public static func isLoopbackHost(_ rawHost: String) -> Bool {
-        var host = rawHost
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if host.hasSuffix(".") {
-            host.removeLast()
-        }
-        if let zoneIndex = host.firstIndex(of: "%") {
-            host = String(host[..<zoneIndex])
-        }
+        let host = self.normalizedHost(rawHost)
         if host.isEmpty {
             return false
         }

@@ -35,6 +35,23 @@ function runSummary(report: unknown, extraArgs: string[] = []) {
   return { output, result };
 }
 
+function metric(
+  title: string,
+  unit: string,
+  median: number,
+  overrides: Partial<{ count: unknown; max: number; p95: number }> = {},
+) {
+  return { count: 1, max: median, median, p95: median, title, unit, ...overrides };
+}
+
+function metricReport(status: string, metrics: Record<string, ReturnType<typeof metric>>) {
+  return {
+    performance: { repeat: 1, groups: [{ metrics, scenario: "gateway", state: "clean" }] },
+    records: [{ scenario: "gateway", state: "clean", status }],
+    summary: { statuses: { [status]: 1 } },
+  };
+}
+
 describe("scripts/kova-ci-summary", () => {
   it("prints help without treating --help as a valued option", () => {
     const result = spawnSync(
@@ -98,45 +115,13 @@ describe("scripts/kova-ci-summary", () => {
 
   it("renders a Kova summary when status and evidence are present", () => {
     const { output, result } = runSummary({
+      ...metricReport("pass", {
+        cpuPercentMax: metric("CPU max", "%", 12),
+        resourcePeakGatewayRssMb: metric("Gateway RSS", "MB", 256),
+        timeToHealthReadyMs: metric("Health ready", "ms", 20, { max: 30, p95: 30 }),
+      }),
       generatedAt: "2026-06-06T00:00:00.000Z",
-      performance: {
-        repeat: 1,
-        groups: [
-          {
-            metrics: {
-              cpuPercentMax: {
-                count: 1,
-                max: 12,
-                median: 12,
-                p95: 12,
-                title: "CPU max",
-                unit: "%",
-              },
-              resourcePeakGatewayRssMb: {
-                count: 1,
-                max: 256,
-                median: 256,
-                p95: 256,
-                title: "Gateway RSS",
-                unit: "MB",
-              },
-              timeToHealthReadyMs: {
-                count: 1,
-                max: 30,
-                median: 20,
-                p95: 30,
-                title: "Health ready",
-                unit: "ms",
-              },
-            },
-            scenario: "gateway",
-            state: "clean",
-          },
-        ],
-      },
-      records: [{ scenario: "gateway", state: "clean", status: "pass" }],
       runId: "run-1",
-      summary: { statuses: { pass: 1 } },
       target: "main",
     });
 
@@ -148,29 +133,11 @@ describe("scripts/kova-ci-summary", () => {
   });
 
   it("renders blocked reports without resource metrics", () => {
-    const { output, result } = runSummary({
-      performance: {
-        repeat: 1,
-        groups: [
-          {
-            metrics: {
-              timeToHealthReadyMs: {
-                count: 1,
-                max: 30,
-                median: 20,
-                p95: 30,
-                title: "Health ready",
-                unit: "ms",
-              },
-            },
-            scenario: "gateway",
-            state: "clean",
-          },
-        ],
-      },
-      records: [{ scenario: "gateway", state: "clean", status: "BLOCKED" }],
-      summary: { statuses: { BLOCKED: 1 } },
-    });
+    const { output, result } = runSummary(
+      metricReport("BLOCKED", {
+        timeToHealthReadyMs: metric("Health ready", "ms", 20, { max: 30, p95: 30 }),
+      }),
+    );
 
     expect(result.status).toBe(0);
     expect(output).toContain("| gateway | clean | Health ready | 20 ms | 30 ms | 30 ms |");
@@ -178,29 +145,11 @@ describe("scripts/kova-ci-summary", () => {
   });
 
   it("rejects successful reports without resource metrics", () => {
-    const { result } = runSummary({
-      performance: {
-        repeat: 1,
-        groups: [
-          {
-            metrics: {
-              timeToHealthReadyMs: {
-                count: 1,
-                max: 30,
-                median: 20,
-                p95: 30,
-                title: "Health ready",
-                unit: "ms",
-              },
-            },
-            scenario: "gateway",
-            state: "clean",
-          },
-        ],
-      },
-      records: [{ scenario: "gateway", state: "clean", status: "PASS" }],
-      summary: { statuses: { PASS: 1 } },
-    });
+    const { result } = runSummary(
+      metricReport("PASS", {
+        timeToHealthReadyMs: metric("Health ready", "ms", 20, { max: 30, p95: 30 }),
+      }),
+    );
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
@@ -209,37 +158,12 @@ describe("scripts/kova-ci-summary", () => {
   });
 
   it("renders available metrics from failed reports when CPU samples are absent", () => {
-    const { output, result } = runSummary({
-      performance: {
-        repeat: 1,
-        groups: [
-          {
-            metrics: {
-              resourcePeakGatewayRssMb: {
-                count: 1,
-                max: 256,
-                median: 256,
-                p95: 256,
-                title: "Gateway RSS",
-                unit: "MB",
-              },
-              timeToHealthReadyMs: {
-                count: 1,
-                max: 30,
-                median: 20,
-                p95: 30,
-                title: "Health ready",
-                unit: "ms",
-              },
-            },
-            scenario: "gateway",
-            state: "clean",
-          },
-        ],
-      },
-      records: [{ scenario: "gateway", state: "clean", status: "FAIL" }],
-      summary: { statuses: { FAIL: 1 } },
-    });
+    const { output, result } = runSummary(
+      metricReport("FAIL", {
+        resourcePeakGatewayRssMb: metric("Gateway RSS", "MB", 256),
+        timeToHealthReadyMs: metric("Health ready", "ms", 20, { max: 30, p95: 30 }),
+      }),
+    );
 
     expect(result.status).toBe(0);
     expect(output).toContain("| gateway | clean | Gateway RSS | 256 MB | 256 MB | 256 MB |");
@@ -247,29 +171,11 @@ describe("scripts/kova-ci-summary", () => {
   });
 
   it("rejects successful reports without CPU metrics", () => {
-    const { result } = runSummary({
-      performance: {
-        repeat: 1,
-        groups: [
-          {
-            metrics: {
-              resourcePeakGatewayRssMb: {
-                count: 1,
-                max: 256,
-                median: 256,
-                p95: 256,
-                title: "Gateway RSS",
-                unit: "MB",
-              },
-            },
-            scenario: "gateway",
-            state: "clean",
-          },
-        ],
-      },
-      records: [{ scenario: "gateway", state: "clean", status: "PASS" }],
-      summary: { statuses: { PASS: 1 } },
-    });
+    const { result } = runSummary(
+      metricReport("PASS", {
+        resourcePeakGatewayRssMb: metric("Gateway RSS", "MB", 256),
+      }),
+    );
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
@@ -278,82 +184,25 @@ describe("scripts/kova-ci-summary", () => {
   });
 
   it("omits malformed resource metrics instead of rejecting failure evidence", () => {
-    const { output, result } = runSummary({
-      performance: {
-        repeat: 1,
-        groups: [
-          {
-            metrics: {
-              cpuPercentMax: {
-                count: "Infinity",
-                max: 12,
-                median: 12,
-                p95: 12,
-                title: "CPU max",
-                unit: "%",
-              },
-              resourcePeakGatewayRssMb: {
-                count: true,
-                max: 256,
-                median: 256,
-                p95: 256,
-                title: "Gateway RSS",
-                unit: "MB",
-              },
-            },
-            scenario: "gateway",
-            state: "clean",
-          },
-        ],
-      },
-      records: [{ scenario: "gateway", state: "clean", status: "FAIL" }],
-      summary: { statuses: { FAIL: 1 } },
-    });
+    const { output, result } = runSummary(
+      metricReport("FAIL", {
+        cpuPercentMax: metric("CPU max", "%", 12, { count: "Infinity" }),
+        resourcePeakGatewayRssMb: metric("Gateway RSS", "MB", 256, { count: true }),
+      }),
+    );
 
     expect(result.status).toBe(0);
     expect(output).toContain("No sampled key metrics were available");
   });
 
   it("omits key metric rows with invalid sample counts", () => {
-    const { output, result } = runSummary({
-      performance: {
-        repeat: 1,
-        groups: [
-          {
-            metrics: {
-              cpuPercentMax: {
-                count: 1,
-                max: 12,
-                median: 12,
-                p95: 12,
-                title: "CPU max",
-                unit: "%",
-              },
-              resourcePeakGatewayRssMb: {
-                count: 1,
-                max: 256,
-                median: 256,
-                p95: 256,
-                title: "Gateway RSS",
-                unit: "MB",
-              },
-              timeToHealthReadyMs: {
-                count: "0",
-                max: 30,
-                median: 20,
-                p95: 30,
-                title: "Health ready",
-                unit: "ms",
-              },
-            },
-            scenario: "gateway",
-            state: "clean",
-          },
-        ],
-      },
-      records: [{ scenario: "gateway", state: "clean", status: "pass" }],
-      summary: { statuses: { pass: 1 } },
-    });
+    const { output, result } = runSummary(
+      metricReport("pass", {
+        cpuPercentMax: metric("CPU max", "%", 12),
+        resourcePeakGatewayRssMb: metric("Gateway RSS", "MB", 256),
+        timeToHealthReadyMs: metric("Health ready", "ms", 20, { max: 30, p95: 30, count: "0" }),
+      }),
+    );
 
     expect(result.status).toBe(0);
     expect(output).not.toContain("Health ready");

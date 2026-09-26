@@ -13,15 +13,10 @@ import type {
   QaBusStateSnapshot,
   QaBusThread,
   QaBusToolCall,
+  QaTargetParts,
 } from "./qa-channel-protocol.js";
 
 export type * from "./qa-channel-protocol.js";
-
-type QaTargetParts = {
-  chatType: "direct" | "channel" | "group";
-  conversationId: string;
-  threadId?: string;
-};
 
 type FacadeModule = {
   buildQaTarget: (params: QaTargetParts & { threadId?: string | null }) => string;

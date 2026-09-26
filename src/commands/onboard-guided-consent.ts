@@ -98,13 +98,12 @@ export async function requestGuidedOnboardingConsent(params: {
       };
     }
   }
-  const onboardingSecurityAcknowledgedAt = securityAcknowledgedAt;
-  if (!onboardingSecurityAcknowledgedAt) {
+  if (!securityAcknowledgedAt) {
     throw new Error("Local onboarding requires its persisted security acknowledgement.");
   }
   return {
     quickstart,
     config: acknowledgedConfig,
-    securityAcknowledgedAt: onboardingSecurityAcknowledgedAt,
+    securityAcknowledgedAt,
   };
 }

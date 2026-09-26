@@ -11,16 +11,9 @@ export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_LEGACY_BASE_URL = "https://openrouter.ai/v1";
 const ARCEE_OPENROUTER_MODEL_IDS = new Set(["trinity-large-preview", "trinity-large-thinking"]);
 
-function normalizeBaseUrl(baseUrl: string | undefined): string {
-  return (baseUrl ?? "").trim().replace(/\/+$/, "");
-}
-
 /** Normalize OpenRouter base URLs accepted for Arcee model routing. */
 export function normalizeArceeOpenRouterBaseUrl(baseUrl: string | undefined): string | undefined {
-  const normalized = normalizeBaseUrl(baseUrl);
-  if (!normalized) {
-    return undefined;
-  }
+  const normalized = (baseUrl ?? "").trim().replace(/\/+$/, "");
   if (normalized === OPENROUTER_BASE_URL || normalized === OPENROUTER_LEGACY_BASE_URL) {
     return OPENROUTER_BASE_URL;
   }

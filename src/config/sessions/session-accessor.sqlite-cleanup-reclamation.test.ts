@@ -237,7 +237,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
   });
 
   it.each([false, true])(
-    "reports warm marker phases without changing native failure=%s",
+    "reuses the warm archive reader while preserving marker phases and native failure=%s",
     async (fail) => {
       const sessionKey = "agent:main:marker-scan-history";
       const sessionId = "marker-scan-history";
@@ -342,7 +342,8 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         channel("worker_threads").unsubscribe(onWorker);
         database.db.exec("DROP VIEW temp.transcript_events");
       }
-      expect(workersStarted).toBe(fail ? 0 : 2);
+      // Empty archive probes reuse the history reader across warm cleanup passes.
+      expect(workersStarted).toBe(fail ? 0 : 1);
       expect(loadSessionEntry({ sessionKey, storePath })).toEqual(before);
       await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(
         events,

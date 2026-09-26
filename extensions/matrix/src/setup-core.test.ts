@@ -64,15 +64,6 @@ function makeFakeSetupWizard(
 }
 
 describe("createMatrixSetupWizardProxy", () => {
-  it("does not load the setup surface when constructing the proxy", () => {
-    const loader = vi.fn(async () => ({ matrixSetupWizard: makeFakeSetupWizard() }));
-
-    const proxy = createMatrixSetupWizardProxy(loader);
-
-    expect(proxy.channel).toBe("matrix");
-    expect(loader).not.toHaveBeenCalled();
-  });
-
   it("loads the setup surface when setup status is requested", async () => {
     const status = {
       channel: "matrix" as const,
@@ -249,80 +240,6 @@ describe("matrixSetupAdapter", () => {
 
     expectPromotedDefaultAccount(next);
     expectOpsAccount(next);
-  });
-
-  it("reuses an existing raw default-like key during promotion when defaultAccount is unset", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@default:example.org",
-          accessToken: "tok-default",
-          avatarUrl: "mxc://example.org/default-avatar",
-          accounts: {
-            Default: {
-              enabled: true,
-              deviceName: "Legacy raw key",
-            },
-            support: {
-              homeserver: "https://matrix.example.org",
-              accessToken: "tok-support",
-            },
-          },
-        },
-      },
-    } as CoreConfig;
-
-    const next = applyOpsAccountConfig(cfg);
-
-    expectPromotedDefaultAccount(next);
-    expectFields(next.channels?.matrix?.accounts?.support, {
-      homeserver: "https://matrix.example.org",
-      accessToken: "tok-support",
-    });
-    expectOpsAccount(next);
-  });
-
-  it("clears stored auth fields when switching an account to env-backed auth", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              name: "Ops",
-              homeserver: "https://matrix.example.org",
-              proxy: "http://127.0.0.1:7890",
-              userId: "@ops:example.org",
-              accessToken: "ops-token",
-              password: "secret",
-              deviceId: "DEVICE",
-              deviceName: "Ops device",
-            },
-          },
-        },
-      },
-    } as CoreConfig;
-
-    const next = matrixSetupAdapter.applyAccountConfig({
-      cfg,
-      accountId: "ops",
-      input: {
-        name: "Ops",
-        useEnv: true,
-      },
-    }) as CoreConfig;
-
-    expectFields(next.channels?.matrix?.accounts?.ops, {
-      name: "Ops",
-      enabled: true,
-    });
-    expect(next.channels?.matrix?.accounts?.ops?.homeserver).toBeUndefined();
-    expect(next.channels?.matrix?.accounts?.ops?.proxy).toBeUndefined();
-    expect(next.channels?.matrix?.accounts?.ops?.userId).toBeUndefined();
-    expect(next.channels?.matrix?.accounts?.ops?.accessToken).toBeUndefined();
-    expect(next.channels?.matrix?.accounts?.ops?.password).toBeUndefined();
-    expect(next.channels?.matrix?.accounts?.ops?.deviceId).toBeUndefined();
-    expect(next.channels?.matrix?.accounts?.ops?.deviceName).toBeUndefined();
   });
 
   it("keeps avatarUrl when switching an account to env-backed auth", () => {

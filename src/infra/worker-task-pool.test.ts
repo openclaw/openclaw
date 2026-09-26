@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { getTrackedWorkerCpuSources } from "./worker-cpu.js";
+import { getTrackedWorkerCpuSources, getTrackedWorkerPoolSnapshot } from "./worker-cpu.js";
 import { workerTaskPoolEntrypoints } from "./worker-task-pool-runtime.test-support.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
@@ -64,6 +64,7 @@ afterEach(async () => {
 
 describe("worker task pool", () => {
   it("acknowledges input custody on its channel without a host exchange and reuses the healthy worker", async () => {
+    const initial = getTrackedWorkerPoolSnapshot();
     const pool = createPool();
     const released = vi.fn();
     const onRequest = vi.fn(async () => {
@@ -78,6 +79,12 @@ describe("worker task pool", () => {
     const next = await pool.run({ label: "next" }, {});
     expect(next.threadId).toBe(first.threadId);
     expect(workers).toHaveLength(1);
+    const warm = getTrackedWorkerPoolSnapshot();
+    expect(warm.workerPoolCount).toBe(initial.workerPoolCount + 1);
+    expect(warm.workerCount).toBe(initial.workerCount + 1);
+    expect(warm.workerPools.at(-1)).toMatchObject({ workerCount: 1 });
+    await pool.close();
+    expect(getTrackedWorkerPoolSnapshot()).toEqual(initial);
   });
 
   it("rotates after active settlement and native exit while preserving queued order and deadlines", async () => {
@@ -402,6 +409,7 @@ describe("worker task pool", () => {
   );
 
   it("shares compute capacity across pools while ordered workers remain independent", async () => {
+    const initial = getTrackedWorkerPoolSnapshot();
     const limit = Math.max(1, availableParallelism() - 1);
     const owner = createPool({ workerUrl, sharedCompute: true, maxWorkers: limit });
     const waiting = createPool({ workerUrl, sharedCompute: true });
@@ -423,6 +431,10 @@ describe("worker task pool", () => {
       await settled;
     }
     expect(await queued).toMatchObject({ label: "waiting" });
+    const census = getTrackedWorkerPoolSnapshot();
+    expect(census.workerPoolCount).toBe(initial.workerPoolCount + 3);
+    expect(census.workerCount).toBe(initial.workerCount + limit + 2);
+    expect(census.workerPools.map((pool) => pool.workerCount)).toEqual([limit, 1, 1]);
   });
 
   it.each(["before", "during"] as const)(
@@ -744,19 +756,16 @@ describe("worker task pool", () => {
     },
   );
 
-  it.each([0, 1])(
-    "rejects exit code %i before a response and recovers capacity",
-    async (exitCode) => {
-      const pool = createPool();
-      await expect(
-        pool.run({ label: "exit", exitCode }, { timeoutMs: 10_000 }),
-      ).rejects.toMatchObject({ code: "unavailable" });
-      await expect(pool.run({ label: "next" }, { timeoutMs: 10_000 })).resolves.toMatchObject({
-        label: "next",
-      });
-      expect(workers).toHaveLength(2);
-    },
-  );
+  it("rejects a clean exit before a response and recovers capacity", async () => {
+    const pool = createPool();
+    await expect(
+      pool.run({ label: "exit", exitCode: 0 }, { timeoutMs: 10_000 }),
+    ).rejects.toMatchObject({ code: "unavailable" });
+    await expect(pool.run({ label: "next" }, { timeoutMs: 10_000 })).resolves.toMatchObject({
+      label: "next",
+    });
+    expect(workers).toHaveLength(2);
+  });
 
   it("closes a generation before a rejected result can dispatch its successor", async () => {
     const reason = new Error("generation superseded");

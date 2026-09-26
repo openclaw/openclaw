@@ -238,13 +238,7 @@ const RUNTIME_CONTEXT_NOTICE_PATTERN = new RegExp(
   OPENCLAW_RUNTIME_CONTEXT_NOTICE.split(/\s+/).map(escapeRegExp).join("\\s+"),
 );
 const RUNTIME_CONTEXT_PREFACE_PATTERN = new RegExp(
-  `^[ \\t]*(?:${RUNTIME_CONTEXT_PROMPT_HEADERS.flatMap((header) => {
-    const sentences = header.split(". ");
-    // Echoes may start at a header sentence, but the notice alone is ordinary text.
-    return sentences.map((_, index) =>
-      sentences.slice(index).join(". ").split(/\s+/).map(escapeRegExp).join("\\s+"),
-    );
-  }).join("|")})\\s+${RUNTIME_CONTEXT_NOTICE_PATTERN.source}[ \\t]*(?:\\r?\\n|$)`,
+  `^[ \\t]*(?:${RUNTIME_CONTEXT_CARRIER_PREFIX_PATTERN.source})\\s+${RUNTIME_CONTEXT_NOTICE_PATTERN.source}[ \\t]*(?:\\r?\\n|$)`,
   "gm",
 );
 
@@ -407,18 +401,21 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
   if (lastUserIndex === -1) {
     return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
   }
-  const currentRuntimeContextIndexes = new Set<number>();
-  for (let index = lastUserIndex - 1; index >= 0; index -= 1) {
-    if (!isOpenClawRuntimeContextCustomMessage(messages[index])) {
-      break;
-    }
-    currentRuntimeContextIndexes.add(index);
+  let currentRuntimeContextStart = lastUserIndex;
+  while (
+    currentRuntimeContextStart > 0 &&
+    isOpenClawRuntimeContextCustomMessage(messages[currentRuntimeContextStart - 1])
+  ) {
+    currentRuntimeContextStart -= 1;
   }
   return messages.filter((message, index) => {
     if (!isOpenClawRuntimeContextCustomMessage(message)) {
       return true;
     }
-    return currentRuntimeContextIndexes.has(index) || isRetainedRuntimeContextMessage(message);
+    return (
+      (index >= currentRuntimeContextStart && index < lastUserIndex) ||
+      isRetainedRuntimeContextMessage(message)
+    );
   });
 }
 

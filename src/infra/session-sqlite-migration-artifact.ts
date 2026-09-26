@@ -21,6 +21,7 @@ export const MigrationArtifactSchema = z.object({
   identity: IdentitySchema,
   classification: z.enum(["imported", "repair-original", "protected"]),
   reason: z.string(),
+  verification: z.string().optional(),
   dependencies: z.array(z.string()).default([]),
   disposal: z.discriminatedUnion("state", [
     z.object({ state: z.literal("retained") }),
@@ -134,9 +135,10 @@ export function readMigrationArtifactIdentity(
 export function sameMigrationArtifact(
   left: MigrationArtifactIdentity,
   right: MigrationArtifactIdentity,
+  options: { ignoreDevice?: boolean } = {},
 ): boolean {
   return (
-    left.dev === right.dev &&
+    (options.ignoreDevice || left.dev === right.dev) &&
     left.ino === right.ino &&
     left.mtimeNs === right.mtimeNs &&
     left.size === right.size &&

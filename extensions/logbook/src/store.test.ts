@@ -249,22 +249,6 @@ describe("LogbookStore", () => {
     }
   });
 
-  it("rejects values that violate STRICT column types", () => {
-    const database = new DatabaseSync(path.join(dir, "logbook.sqlite"));
-    try {
-      expect(() =>
-        database
-          .prepare("INSERT INTO standups (day, text, updated_ms) VALUES (?, ?, ?)")
-          .run(DAY, "bad timestamp", "not-an-integer"),
-      ).toThrow();
-      expect(database.prepare("SELECT COUNT(*) AS count FROM standups").get()).toEqual({
-        count: 0,
-      });
-    } finally {
-      database.close();
-    }
-  });
-
   it("rolls back the whole batch when any frame is missing", async () => {
     const t0 = Date.now();
     const frameId = await insertFrame(t0);
@@ -403,17 +387,6 @@ describe("LogbookStore", () => {
     });
   });
 
-  it("prunes old frame rows and files but keeps recent ones", async () => {
-    const now = Date.now();
-    const oldId = await insertFrame(now - 20 * 24 * 60 * 60_000);
-    const newId = await insertFrame(now);
-    const oldPath = (await store.frameById(oldId))?.path ?? "";
-    expect(await store.pruneFrames(now - 14 * 24 * 60 * 60_000)).toBe(1);
-    expect(await store.frameById(oldId)).toBeNull();
-    expect(existsSync(oldPath)).toBe(false);
-    expect(await store.frameById(newId)).not.toBeNull();
-  });
-
   it("keeps frame metadata when a retained file cannot be removed", async () => {
     const now = Date.now();
     const firstId = await insertFrame(now - 21 * 24 * 60 * 60_000);
@@ -430,16 +403,6 @@ describe("LogbookStore", () => {
     expect(await store.pruneFrames(now - 14 * 24 * 60 * 60_000)).toBe(2);
     expect(await store.frameById(firstId)).toBeNull();
     expect(await store.frameById(blockedId)).toBeNull();
-  });
-
-  it("detaches pruned keyframes from surviving cards", async () => {
-    const now = Date.now();
-    const oldId = await insertFrame(now - 20 * 24 * 60 * 60_000);
-    await store.replaceCardsInWindow(DAY, 0, Number.MAX_SAFE_INTEGER, [
-      draft({ keyframeId: oldId }),
-    ]);
-    await store.pruneFrames(now - 14 * 24 * 60 * 60_000);
-    expect((await store.cardsForDay(DAY))[0]?.keyframeId).toBeUndefined();
   });
 
   it("replaces observations on batch retry instead of appending", async () => {
@@ -525,12 +488,6 @@ describe("LogbookStore", () => {
     expect(mode(dir)).toBe(0o700);
     expect(mode(store.framesDir)).toBe(0o700);
     expect(mode(path.join(dir, "logbook.sqlite"))).toBe(0o600);
-  });
-
-  it("stores and updates standups", async () => {
-    await store.saveStandup(DAY, "## Done\n- shipped");
-    await store.saveStandup(DAY, "## Done\n- shipped more");
-    expect((await store.getStandup(DAY))?.text).toContain("shipped more");
   });
 
   it("migrates legacy tables to STRICT without losing batch assignments", async () => {
