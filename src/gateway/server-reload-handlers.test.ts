@@ -97,8 +97,9 @@ import {
 import { doesReloadAffectProviderAuth } from "./config-reload-recovery.js";
 import type { GatewayHotReloadApplication } from "./config-reload-status.types.js";
 import {
-  captureNextPluginLifecycleLease,
+  createPluginLifecycleLeaseTestClock,
   createRecoveryRestartMock,
+  createReloadWarningObserver,
   prepareConfigReloadTest,
   waitForReloadState,
 } from "./config-reload.test-support.js";
@@ -704,7 +705,7 @@ async function createManagedRestartSequenceHarness(
   const unavailableSecretIds = new Set(["MISSING_RESTART_TOKEN", "MISSING_HOT_TOKEN"]);
   let recordPromotion: ((hash: string) => void) | undefined;
   let recordReloadError: ((message: string) => void) | undefined;
-  let recordReloadWarning: ((message: string) => void) | undefined;
+  const reloadWarning = createReloadWarningObserver();
   const { requestRecoveryRestart, restartEmitted } = createRecoveryRestartMock();
   const nextPromotion = () =>
     new Promise<string>((resolve) => {
@@ -714,15 +715,6 @@ async function createManagedRestartSequenceHarness(
     new Promise<string>((resolve) => {
       recordReloadError = resolve;
     });
-  const nextReloadWarning = (text: string) =>
-    new Promise<void>((resolve) => {
-      recordReloadWarning = (message) => {
-        if (message.includes(text)) {
-          recordReloadWarning = undefined;
-          resolve();
-        }
-      };
-    });
   const promoteSnapshot = vi.fn(async (snapshot: { hash?: string }) => {
     recordPromotion?.(snapshot.hash ?? "");
     recordPromotion = undefined;
@@ -730,7 +722,7 @@ async function createManagedRestartSequenceHarness(
   });
   const logReload = {
     info: vi.fn(),
-    warn: vi.fn((message: string) => recordReloadWarning?.(message)),
+    warn: vi.fn(reloadWarning.observe),
     error: vi.fn((message: string) => {
       recordReloadError?.(message);
       recordReloadError = undefined;
@@ -820,7 +812,7 @@ async function createManagedRestartSequenceHarness(
     logReload,
     nextPromotion,
     nextReloadError,
-    nextReloadWarning,
+    nextReloadWarning: reloadWarning.next,
     restartEmitted,
     promoteSnapshot,
     reloader,
@@ -6142,7 +6134,7 @@ describe("gateway Gmail hot reload handlers", () => {
     async (holdPromotion) => {
       vi.useFakeTimers();
       const harness = await createManagedRestartSequenceHarness();
-      const waitForReloadLease = captureNextPluginLifecycleLease();
+      const leaseClock = createPluginLifecycleLeaseTestClock();
       const promotionGate = createDeferred();
       if (holdPromotion) {
         const promote = harness.promoteSnapshot.getMockImplementation();
@@ -6161,7 +6153,7 @@ describe("gateway Gmail hot reload handlers", () => {
         const promotion = harness.nextPromotion();
         harness.writeConfig(harness.deferredConfig, "deferred-emission-preflight", 1);
         await vi.advanceTimersByTimeAsync(0);
-        await promotion;
+        await leaseClock.waitFor(promotion);
 
         harness.setSecretUnavailable("RESTART_A_TOKEN");
         if (holdPromotion) {
@@ -6173,17 +6165,18 @@ describe("gateway Gmail hot reload handlers", () => {
             "gateway restart recovery emission failed; retrying",
           );
           expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+          hoisted.activeTaskBlockers.push(makeActiveTaskBlocker());
         }
         promotionGate.resolve();
         // Restart preparation reacquires the outer plugin lease after reload root admission ends.
-        await waitForReloadLease();
+        await leaseClock.waitForFirstLease();
         expect(harness.assertRestartReady).not.toHaveBeenCalled();
         hoisted.activeTaskBlockers.length = 0;
         const retryScheduled = harness.nextReloadWarning(
           "gateway restart recovery emission failed; retrying",
         );
         await vi.advanceTimersByTimeAsync(500);
-        await retryScheduled;
+        await leaseClock.waitFor(retryScheduled);
         expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
         expect(harness.assertRestartReady).toHaveBeenCalledOnce();
         expect(harness.logReload.warn).toHaveBeenCalledWith(
@@ -6192,7 +6185,7 @@ describe("gateway Gmail hot reload handlers", () => {
 
         harness.setSecretAvailable("RESTART_A_TOKEN");
         await vi.advanceTimersByTimeAsync(1_000);
-        await harness.restartEmitted;
+        await leaseClock.waitFor(harness.restartEmitted);
         expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce();
         expect(harness.assertRestartReady).toHaveBeenCalledTimes(2);
         expect(harness.activateRuntimeSecrets.prepareSnapshot).toHaveBeenCalledTimes(3);

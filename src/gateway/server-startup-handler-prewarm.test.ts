@@ -1,12 +1,22 @@
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resetGatewayWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
+  executeRequest: vi.fn(),
+  ensureSkillsWatcher: vi.fn(),
+  prepareWorkspaceSkillEntries: vi.fn<
+    typeof import("../skills/loading/workspace-skill-loader.js").prepareWorkspaceSkillEntries
+  >(async () => ({ entries: [] })),
+  prewarmContextWindowCacheAfterReady: vi.fn(async () => {}),
   getMemoryCapabilityRegistration: vi.fn<() => { pluginId: string } | undefined>(),
   prewarmMemorySearchWorker: vi.fn(async () => {
     mocks.events.push("memory-search");
@@ -36,6 +46,40 @@ vi.mock("../plugins/management-service.js", () => ({
   listManagedPlugins: mocks.listManagedPlugins,
 }));
 
+vi.mock("./server/ws-connection/message-handler.js", () => {
+  mocks.events.push("connection");
+  return { attachGatewayWsMessageHandler: mocks.executeRequest };
+});
+vi.mock("./server-chat.js", () => {
+  mocks.events.push("agent-events");
+  return { createAgentEventHandler: mocks.executeRequest };
+});
+vi.mock("./server-session-key.js", () => ({ resolveSessionKeyForRun: mocks.executeRequest }));
+vi.mock("./server-methods/core-handlers.js", async () => {
+  const { createLazyCoreHandlers } = await import("./server-methods/lazy-core-handlers.js");
+  return {
+    coreGatewayHandlers: createLazyCoreHandlers({
+      methods: ["chat.history", "chat.send", "sessions.list"],
+      loadHandlers: async () => {
+        mocks.events.push("handlers");
+        return {
+          "chat.history": mocks.executeRequest,
+          "chat.send": mocks.executeRequest,
+          "sessions.list": mocks.executeRequest,
+        };
+      },
+    }),
+  };
+});
+vi.mock("../skills/loading/workspace-skill-loader.js", () => ({
+  prepareWorkspaceSkillEntries: mocks.prepareWorkspaceSkillEntries,
+}));
+vi.mock("../agents/workspace-access.js", () => ({ getAgentWorkspaceAccess: () => undefined }));
+vi.mock("../skills/runtime/refresh.js", () => ({ ensureSkillsWatcher: mocks.ensureSkillsWatcher }));
+vi.mock("../agents/context.js", () => ({
+  prewarmContextWindowCacheAfterReady: mocks.prewarmContextWindowCacheAfterReady,
+}));
+
 vi.mock("../plugins/memory-state.js", () => ({
   getMemoryCapabilityRegistration: mocks.getMemoryCapabilityRegistration,
 }));
@@ -45,9 +89,17 @@ vi.mock("../plugins/public-surface-loader.js", () => ({
 }));
 
 const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler-prewarm.js");
+const workspaces = {
+  main: path.resolve("prewarm-main"),
+  research: path.resolve("prewarm-research"),
+};
 
 beforeEach(() => {
   mocks.events.length = 0;
+  mocks.executeRequest.mockClear();
+  mocks.ensureSkillsWatcher.mockClear();
+  mocks.prepareWorkspaceSkillEntries.mockClear();
+  mocks.prewarmContextWindowCacheAfterReady.mockClear();
   mocks.loadCombinedSessionStoreForGatewayCore.mockClear();
   mocks.listManagedPlugins.mockClear();
   mocks.getMemoryCapabilityRegistration.mockReset();
@@ -61,32 +113,92 @@ afterEach(() => {
 });
 
 describe("scheduleGatewayHandlerPrewarm", () => {
-  it.each([undefined, "memory-lancedb", "memory-core"])(
-    "warms retrieval only for active Memory Core (memory plugin: %s)",
+  it("prepares first-use modules, primary skills, and Memory Core in sequence without executing requests", async () => {
+    vi.useFakeTimers();
+    mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: {
+          main: { workspace: workspaces.main },
+          research: { workspace: workspaces.research },
+        },
+      },
+    };
+
+    const sidecar = scheduleGatewayHandlerPrewarm({
+      getConfig: () => cfg,
+      log: { warn: vi.fn() },
+    });
+
+    try {
+      expect(mocks.events).toEqual([]);
+      // Dynamic imports can enqueue the next idle timer after the current timer drain.
+      do {
+        await vi.runAllTimersAsync();
+        await vi.dynamicImportSettled();
+      } while (vi.getTimerCount() > 0);
+
+      expect(mocks.events).toContain("connection");
+      expect(mocks.events).toContain("agent-events");
+      expect(mocks.events.filter((event) => event === "handlers")).toHaveLength(3);
+      expect(mocks.executeRequest).not.toHaveBeenCalled();
+      expect(mocks.prepareWorkspaceSkillEntries.mock.calls).toEqual([
+        [workspaces.main, { config: cfg, agentId: "main" }],
+        [workspaces.research, { config: cfg, agentId: "research" }],
+      ]);
+      expect(mocks.ensureSkillsWatcher.mock.calls).toEqual([
+        [{ workspaceDir: workspaces.main, config: cfg, agentId: "main" }],
+        [{ workspaceDir: workspaces.research, config: cfg, agentId: "research" }],
+      ]);
+      expect(mocks.ensureSkillsWatcher.mock.invocationCallOrder[0]).toBeLessThan(
+        expectDefined(
+          mocks.prepareWorkspaceSkillEntries.mock.invocationCallOrder[0],
+          "skill preparation call",
+        ),
+      );
+      expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
+      expect(mocks.loadCombinedSessionStoreForGatewayCore).not.toHaveBeenCalled();
+      expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledOnce();
+      expect(mocks.prewarmMemorySearchWorker).toHaveBeenCalledOnce();
+      const memoryCall = expectDefined(
+        mocks.prewarmMemorySearchWorker.mock.invocationCallOrder[0],
+        "memory retrieval preparation call",
+      );
+      expect(mocks.prewarmContextWindowCacheAfterReady.mock.invocationCallOrder[0]).toBeLessThan(
+        memoryCall,
+      );
+      expect(memoryCall).toBeLessThan(
+        expectDefined(
+          mocks.listManagedPlugins.mock.invocationCallOrder[0],
+          "plugin preparation call",
+        ),
+      );
+      expect(mocks.listManagedPlugins).toHaveBeenCalledWith({ config: cfg });
+    } finally {
+      await sidecar.stop();
+    }
+  });
+
+  it.each([undefined, "memory-lancedb"])(
+    "skips retrieval preparation when Memory Core is inactive (%s)",
     async (pluginId) => {
       vi.useFakeTimers();
       mocks.getMemoryCapabilityRegistration.mockReturnValue(pluginId ? { pluginId } : undefined);
-      const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-      } as never;
-
       const sidecar = scheduleGatewayHandlerPrewarm({
-        cfgAtStart: cfg,
+        getConfig: () => ({ agents: { entries: {} } }),
         log: { warn: vi.fn() },
       });
-
-      expect(mocks.events).toEqual([]);
-      await vi.runAllTimersAsync();
-
-      expect(mocks.events).toEqual(
-        pluginId === "memory-core" ? ["memory-search", "plugins"] : ["plugins"],
-      );
-      expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledTimes(
-        pluginId === "memory-core" ? 1 : 0,
-      );
-      expect(mocks.loadCombinedSessionStoreForGatewayCore).not.toHaveBeenCalled();
-      expect(mocks.listManagedPlugins).toHaveBeenCalledWith({ config: cfg });
-      await sidecar.stop();
+      try {
+        do {
+          await vi.runAllTimersAsync();
+          await vi.dynamicImportSettled();
+        } while (vi.getTimerCount() > 0);
+        expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
+        expect(mocks.prewarmMemorySearchWorker).not.toHaveBeenCalled();
+        expect(mocks.listManagedPlugins).toHaveBeenCalledOnce();
+      } finally {
+        await sidecar.stop();
+      }
     },
   );
 
@@ -96,7 +208,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     const load = vi.fn(async () => {});
 
     const sidecar = scheduleGatewayHandlerPrewarm({
-      cfgAtStart: {} as never,
+      getConfig: () => ({}),
       log: { warn: vi.fn() },
       items: [{ name: "sessions", load }],
       waitForPostReadyWork: () => gatewayReady,
@@ -119,7 +231,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     }
     const load = vi.fn(async () => {});
     const sidecar = scheduleGatewayHandlerPrewarm({
-      cfgAtStart: {} as never,
+      getConfig: () => ({}),
       log: { warn: vi.fn() },
       items: [{ name: "sessions", load }],
     });
@@ -131,7 +243,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     await vi.advanceTimersByTimeAsync(249);
     expect(load).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+    expect(load).toHaveBeenCalledOnce();
     await sidecar.stop();
   });
 
@@ -141,7 +253,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     const load = vi.fn(async () => {});
 
     const sidecar = scheduleGatewayHandlerPrewarm({
-      cfgAtStart: {} as never,
+      getConfig: () => ({}),
       log: { warn: vi.fn() },
       items: [{ name: "sessions", load }],
       waitForPostReadyWork: () => gatewayReady,
@@ -165,7 +277,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       .mockResolvedValue("request result");
 
     scheduleGatewayHandlerPrewarm({
-      cfgAtStart: {} as never,
+      getConfig: () => ({}),
       log: { warn },
       items: [
         {
@@ -197,7 +309,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     );
     const second = vi.fn(async () => {});
     const sidecar = scheduleGatewayHandlerPrewarm({
-      cfgAtStart: {} as never,
+      getConfig: () => ({}),
       log: { warn: vi.fn() },
       items: [
         { name: "first", load: first },
@@ -214,4 +326,67 @@ describe("scheduleGatewayHandlerPrewarm", () => {
 
     expect(second).not.toHaveBeenCalled();
   });
+});
+
+it("keeps the context cache delayed and uses current config after foreground work", async () => {
+  vi.useFakeTimers();
+  const initial: OpenClawConfig = { agents: { entries: {} } };
+  let current = initial;
+  const handle = scheduleGatewayHandlerPrewarm({
+    getConfig: () => current,
+    log: { warn: vi.fn() },
+  });
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
+  const request = tryBeginGatewayRootWorkAdmission();
+  if (!request) {
+    throw new Error("Expected foreground admission");
+  }
+  try {
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
+    current = { agents: { entries: {} }, skills: { load: { watch: false } } };
+    request.release();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledWith({
+      config: current,
+      isCancelled: expect.any(Function),
+    });
+  } finally {
+    request.release();
+    await handle.stop();
+  }
+});
+
+it("skips optional discovery when foreground work arrives after idle admission", async () => {
+  vi.useFakeTimers();
+  mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
+  const handle = scheduleGatewayHandlerPrewarm({
+    getConfig: () => ({ agents: { entries: { main: { workspace: workspaces.main } } } }),
+    log: { warn: vi.fn() },
+    startupTrace: {
+      measure: async (_name, load) => {
+        const request = tryBeginGatewayIndependentRootWorkAdmission("test-request");
+        if (!request) {
+          throw new Error("Expected foreground admission");
+        }
+        try {
+          return await load();
+        } finally {
+          request.release();
+        }
+      },
+    },
+  });
+  try {
+    do {
+      await vi.runAllTimersAsync();
+      await vi.dynamicImportSettled();
+    } while (vi.getTimerCount() > 0);
+    expect(mocks.prepareWorkspaceSkillEntries).not.toHaveBeenCalled();
+    expect(mocks.ensureSkillsWatcher).not.toHaveBeenCalled();
+    expect(mocks.prewarmMemorySearchWorker).not.toHaveBeenCalled();
+  } finally {
+    await handle.stop();
+  }
 });

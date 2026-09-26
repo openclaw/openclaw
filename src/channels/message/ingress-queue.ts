@@ -205,6 +205,11 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     shouldRecoverCorrupt?: (claim: ChannelIngressQueueCorruptClaim) => boolean | Promise<boolean>;
   }): Promise<number>;
   prune(options?: ChannelIngressQueuePruneOptions): Promise<number>;
+  /**
+   * Delete all rows after callers stop the account's producers and drain.
+   * Optional for existing plugin-supplied queue inputs; core queues implement it.
+   */
+  purge?(): Promise<number>;
 };
 
 /** Construction options for a channel/account-scoped ingress queue. */
@@ -1293,6 +1298,24 @@ export function createChannelIngressQueue<
     );
   };
 
+  const purge: NonNullable<
+    ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["purge"]
+  > = async () => {
+    const database = openChannelIngressDatabase(options.stateDir);
+    return runOpenClawStateWriteTransaction(
+      (tx) =>
+        affectedRows(
+          executeSqliteQuerySync(
+            tx.db,
+            getChannelIngressKysely(tx.db)
+              .deleteFrom("channel_ingress_events")
+              .where("queue_name", "=", queueName),
+          ),
+        ),
+      { path: database.path },
+    );
+  };
+
   const prune: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["prune"] = async (
     pruneOptions,
   ) => {
@@ -1417,6 +1440,7 @@ export function createChannelIngressQueue<
     delete: deleteEntry,
     recoverStaleClaims,
     prune,
+    purge,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

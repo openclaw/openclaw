@@ -1,11 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getTaskById } from "./task-registry-query.js";
 import { runTaskRegistryWorkerMutation, taskDeliveryStates, tasks } from "./task-registry-state.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
+import { deleteTaskRowsWithDeliveryState } from "./task-registry.store.kernel.js";
 import type { TaskRegistryMutationScope } from "./task-registry.store.types.js";
 import { createTaskFixture } from "./task-registry.test-support.js";
 import { resetTaskRegistryForTests } from "./task-runtime.test-helpers.js";
@@ -84,7 +89,9 @@ it.each([1, 2])("refreshes 50 dirty scopes in one read (copies: %i)", async (cop
   const fullLoad = vi.spyOn(store, "loadSnapshot");
   try {
     store.upsertTaskWithDeliveryState({ task: { ...updated, task: "Updated" } });
-    store.deleteTaskWithDeliveryState(deleted.taskId);
+    runOpenClawStateWriteTransaction(() =>
+      deleteTaskRowsWithDeliveryState(openOpenClawStateDatabase().db, deleted.taskId),
+    );
     expect(getTaskById(updated.taskId)?.task).toBe("Updated");
     expect(tasks.has(deleted.taskId)).toBe(false);
     expect(tasks.size).toBe(49);

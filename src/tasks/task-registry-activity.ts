@@ -18,6 +18,7 @@ import type { AgentEventPayload } from "../infra/agent-events.js";
 import { readTaskBackingInstance } from "./task-backing-records.js";
 import { cloneTaskRecordForObserver } from "./task-registry-records.js";
 import {
+  clearTaskActivity,
   emitTaskRegistryObserverEvent,
   taskActivityByTaskId,
   tasks,
@@ -478,13 +479,4 @@ export function flushTaskActivity(taskId: string): void {
     kind: "upserted",
     task: cloneTaskRecordForObserver(task),
   }));
-}
-
-export function clearTaskActivity(taskId: string): void {
-  const activity = taskActivityByTaskId.get(taskId);
-  if (activity?.flushTimer) {
-    clearTimeout(activity.flushTimer);
-  }
-  activity?.preparedItems.clear();
-  taskActivityByTaskId.delete(taskId);
 }
