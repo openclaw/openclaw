@@ -1,4 +1,6 @@
 import { isOperatorUiClient } from "../../utils/message-channel.js";
+import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type ChatSendAckServerTiming = {
@@ -93,4 +95,25 @@ export function emitOperatorChatSendServerTiming(params: {
     new Set([connId]),
     { dropIfSlow: true },
   );
+}
+
+/** Existing admission facts shared by ACK timing and detached dispatch diagnostics. */
+export function buildChatSendTraceAttributes(
+  request: Pick<NormalizedChatSendRequest, "normalizedAttachments" | "explicitOrigin">,
+  session: Pick<
+    PreparedChatSendSession,
+    "clientRunId" | "sessionKey" | "selectedAgent" | "agentId" | "resolvedSessionModel"
+  >,
+  client: GatewayClient | null,
+) {
+  return {
+    runId: session.clientRunId,
+    sessionKey: session.sessionKey,
+    agentId: session.selectedAgent.agentId ?? session.agentId,
+    provider: session.resolvedSessionModel.provider,
+    model: session.resolvedSessionModel.model,
+    hasAttachments: request.normalizedAttachments.length > 0,
+    hasExplicitOrigin: request.explicitOrigin !== undefined,
+    hasConnectedClient: client?.connect !== undefined,
+  };
 }

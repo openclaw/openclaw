@@ -197,3 +197,59 @@ export type PluginHookMessageSentEvent = {
   parentSpanId?: string;
   error?: string;
 };
+
+export type PluginHookBeforeDispatchEvent = {
+  messageId?: string;
+  content: string;
+  body?: string;
+  channel?: string;
+  sessionKey?: string;
+  senderId?: string;
+  replyToId?: string;
+  replyToIdFull?: string;
+  replyToBody?: string;
+  replyToSender?: string;
+  replyToIsQuote?: boolean;
+  isGroup?: boolean;
+  timestamp?: number;
+};
+
+export type PluginHookBeforeDispatchContext = {
+  messageId?: string;
+  channelId?: string;
+  accountId?: string;
+  conversationId?: string;
+  sessionKey?: string;
+  senderId?: string;
+  replyToId?: string;
+  replyToIdFull?: string;
+  replyToBody?: string;
+  replyToSender?: string;
+  replyToIsQuote?: boolean;
+};
+
+/** Only host-authorized, bounded visible text; never raw transcript records. */
+export type PluginHookInputRouteEvent = {
+  readonly currentTurn: readonly { readonly role: "user" | "assistant"; readonly text: string }[];
+  readonly newMessage: string;
+};
+
+export type PluginHookInputRouteContext = {
+  readonly agentId: string;
+  readonly signal: AbortSignal;
+  /** Shared host budget, on performance.now(); preparation is included. */
+  readonly deadlineMonotonicMs: number;
+  /** Fails after caller closure, cancellation, or authority revocation. */
+  readonly assertCurrent: () => void;
+};
+
+/** Advice only: the host retains message custody, target, authorization, and delivery. */
+export type PluginHookInputRouteResult =
+  | { readonly status: "choice"; readonly choice: "steer" | "followup" }
+  | { readonly status: "abstained" }
+  | { readonly status: "unavailable"; readonly reason?: "deadline" };
+
+export type PluginHookBeforeDispatchResult = {
+  handled: boolean;
+  text?: string;
+};

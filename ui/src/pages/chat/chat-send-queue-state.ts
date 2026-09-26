@@ -264,7 +264,9 @@ export function finishChatDeliveryAdmission(
     holdProviderReviewQueuedInputs(host, route, current.agentId);
     return "pending";
   }
-  const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
+  const sendsDuringActiveRun = Boolean(
+    current.queueMode || current.deliveryPolicy || options?.allowActiveRunSend,
+  );
   if (
     chatSendHoldReason(host, route) ||
     (options?.routingSessionKey && !routeVisible(current.agentId)) ||
@@ -422,7 +424,19 @@ export function settleQueuedChatSendFailure(
     options?.restoreOnTerminalFailure === true &&
     restoreRejectedChatDelivery(host, prepared, options);
   if (!restoreCommand) {
-    setState("failed", error);
+    const details = err instanceof GatewayRequestError ? err.details : undefined;
+    updateQueuedSendItem(host, storageMode, id, (item) => ({
+      ...item,
+      sendState: "failed",
+      sendError: error,
+      sendRejectedBeforeCustody:
+        details &&
+        typeof details === "object" &&
+        "code" in details &&
+        details.code === "CHAT_INPUT_NOT_ACQUIRED"
+          ? true
+          : undefined,
+    }));
   }
   if (visibleSessionMatches(host, sessionKey, prepared.agentId) && activeLeafChanged) {
     void Promise.all([loadChatHistory(host), loadChatBranches(host)]);

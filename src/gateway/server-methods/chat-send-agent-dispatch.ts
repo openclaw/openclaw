@@ -14,7 +14,6 @@ import { isInternalSourceReplyChannel } from "../../auto-reply/reply/source-repl
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
@@ -34,11 +33,13 @@ import {
   formatReturnedAgentErrors,
 } from "./chat-send-dispatch-errors.js";
 import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-injection.js";
+import { createChatSendQueueAdoption } from "./chat-send-queue-adoption.js";
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { finalizeChatSendDispatchedReplies } from "./chat-send-reply-finalization.js";
 import {
   classifyAcceptedChatSendFailure,
+  createChatSendStateAcquisitionDeadline,
   runAcceptedChatSendDispatch,
   waitForAcceptedChatSendRetry,
 } from "./chat-send-retry.js";
@@ -101,6 +102,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   } = session;
   const { chatSendReceivedAtMs, clientInfo, p, reconnectResumeRequested, supportsTaskSuggestions } =
     request;
+  const takeInputRoutingCustody =
+    params.takeInputRoutingCustody ?? (() => admission.inputRouting?.release());
   const {
     accountId,
     ctx,
@@ -118,19 +121,12 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   } = userTurn;
   const { beginCapturedMessageInjection, preAckReplyContextPromise, replyContextFieldsPromise } =
     injection;
-  let { messageInjectionAttempt } = injection;
   const { chatSendAckedAtMs, chatSendTiming } = timing;
 
   const jobSessionBinding = admission.sessionBinding;
-  const requestDeadline =
-    performance.now() +
-    Math.max(0, (activeRunAbort.entry?.expiresAtMs ?? Number.POSITIVE_INFINITY) - Date.now());
-  let acquisitionDeadline: number | undefined;
-  const stateAcquisitionDeadline = () =>
-    (acquisitionDeadline ??= Math.min(
-      requestDeadline,
-      performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-    ));
+  const stateAcquisitionDeadline = createChatSendStateAcquisitionDeadline(
+    activeRunAbort.entry?.expiresAtMs,
+  );
   let agentRunStarted = false;
   let replyDispatchRun: ReplyDispatchRun | undefined;
   const isRunCurrent = () =>
@@ -184,7 +180,23 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     armOperatorRunCancellation: admission.armOperatorRunCancellation,
     retireOperatorRunCancellation: admission.retireOperatorRunCancellation,
   });
+  if (admission.inputRouting) {
+    const onDeferred = queuedFollowup.lifecycle.onDeferred;
+    queuedFollowup.lifecycle.onDeferred = () => {
+      const accepted = onDeferred?.();
+      if (accepted !== false) {
+        // adoptFollowupQueue revalidates advice in the same synchronous frame
+        // before the queue reaches this callback and publishes its entry.
+        takeInputRoutingCustody();
+      }
+      return accepted;
+    };
+  }
   let acceptedMessageInjection = false;
+  const adoptFollowupQueue = createChatSendQueueAdoption(params, () => {
+    acceptedMessageInjection = true;
+    takeInputRoutingCustody();
+  });
   const classifyDispatchFailure = (error: unknown) =>
     classifyAcceptedChatSendFailure({
       error,
@@ -192,7 +204,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       executionStarted: agentRunStarted,
       sideEffectsObserved:
         acceptedMessageInjection ||
-        messageInjectionAttempt !== undefined ||
+        injection.messageInjectionAttempt !== undefined ||
         replyDispatch.deliveredReplies.length > 0,
     });
   const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
@@ -283,11 +295,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             const replyContextFields = await replyContextFieldsPromise;
             assertWorkspaceRunOwnership?.();
             applyChatSendReplyContextFields(ctx, replyContextFields);
-            messageInjectionAttempt = beginCapturedMessageInjection();
+            injection.messageInjectionAttempt = beginCapturedMessageInjection();
           }
-          if (messageInjectionAttempt) {
+          if (injection.messageInjectionAttempt) {
             const injected = await finalizeAcceptedChatSendMessageInjection({
-              attempt: messageInjectionAttempt,
+              attempt: injection.messageInjectionAttempt,
               sessionBinding: jobSessionBinding,
               context,
               ctx,
@@ -301,6 +313,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             assertWorkspaceRunOwnership?.();
             if (injected) {
               acceptedMessageInjection = true;
+              takeInputRoutingCustody();
               return {
                 queuedFinal: false,
                 counts: { tool: 0, block: 0, final: 0 },
@@ -312,6 +325,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           applyChatSendManagedMedia(ctx, pluginBoundMedia, managedMediaApplyMode);
           const dispatchInbound = () => {
             assertWorkspaceRunOwnership?.();
+            params.revalidateRouting?.();
+            const resolvedQueueMode = request.resolvedQueueMode ?? p.queueMode;
             return dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
@@ -373,7 +388,12 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 },
                 // Keep a Gateway-owned cancel identity after this chat.send
                 // terminalizes while the prompt waits in followup/collect queue.
-                onFollowupQueueDisposition: queuedFollowup.onQueueDisposition,
+                onFollowupQueueDisposition: (reason) => {
+                  const result = queuedFollowup.onQueueDisposition(reason);
+                  // These are terminal queue drops, not successful enqueue receipts.
+                  takeInputRoutingCustody();
+                  return result;
+                },
                 onQueuedFollowupReplyBatch: queuedFollowup.onQueuedFollowupReplyBatch,
                 turnAdoptionLifecycle: queuedFollowup.lifecycle,
                 images: replyOptionImages,
@@ -382,9 +402,10 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 ...(p.timeoutMs !== undefined ? { timeoutOverrideMs: p.timeoutMs } : {}),
                 thinkingLevelOverride: p.thinking,
                 fastModeOverride: p.fastMode,
-                queueModeOverride: p.queueMode,
+                queueModeOverride: resolvedQueueMode,
+                adoptFollowupQueue,
                 userTurnTranscriptRecorder: userTurnRecorder,
-                ...(p.queueMode === "steer"
+                ...(resolvedQueueMode === "steer" || admission.autoSteerTarget !== undefined
                   ? { messageInjectionDisposition: "rejected" as const }
                   : {}),
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
@@ -435,6 +456,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                       }
                     }
                   }
+                  takeInputRoutingCustody();
                   return options?.completionSource;
                 },
                 onModelSelected: (modelSelection) => {

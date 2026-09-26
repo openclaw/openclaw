@@ -74,6 +74,8 @@ type ChatSendJobAdmission = Pick<
 
 export async function handleChatSendSetupError(params: {
   cacheResult?: boolean;
+  /** Set only before any input staging or delivery custody can occur. */
+  inputNotAcquired?: true;
   admission: ChatSendJobAdmission;
   context: GatewayRequestContext;
   error: unknown;
@@ -132,13 +134,10 @@ export async function handleChatSendSetupError(params: {
       ? errorShape(ErrorCodes.INVALID_REQUEST, params.error.message, {
           details: { code: "GOAL_OPERATION_REJECTED", reason: params.error.code },
         })
-      : errorShape(
-          ErrorCodes.UNAVAILABLE,
-          errorMessage,
-          failureDisposition === "client-retry"
-            ? { retryable: true, retryAfterMs: 250 }
-            : undefined,
-        );
+      : errorShape(ErrorCodes.UNAVAILABLE, errorMessage, {
+          ...(failureDisposition === "client-retry" ? { retryable: true, retryAfterMs: 250 } : {}),
+          ...(params.inputNotAcquired ? { details: { code: "CHAT_INPUT_NOT_ACQUIRED" } } : {}),
+        });
   const payload = { runId: clientRunId, status: "error" as const, summary: errorMessage };
   if (params.cacheResult !== false && failureDisposition !== "client-retry") {
     setGatewayDedupeEntry({

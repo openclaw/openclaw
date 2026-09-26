@@ -166,6 +166,9 @@ export type {
   PluginConversationBindingRequestResult,
 } from "../plugins/conversation-binding.types.js";
 export type {
+  PluginHookInputRouteContext,
+  PluginHookInputRouteEvent,
+  PluginHookInputRouteResult,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,

@@ -150,7 +150,11 @@ async function reconcileStoredChatOutboxHead(
   // history to retire delivered messages, even while a run streams.
   const neverAttempted =
     (item.sendAttempts ?? 0) === 0 && item.sendRequestStartedAtMs === undefined;
-  if (neverAttempted && item.queueMode && item.sendState !== "unconfirmed") {
+  if (
+    neverAttempted &&
+    (item.queueMode || item.deliveryPolicy) &&
+    item.sendState !== "unconfirmed"
+  ) {
     return "send";
   }
   if (neverAttempted) {
@@ -274,6 +278,7 @@ async function drainStoredChatOutbox(
       (entry) =>
         lane.freshAdmissions.has(entry.id) &&
         (entry.queueMode ||
+          entry.deliveryPolicy ||
           (!entry.intent && lane.pendingOptions.get(entry.id)?.allowActiveRunSend)),
     );
     const storedItem =

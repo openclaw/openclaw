@@ -4,6 +4,13 @@
   outline: none;
 }
 
+.chat-auto-steer-receipt {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .chat-position-rail {
   /* Centered previews need clearance at both ends of a capped rail. */
   --chat-position-rail-clearance: 60px;

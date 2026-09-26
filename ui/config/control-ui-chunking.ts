@@ -158,7 +158,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // generated chunks within the existing compressed-size budget.
                 // Let tiny split tails stay with their consumers through automatic chunking.
                 minSize: 16 * 1024,
-                maxSize: 1408 * 1024,
+                maxSize: 1280 * 1024,
               };
             }),
             {

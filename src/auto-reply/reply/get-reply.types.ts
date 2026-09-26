@@ -87,6 +87,15 @@ type InternalReplySessionOptions = {
   onQueuedFollowupReplyBatch?: QueuedFollowupReplyDelivery;
   /** Overrides persisted queue mode for this reply only. */
   queueModeOverride?: QueueMode;
+  /**
+   * Final source-owned routing fence for a prepared followup. Revalidate transient
+   * advice and invoke enqueue synchronously with the current mode, or finish an
+   * exact-target injection without replaying dispatch. No custody transfers merely
+   * by entering this callback; enqueue or the injection owner must accept it.
+   */
+  adoptFollowupQueue?: (
+    enqueue: (mode: QueueMode) => boolean,
+  ) => Promise<"steered" | "queued" | "skipped">;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
   skillOverrides?: SessionToolOverrides["skills"];

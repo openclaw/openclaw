@@ -403,15 +403,27 @@ export async function runReplyAgent(
 
   if (activeRunQueueAction === "enqueue-followup") {
     bindQueueDisposition();
-    const enqueued = enqueueFollowupRun(
-      queueKey,
-      followupRun,
-      resolvedQueue,
-      "message-id",
-      queuedRunFollowupTurn,
-      false,
-    );
-    if (!enqueued) {
+    const enqueue = (mode = resolvedQueue.mode) =>
+      enqueueFollowupRun(
+        queueKey,
+        followupRun,
+        { ...resolvedQueue, mode },
+        "message-id",
+        queuedRunFollowupTurn,
+        false,
+      );
+    // The source fence may finish a newly required exact-target steer. It commits
+    // any fallback queue entry in its own synchronous revalidation frame, not
+    // after this await, and never replays preparation or dispatch side effects.
+    const adoption = opts?.adoptFollowupQueue
+      ? await opts.adoptFollowupQueue(enqueue)
+      : enqueue()
+        ? "queued"
+        : "skipped";
+    if (adoption !== "queued") {
+      if (adoption === "steered" && replyOperationRunState) {
+        replyOperationRunState.admission = { status: "accepted", mode: "steer" };
+      }
       releaseAdmissionTicket();
       typing.cleanup();
       return undefined;

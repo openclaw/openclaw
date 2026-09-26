@@ -11,21 +11,13 @@ import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
-import {
-  REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
-  ReplyRunAlreadyActiveError,
-  ReplyRunFollowupAdmissionBlockedError,
-  ReplyRunSuccessorAdmissionBlockedError,
-  type ReplyOperation,
-  type ReplyOperationPhase,
-  type ReplyToolAuthoritySnapshot,
-  type ReplyTurnKind,
-} from "./reply-run-registry.contracts.js";
+import * as replyContracts from "./reply-run-registry.contracts.js";
 import {
   abortFrozenOperations,
   attachedBackendByOperation,
   clearReplyOperationByOperation,
   clearReplyRunState,
+  createReplyInputRoutingReservations,
   createUserAbortError,
   evictReplyOperationByOperation,
   expireReplyOperationByOperation,
@@ -52,21 +44,17 @@ import {
   updateSuccessorAdmissionSessionId,
 } from "./reply-run-registry.state.js";
 
-type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
-type ReplyOperationResult = NonNullable<ReplyOperation["result"]>;
-type ReplyOperationAbortCode = Extract<ReplyOperationResult, { kind: "aborted" }>["code"];
-
 export function createReplyOperation(params: {
   sessionKey: string;
   sessionId: string;
   agentId?: string;
-  turnKind?: ReplyTurnKind;
+  turnKind?: replyContracts.ReplyTurnKind;
   resetTriggered: boolean;
   routeThreadId?: string | number;
   originatingLeafEntryId?: string | null;
   upstreamAbortSignal?: AbortSignal;
   respectFollowupAdmissionBarrier?: boolean;
-}): ReplyOperation {
+}): replyContracts.ReplyOperation {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionKey) {
@@ -79,13 +67,13 @@ export function createReplyOperation(params: {
     params.respectFollowupAdmissionBarrier &&
     replyRunState.followupAdmissionBarriersByKey.has(sessionKey)
   ) {
-    throw new ReplyRunFollowupAdmissionBlockedError(sessionKey);
+    throw new replyContracts.ReplyRunFollowupAdmissionBlockedError(sessionKey);
   }
   if (replyRunState.activeRunsByKey.has(sessionKey)) {
-    throw new ReplyRunAlreadyActiveError(sessionKey);
+    throw new replyContracts.ReplyRunAlreadyActiveError(sessionKey);
   }
   if (replyRunState.successorAdmissionBarriersByKey.has(sessionKey)) {
-    throw new ReplyRunSuccessorAdmissionBlockedError(sessionKey);
+    throw new replyContracts.ReplyRunSuccessorAdmissionBlockedError(sessionKey);
   }
 
   const controller = new AbortController();
@@ -94,17 +82,17 @@ export function createReplyOperation(params: {
   let currentSessionKey = sessionKey;
   let currentSessionId = sessionId;
   let currentAgentId = resolveReplyOperationAgentId(sessionKey, params.agentId);
-  let phase: ReplyOperationPhase = "queued";
+  let phase: replyContracts.ReplyOperationPhase = "queued";
   let phaseBeforeGlobalLaneWait: "queued" | "running" | undefined;
   let staleExpiryReason: replyRunSettle.ReplyOperationStaleReason | undefined;
-  let result: ReplyOperationResult | null = null;
+  let result: replyContracts.ReplyOperationResult | null = null;
   let stateCleared = false;
   let pendingClearBarrier: ReplyRunAdmissionBarrier | undefined;
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
   let toolAuthorityFingerprint: string | undefined;
-  let toolAuthoritySnapshot: ReplyToolAuthoritySnapshot | undefined;
+  let toolAuthoritySnapshot: replyContracts.ReplyToolAuthoritySnapshot | undefined;
   let toolAuthorityRoute: { provider: string; model: string } | undefined;
   const ownerSettlement = createDeferredCore();
   const producerCompletion = createDeferredCore();
@@ -135,7 +123,7 @@ export function createReplyOperation(params: {
   const recordActivity = () => {
     lastActivityAtMs = Date.now();
   };
-  const setResult = (next: ReplyOperationResult) => {
+  const setResult = (next: replyContracts.ReplyOperationResult) => {
     result = next;
     recordActivity();
   };
@@ -195,13 +183,13 @@ export function createReplyOperation(params: {
     if (stateCleared) {
       return;
     }
-    terminalSettleTimer.scheduleOnce(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+    terminalSettleTimer.scheduleOnce(replyContracts.REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
   };
 
   const abortOperation = (
-    reason: ReplyBackendCancelReason,
+    reason: replyContracts.ReplyBackendCancelReason,
     abortReason: unknown,
-    abortedCode: ReplyOperationAbortCode,
+    abortedCode: replyContracts.ReplyOperationAbortCode,
   ) => {
     const phaseBeforeAbort = phase;
     if (!result) {
@@ -226,7 +214,8 @@ export function createReplyOperation(params: {
     }
   };
 
-  const operation: ReplyOperation = {
+  const operation: replyContracts.ReplyOperation = {
+    reserveInputRouting: createReplyInputRoutingReservations(),
     get key() {
       return currentSessionKey;
     },

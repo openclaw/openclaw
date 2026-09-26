@@ -5,6 +5,7 @@ import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
@@ -24,6 +25,8 @@ import {
   voiceStatusLabel,
 } from "./chat-voice-activity.ts";
 
+registerModelControlsEnglish();
+
 export type ChatRunControlsProps = {
   canAbort: boolean;
   canSend: boolean;
@@ -35,6 +38,7 @@ export type ChatRunControlsProps = {
   preparingAttachments?: boolean;
   isBusy: boolean;
   followUpMode?: ControlUiFollowUpMode;
+  autoSteerEnabled?: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
   suggestionComposer?: boolean;
   submissionLabel?: string;
@@ -509,24 +513,28 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
     props.submissionLabel ??
     (props.suggestionComposer
       ? t("chat.sessionSuggestions.suggest")
-      : !props.canAbort || props.followUpMode === undefined
-        ? t("chat.runControls.send")
-        : steersActiveRun
-          ? t("chat.queue.steer")
-          : interruptsActiveRun
-            ? t("chat.runControls.send")
-            : t("chat.runControls.queue"));
+      : props.autoSteerEnabled && props.canAbort
+        ? t("chat.modelControls.autoSteer")
+        : !props.canAbort || props.followUpMode === undefined
+          ? t("chat.runControls.send")
+          : steersActiveRun
+            ? t("chat.queue.steer")
+            : interruptsActiveRun
+              ? t("chat.runControls.send")
+              : t("chat.runControls.queue"));
   const activeRunActionDescription =
     props.submissionLabel ??
     (props.suggestionComposer
       ? t("chat.sessionSuggestions.suggestMessage")
-      : !props.canAbort || props.followUpMode === undefined
-        ? t("chat.runControls.sendMessage")
-        : steersActiveRun
-          ? t("chat.followUpModeSteer")
-          : interruptsActiveRun
-            ? t("chat.runControls.sendMessage")
-            : t("chat.runControls.queueMessage"));
+      : props.autoSteerEnabled && props.canAbort
+        ? t("chat.modelControls.autoSteerSend")
+        : !props.canAbort || props.followUpMode === undefined
+          ? t("chat.runControls.sendMessage")
+          : steersActiveRun
+            ? t("chat.followUpModeSteer")
+            : interruptsActiveRun
+              ? t("chat.runControls.sendMessage")
+              : t("chat.runControls.queueMessage"));
   const alternateActionLabel = t(
     props.alternateFollowUpMode === "queue" ? "chat.runControls.queue" : "chat.queue.steer",
   );

@@ -35,8 +35,12 @@ chooses the provider for explicit evaluation and supported consumers. The core
 Selection does not start background work or replace the chat model.
 Automatic experimental consumers additionally require explicit
 [Decision assistance opt-in](/concepts/experimental-features#decision-assistance).
-That Labs entry currently provides the gate foundation only, with no automatic
-consumers connected; explicit `decision_evaluate` remains independent of Labs.
+[Auto steering](/concepts/queue-steering#auto-steering) additionally requires its
+feature plugin and the browser Auto preference. Explicit `decision_evaluate`
+remains independent of Labs.
+
+See the [Decision-powered feature index](/concepts/decision-powered-features)
+for implemented consumers, their opt-ins, evidence transfer, and fallback behavior.
 
 ## Choose a provider and model
 

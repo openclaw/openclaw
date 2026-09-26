@@ -10,6 +10,7 @@ export const en: TranslationMap & {
   browser: TranslationMap & { errors: TranslationMap };
   shortcutsOverlay: TranslationMap & { title: string };
   chat: TranslationMap & {
+    autoSteer: TranslationMap;
     codeBlock: TranslationMap;
     commands: TranslationMap;
     detailPanel: TranslationMap;
@@ -3376,6 +3377,7 @@ export const en: TranslationMap & {
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "Follow-ups while the agent is working",
+    autoSteer: {},
     followUpModeQueue: "Queue until the run ends",
     followUpModeServer: "Server default ({mode})",
     followUpModeLoading: "loading…",

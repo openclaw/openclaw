@@ -1,8 +1,22 @@
+import { performance } from "node:perf_hooks";
 import type { SessionTranscriptReadScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 
 const ACCEPTED_CHAT_SEND_MAX_DISPATCH_ATTEMPTS = 3;
+
+/** One accepted request retains its first state-acquisition budget across retries. */
+export function createChatSendStateAcquisitionDeadline(expiresAtMs: number | undefined) {
+  const requestDeadline =
+    performance.now() + Math.max(0, (expiresAtMs ?? Number.POSITIVE_INFINITY) - Date.now());
+  let acquisitionDeadline: number | undefined;
+  return () =>
+    (acquisitionDeadline ??= Math.min(
+      requestDeadline,
+      performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    ));
+}
 
 export type AcceptedChatSendFailureDisposition =
   | "client-retry"

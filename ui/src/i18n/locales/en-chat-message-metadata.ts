@@ -3,6 +3,18 @@ import { en } from "./en.ts";
 
 const enChatMessageMetadata = {
   chat: {
+    autoSteer: {
+      selectedSteer: "Auto selected Steer",
+      selectedFollowup: "Auto selected Follow-up",
+      fallback: "Auto · manual default",
+      steered: "Steered",
+      decision: "Auto selected a delivery policy; delivery is confirmed separately.",
+      abstained: "The decision model abstained; used the manual default.",
+      unavailable: "The decision model was unavailable; used the manual default.",
+      deadline: "The decision took too long; used the manual default.",
+      ineligible: "This input was not eligible for Auto; used the manual default.",
+      staleTurn: "The active turn changed; Auto advice was not applied.",
+    },
     messages: {
       attachedContext: {
         label: "Context attached",
@@ -76,6 +88,9 @@ const enChatMessageMetadata = {
 } satisfies TranslationMap;
 
 export const registerChatMessageMetadataEnglish = Object.assign(
-  () => Object.assign(en.chat.messages, enChatMessageMetadata.chat.messages),
+  () => {
+    Object.assign(en.chat.messages, enChatMessageMetadata.chat.messages);
+    Object.assign(en.chat.autoSteer, enChatMessageMetadata.chat.autoSteer);
+  },
   { catalog: enChatMessageMetadata },
 );

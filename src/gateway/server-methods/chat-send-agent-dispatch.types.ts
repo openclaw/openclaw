@@ -15,6 +15,8 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type StartChatDispatchParams = {
   admissionStartedAt: number;
+  revalidateRouting?: () => void;
+  takeInputRoutingCustody?: () => void;
   admission: AdmittedChatSend;
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];

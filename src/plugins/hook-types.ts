@@ -34,6 +34,12 @@ import type {
   PluginHookGatewayStopEvent,
 } from "./hook-gateway.types.js";
 import type {
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchContext,
+  PluginHookBeforeDispatchResult,
+  PluginHookInputRouteEvent,
+  PluginHookInputRouteContext,
+  PluginHookInputRouteResult,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookMessageContext,
@@ -77,6 +83,12 @@ export type {
   PluginHeartbeatPromptContributionResult,
 } from "./host-hook-turn-types.js";
 export type {
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchContext,
+  PluginHookBeforeDispatchResult,
+  PluginHookInputRouteEvent,
+  PluginHookInputRouteContext,
+  PluginHookInputRouteResult,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundMessageMetadata,
@@ -143,6 +155,7 @@ const PLUGIN_HOOK_NAMES = [
   "skill_proposal_changed",
   "skill_changed",
   "before_dispatch",
+  "input_route",
   "reply_dispatch",
   "before_install",
   "before_agent_run",
@@ -187,6 +200,7 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   promptInjectionHookNameSet.has(hookName);
 
 const CONVERSATION_HOOK_NAMES = [
+  "input_route",
   "before_model_resolve",
   "agent_turn_prepare",
   "before_prompt_build",
@@ -463,41 +477,6 @@ type PluginHookAfterCompactionEvent = {
 export type PluginHookInboundClaimResult = {
   handled: boolean;
   reply?: ReplyPayload;
-};
-
-export type PluginHookBeforeDispatchEvent = {
-  messageId?: string;
-  content: string;
-  body?: string;
-  channel?: string;
-  sessionKey?: string;
-  senderId?: string;
-  replyToId?: string;
-  replyToIdFull?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToIsQuote?: boolean;
-  isGroup?: boolean;
-  timestamp?: number;
-};
-
-export type PluginHookBeforeDispatchContext = {
-  messageId?: string;
-  channelId?: string;
-  accountId?: string;
-  conversationId?: string;
-  sessionKey?: string;
-  senderId?: string;
-  replyToId?: string;
-  replyToIdFull?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToIsQuote?: boolean;
-};
-
-export type PluginHookBeforeDispatchResult = {
-  handled: boolean;
-  text?: string;
 };
 
 export type PluginHookReplyDispatchEvent = {
@@ -969,6 +948,11 @@ type AsyncPluginHook<Event, Context, Result = void> = (
 ) => Promise<Result | void> | Result | void;
 
 export type PluginHookHandlerMap = {
+  input_route: AsyncPluginHook<
+    PluginHookInputRouteEvent,
+    PluginHookInputRouteContext,
+    PluginHookInputRouteResult
+  >;
   agent_turn_prepare: AsyncPluginHook<
     PluginAgentTurnPrepareEvent,
     PluginHookAgentContext,

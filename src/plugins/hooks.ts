@@ -28,7 +28,12 @@ import {
   type InputGateDecision,
   isHookDecision,
 } from "./hook-decision-types.js";
-import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
+import { prepareInputRoute } from "./hook-input-route.js";
+import {
+  cloneHookIsolationValue,
+  deepFreezeHookValue,
+  HookIsolationError,
+} from "./hook-isolation.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
 import { withHookTimeout } from "./hook-timeout.js";
@@ -160,21 +165,6 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   resolve_exec_env: 15_000,
   skill_proposal_evaluate: 120_000,
 };
-
-function deepFreezeHookValue<T>(value: T, seen = new WeakSet<object>()): T {
-  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
-    return value;
-  }
-  const object = value as object;
-  if (seen.has(object)) {
-    return value;
-  }
-  seen.add(object);
-  for (const child of Object.values(object)) {
-    deepFreezeHookValue(child, seen);
-  }
-  return Object.freeze(value);
-}
 
 type HookEvent<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[0];
 type HookContext<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[1];
@@ -1364,9 +1354,6 @@ export function createHookRunner(
     );
   }
 
-  /**
-   * Get count of registered hooks for a given hook name.
-   */
   function getHookCount(hookName: PluginHookName): number {
     return registry.typedHooks.filter((h) => h.hookName === hookName).length;
   }
@@ -1406,6 +1393,8 @@ export function createHookRunner(
     runChannelPairingRequested: bindVoidHook("channel_pairing_requested"),
     runMessageReceived: bindVoidHook("message_received"),
     runBeforeDispatch,
+    prepareInputRoute: (isEligible: (pluginId: string) => boolean) =>
+      prepareInputRoute(() => getHooksForName(registry, "input_route"), isEligible),
     runReplyDispatch: bindClaimingHook("reply_dispatch"),
     runReplyPayloadSending: bindModifyingHook("reply_payload_sending", {
       // Handlers see the latest payload without inheriting host-only media trust.

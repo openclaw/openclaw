@@ -198,6 +198,7 @@ export type UiSettings = {
   // Browser-local presentation preference; false preserves active-card auto-expand.
   chatCollapseTaskProgress?: boolean;
   chatSendShortcut?: ChatSendShortcut;
+  chatAutoSteer?: boolean; // Independent, default-off browser routing preference.
   chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
   catalogOpenTarget?: CatalogOpenTarget;
   realtimeTalkInputDeviceId?: string;
@@ -533,6 +534,7 @@ export function loadUiPreferences(
           : defaults.chatCollapseTaskProgress,
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
+      chatAutoSteer: parsed.chatAutoSteer === true,
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
@@ -684,6 +686,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
     chatSendShortcut: next.chatSendShortcut === "modifier-enter" ? "modifier-enter" : undefined,
     chatFollowUpMode: normalizeChatFollowUpModeOverride(next.chatFollowUpMode),
+    chatAutoSteer: next.chatAutoSteer === true ? true : undefined,
     catalogOpenTarget: next.catalogOpenTarget === "terminal" ? "terminal" : undefined,
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
     realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),

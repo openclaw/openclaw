@@ -125,6 +125,22 @@ In **Connectors**, administrators can select **Add MCP server…** and choose a 
 
 Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
 
+## Auto steering
+
+When the optional `auto-steer` plugin, owning agent Decision model, and
+**Settings → Labs → Decision assistance** are available, the effort picker offers
+an **Auto** switch directly below **Fast**. Auto is off by default and is independent
+of the manual follow-up preference. Turning it on does not evaluate anything until
+an eligible text message arrives during an active visible turn.
+
+Auto chooses between steering the whole message and a later followup, without
+rewriting it. Manual Steer/Queue controls and Stop keep their existing behavior.
+Outbox items retain their captured delivery policy through edits and reconnects.
+Turning Auto or Labs off restores the prior manual/server baseline. See
+[Auto steering](/concepts/queue-steering#auto-steering) for evidence bounds,
+provider disclosure, deadlines, and the distinction between advice and confirmed
+steering delivery.
+
 ## Emoji shortcodes
 
 In Chat and New Session, type a colon followed by an emoji name, such as

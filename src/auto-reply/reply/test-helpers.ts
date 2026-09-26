@@ -4,6 +4,7 @@ import { onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { createReplyInputRoutingReservations } from "./reply-run-registry.state.js";
 import type { TypingController } from "./typing.js";
 
 /** Creates a stateful reply-operation double without registering global run state. */
@@ -26,6 +27,7 @@ export function createMockReplyOperation(
   let toolAuthoritySnapshot: Parameters<ReplyOperation["bindToolAuthoritySnapshot"]>[0] | undefined;
   let toolAuthorityRoute: ReplyOperation["toolAuthorityRoute"];
   const replyOperation: ReplyOperation = {
+    reserveInputRouting: createReplyInputRoutingReservations(),
     key: overrides.key ?? "main",
     get sessionId() {
       return sessionId;

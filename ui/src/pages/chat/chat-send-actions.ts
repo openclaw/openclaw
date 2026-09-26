@@ -70,7 +70,9 @@ const resetRetryState = (
     sendError: entry.sendState === "failed" ? entry.sendError : undefined,
     sendRequestStartedAtMs: uncertain ? entry.sendRequestStartedAtMs : undefined,
     sendRunId:
-      entry.sendState === "failed" && entry.queueMode !== "steer" && !entry.intent
+      entry.sendState === "failed" &&
+      ((entry.deliveryPolicy === "auto" && entry.sendRejectedBeforeCustody === true) ||
+        (entry.queueMode !== "steer" && !entry.deliveryPolicy && !entry.intent))
         ? generateUUID()
         : entry.sendRunId,
     sendState: uncertain ? "unconfirmed" : sendState,
@@ -89,7 +91,21 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string): Promis
     setChatError(host, QUEUED_MESSAGE_STEER_CONFLICT_ERROR);
     return;
   }
-  const item = updateQueuedMessage(host, id, (entry) => ({ ...entry, queueMode: "steer" }));
+  const item = updateQueuedMessage(host, id, (entry) => ({
+    ...entry,
+    queueMode: "steer",
+    deliveryPolicy: undefined,
+    // A new manual admission may bypass a cached Auto rejection only with proof
+    // that the failed attempt never took custody. Uncertain attempts keep their ID.
+    sendRunId:
+      entry.deliveryPolicy === "auto" &&
+      entry.sendState === "failed" &&
+      entry.sendRejectedBeforeCustody === true &&
+      !hasUncertainChatDelivery(entry)
+        ? generateUUID()
+        : entry.sendRunId,
+    sendRejectedBeforeCustody: undefined,
+  }));
   if (!item) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return;
@@ -262,7 +278,8 @@ export async function retryQueuedChatMessage(
     return;
   }
   const outbox = retried.scope;
-  const explicitAdmission = retry.queueMode || retriesFailedDelivery || retriesUnconfirmed;
+  const explicitAdmission =
+    retry.queueMode || retry.deliveryPolicy || retriesFailedDelivery || retriesUnconfirmed;
   const drain = scheduleStoredChatOutboxDrain(
     host,
     outbox,

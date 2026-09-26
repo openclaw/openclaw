@@ -37,6 +37,11 @@ const enModelControls = {
       faster: "Faster",
       smarter: "Smarter",
       fastMode: "Fast mode",
+      autoSteer: "Auto",
+      autoSteerAria: "Automatic message routing",
+      autoSteerSend: "Send with automatic message routing",
+      autoSteerHelp:
+        "Use the decision model to steer refinements or queue a new request. Browser preference.",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
       configureModels: "Configure models",

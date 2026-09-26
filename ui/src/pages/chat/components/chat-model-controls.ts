@@ -34,7 +34,7 @@ import {
 } from "../../../lib/model-runtime-choice.ts";
 import { isSessionRunActive } from "../../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
-import { renderChatEffortPicker } from "./chat-effort-picker.ts";
+import { renderChatEffortPicker, type ChatAutoSteerControl } from "./chat-effort-picker.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
   isModelPickerOptionSelected,
@@ -57,6 +57,7 @@ type ChatContextWindowTarget = Pick<
 >;
 
 type ChatModelControlsProps = {
+  autoSteer?: ChatAutoSteerControl;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
   accountSelection?: ChatAccountSelection | null;
   renderAccountSection?: (model: string) => ChatModelAccountSection | undefined;
@@ -589,7 +590,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   // menu closes), so a sibling appearing cannot move that anchor mid-interaction.
   const reserveEffortPicker =
     !hasResolvableModel && (catalogLoadingWithoutSnapshot || props.modelPickerOpen === true);
-  const showEffortPicker = hasResolvableModel || reserveEffortPicker;
+  const showEffortPicker = Boolean(props.autoSteer) || hasResolvableModel || reserveEffortPicker;
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
@@ -652,8 +653,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         !showEffortPicker
           ? nothing
           : renderChatEffortPicker({
-              disabled: effortDisabled,
-              disabledReason: props.effortMutationDisabledReason,
+              autoSteer: props.autoSteer,
+              disabled: effortDisabled && (!props.autoSteer || props.autoSteer.disabled === true),
+              disabledReason: props.autoSteer ? undefined : props.effortMutationDisabledReason,
               fastMode: {
                 ...fastMode,
                 disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
@@ -666,7 +668,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
               onRequestUpdate: props.onRequestUpdate,
               onThinkingSelect: async (next, targetSessionKey) =>
                 props.onThinkingSelect?.(next, targetSessionKey),
-              reserved: reserveEffortPicker,
+              reserved: reserveEffortPicker && !props.autoSteer,
             })
       }
     </div>

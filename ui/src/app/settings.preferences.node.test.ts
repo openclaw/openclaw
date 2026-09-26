@@ -28,6 +28,19 @@ import {
 describe("settings preference persistence", () => {
   installSettingsStorageLifecycle();
 
+  it.each([undefined, "queue", "steer"] as const)(
+    "keeps Auto independent of manual baseline %s",
+    (chatFollowUpMode) => {
+      setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+      expect(loadSettings().chatAutoSteer).not.toBe(true);
+      saveSettings({ ...loadSettings(), chatFollowUpMode, chatAutoSteer: true });
+      expect(loadSettings()).toMatchObject({ chatAutoSteer: true, chatFollowUpMode });
+      saveSettings({ ...loadSettings(), chatAutoSteer: false });
+      expect(loadSettings().chatAutoSteer).not.toBe(true);
+      expect(loadSettings().chatFollowUpMode).toBe(chatFollowUpMode);
+    },
+  );
+
   it.each([false, true])(
     "keeps the live connection URL when a same-scope spelling was persisted (private storage: %s)",
     (privateStorage) => {

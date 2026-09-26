@@ -130,6 +130,7 @@ export function readChatPaneMutationAccess(
 export function renderChatPaneComposerControls(params: {
   state: ChatPageHost;
   selectedSession: GatewaySessionRow | undefined;
+  isAutoSteerAvailable?: () => boolean;
   agentDefaultModel: string | undefined;
   agentDefaultPermissionMode?: ChatPermissionPickerProps["defaultMode"];
   modelAccess: SessionMethodAccess;
@@ -235,6 +236,28 @@ export function renderChatPaneComposerControls(params: {
     composerControls: html`
       <div class="chat-composer-model-control">
         ${renderChatModelControls({
+          autoSteer: params.isAutoSteerAvailable?.()
+            ? {
+                active: state.settings.chatAutoSteer === true,
+                disabled:
+                  !state.connected ||
+                  !readChatPaneComposerAccess({ hello: state.hello }, selectedSession, false)
+                    .canSend,
+                onSelect: (enabled) => {
+                  if (
+                    ownsSelection() &&
+                    params.isAutoSteerAvailable?.() &&
+                    readChatPaneComposerAccess(
+                      { hello: state.hello },
+                      selectedChatSessionRow(state),
+                      false,
+                    ).canSend
+                  ) {
+                    state.applySettings({ chatAutoSteer: enabled });
+                  }
+                },
+              }
+            : undefined,
           modelAuthStatusResult: state.modelAuthStatusResult,
           accountSelection,
           renderAccountSection: (accountModel) =>

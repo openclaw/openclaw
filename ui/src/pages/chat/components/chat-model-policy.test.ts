@@ -13,7 +13,11 @@ const models = ["primary", "fallback", "custom"].map((id) => ({
   available: true,
 }));
 
-function mountControls(catalog: ModelCatalogResult, retired = false) {
+function mountControls(
+  catalog: ModelCatalogResult,
+  retired = false,
+  autoSteer?: Parameters<typeof renderChatModelControls>[0]["autoSteer"],
+) {
   const container = document.createElement("div");
   const sessions = createSessionsListResult({
     model: "forbidden-current",
@@ -26,6 +30,7 @@ function mountControls(catalog: ModelCatalogResult, retired = false) {
   const before = JSON.stringify(selectedSession);
   render(
     renderChatModelControls({
+      autoSteer,
       activeRunId: null,
       connected: true,
       gatewayAvailable: true,
@@ -53,6 +58,27 @@ function mountControls(catalog: ModelCatalogResult, retired = false) {
 }
 
 describe("server-owned model selection policy", () => {
+  it("keeps a supplied Auto control available without permitted chat model or reasoning choices", () => {
+    const catalog = {
+      models: [],
+      modelSelectionPolicy: { restricted: true, defaultModel: null },
+    } satisfies ModelCatalogResult;
+    const onSelect = vi.fn();
+    const auto = mountControls(catalog, false, { active: false, onSelect });
+    expect(
+      auto.container.querySelector(".chat-controls__effort-picker")?.getAttribute("aria-hidden"),
+    ).toBe("false");
+    expect(
+      auto.container.querySelector("[data-chat-thinking-select]")?.getAttribute("aria-disabled"),
+    ).toBe("false");
+    auto.container.querySelector<HTMLButtonElement>("[data-chat-auto-steer-toggle]")?.click();
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(true);
+    // New-session and other shared callers omit Auto; no inert switch is added for them.
+    expect(
+      mountControls(catalog).container.querySelector("[data-chat-auto-steer-toggle]"),
+    ).toBeNull();
+  });
+
   it.each([false, true])("renders only permitted choices when restricted=%s", (restricted) => {
     const { container, onModelSelect } = mountControls({
       models,

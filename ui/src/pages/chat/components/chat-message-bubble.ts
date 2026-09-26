@@ -35,6 +35,7 @@ import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions, renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
+import { renderAutoSteerReceipt } from "./chat-auto-steer.ts";
 import {
   renderAssistantAttachments,
   renderMessageAttachment,
@@ -679,6 +680,6 @@ export function renderGroupedMessage(
           : nothing
       }
     </div>
-    ${renderMessageWorkContext(message)}
+    ${renderAutoSteerReceipt(message)} ${renderMessageWorkContext(message)}
   `;
 }

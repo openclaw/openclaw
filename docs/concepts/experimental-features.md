@@ -60,9 +60,10 @@ that default.
 
 ## Decision assistance
 
-**Foundation only:** this Labs entry saves intent but connects no automatic
-Decision consumers. Turning it on does not start inference, enable consumer
-modes, select a provider, provision credentials, or download models.
+This Labs entry gates automatic Decision consumers, including optional
+[Auto steering](/concepts/queue-steering#auto-steering). Turning it on does not
+start inference, enable the browser Auto preference, select a provider, provision
+credentials, or download models.
 
 The switch and manually authored config use the same global Boolean:
 
@@ -80,9 +81,10 @@ The default is **off**. Only explicit `true` opts in; omission, `false`, or
 unrelated experimental options do not. Objects such as
 `decisionAssistance: { enabled: true }` are invalid. Turning the Labs switch off
 removes its override and restores off, preserving model selections and sibling
-settings. There is no browser-local preference.
+settings. This global gate is separate from each consumer preference; Auto
+steering additionally has a default-off browser preference.
 
-Saved opt-in is not per-agent eligibility. Future automatic consumers also need
+Saved opt-in is not per-agent eligibility. Automatic consumers also need
 an effective [Decision model](/concepts/decision-models) for their owning agent.
 An unset agent model inherits `agents.defaults.decisionModel`; an explicit empty
 `agents.entries.<id>.decisionModel` disables eligibility for that agent. A model

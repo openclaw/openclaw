@@ -360,6 +360,7 @@ export function createPageState(
       chatShowToolCalls: next.chatShowToolCalls,
       chatPersistCommentary: next.chatPersistCommentary,
       chatSendShortcut: next.chatSendShortcut,
+      chatAutoSteer: next.chatAutoSteer,
     });
     renderLifecycle.invalidate();
   };

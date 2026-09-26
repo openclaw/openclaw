@@ -29,6 +29,7 @@ export async function requestChatSend(
     sessionKey?: string;
     agentId?: string;
     queueMode?: QueueMode;
+    deliveryPolicy?: "auto";
     intent?: ChatSendIntent;
     sessionId?: string;
     replyToId?: string;
@@ -57,6 +58,7 @@ export async function requestChatSend(
     deliver: false,
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.queueMode ? { queueMode: params.queueMode } : {}),
+    ...(params.deliveryPolicy ? { deliveryPolicy: params.deliveryPolicy } : {}),
     ...(params.expectedLeafEntryId !== undefined
       ? { expectedLeafEntryId: params.expectedLeafEntryId }
       : {}),

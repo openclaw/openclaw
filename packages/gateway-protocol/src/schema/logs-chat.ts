@@ -274,6 +274,12 @@ const RunToolBindingsSchema = Type.Record(
 const QUEUE_MODES = ["steer", "followup", "collect", "interrupt"] as const;
 export type QueueMode = (typeof QUEUE_MODES)[number];
 
+/** Routing advice, not evidence that the active turn consumed the input. */
+export type AutoSteerReceipt = {
+  choice?: "steer" | "followup";
+  reason: "decision" | "abstained" | "unavailable" | "deadline" | "ineligible" | "stale-turn";
+};
+
 export const ChatSendIntentSchema = closedObject({
   kind: Type.Literal("session-goal-start"),
   version: Type.Literal(1),
@@ -307,6 +313,8 @@ export const ChatSendParamsSchema = closedObject({
   fastAutoOnSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
   // One-turn override for active-run queue admission.
   queueMode: Type.Optional(Type.String({ enum: [...QUEUE_MODES] })),
+  // Browser opt-in overlay; queueMode retains the manual/server fallback.
+  deliveryPolicy: Type.Optional(Type.Literal("auto")),
   deliver: Type.Optional(Type.Boolean()),
   originatingChannel: Type.Optional(Type.String()),
   originatingTo: Type.Optional(Type.String()),

@@ -168,7 +168,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "agents.defaults.experimental":
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
   "agents.defaults.experimental.decisionAssistance":
-    "Global opt-in for future automatic Decision experiments (default: false). Also requires an effective decisionModel for each owning agent. This foundation connects no automatic consumers and does not gate the explicit decision_evaluate tool, select providers, or grant actions.",
+    "Global opt-in for automatic Decision experiments (default: false). Also requires an effective decisionModel for each owning agent. Auto steering separately requires its enabled plugin and browser Auto preference. This setting does not gate the explicit decision_evaluate tool, select providers, or grant actions.",
   "agents.defaults.experimental.localModelLean":
     "Advanced troubleshooting override that restricts optional tools such as browser, automations, and message. Off by default; supported local runtimes use automatic Tool Search without this restriction. Explicit tool allows and required delivery tools are preserved.",
   "agents.defaults.startupContext":

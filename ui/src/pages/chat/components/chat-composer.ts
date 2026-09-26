@@ -623,6 +623,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) > 0,
     isBusy,
     followUpMode: props.followUpMode,
+    autoSteerEnabled: props.autoSteerEnabled,
     alternateFollowUpMode,
     suggestionComposer: props.suggestionComposer,
     submissionLabel: goalComposer.submissionLabel,

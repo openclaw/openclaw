@@ -2,6 +2,21 @@ import type { PluginHookName } from "./types.js";
 
 export class HookIsolationError extends Error {}
 
+export function deepFreezeHookValue<T>(value: T, seen = new WeakSet<object>()): T {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+    return value;
+  }
+  const object = value;
+  if (seen.has(object)) {
+    return value;
+  }
+  seen.add(object);
+  for (const child of Object.values(object)) {
+    deepFreezeHookValue(child, seen);
+  }
+  return Object.freeze(value);
+}
+
 function containsSharedMemory(value: unknown, seen: Set<object>): boolean {
   if (typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer) {
     return true;

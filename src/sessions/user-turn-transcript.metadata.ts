@@ -73,6 +73,7 @@ export function buildPersistedUserTurnMetadata(
     ...(senderName ? { senderName } : {}),
     ...(senderUsername ? { senderUsername } : {}),
     ...(senderIdentity && senderIdentity.id === senderId ? { senderIdentity } : {}),
+    ...(input.autoSteer ? { autoSteer: { ...input.autoSteer } } : {}),
     ...(input.workContext ? { workContext: structuredClone(input.workContext) } : {}),
     ...(input.mentions?.length
       ? { humanMentions: input.mentions.map((mention) => ({ ...mention })) }
@@ -158,6 +159,10 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
   if (preparedMeta?.intent) {
     runtimeMeta.intent = preparedMeta.intent;
   }
+  delete runtimeMeta.autoSteer;
+  if (preparedMeta?.autoSteer) {
+    runtimeMeta.autoSteer = structuredClone(preparedMeta.autoSteer);
+  }
   delete runtimeMeta.steerTargetRunId;
   if (steerTargetRunId) {
     runtimeMeta.steerTargetRunId = steerTargetRunId;
@@ -237,6 +242,8 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const display = message.display;
   const intent =
     originalMeta?.intent === undefined ? undefined : structuredClone(originalMeta.intent);
+  const autoSteer =
+    originalMeta?.autoSteer === undefined ? undefined : structuredClone(originalMeta.autoSteer);
   const senderIsOwner = originalMeta?.senderIsOwner;
   const replyToId = normalizeOptionalString(originalMeta?.replyToId);
   const originalReplyPreview = asOptionalRecord(originalMeta?.replyToPreview);
@@ -296,6 +303,10 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   delete protectedMeta.humanMentions;
   if (humanMentions !== undefined && isDeepStrictEqual(nextUserMessage.content, originalContent)) {
     protectedMeta.humanMentions = humanMentions;
+  }
+  delete protectedMeta.autoSteer;
+  if (autoSteer !== undefined) {
+    protectedMeta.autoSteer = autoSteer;
   }
   delete protectedMeta.steerTargetRunId;
   if (steerTargetRunId) {

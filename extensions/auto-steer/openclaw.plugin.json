@@ -1,0 +1,16 @@
+{
+  "id": "auto-steer",
+  "name": "Auto steering",
+  "categories": [
+    "agent-orchestration"
+  ],
+  "description": "Optional routing advice for ordinary Control UI messages during an active turn.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

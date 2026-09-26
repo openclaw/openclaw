@@ -71,6 +71,10 @@ Configure globally or per channel via `messages.queue`:
 }
 ```
 
+[Auto steering](/concepts/queue-steering#auto-steering) is an optional Control UI
+consumer, not another queue mode. Its default-off browser preference preserves
+these queue settings as the fallback; explicit manual actions bypass classification.
+
 ## Queue options
 
 Per-session `/queue` options apply to queued delivery. The `debounce` option also sets the Codex steering quiet window in `steer` mode:

@@ -25,6 +25,17 @@ import {
   type ReplyOperationPhase,
 } from "./reply-run-registry.contracts.js";
 
+/** A cancelled later input cannot let its successors pass an earlier custody hold. */
+export function createReplyInputRoutingReservations(): ReplyOperation["reserveInputRouting"] {
+  let tail = Promise.resolve();
+  return () => {
+    const ready = tail;
+    const released = createDeferredCore();
+    tail = ready.then(() => released.promise);
+    return { ready, release: released.resolve };
+  };
+}
+
 type ReplyRunWaiter = {
   finish: (ended: boolean) => void;
   timer?: NodeJS.Timeout;

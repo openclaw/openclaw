@@ -152,9 +152,13 @@ export type ChatQueueItem = {
   pendingRunId?: string;
   sendAttempts?: number;
   sendError?: string;
+  /** Exact Gateway rejection confirms that this attempt never acquired input custody. */
+  sendRejectedBeforeCustody?: true;
   sendRunId?: string;
   /** One-send override retained with the durable row for reconnect and retry. */
   queueMode?: QueueMode;
+  /** Auto is an overlay, not a replacement for the manual/server queue policy. */
+  deliveryPolicy?: "auto";
   /** Admission intent and its original issue time survive transport retries together. */
   intent?: ChatSendIntent;
   /** For structured admissions, preserve the originally selected session incarnation. */

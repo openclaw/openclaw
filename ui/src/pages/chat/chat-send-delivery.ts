@@ -313,6 +313,7 @@ async function sendPreparedChatMessage(
     ...item,
     sendAttempts: (item.sendAttempts ?? 0) + 1,
     sendError: undefined,
+    sendRejectedBeforeCustody: undefined,
     sendRunId: runId,
     sendState: "sending",
     sendRequestStartedAtMs: requestStartedAtMs,
@@ -373,6 +374,7 @@ async function sendPreparedChatMessage(
       ...(prepared.sessionId ? { sessionId: prepared.sessionId } : {}),
       ...(prepared.intent ? { intent: prepared.intent, sessionId: prepared.sessionId } : {}),
       ...(prepared.queueMode ? { queueMode: prepared.queueMode } : {}),
+      ...(prepared.deliveryPolicy ? { deliveryPolicy: prepared.deliveryPolicy } : {}),
       ...(prepared.queueMode !== "steer" && deliveryLeafEntryId !== undefined
         ? { expectedLeafEntryId: deliveryLeafEntryId }
         : {}),
@@ -617,6 +619,7 @@ export async function deliverChatQueueItem(
       if (
         routeVisible &&
         !admittedItem.queueMode &&
+        !admittedItem.deliveryPolicy &&
         !sendOptions.allowActiveRunSend &&
         (isChatBusy(host) || hasDirectSessionRun(host))
       ) {

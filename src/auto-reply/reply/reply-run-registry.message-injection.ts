@@ -16,6 +16,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createMessageInjectionAuthority,
   MessageInjectionAuthorityError,
+  MessageInjectionEligibilityError,
 } from "./message-injection-authority.js";
 import {
   replyMessageInjectionTargetOperation,
@@ -155,6 +156,7 @@ export function resolveReplyMessageInjectionRejection(params: {
   options?: ReplyBackendQueueMessageOptions;
   allowPendingUserInputAnswer?: false;
   assertCurrent?: () => void;
+  isEligible?: () => boolean;
 }):
   | {
       reason: ReplyMessageInjectionRejectionReason;
@@ -176,6 +178,9 @@ export function resolveReplyMessageInjectionRejection(params: {
   const backend = getAttachedBackend(operation);
   const canInject = () => {
     params.assertCurrent?.();
+    if (params.isEligible?.() === false) {
+      throw new MessageInjectionEligibilityError();
+    }
     return (
       replyRunState.activeRunsByKey.get(operation.key) === operation &&
       !operation.result &&
@@ -184,7 +189,11 @@ export function resolveReplyMessageInjectionRejection(params: {
     );
   };
   const injection = backend
-    ? resolveReplyBackendMessageInjection(backend, canInject, params.assertCurrent !== undefined)
+    ? resolveReplyBackendMessageInjection(
+        backend,
+        canInject,
+        params.assertCurrent !== undefined || params.isEligible !== undefined,
+      )
     : undefined;
   if (!backend || !injection) {
     return { reason: "injection_unavailable" };
@@ -282,6 +291,23 @@ function resolveReplyMessageInjectionFailure(
   }
   const authorityError = refusal ?? unsupported;
   if (
+    !accepted &&
+    authorityError instanceof MessageInjectionAuthorityError &&
+    authorityError.cause instanceof MessageInjectionEligibilityError
+  ) {
+    // Revalidate the original caller independently. Optional advice never turns
+    // genuine source revocation, uncertain custody, or accepted work into replay.
+    try {
+      assertCurrent?.();
+    } catch (sourceError) {
+      return {
+        status: "failed",
+        error: toErrorObject(sourceError, "Message source authority is no longer current"),
+      };
+    }
+    return { status: "rejected", reason: "injection_unavailable" };
+  }
+  if (
     authorityError instanceof MessageInjectionAuthorityError ||
     authorityError instanceof QuestionDispatchRefusedError ||
     authorityError instanceof SessionPendingInputCustodyError
@@ -306,8 +332,13 @@ export function beginReplyMessageInjectionTarget(
   options?: ReplyMessageInjectionOptions,
 ): ReplyMessageInjectionAttempt {
   const operation = target[replyMessageInjectionTargetOperation];
-  const { toolAuthorityOverlay, assertCurrent, allowPendingUserInputAnswer, ...backendOptions } =
-    options ?? {};
+  const {
+    toolAuthorityOverlay,
+    assertCurrent,
+    isEligible,
+    allowPendingUserInputAnswer,
+    ...backendOptions
+  } = options ?? {};
   const projectedToolAuthorityFingerprint = toolAuthorityOverlay
     ? operation.projectToolAuthorityFingerprint(toolAuthorityOverlay)
     : backendOptions.toolAuthorityFingerprint;
@@ -324,6 +355,7 @@ export function beginReplyMessageInjectionTarget(
     options: queueOptions,
     allowPendingUserInputAnswer,
     assertCurrent,
+    isEligible,
   });
   if (!("injection" in resolved)) {
     const immediateRejection = {

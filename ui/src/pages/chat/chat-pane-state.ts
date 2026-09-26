@@ -2,10 +2,12 @@ import { downloadArtifact } from "../../api/artifact-download.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { isChatAutoSteerAvailable } from "../../lib/chat/auto-steer.ts";
 import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
+import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -139,7 +141,20 @@ export function initialHistorySubmitState(state: ChatState, unavailable: boolean
   };
 }
 
-export function resolveChatPaneFollowUpMode(
+/** Both composer rendering and submission consume the same pane-owned policy. */
+export function bindChatPaneSendPolicy(
+  state: ChatPageHost,
+  session: GatewaySessionRow | undefined,
+  runtimeConfig: ApplicationContext["runtimeConfig"],
+) {
+  state.chatFollowUpMode = resolveChatPaneFollowUpMode(state, session, runtimeConfig.state);
+  const isAutoSteerAvailable = () =>
+    isChatAutoSteerAvailable(runtimeConfig.state, resolveChatAgentId(state));
+  state.isAutoSteerAvailable = isAutoSteerAvailable;
+  return isAutoSteerAvailable;
+}
+
+function resolveChatPaneFollowUpMode(
   state: Pick<ChatPageHost, "settings" | "chatEffectiveQueueMode" | "chatQueueModeOverride">,
   session: GatewaySessionRow | undefined,
   runtimeConfig: ApplicationContext["runtimeConfig"]["state"],

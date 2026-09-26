@@ -56,12 +56,14 @@ export function createChatSendMessageInjectionStarter(params: {
     "ctx" | "isInternalTextSlashCommandTurn" | "replyOptionImages" | "replyOptionMedia"
   >;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
+  onQueueAccepted?: ReplyBackendQueueMessageOptions["onQueueAccepted"];
   documentContext?: ({ status: "rendered" } & InboundDocumentContext) | { status: "failed" };
   userTurnTranscriptRecorder: NonNullable<
     ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
   >;
   logGateway: GatewayRequestContext["logGateway"];
   assertCurrent?: () => void;
+  isEligible?: () => boolean;
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
@@ -169,6 +171,7 @@ export function createChatSendMessageInjectionStarter(params: {
               text: buildInboundUserContextPrefix(ctx, resolveEnvelopeFormatOptions(cfg), entry),
             },
         assertCurrent,
+        isEligible: params.isEligible,
         steeringMode: "all",
         isInboundUserMessage: true,
         ...(isProgressCardRefreshInputProvenance(ctx.InputProvenance)
@@ -195,6 +198,7 @@ export function createChatSendMessageInjectionStarter(params: {
           : {}),
         taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+        onQueueAccepted: params.onQueueAccepted,
       },
     );
     return attempt;
@@ -246,6 +250,8 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
   >;
   startedAt: number;
   target: ReplyMessageInjectionTarget;
+  /** Late routing runs inside dispatch, which already owns message hooks and audit. */
+  dispatchOwnsMessageLifecycle?: boolean;
 }): Promise<boolean> {
   const { context, ctx, session } = params;
   const { agentId, cfg, clientRunId, entry, sessionKey, storePath } = session;
@@ -294,7 +300,7 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     );
   }
   await params.persistUserTurnTranscriptBestEffort();
-  if (isDiagnosticsEnabled(cfg)) {
+  if (!params.dispatchOwnsMessageLifecycle && isDiagnosticsEnabled(cfg)) {
     logMessageReceived({
       sessionKey,
       channel,
@@ -313,27 +319,29 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       reason: outcomeReason,
     });
   }
-  emitMessageReceivedHooks({
-    ctx: finalizedCtx,
-    hookRunner: getGlobalHookRunner(),
-    sessionKey,
-    timestamp:
-      typeof finalizedCtx.Timestamp === "number" && Number.isFinite(finalizedCtx.Timestamp)
-        ? finalizedCtx.Timestamp
-        : undefined,
-  });
-  emitInboundMessageAuditTerminal({
-    cfg,
-    counts: { tool: 0, block: 0, final: 0 },
-    ctx: finalizedCtx,
-    observedRunId: clientRunId,
-    startedAt: params.startedAt,
-    terminal: indeterminate
-      ? { outcome: "error", options: { reason: outcomeReason, error: indeterminate } }
-      : steerAborted
-        ? { outcome: "skipped", options: { reason: outcomeReason } }
-        : { outcome: "completed", options: { reason: outcomeReason } },
-  });
+  if (!params.dispatchOwnsMessageLifecycle) {
+    emitMessageReceivedHooks({
+      ctx: finalizedCtx,
+      hookRunner: getGlobalHookRunner(),
+      sessionKey,
+      timestamp:
+        typeof finalizedCtx.Timestamp === "number" && Number.isFinite(finalizedCtx.Timestamp)
+          ? finalizedCtx.Timestamp
+          : undefined,
+    });
+    emitInboundMessageAuditTerminal({
+      cfg,
+      counts: { tool: 0, block: 0, final: 0 },
+      ctx: finalizedCtx,
+      observedRunId: clientRunId,
+      startedAt: params.startedAt,
+      terminal: indeterminate
+        ? { outcome: "error", options: { reason: outcomeReason, error: indeterminate } }
+        : steerAborted
+          ? { outcome: "skipped", options: { reason: outcomeReason } }
+          : { outcome: "completed", options: { reason: outcomeReason } },
+    });
+  }
   const updatedAt = Date.now();
   if (entry) {
     entry.updatedAt = updatedAt;

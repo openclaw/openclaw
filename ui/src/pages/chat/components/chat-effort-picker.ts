@@ -16,7 +16,20 @@ import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-p
 
 registerModelControlsEnglish();
 
+const autoSteerIcon = strokeIcon(svg`<path d="m18 14 4 4-4 4" />
+    <path d="m18 2 4 4-4 4" />
+    <path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22" />
+    <path d="M2 6h1.972a4 4 0 0 1 3.6 2.2" />
+    <path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45" />`);
+
+export type ChatAutoSteerControl = {
+  active: boolean;
+  disabled?: boolean;
+  onSelect: (enabled: boolean) => void;
+};
+
 type ChatEffortPickerParams = {
+  autoSteer?: ChatAutoSteerControl;
   disabled: boolean;
   disabledReason?: string;
   fastMode: ChatFastModeSelectState;
@@ -36,7 +49,7 @@ function formatEffortLabel(label: string): string {
 export function renderChatEffortPicker(params: ChatEffortPickerParams) {
   const sliderStops = params.thinking.options;
   const showReasoning = sliderStops.length > 0;
-  if (!params.reserved && !showReasoning && !params.fastMode.supported) {
+  if (!params.reserved && !showReasoning && !params.fastMode.supported && !params.autoSteer) {
     return nothing;
   }
   const selection = params.thinking.selection;
@@ -68,12 +81,16 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
   const reasoningValueLabel = hasThinkingOverride
     ? reasoningValueText
     : t("chat.modelControls.defaultWithLevel", { level: defaultLevelLabel });
-  const triggerLabel = showReasoning ? reasoningValueText : t("chat.modelControls.fastMode");
+  const triggerLabel = showReasoning
+    ? reasoningValueText
+    : t(params.fastMode.supported ? "chat.modelControls.fastMode" : "chat.modelControls.autoSteer");
   const triggerTitle = showReasoning
     ? params.fastMode.active
       ? `${triggerLabel} · ${t("chat.modelControls.fastMode")}`
       : triggerLabel
-    : `${triggerLabel}: ${params.fastMode.label}`;
+    : params.fastMode.supported
+      ? `${triggerLabel}: ${params.fastMode.label}`
+      : triggerLabel;
   const commitThinking = (value: string) => {
     void params
       .onThinkingSelect(value, params.sessionKey)
@@ -208,7 +225,9 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                   }
                 </span>
               `
-            : html`<span class="chat-controls__effort-speed" aria-hidden="true">${icons.zap}</span>`
+            : html`<span class="chat-controls__effort-speed" aria-hidden="true"
+                >${params.autoSteer && !params.fastMode.supported ? autoSteerIcon : icons.zap}</span
+              >`
         }
         <span class="chat-controls__inline-select-label">${triggerLabel}</span>
         <span class="chat-controls__inline-select-chevron" aria-hidden="true"
@@ -219,7 +238,11 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
         <div
           class="chat-controls__inline-select-menu chat-controls__effort-menu"
           aria-label=${t(
-            showReasoning ? "chat.modelControls.effort" : "chat.modelControls.fastMode",
+            showReasoning
+              ? "chat.modelControls.effort"
+              : params.fastMode.supported
+                ? "chat.modelControls.fastMode"
+                : "chat.modelControls.autoSteer",
           )}
         >
           ${
@@ -365,6 +388,43 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
               <span class="chat-controls__speed-toggle-thumb"></span>
             </button>
           </div>
+          ${
+            params.autoSteer
+              ? html`
+                  <div class="chat-controls__fast-mode-row" data-chat-auto-steer-row>
+                    <span class="chat-controls__fast-mode-icon" aria-hidden="true"
+                      >${autoSteerIcon}</span
+                    >
+                    <span class="chat-controls__fast-mode-copy">
+                      <span class="chat-controls__fast-mode-title"
+                        >${t("chat.modelControls.autoSteer")}</span
+                      >
+                      <span
+                        class="chat-controls__fast-mode-description chat-controls__auto-description"
+                        >${t("chat.modelControls.autoSteerHelp")}</span
+                      >
+                    </span>
+                    <button
+                      class="chat-controls__speed-toggle ${params.autoSteer.active ? "chat-controls__speed-toggle--active" : ""}"
+                      data-chat-auto-steer-toggle
+                      type="button"
+                      role="switch"
+                      aria-checked=${String(params.autoSteer.active)}
+                      aria-label=${t("chat.modelControls.autoSteerAria")}
+                      ?disabled=${params.autoSteer.disabled === true}
+                      @click=${(event: MouseEvent) => {
+                        event.stopPropagation();
+                        if (!params.autoSteer?.disabled) {
+                          params.autoSteer?.onSelect(!params.autoSteer.active);
+                        }
+                      }}
+                    >
+                      <span class="chat-controls__speed-toggle-thumb"></span>
+                    </button>
+                  </div>
+                `
+              : nothing
+          }
         </div>
       </wa-popup>
     </details>

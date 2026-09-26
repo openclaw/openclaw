@@ -43,10 +43,10 @@ import {
 } from "./chat-pane-session-controls.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
+  bindChatPaneSendPolicy,
   dismissChatError,
   initialHistorySubmitState,
   resolveChatArtifactDownload,
-  resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
 import { ChatProviderReviewController } from "./chat-provider-review-controller.ts";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
@@ -121,10 +121,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       layout: state.sidebarLayout,
       paneWidth: this.paneWidth,
     });
-    state.chatFollowUpMode = resolveChatPaneFollowUpMode(
+    const isAutoSteerAvailable = bindChatPaneSendPolicy(
       state,
       selectedSession,
-      this.context.runtimeConfig.state,
+      this.context.runtimeConfig,
     );
     const currentAgentId = resolveChatAgentId(state);
     const { catalogKey, chatProps } = resolveChatMessageAccess(state);
@@ -253,6 +253,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           selectedSession,
           agentDefaultModel,
           agentDefaultPermissionMode: selectedAgent?.defaultPermissionMode,
+          isAutoSteerAvailable,
           modelAccess: mutationAccess.model,
           effortAccess: mutationAccess.effort,
           contextWindowAccess: mutationAccess.contextWindow,
@@ -454,6 +455,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
+      autoSteerEnabled: state.settings.chatAutoSteer === true && isAutoSteerAvailable(),
       draft: state.chatMessage,
       mentions: state.chatMentions,
       getMentions: () => state.chatMentions ?? [],

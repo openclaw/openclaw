@@ -6,6 +6,14 @@ export class MessageInjectionAuthorityError extends Error {
   }
 }
 
+/** Optional advice can cease to apply without revoking the authorized input itself. */
+export class MessageInjectionEligibilityError extends Error {
+  constructor() {
+    super("Message injection is no longer eligible");
+    this.name = "MessageInjectionEligibilityError";
+  }
+}
+
 /** One injection stays revoked even if its source later appears current again. */
 export function createMessageInjectionAuthority(canInject: () => boolean): () => void {
   let revoked: MessageInjectionAuthorityError | undefined;

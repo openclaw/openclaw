@@ -21,6 +21,7 @@ function createControlsFixture(
   scope: string,
   sharingRole: GatewaySessionRow["sharingRole"] = "owner",
   globalTarget?: { sessionKey: string; rowAgentId: string },
+  isAutoSteerAvailable?: () => boolean,
 ) {
   const selectedSession = {
     key: globalTarget ? "global" : "agent:main:existing",
@@ -78,6 +79,7 @@ function createControlsFixture(
   );
   const controls = renderChatPaneComposerControls({
     state: paneState,
+    isAutoSteerAvailable,
     selectedSession: visibleSession,
     agentDefaultModel: undefined,
     modelAccess: access.model,
@@ -93,6 +95,27 @@ function createControlsFixture(
 }
 
 describe("chat pane model-setting permissions", () => {
+  it("keeps Auto preference callbacks scoped to the originating pane and live eligibility", () => {
+    let available = true;
+    const first = createControlsFixture("operator.write", "owner", undefined, () => available);
+    const second = createControlsFixture("operator.write", "owner", undefined, () => true);
+    first.state.applySettings = vi.fn();
+    second.state.applySettings = vi.fn();
+    const toggle = first.container.querySelector<HTMLButtonElement>(
+      "[data-chat-auto-steer-toggle]",
+    )!;
+    toggle.click();
+    expect(first.state.applySettings).toHaveBeenCalledExactlyOnceWith({ chatAutoSteer: true });
+    expect(second.state.applySettings).not.toHaveBeenCalled();
+    available = false;
+    toggle.click();
+    available = true;
+    first.state.sessionKey = "agent:other:new";
+    toggle.click();
+    expect(first.state.applySettings).toHaveBeenCalledTimes(1);
+    expect(first.state.request).not.toHaveBeenCalled();
+  });
+
   it.each([
     { sessionKey: "agent:work:main", rowAgentId: "work", sharingRole: "owner", allowed: true },
     { sessionKey: "agent:work:main", rowAgentId: "work", sharingRole: "viewer", allowed: false },

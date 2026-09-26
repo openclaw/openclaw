@@ -58,6 +58,31 @@ does not block ordinary agent sessions. Omitted, empty, malformed, or partly
 unknown eligibility lists remain unrestricted. Missing or unknown dispatch
 context also keeps the hook eligible.
 
+## Advisory input routing
+
+`input_route` is the narrow advisory seam used by the optional Auto steering
+plugin. Unlike `before_dispatch`, it never claims message handling. The host
+selects one eligible registration before preparing evidence; an abstention does
+not invoke another adviser.
+
+The event contains only `currentTurn: { role, text }[]` and `newMessage`, already
+authorized and bounded by the host. The context supplies the owning `agentId`,
+`signal`, `deadlineMonotonicMs` on `performance.now()`, and `assertCurrent()`.
+Call `api.runtime.decisions.evaluate` with the remaining budget and signal;
+revalidate before and after awaited work. Retained contexts fail after closure.
+Do not read ambient history, retry, select another model, rewrite the input, or
+perform delivery from this hook.
+
+Return `{ status: "choice", choice: "steer" | "followup" }`,
+`{ status: "abstained" }`, or `{ status: "unavailable", reason?: "deadline" }`.
+No choice means no advice, not a negative answer. Cancellation, authority failure,
+and malformed contracts reject instead of being silently treated as unavailable.
+The host owns eligibility, source ordering, the exact target, cancellation,
+durable input custody, and the eventual delivery receipt. Conversation-access
+policy applies to this hook, including explicit opt-in for non-bundled plugins.
+
+## Message observation and delivery
+
 Use message hooks for channel-level routing and delivery policy:
 
 - `message_received`: observe inbound content, sender, `threadId`,

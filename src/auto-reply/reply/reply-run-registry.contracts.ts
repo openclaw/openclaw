@@ -25,7 +25,7 @@ type ReplyRunKey = string;
 
 type ReplyBackendKind = "embedded" | "cli";
 
-type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
+export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
 export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 
@@ -66,6 +66,8 @@ export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
   toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
   /** Composed into V2's final admission assertion after asynchronous preparation. */
   assertCurrent?: () => void;
+  /** Optional routing eligibility, not source authority; false permits fallback only before custody. */
+  isEligible?: () => boolean;
 };
 
 export type ReplyToolAuthorityRoute = Readonly<{
@@ -250,17 +252,19 @@ type ReplyOperationFailureCode =
   | "run_stalled"
   | "run_failed";
 
-type ReplyOperationAbortCode =
+export type ReplyOperationAbortCode =
   | "aborted_by_user"
   | "aborted_for_restart"
   | "aborted_for_supersession";
 
-type ReplyOperationResult =
+export type ReplyOperationResult =
   | { kind: "completed" }
   | { kind: "failed"; code: ReplyOperationFailureCode; cause?: unknown }
   | { kind: "aborted"; code: ReplyOperationAbortCode };
 
 export type ReplyOperation = {
+  /** Reserve source admission order until delivery takes custody or the input terminalizes. */
+  reserveInputRouting(): { ready: Promise<void>; release: () => void };
   readonly key: ReplyRunKey;
   readonly sessionId: string;
   /** Captured logical owner for session activity, including raw global keys. */

@@ -12,6 +12,54 @@ When a normal prompt arrives while a session run is active and the queue mode is
 
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
+## Auto steering
+
+Auto is an optional, default-off Control UI preference. Enable the `auto-steer`
+plugin, select a Decision model for the owning agent, enable **Settings → Labs →
+Decision assistance**, then turn on **Auto** directly below **Fast** in the chat
+effort picker. Selecting a model or opening the picker never calls a provider.
+
+With Auto on, one ordinary human text message arriving during an active visible
+turn is classified as either:
+
+- **Steer:** a correction, refinement, answer, clarification, or additional
+  constraint on the active task.
+- **Followup:** an independent request that should run after the current task.
+
+The whole message takes one route. Auto does not rewrite or split it, change the
+chat model, grant tool permissions, or cancel the active task. Manual Steer,
+Queue, Followup, interrupt, commands (including `/` and `!`), and Stop bypass
+classification. **Stop remains cancellation.**
+
+Auto preserves the existing manual/server queue baseline. Disabling Auto or
+Decision assistance restores that baseline; unavailable, expired, ineligible,
+and abstained classifications also use it. A queue baseline is not silently
+changed to Steer. Each outbox item retains its original Auto intent through
+editing, reconnect and retry; choosing manual Steer clears that item's Auto intent.
+
+The host allows one 500 ms monotonic budget for optional code loading, authorized
+history preparation, provider work, and decoding. This is a routing budget, not a
+provider latency promise. There are no retries, alternate models, grounding, or
+confidence thresholds. Cancellation and revoked authority do not become fallback
+work. Advice is tied to the originally captured active turn, never its successor.
+
+Only bounded visible user/assistant text is offered to the selected Decision
+provider: an input of at most 8,000 characters, at most 12 recent display messages
+read within a 32,000-byte history budget, and at most 12,000 context characters.
+The exact initiating turn must be present. Tools, hidden reasoning, system rows,
+provenance and metadata are excluded; sensitive text is redacted without changing
+the original transcript. Redaction is not anonymization. Hosted providers receive
+this evidence and may charge for evaluation.
+
+Incognito, attachments, replies, work-context submissions, synthetic input,
+background turns, and other clients bypass Auto. Explicit Decision evaluation is
+unaffected by this automatic-consumer gate.
+
+A receipt such as **Auto: selected Steer** is advice, not proof of consumption.
+Only the transcript owner's canonical steering delivery receipt permits the UI
+to show **Steered**. Probabilities, reasoning, and evidence are not persisted as a
+new audit record.
+
 ## Runtime boundary
 
 Steering does not interrupt a tool call that is already running. The OpenClaw runtime checks at tool-launch boundaries as well as model boundaries:

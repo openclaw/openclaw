@@ -129,6 +129,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
+  autoSteerEnabled?: boolean;
   pendingAttachmentReads?: number;
   getPendingAttachmentReads?: () => number;
   replyTarget?: {

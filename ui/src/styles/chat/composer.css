@@ -3087,6 +3087,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
   white-space: nowrap;
 }
 
+.chat-controls__auto-description {
+  white-space: normal;
+}
+
 .chat-controls__context-window-options {
   flex: 0 0 auto;
 }

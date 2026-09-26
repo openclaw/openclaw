@@ -12,6 +12,7 @@ import {
   type HumanMention,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type {
+  AutoSteerReceipt,
   ChatSendParamsSchema,
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -61,6 +62,9 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  /** Host advice is captured before transcript admission, never accepted from the client. */
+  autoSteer?: AutoSteerReceipt;
+  resolvedQueueMode?: QueueMode;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
