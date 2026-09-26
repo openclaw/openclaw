@@ -77,6 +77,7 @@ const REGISTRY_ENV_KEYS =
   );
 
 type SchedulerLimits = ReturnType<typeof parseSchedulerOptions>;
+type PreparedDockerLane = DockerE2eLane & { bundledPluginSweepIds?: string };
 type DockerCandidatePlan = ReturnType<typeof resolveDockerE2ePlan>["plan"];
 
 type SchedulerActiveState = {
@@ -1486,8 +1487,54 @@ type DockerLaneEnv = {
   OPENCLAW_DOCKER_CLI_TOOLS_DIR: string;
 };
 
+async function prepareBundledPluginSweepInventory(
+  lanes: PreparedDockerLane[],
+  baseEnv: NodeJS.ProcessEnv,
+) {
+  const configured = baseEnv.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS?.trim();
+  delete baseEnv.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS;
+  const sweepLanes = lanes.filter(({ name }) =>
+    name.startsWith("bundled-plugin-install-uninstall-"),
+  );
+  if (sweepLanes.length === 0) {
+    return;
+  }
+  let sweepIds =
+    configured &&
+    !["undefined", "null"].includes(configured) &&
+    configured.split(/[,\s]+/u).some(Boolean)
+      ? configured
+      : undefined;
+  if (sweepIds === undefined) {
+    // Use the trusted inventory owner with frozen-target data, not target code or
+    // the installed package: missing packaged plugins must remain observable.
+    const { listBundledPluginPackArtifacts } =
+      await import("./lib/bundled-plugin-build-entries.mjs");
+    const artifacts = listBundledPluginPackArtifacts({
+      cwd: ROOT_DIR,
+      env: {
+        ...baseEnv,
+        OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined,
+        OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: undefined,
+      },
+    });
+    const expectedIds = artifacts.flatMap((artifact) => {
+      const match = /^dist\/extensions\/([^/]+)\/openclaw\.plugin\.json$/u.exec(artifact);
+      return match?.[1] ? [match[1]] : [];
+    });
+    if (expectedIds.length === 0) {
+      throw new Error("frozen target has no packaged bundled plugin manifests to verify");
+    }
+    sweepIds = expectedIds.join(",");
+  }
+  // Every shard receives the same ordered inventory; the probe owns partitioning.
+  for (const lane of sweepLanes) {
+    lane.bundledPluginSweepIds = sweepIds;
+  }
+}
+
 function laneEnv(
-  poolLane: DockerE2eLane,
+  poolLane: PreparedDockerLane,
   baseEnv: NodeJS.ProcessEnv,
   logDir: string,
   cacheKey: string | undefined,
@@ -1504,6 +1551,9 @@ function laneEnv(
     ),
   };
   env.OPENCLAW_DOCKER_ALL_LANE_NAME = name;
+  if (poolLane.bundledPluginSweepIds !== undefined) {
+    env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS = poolLane.bundledPluginSweepIds;
+  }
   const image = e2eImageForLane(poolLane, baseEnv);
   if (image) {
     env.OPENCLAW_DOCKER_E2E_IMAGE = image;
@@ -2269,6 +2319,8 @@ async function main() {
     );
     return;
   }
+
+  await prepareBundledPluginSweepInventory(scheduledLanes, baseEnv);
 
   await runPhase(
     phases,
