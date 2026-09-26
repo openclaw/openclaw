@@ -476,32 +476,35 @@ require("node:module").syncBuiltinESMExports();
         {
           source: 'export const WORKER_BUNDLE_ENTRY_PATH = "";\n',
           expected:
-            "release-check: target worker artifact WORKER_BUNDLE_ENTRY_PATH must be a non-empty path string.",
+            "Target worker artifact WORKER_BUNDLE_ENTRY_PATH must be a non-empty path string.",
         },
         {
           source: 'export const WORKER_BUNDLE_ENTRY_PATH = "../worker/main.mjs";\n',
           expected:
-            "release-check: target worker artifact WORKER_BUNDLE_ENTRY_PATH must be a normalized relative path within dist/worker.",
+            "Target worker artifact WORKER_BUNDLE_ENTRY_PATH must be a normalized relative path within dist/worker.",
         },
-        ...["undefined", "[]"].map((value) => ({
+        ...["null", "[]"].map((value) => ({
           source: legacyWorkerContract + `export const WORKER_BUNDLE_ARTIFACT_PATHS = ${value};\n`,
-          expected: "release-check: target WORKER_BUNDLE_ARTIFACT_PATHS must be a non-empty array.",
+          expected: "Target WORKER_BUNDLE_ARTIFACT_PATHS must be a non-empty array.",
         })),
+        {
+          source: legacyWorkerContract + "export const WORKER_BUNDLE_ARTIFACT_PATHS = undefined;\n",
+          expected: "Target worker artifact reference must be a local constant: undefined.",
+        },
         {
           source: 'export const WORKER_BUNDLE_ARTIFACT_PATHS = ["worker.mjs", ""];\n',
           expected:
-            "release-check: target worker artifact WORKER_BUNDLE_ARTIFACT_PATHS[1] must be a non-empty path string.",
+            "Target worker artifact WORKER_BUNDLE_ARTIFACT_PATHS[1] must be a non-empty path string.",
         },
         {
           source:
             'export const WORKER_BUNDLE_ARTIFACT_PATHS = ["worker.mjs", "../worker/main.mjs"];\n',
           expected:
-            "release-check: target worker artifact WORKER_BUNDLE_ARTIFACT_PATHS[1] must be a normalized relative path within dist/worker.",
+            "Target worker artifact WORKER_BUNDLE_ARTIFACT_PATHS[1] must be a normalized relative path within dist/worker.",
         },
         {
           source: "export const OTHER_PATH = 1;\n",
-          expected:
-            "release-check: target worker producer is missing WORKER_BUNDLE_*_PATH declarations.",
+          expected: "Target worker artifact count must be between 1 and 16.",
         },
       ];
       for (const [index, { source, expected }] of invalidContracts.entries()) {

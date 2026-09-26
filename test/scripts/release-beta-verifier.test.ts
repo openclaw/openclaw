@@ -895,6 +895,52 @@ syncBuiltinESMExports();`,
     );
   });
 
+  it.each([false, true])(
+    "passes one captured product SHA to trusted postpublish tooling (explicit=%s)",
+    async (explicit) => {
+      const fixture = workflowFixture({ status: "completed", conclusion: "success" });
+      const node = join(fixture.binDir, "node");
+      const capture = join(fixture.rootDir, "postpublish-argv.json");
+      const targetSha = "a".repeat(40);
+      const headReads = join(fixture.rootDir, "target-head-reads.txt");
+      writeFileSync(
+        join(fixture.binDir, "git"),
+        `#!${testNodeExecPath}
+const fs = require("node:fs");
+if (process.argv.slice(2).join(" ") !== "rev-parse HEAD") throw new Error("Unexpected Git command");
+if (fs.realpathSync(process.cwd()) === fs.realpathSync(${JSON.stringify(fixture.rootDir)})) {
+  if (fs.existsSync(${JSON.stringify(headReads)})) throw new Error("Target HEAD was reread");
+  fs.writeFileSync(${JSON.stringify(headReads)}, "read");
+  console.log(${JSON.stringify(targetSha)});
+} else { console.log("b".repeat(40)); }
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        node,
+        `#!${testNodeExecPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(capture)}, JSON.stringify(process.argv.slice(2)));\n`,
+      );
+      chmodSync(node, 0o755);
+      fixture.args.skipPostpublish = false;
+      const trustedVerifier = resolve("scripts/openclaw-npm-postpublish-verify.ts");
+      if (explicit) {
+        fixture.args.releaseSha = targetSha;
+        fixture.args.postpublishVerifier = trustedVerifier;
+      }
+
+      await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+
+      expect(JSON.parse(readFileSync(capture, "utf8"))).toEqual([
+        "--import",
+        resolve("scripts/tsx.mjs"),
+        trustedVerifier,
+        version,
+        fixture.rootDir,
+        targetSha,
+      ]);
+    },
+  );
+
   it("rejects a failed Telegram job even when its workflow concludes success", async () => {
     const fixture = workflowFixture({
       jobs: [{ name: "Run package Telegram E2E", conclusion: "failure" }],
@@ -1016,16 +1062,12 @@ describe("parseReleaseVerifyBetaArgs", () => {
   });
 
   it("only accepts the trusted tooling postpublish verifier override", () => {
-    expect(resolveOpenClawNpmPostpublishVerifier("/tmp/release")).toBe(
-      "/tmp/release/scripts/openclaw-npm-postpublish-verify.ts",
-    );
     const trustedVerifier = resolve("scripts/openclaw-npm-postpublish-verify.ts");
-    expect(resolveOpenClawNpmPostpublishVerifier("/tmp/release", trustedVerifier)).toBe(
-      trustedVerifier,
+    expect(resolveOpenClawNpmPostpublishVerifier()).toBe(trustedVerifier);
+    expect(resolveOpenClawNpmPostpublishVerifier(trustedVerifier)).toBe(trustedVerifier);
+    expect(() => resolveOpenClawNpmPostpublishVerifier("/tmp/untrusted-verifier.ts")).toThrow(
+      "must select the trusted tooling verifier",
     );
-    expect(() =>
-      resolveOpenClawNpmPostpublishVerifier("/tmp/release", "/tmp/untrusted-verifier.ts"),
-    ).toThrow("must select the trusted tooling verifier");
     expect(() =>
       parseReleaseVerifyBetaArgs([
         "2026.5.10-beta.3",

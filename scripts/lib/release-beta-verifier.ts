@@ -978,12 +978,13 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
   return parsed;
 }
 
-export function resolveOpenClawNpmPostpublishVerifier(rootDir: string, override?: string): string {
-  if (override === undefined) {
-    return resolve(rootDir, "scripts/openclaw-npm-postpublish-verify.ts");
-  }
-  const verifier = resolve(override);
-  if (verifier !== resolve(TRUSTED_TOOLING_ROOT, "scripts/openclaw-npm-postpublish-verify.ts")) {
+export function resolveOpenClawNpmPostpublishVerifier(override?: string): string {
+  const trustedVerifier = resolve(
+    TRUSTED_TOOLING_ROOT,
+    "scripts/openclaw-npm-postpublish-verify.ts",
+  );
+  const verifier = override === undefined ? trustedVerifier : resolve(override);
+  if (verifier !== trustedVerifier) {
     throw new Error("--postpublish-verifier must select the trusted tooling verifier.");
   }
   return verifier;
@@ -1972,10 +1973,14 @@ export async function verifyBetaRelease(
     if (rootVersion !== args.version) {
       throw new Error(`package.json version is ${rootVersion}; expected ${args.version}.`);
     }
+    let checkedOutSha: string | undefined;
+    if (args.releaseSha !== undefined || !args.skipPostpublish) {
+      checkedOutSha = requireCommitSha(
+        runReleaseVerifierCommand("git", ["rev-parse", "HEAD"], { cwd: rootDir }),
+        "release checkout SHA",
+      );
+    }
     if (args.releaseSha !== undefined) {
-      const checkedOutSha = runReleaseVerifierCommand("git", ["rev-parse", "HEAD"], {
-        cwd: rootDir,
-      });
       if (checkedOutSha !== args.releaseSha) {
         throw new Error(`release checkout SHA is ${checkedOutSha}; expected ${args.releaseSha}.`);
       }
@@ -2010,13 +2015,19 @@ export async function verifyBetaRelease(
 
     if (!args.skipPostpublish && coreBetaFloorError === undefined) {
       diagnostic.start("postpublish");
-      const postpublishVerifier = resolveOpenClawNpmPostpublishVerifier(
-        rootDir,
-        args.postpublishVerifier,
+      const postpublishVerifier = resolveOpenClawNpmPostpublishVerifier(args.postpublishVerifier);
+      execFileSync(
+        "node",
+        [
+          "--import",
+          resolve(TRUSTED_TOOLING_ROOT, "scripts/tsx.mjs"),
+          postpublishVerifier,
+          args.version,
+          rootDir,
+          requireCommitSha(checkedOutSha, "release checkout SHA"),
+        ],
+        { stdio: "inherit" },
       );
-      execFileSync("node", ["--import", "tsx", postpublishVerifier, args.version], {
-        stdio: "inherit",
-      });
       lines.push("openclaw postpublish verifier OK");
       diagnostic.success("postpublish");
     }
