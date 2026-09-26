@@ -15,6 +15,7 @@ import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-ope
 import {
   isStateDatabaseReadAdmissionInvalidatedError,
   StateDatabaseReadAdmissionInvalidatedError,
+  type OpenClawStateDatabaseReadAdmission,
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
 import {
@@ -30,13 +31,19 @@ export function createStateDatabaseWalOwner(
   retainForIdle: (database: OpenClawStateDatabase) => () => void,
 ) {
   return {
-    register(this: void, database: OpenClawStateDatabase, identity: DatabasePathIdentity): void {
+    register(
+      this: void,
+      database: OpenClawStateDatabase,
+      identity: DatabasePathIdentity,
+      admission: OpenClawStateDatabaseReadAdmission,
+      env: NodeJS.ProcessEnv,
+    ): void {
       if (!isMainThread) {
         return;
       }
       const context = captureOpenClawStateWorkerContextWithAdmission(
-        { path: database.path },
-        asyncResources.capture,
+        { path: database.path, env },
+        () => admission,
       );
       const controller = new AbortController();
       let pending: Promise<SqliteWalPeriodicResult | undefined> | undefined;
