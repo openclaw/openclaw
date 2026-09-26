@@ -67,7 +67,6 @@ import {
   renderToolCard,
   renderToolIcon,
   renderPluginToolResult,
-  renderToolPreview,
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
@@ -78,6 +77,7 @@ import {
   renderToolOutcome,
 } from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
+import { renderToolPreview } from "./widget-card.ts";
 
 registerChatMessageMetadataEnglish();
 

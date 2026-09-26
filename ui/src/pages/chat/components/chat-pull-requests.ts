@@ -81,29 +81,18 @@ export function dismissChatPullRequest(
   return ids;
 }
 
-function stateLabel(state: ControlUiSessionPullRequest["state"]): string {
-  switch (state) {
-    case "merged":
-      return t("chat.pullRequests.merged");
-    case "draft":
-      return t("chat.pullRequests.draft");
-    case "closed":
-      return t("chat.pullRequests.closed");
-    default:
-      return t("chat.pullRequests.open");
-  }
-}
+const STATE_LABEL_KEYS = {
+  merged: "chat.pullRequests.merged",
+  draft: "chat.pullRequests.draft",
+  closed: "chat.pullRequests.closed",
+  open: "chat.pullRequests.open",
+} as const;
 
-function checksLabel(checks: NonNullable<ControlUiSessionPullRequest["checks"]>): string {
-  switch (checks.state) {
-    case "passing":
-      return t("chat.pullRequests.checksPassing");
-    case "failing":
-      return t("chat.pullRequests.checksFailing");
-    default:
-      return t("chat.pullRequests.checksPending");
-  }
-}
+const CHECK_LABEL_KEYS = {
+  passing: "chat.pullRequests.checksPassing",
+  failing: "chat.pullRequests.checksFailing",
+  pending: "chat.pullRequests.checksPending",
+} as const;
 
 function renderChecksRow(label: string, count: number, modifier: string) {
   if (count === 0) {
@@ -126,7 +115,7 @@ function renderChecks(
   if (!checks) {
     return nothing;
   }
-  const label = checksLabel(checks);
+  const label = t(CHECK_LABEL_KEYS[checks.state]);
   const syncChecksOverlay = (element: EventTarget | null | undefined) => {
     if (!(element instanceof HTMLDetailsElement)) {
       return;
@@ -348,7 +337,9 @@ export function renderChatPullRequests(props: {
               ${
                 pullRequest.state === "open"
                   ? nothing
-                  : html`<span class="chat-pr__state">${stateLabel(pullRequest.state)}</span>`
+                  : html`<span class="chat-pr__state"
+                      >${t(STATE_LABEL_KEYS[pullRequest.state])}</span
+                    >`
               }
               ${!merged || props.status === "unavailable" ? renderStatusWarning(props.status) : nothing}
               ${rowPublication && !published ? renderGitHubPublicationAction(rowPublication) : nothing}

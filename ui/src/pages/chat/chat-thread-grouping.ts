@@ -255,7 +255,7 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
 
 // Unphased providers keep the last-visible-reply policy. Explicit commentary
 // cannot move the completed-work boundary past an already delivered answer.
-function isFinalReplyGroup(item: TurnRenderItem): boolean {
+function isFinalReplyGroup(item: TurnRenderItem): item is MessageGroup {
   return (
     item.kind === "group" &&
     !item.isStreaming &&
@@ -322,21 +322,13 @@ export function collapseCompletedTurnWork(
     turns,
     turnUserMessages,
   );
-  const finalReplyIndexes = turns.map((turn, turnIndex) => {
-    if (continuationTurnIndexes.has(turnIndex)) {
-      return -1;
-    }
-    for (let index = turn.length - 1; index >= 0; index -= 1) {
-      const candidate = turn[index];
-      if (candidate && isFinalReplyGroup(candidate)) {
-        return index;
-      }
-    }
-    return -1;
-  });
-  const terminalReplies = finalReplyIndexes.map((index, turnIndex) =>
-    index >= 0 ? (turns[turnIndex]?.[index] as MessageGroup) : undefined,
+  const terminalReplies = turns.map((turn, turnIndex) =>
+    continuationTurnIndexes.has(turnIndex) ? undefined : turn.findLast(isFinalReplyGroup),
   );
+  const finalReplyIndexes = turns.map((turn, index) => {
+    const reply = terminalReplies[index];
+    return reply ? turn.lastIndexOf(reply) : -1;
+  });
   for (let turnIndex = turns.length - 2; turnIndex >= 0; turnIndex -= 1) {
     const continuationTurnIndex = continuationTurnIndexes.get(turnIndex);
     if (!terminalReplies[turnIndex] && continuationTurnIndex !== undefined) {

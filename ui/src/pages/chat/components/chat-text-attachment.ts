@@ -2,6 +2,7 @@ import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
 import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
@@ -17,12 +18,7 @@ import {
   renderCompactAttachmentCard,
 } from "./chat-attachment-card.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
-import {
-  htmlPreviewElement,
-  isHtmlDocument,
-  LazyCustomElementRequestController,
-  renderHtmlPreview,
-} from "./chat-html-preview.ts";
+import { htmlPreviewElement, isHtmlDocument, renderHtmlPreview } from "./chat-html-preview.ts";
 
 registerFilePreviewEnglish();
 

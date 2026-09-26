@@ -8,6 +8,7 @@ import { renderStreamGroup, renderWorkGroupSummary } from "./components/chat-mes
 import "../../styles/base.css";
 import "../../styles/components.css";
 import "../../styles/chat.ts";
+import "../../styles/chat/composer-surface.css";
 
 const paragraph =
   "The conversation keeps every participant's content inside the shared column. ".repeat(20);
@@ -93,6 +94,8 @@ describe("shared chat content column", () => {
       it(`bounds every left-side block at ${width}px in ${theme}`, async () => {
         await page.viewport(width, 900);
         container = document.createElement("div");
+        container.className = "chat";
+        container.style.height = "850px";
         previousTheme = document.documentElement.dataset.themeMode;
         document.documentElement.dataset.themeMode = theme;
         document.body.append(container);
@@ -109,6 +112,11 @@ describe("shared chat content column", () => {
               } else {
                 container.style.removeProperty("--chat-message-max-width");
               }
+              if (mode === "saved") {
+                container.style.setProperty("--chat-thread-max-width", "100%");
+              } else {
+                container.style.removeProperty("--chat-thread-max-width");
+              }
               container.dir = direction;
               container.style.width = narrow ? "min(100%, 480px)" : "100%";
               render(
@@ -117,31 +125,33 @@ describe("shared chat content column", () => {
                     class=${`chat-thread${direct ? " chat-thread--direct" : ""}`}
                     style="height: 850px"
                   >
-                    ${renderMessageGroup(
-                      group("own", "user", paragraph, {
-                        sender: {
-                          id: "alice",
-                          name: "Alice Chen",
-                          identity: { type: "profile", id: "alice" },
+                    <div class="chat-thread-inner">
+                      ${renderMessageGroup(
+                        group("own", "user", paragraph, {
+                          sender: {
+                            id: "alice",
+                            name: "Alice Chen",
+                            identity: { type: "profile", id: "alice" },
+                          },
+                        }),
+                        options,
+                      )}
+                      ${fixtures.map((fixture) =>
+                        renderMessageGroup(fixture, {
+                          ...options,
+                          isToolExpanded: () => true,
+                        }),
+                      )}
+                      ${renderWorkGroupSummary(
+                        { key: "summary", durationMs: 2_000, groups: [] },
+                        {
+                          expanded: false,
+                          onToggle: () => {},
                         },
-                      }),
-                      options,
-                    )}
-                    ${fixtures.map((fixture) =>
-                      renderMessageGroup(fixture, {
-                        ...options,
-                        isToolExpanded: () => true,
-                      }),
-                    )}
-                    ${renderWorkGroupSummary(
-                      { key: "summary", durationMs: 2_000, groups: [] },
-                      {
-                        expanded: false,
-                        onToggle: () => {},
-                      },
-                    )}
-                    ${renderStreamGroup([{ kind: "stream", key: "stream", text: code, startedAt: 1_000, isStreaming: true }])}
-                    ${renderStreamGroup([{ kind: "reading-indicator", key: "working", startedAt: 1_000 }])}
+                      )}
+                      ${renderStreamGroup([{ kind: "stream", key: "stream", text: code, startedAt: 1_000, isStreaming: true }])}
+                      ${renderStreamGroup([{ kind: "reading-indicator", key: "working", startedAt: 1_000 }])}
+                    </div>
                   </div>
                 `,
                 container,

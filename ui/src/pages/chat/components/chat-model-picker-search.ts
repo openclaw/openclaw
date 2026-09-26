@@ -1,6 +1,6 @@
 import { generateUUID } from "../../../lib/uuid.ts";
 
-export function pickerMenu(target: EventTarget | null): HTMLElement | null {
+function pickerMenu(target: EventTarget | null): HTMLElement | null {
   return target instanceof Element
     ? target.closest<HTMLElement>(".chat-controls__model-menu")
     : null;
@@ -47,7 +47,7 @@ function ensureModelPickerIds(menu: HTMLElement): void {
   input.setAttribute("aria-expanded", details.open ? "true" : "false");
 }
 
-export function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
+function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-option]").forEach((candidate) => {
     candidate.toggleAttribute("data-chat-model-highlighted", candidate === row);
   });
@@ -56,6 +56,14 @@ export function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | un
     input?.setAttribute("aria-activedescendant", row.id);
   } else {
     input?.removeAttribute("aria-activedescendant");
+  }
+}
+
+export function handleModelOptionMouseEnter(event: MouseEvent): void {
+  const row = event.currentTarget;
+  const menu = pickerMenu(row);
+  if (row instanceof HTMLButtonElement && menu) {
+    highlightModelRow(menu, row);
   }
 }
 
