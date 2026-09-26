@@ -8,6 +8,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
 import type { DaemonStatus } from "./status.gather.js";
+import { registerServiceInspectionHintTests } from "./status.print.inspection.test-support.js";
 import { printDaemonStatus as printDaemonStatusRuntime } from "./status.print.js";
 
 type TestDaemonStatus = Omit<DaemonStatus, "service"> & {
@@ -1156,41 +1157,10 @@ describe("printDaemonStatus", () => {
     );
   });
 
-  it.each(["user", "system"] as const)(
-    "requires inspection before suggesting cleanup for a detected %s systemd unit",
-    async (scope) => {
-      const { renderGatewayServiceCleanupHints } =
-        await vi.importActual<typeof import("../../daemon/inspect.js")>("../../daemon/inspect.js");
-      renderGatewayServiceCleanupHintsMock.mockImplementation(renderGatewayServiceCleanupHints);
-
-      printDaemonStatus(
-        {
-          service: {
-            label: "systemd",
-            loadState: { status: "unknown", detail: "ownership not verified" },
-            loadedText: "enabled",
-            notLoadedText: "disabled",
-          },
-          extraServices: [
-            {
-              platform: "linux",
-              label: "openclaw.service",
-              scope,
-              detail: `unit: ${scope === "user" ? "/home/test/.config/systemd/user" : "/etc/systemd/system"}/openclaw.service`,
-            },
-          ],
-        },
-        { json: false, deep: true },
-      );
-
-      const output = runtime.log.mock.calls.map(([line]) => line).join("\n");
-      expect(output).toContain("openclaw.service");
-      expect(output).not.toContain("disable --now");
-      expect(output).not.toContain("rm ");
-      expect(output).toContain(`Inspection hint: systemctl --${scope} status -- openclaw.service`);
-      expect(output).toContain(`Inspection hint: systemctl --${scope} cat -- openclaw.service`);
-    },
-  );
+  registerServiceInspectionHintTests({
+    renderHints: renderGatewayServiceCleanupHintsMock,
+    output: () => runtime.log.mock.calls.map(([line]) => line).join("\n"),
+  });
 
   it("does not print systemd user-service hints when a gateway responds", () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");

@@ -3,6 +3,7 @@ import { Writable } from "node:stream";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV, isGatewayServiceEnv } from "../../daemon/constants.js";
+import { ScheduledTaskInspectionError } from "../../daemon/schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import {
   ServiceInspectionError,
@@ -14,7 +15,7 @@ import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceState,
 } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.js";
 import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-identity.js";
 import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
@@ -40,7 +41,6 @@ import type {
 } from "./update-command-service-context-types.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
-  assertGatewayServiceManagementAllowedForUpdate,
   GATEWAY_SERVICE_INSPECTION_WARNING,
   GatewayServiceUpdateOwnershipError,
   observedSystemdManagerUid,
@@ -314,22 +314,25 @@ async function stopManagedServiceBeforeMutableUpdate(
   try {
     const inspectedService = resolveGatewayService();
     service = inspectedService;
-    serviceState = await withCommandProcessScope(() =>
-      readGatewayServiceStateForUpdate(inspectedService, serviceEnv, params.timeoutMs),
-    );
-    if (
-      process.platform === "win32" &&
-      serviceState.runtime?.inspectionFailure?.timeoutMs !== undefined
-    ) {
-      // Re-read the definition too: a timed-out snapshot cannot grant service ownership.
-      serviceState = await withCommandProcessScope(() =>
-        readGatewayServiceState(inspectedService, {
-          env: serviceEnv,
-          requireEffective: true,
-          validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-          timeoutMs: params.timeoutMs,
-        }),
-      );
+    for (let attempt = 0; ; attempt++) {
+      const retryTimeout = process.platform === "win32" && attempt === 0;
+      try {
+        serviceState = await withCommandProcessScope(() =>
+          readGatewayServiceStateForUpdate(inspectedService, serviceEnv, params.timeoutMs),
+        );
+      } catch (error) {
+        if (
+          retryTimeout &&
+          error instanceof ScheduledTaskInspectionError &&
+          error.timeoutMs !== undefined
+        ) {
+          continue;
+        }
+        throw error;
+      }
+      if (!retryTimeout || serviceState.runtime?.inspectionFailure?.timeoutMs === undefined) {
+        break;
+      }
     }
   } catch (err) {
     if (hasCommandProcessCleanupError(err)) {
@@ -645,7 +648,14 @@ async function stopManagedServiceBeforeMutableUpdate(
     try {
       assertCurrent();
     } catch (cause) {
-      throw new AggregateError([err, cause], "Update executor was lost during native preparation", {
+      const failures = [err, cause];
+      try {
+        // Lost authority forbids restoration, but this private recovery still needs settlement.
+        await windowsTaskAutoStartRecovery?.complete(false);
+      } catch (settlementError) {
+        failures.push(settlementError);
+      }
+      throw new AggregateError(failures, "Update executor was lost during native preparation", {
         cause,
       });
     }

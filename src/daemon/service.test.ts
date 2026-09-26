@@ -19,7 +19,11 @@ import {
   resolveGatewayService,
   startGatewayService,
 } from "./service.js";
-import { createMockGatewayService, mockSystemAccountHome } from "./service.test-helpers.js";
+import {
+  createMockGatewayService,
+  managerlessPreflightCases,
+  mockSystemAccountHome,
+} from "./service.test-helpers.js";
 
 const probePortUsage = vi.hoisted(() =>
   vi.fn<typeof import("../infra/ports-probe.js").probePortUsage>(),
@@ -43,45 +47,6 @@ afterEach(() => {
 function createService(overrides: Partial<GatewayService> = {}): GatewayService {
   return createMockGatewayService(overrides);
 }
-
-const managerlessPreflightCases = [
-  ...(["git", "package"] as const).flatMap((updateInstallKind) =>
-    ([false, true] as const).map((shouldRestart) => ({
-      updateInstallKind,
-      shouldRestart,
-      condition: "absent",
-      portUsage: "free" as const,
-      portSource: "env" as const,
-    })),
-  ),
-  { updateInstallKind: "package" as const, shouldRestart: true, condition: "installed" },
-  { updateInstallKind: "package" as const, shouldRestart: true, condition: "node absent" },
-  { updateInstallKind: "package" as const, shouldRestart: true, condition: "node installed" },
-  { updateInstallKind: "package" as const, shouldRestart: true, condition: "global definition" },
-  { updateInstallKind: "package" as const, shouldRestart: true, condition: "unreadable" },
-  { updateInstallKind: "package" as const, shouldRestart: true, condition: "manager" },
-  {
-    updateInstallKind: "package" as const,
-    shouldRestart: true,
-    condition: "busy port",
-    portUsage: "busy" as const,
-    portSource: "env" as const,
-  },
-  {
-    updateInstallKind: "package" as const,
-    shouldRestart: true,
-    condition: "configured busy port",
-    portUsage: "busy" as const,
-    portSource: "config" as const,
-  },
-  {
-    updateInstallKind: "package" as const,
-    shouldRestart: true,
-    condition: "unknown port",
-    portUsage: "unknown" as const,
-    portSource: "env" as const,
-  },
-];
 
 describe("resolveGatewayService", () => {
   it.each([
@@ -297,11 +262,49 @@ describe("readGatewayServiceState", () => {
     });
   });
 
+  it.each([
+    { platform: "win32" as const, requireLoadedCommand: true, selected: "registered" },
+    { platform: "win32" as const, requireLoadedCommand: false, selected: "configured" },
+    { platform: "darwin" as const, requireLoadedCommand: true, selected: "configured" },
+  ])(
+    "uses the $selected launcher for $platform loaded-only=$requireLoadedCommand status",
+    async ({ platform, requireLoadedCommand, selected }) => {
+      mockProcessPlatform(platform);
+      const configured = "C:\\config\\gateway.cmd";
+      const registered = "C:\\registered\\gateway.cmd";
+      const expected = selected === "registered" ? registered : configured;
+      const service = createService({
+        readCommand: vi.fn(async () => ({
+          programArguments: ["node", "openclaw", "gateway", "run"],
+          sourcePath: registered,
+        })),
+        isLoaded: vi.fn<GatewayService["isLoaded"]>(
+          async ({ env } = {}) => env?.OPENCLAW_TASK_SCRIPT === expected,
+        ),
+        readRuntime: vi.fn<GatewayService["readRuntime"]>(async (env) => ({
+          status: env?.OPENCLAW_TASK_SCRIPT === expected ? "running" : "unknown",
+        })),
+      });
+
+      const state = await readGatewayServiceState(service, {
+        env: { OPENCLAW_TASK_SCRIPT: configured },
+        requireEffective: true,
+        requireLoadedCommand,
+      });
+
+      expect(state).toMatchObject({
+        loadState: { status: "loaded" },
+        running: true,
+        env: { OPENCLAW_TASK_SCRIPT: expected },
+      });
+    },
+  );
+
   it.each(managerlessPreflightCases)(
     "handles managerless Linux inspection for $updateInstallKind restart=$shouldRestart ($condition)",
     async ({ updateInstallKind, shouldRestart, condition, portUsage, portSource }) => {
       const { maybeStopManagedServiceBeforeMutableUpdate } =
-        await import("../cli/update-cli/update-command-service.js");
+        await import("../cli/update-cli/update-command-service-maintenance.js");
       const home = await makeTempWorkspace("openclaw-managerless-preflight-");
       const keys = [
         "HOME",

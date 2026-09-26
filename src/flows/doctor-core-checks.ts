@@ -42,6 +42,7 @@ import { createAcpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
+import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import {
@@ -62,17 +63,10 @@ const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profil
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
-const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 const SKILL_WORKSHOP_RELOCATION_CHECK_ID = "core/doctor/skill-workshop-relocation";
-type CoreHealthCheckContext = HealthCheckContext & {
-  readonly deep?: boolean;
-};
-type CoreHealthRepairContext = HealthRepairContext & {
-  readonly deep?: boolean;
-};
 
 export type CoreHealthCheckDeps = {
   readonly detectUnavailableSkills: (
@@ -782,38 +776,6 @@ const telegramGeneralTopicConversationsCheck: HealthCheck = {
     return {
       changes: [`Merged ${repaired} stale Telegram General-topic conversation identity row(s).`],
       effects: repaired > 0 ? [effect] : [],
-    };
-  },
-};
-
-const gatewayServicesExtraCheck: HealthCheck = {
-  id: GATEWAY_SERVICES_EXTRA_CHECK_ID,
-  kind: "core",
-  description: "Extra gateway-like services are represented as structured findings.",
-  source: "doctor",
-  async detect(ctx) {
-    const coreCtx = ctx as CoreHealthCheckContext;
-    const { detectExtraGatewayServiceIssues, extraGatewayServiceToHealthFinding } =
-      await import("../commands/doctor-gateway-services.js");
-    return (await detectExtraGatewayServiceIssues({ deep: coreCtx.deep === true })).map(
-      extraGatewayServiceToHealthFinding,
-    );
-  },
-  async repair(ctx) {
-    const coreCtx = ctx as CoreHealthRepairContext;
-    const { detectExtraGatewayServiceIssues, extraGatewayServiceToRepairEffects } =
-      await import("../commands/doctor-gateway-services.js");
-    const effects = (
-      await detectExtraGatewayServiceIssues({ deep: coreCtx.deep === true })
-    ).flatMap(extraGatewayServiceToRepairEffects);
-    if (ctx.dryRun === true) {
-      return { status: "repaired", changes: [], effects };
-    }
-    return {
-      status: "skipped",
-      reason: "legacy doctor gateway service contribution owns cleanup",
-      changes: [],
-      effects,
     };
   },
 };

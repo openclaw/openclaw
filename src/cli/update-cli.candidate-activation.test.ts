@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { sanitizeTriageUpdateFailure } from "../commands/triage-update.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { UpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
@@ -539,10 +540,11 @@ describe("update-cli", () => {
       const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       const tempDir = tempDirs.make(`openclaw-update-stopped-loaded-${platform}-`);
       const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
-      primeServiceCommand(["node", entryPath, "gateway", "run"], {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      });
+      primeServiceCommand(
+        ["node", entryPath, "gateway", "run"],
+        { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
+        platform === "win32" ? resolveGatewayTaskScriptPath(process.env) : undefined,
+      );
       serviceLoaded.mockResolvedValue(true);
       serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
       mockFileBackedPathExists();

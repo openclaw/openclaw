@@ -132,8 +132,12 @@ export function findInstalledGatewayChildPid(
 
 async function resolveScheduledTaskNodeHostProcess(
   env: GatewayServiceEnv,
+  installedCommand?: GatewayServiceCommandConfig | null,
 ): Promise<{ pid: number; port: number } | null> {
-  const command = await readScheduledTaskCommand(env).catch(() => null);
+  const command =
+    installedCommand === undefined
+      ? await readScheduledTaskCommand(env).catch(() => null)
+      : installedCommand;
   const installedArguments = command?.programArguments;
   if (!installedArguments?.length) {
     return null;
@@ -458,10 +462,11 @@ export async function readBoundedScheduledTaskProcess(
 export async function resolveListenerBackedScheduledTaskRuntime(
   env: GatewayServiceEnv,
   deadlineMs?: number,
+  installedCommand?: GatewayServiceCommandConfig | null,
 ): Promise<Pick<GatewayServiceRuntime, "status" | "pid" | "detail"> | null> {
   if (deadlineMs !== undefined) {
     // Scheduler state remains authoritative without an exact running process.
-    const observed = await readBoundedScheduledTaskProcess(env, deadlineMs);
+    const observed = await readBoundedScheduledTaskProcess(env, deadlineMs, installedCommand);
     return observed?.pid
       ? {
           status: "running",
@@ -471,7 +476,7 @@ export async function resolveListenerBackedScheduledTaskRuntime(
       : null;
   }
   if (!shouldManageGatewayListenerPort(env)) {
-    const matched = await resolveScheduledTaskNodeHostProcess(env);
+    const matched = await resolveScheduledTaskNodeHostProcess(env, installedCommand);
     return matched
       ? {
           status: "running",
@@ -480,7 +485,10 @@ export async function resolveListenerBackedScheduledTaskRuntime(
         }
       : null;
   }
-  const command = await readScheduledTaskCommand(env).catch(() => null);
+  const command =
+    installedCommand === undefined
+      ? await readScheduledTaskCommand(env).catch(() => null)
+      : installedCommand;
   const context = {
     port: resolveScheduledTaskCommandPort(env, command),
   };

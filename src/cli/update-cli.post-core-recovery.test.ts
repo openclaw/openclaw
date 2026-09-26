@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
 import {
   expectNoSideEffects,
@@ -69,7 +70,11 @@ describe("update-cli", () => {
       const entryPath = path.join(root, "dist", "index.js");
       vi.mocked(resolveGatewayInstallEntrypoint).mockReset().mockResolvedValue(entryPath);
       serviceLoaded.mockResolvedValue(true);
-      primeServiceCommand(["node", entryPath, "gateway", "run"]);
+      primeServiceCommand(
+        ["node", entryPath, "gateway", "run"],
+        undefined,
+        resolveGatewayTaskScriptPath(process.env),
+      );
       pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
       if (previousPluginError) {
         callGateway.mockImplementation(

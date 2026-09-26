@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
   createMockGatewayService,
@@ -136,6 +137,7 @@ it.each([
               },
               readCommand: async () => ({
                 programArguments,
+                sourcePath: resolveGatewayTaskScriptPath(process.env),
                 environment: { HOME: home },
               }),
               readRuntime: async () => ({ status: running ? "running" : "stopped" }),

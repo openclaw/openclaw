@@ -7,16 +7,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   detectMarkerLineWithGateway,
   findExtraGatewayServices,
+  findSystemGatewayServices,
   renderGatewayServiceCleanupHints,
 } from "./inspect.js";
-
-const { execSchtasksMock } = vi.hoisted(() => ({
-  execSchtasksMock: vi.fn(),
-}));
-
-vi.mock("./schtasks-exec.js", () => ({
-  execSchtasks: (...args: unknown[]) => execSchtasksMock(...args),
-}));
 
 const nativePlistHost = vi.hoisted(() => process.platform === "darwin");
 vi.mock("../process/exec.js", async (importOriginal) => {
@@ -213,7 +206,7 @@ describe("renderGatewayServiceCleanupHints", () => {
     ).toEqual([firstHint, secondHint]);
   });
 
-  it("targets the detected Windows scheduled task", () => {
+  it("inspects the detected Windows scheduled task without suggesting removal", () => {
     expect(
       renderGatewayServiceCleanupHints([
         {
@@ -223,7 +216,7 @@ describe("renderGatewayServiceCleanupHints", () => {
           scope: "system",
         },
       ]),
-    ).toEqual(['schtasks /Delete /TN "\\OpenClaw Gateway Backup" /F']);
+    ).toEqual(['schtasks /Query /TN "\\OpenClaw Gateway Backup" /V /FO LIST']);
   });
 
   it.each(["$(Start-Process calc)", "%OPENCLAW_GATEWAY_TASK%", "unsafe&task", "task`name"])(
@@ -267,7 +260,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
     await fs.mkdir(systemdDir, { recursive: true });
     await fs.writeFile(path.join(systemdDir, "openclaw-test.service"), TEST_SERVICE_CONTENTS);
     const result = await findExtraGatewayServices({ HOME: tmpHome });
-    expect(result).toStrictEqual([]);
+    expect(result).toStrictEqual({ services: [], errors: [] });
   });
 
   it.skipIf(!isLinux)(
@@ -281,7 +274,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
         GATEWAY_SERVICE_CONTENTS,
       );
       const result = await findExtraGatewayServices({ HOME: tmpHome });
-      expect(result).toStrictEqual([]);
+      expect(result).toStrictEqual({ services: [], errors: [] });
     },
   );
 
@@ -294,7 +287,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
       await fs.mkdir(systemdDir, { recursive: true });
       await fs.writeFile(unitPath, CLAWDBOT_GATEWAY_CONTENTS);
       const result = await findExtraGatewayServices({ HOME: tmpHome });
-      expect(result).toEqual([
+      expect(result.services).toEqual([
         {
           platform: "linux",
           label: "clawdbot-gateway.service",
@@ -316,7 +309,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
 
     const result = await findExtraGatewayServices({ HOME: tmpHome });
 
-    expect(result).toEqual([
+    expect(result.services).toEqual([
       {
         platform: "linux",
         label: "clawdbot-gateway.service",
@@ -338,7 +331,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
 
     const result = await findExtraGatewayServices({ HOME: tmpHome });
 
-    expect(result).toEqual([
+    expect(result.services).toEqual([
       {
         platform: "linux",
         label: "clawdbot-gateway.service",
@@ -361,7 +354,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
         COMPANION_SERVICE_CONTENTS,
       );
       const result = await findExtraGatewayServices({ HOME: tmpHome });
-      expect(result).toStrictEqual([]);
+      expect(result).toStrictEqual({ services: [], errors: [] });
     },
   );
 
@@ -377,7 +370,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
         CUSTOM_OPENCLAW_GATEWAY_CONTENTS.replace("ExecStart=", `${comment}ExecStart=`),
       );
       const result = await findExtraGatewayServices({ HOME: tmpHome });
-      expect(result).toEqual([
+      expect(result.services).toEqual([
         {
           platform: "linux",
           label: "custom-openclaw.service",
@@ -422,7 +415,7 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
 </dict></plist>`,
     );
     const result = await findExtraGatewayServices({ HOME: tmpHome });
-    expect(result).toStrictEqual([]);
+    expect(result).toStrictEqual({ services: [], errors: [] });
   });
 
   it("does not report LaunchAgent companions that only pass gateway-named options", async () => {
@@ -438,7 +431,7 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
 </dict></plist>`,
     );
     const result = await findExtraGatewayServices({ HOME: tmpHome });
-    expect(result).toStrictEqual([]);
+    expect(result).toStrictEqual({ services: [], errors: [] });
   });
 
   it("does not report non-gateway LaunchAgents that mention clawdbot in environment values", async () => {
@@ -455,7 +448,37 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
 </dict></plist>`,
     );
     const result = await findExtraGatewayServices({ HOME: tmpHome });
-    expect(result).toStrictEqual([]);
+    expect(result).toStrictEqual({ services: [], errors: [] });
+  });
+
+  it("reports a malformed recognizable plist without inventing a cleanup target", async () => {
+    const tmpHome = tempDirs.make("openclaw-test-", os.tmpdir());
+    const launchdDir = path.join(tmpHome, "Library", "LaunchAgents");
+    const plistPath = path.join(launchdDir, "ai.openclaw.backup.plist");
+    await fs.mkdir(launchdDir, { recursive: true });
+    await fs.writeFile(plistPath, "not a plist");
+
+    const result = await findExtraGatewayServices({ HOME: tmpHome });
+
+    expect(result).toEqual({
+      services: [],
+      errors: [{ source: plistPath, message: expect.stringContaining("could not be inspected") }],
+    });
+    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([]);
+  });
+
+  it("reports a service directory read failure as incomplete inspection", async () => {
+    const tmpHome = tempDirs.make("openclaw-test-", os.tmpdir());
+    const launchdDir = path.join(tmpHome, "Library", "LaunchAgents");
+    await fs.mkdir(path.dirname(launchdDir), { recursive: true });
+    await fs.writeFile(launchdDir, "not a directory");
+
+    const result = await findExtraGatewayServices({ HOME: tmpHome });
+
+    expect(result).toEqual({
+      services: [],
+      errors: [{ source: launchdDir, message: expect.stringContaining("could not be inspected") }],
+    });
   });
 
   it("reports custom LaunchAgents that execute openclaw gateway", async () => {
@@ -472,7 +495,7 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
 </dict></plist>`,
     );
     const result = await findExtraGatewayServices({ HOME: tmpHome });
-    expect(result).toEqual([
+    expect(result.services).toEqual([
       {
         platform: "darwin",
         label: "com.example.openclaw-gateway",
@@ -482,110 +505,382 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
         legacy: false,
       },
     ]);
-    expect(renderGatewayServiceCleanupHints(result)).toEqual([
+    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([
       "launchctl bootout gui/$UID/com.example.openclaw-gateway",
       `rm ${plistPath}`,
     ]);
   });
 });
 
-describe("findExtraGatewayServices (win32)", () => {
+describe("Gateway inventory projections", () => {
   const originalPlatform = process.platform;
 
-  beforeEach(() => {
-    Object.defineProperty(process, "platform", {
-      configurable: true,
-      value: "win32",
-    });
-    execSchtasksMock.mockReset();
-  });
-
   afterEach(() => {
-    Object.defineProperty(process, "platform", {
-      configurable: true,
-      value: originalPlatform,
-    });
+    vi.restoreAllMocks();
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
   });
 
-  it("skips schtasks queries unless deep mode is enabled", async () => {
-    const result = await findExtraGatewayServices({});
-    expect(result).toStrictEqual([]);
-    expect(execSchtasksMock).not.toHaveBeenCalled();
-  });
-
-  it("returns empty results when schtasks query fails", async () => {
-    execSchtasksMock.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr: "error",
+  function isolateNativeRoots(home: string) {
+    const roots = [
+      "/etc/systemd/system",
+      "/usr/lib/systemd/system",
+      "/lib/systemd/system",
+      "/Library/LaunchAgents",
+      "/Library/LaunchDaemons",
+    ].map((root) => path.normalize(root));
+    const mapPath = (value: string) => {
+      const normalized = path.normalize(value);
+      return roots.some(
+        (root) => normalized === root || normalized.startsWith(`${root}${path.sep}`),
+      )
+        ? path.join(home, "native", normalized.slice(path.parse(normalized).root.length))
+        : value;
+    };
+    const readdir = fs.readdir;
+    const readFile = fs.readFile;
+    vi.spyOn(fs, "readdir").mockImplementation((...args: Parameters<typeof fs.readdir>) => {
+      if (typeof args[0] === "string") {
+        args[0] = mapPath(args[0]);
+      }
+      return readdir(...args);
     });
-
-    const result = await findExtraGatewayServices({}, { deep: true });
-    expect(result).toStrictEqual([]);
-  });
-
-  it("collects only non-openclaw marker tasks from schtasks output", async () => {
-    // Real schtasks /Query /FO LIST /V output prefixes root-folder task
-    // names with a backslash (e.g. TaskName:\OpenClaw Gateway).
-    execSchtasksMock.mockResolvedValueOnce({
-      code: 0,
-      stdout: [
-        "TaskName:\\OpenClaw Gateway",
-        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
-        "",
-        "TaskName: Clawdbot Legacy",
-        "Task To Run: C:\\clawdbot\\clawdbot.exe run",
-        "",
-        "TaskName: Other Task",
-        "Task To Run: C:\\tools\\helper.exe",
-        "",
-      ].join("\n"),
-      stderr: "",
+    vi.spyOn(fs, "readFile").mockImplementation((...args: Parameters<typeof fs.readFile>) => {
+      if (typeof args[0] === "string") {
+        args[0] = mapPath(args[0]);
+      }
+      return readFile(...args);
     });
+    return async (file: string, contents: string) => {
+      const target = mapPath(file);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, contents);
+    };
+  }
 
-    const result = await findExtraGatewayServices({}, { deep: true });
-    // The \OpenClaw Gateway task is the live launcher — it must be skipped.
-    // Only the unrelated clawdbot task should be flagged.
-    expect(result).toEqual([
-      {
-        platform: "win32",
-        label: "Clawdbot Legacy",
-        detail: "task: Clawdbot Legacy, run: C:\\clawdbot\\clawdbot.exe run",
-        scope: "system",
-        marker: "clawdbot",
-        legacy: true,
-      },
+  it.each([
+    ["literal", "Environment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway", true],
+    [
+      "spaced",
+      "Environment = OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway",
+      true,
+    ],
+    [
+      "tabbed",
+      "Environment\t=\tOPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway",
+      true,
+    ],
+    [
+      "reset",
+      "Environment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway\nEnvironment = ",
+      false,
+    ],
+    [
+      "last Node kind",
+      "Environment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway\nEnvironment = OPENCLAW_SERVICE_KIND=node",
+      false,
+    ],
+    [
+      "other section",
+      "[Unit]\nEnvironment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway",
+      false,
+    ],
+    [
+      "wrong directive case",
+      "environment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway",
+      false,
+    ],
+    [
+      "legacy marker",
+      "Environment=OPENCLAW_SERVICE_MARKER=clawdbot OPENCLAW_SERVICE_KIND=gateway",
+      false,
+    ],
+  ] as const)(
+    "uses %s inline metadata for an unbranded systemd command",
+    async (_name, metadata, included) => {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      const home = tempDirs.make("systemd-inline-metadata-", os.tmpdir());
+      const write = isolateNativeRoots(home);
+      await write(
+        "/etc/systemd/system/custom.service",
+        `[Service]\nExecStart = /usr/bin/node /srv/worker/dist/entry.js gateway run\n${metadata}\n`,
+      );
+
+      expect(await findSystemGatewayServices()).toEqual(
+        included
+          ? [
+              expect.objectContaining({
+                label: "custom.service",
+                marker: "openclaw",
+                legacy: false,
+              }),
+            ]
+          : [],
+      );
+    },
+  );
+
+  it("filters managed systemd Gateways and authenticated Nodes while preserving extras and inspection errors", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    const home = tempDirs.make("managed-systemd-", os.tmpdir());
+    const write = isolateNativeRoots(home);
+    const userDir = path.join(home, ".config/systemd/user");
+    for (const name of ["openclaw-gateway", "openclaw-gateway-dev", "rescue"]) {
+      await write(path.join(userDir, `${name}.service`), CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+    }
+    await write("/etc/systemd/system/openclaw@.service", CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+    await write("/usr/lib/systemd/system/vendor-gateway.service", CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+    await write(
+      path.join(userDir, "openclaw-node.service"),
+      '[Service]\nExecStart=/usr/bin/openclaw node run\nEnvironment="OPENCLAW_SERVICE_MARKER=openclaw" "OPENCLAW_SERVICE_KIND=node" "OPENCLAW_GATEWAY_TOKEN=synthetic-token"\n',
+    );
+    for (const [name, args] of [
+      ["named-node", 'node run --display-name "Home Gateway"'],
+      ["exact-node", "node run --display-name gateway"],
+      ["profile-node", "--profile gateway node run"],
+    ]) {
+      await write(
+        path.join(userDir, `${name}.service`),
+        `[Service]\nExecStart=/usr/bin/node /opt/openclaw/openclaw.mjs ${args}\n`,
+      );
+    }
+    await write(
+      path.join(userDir, "runtime-options.service"),
+      "[Service]\nExecStart=/usr/bin/node -C development --import /opt/bootstrap.mjs /opt/clawdbot/dist/entry.js --profile rescue gateway run\n",
+    );
+    await write(path.join(userDir, "clawdbot-gateway.service"), CLAWDBOT_GATEWAY_CONTENTS);
+    await write(
+      path.join(userDir, "shell.service"),
+      `[Service]\nExecStart=/bin/sh -c 'NODE_ENV=production exec /usr/bin/openclaw --profile rescue gateway run'\n`,
+    );
+    await write(
+      path.join(userDir, "shell-node.service"),
+      `[Service]\nExecStart=/bin/sh -c 'exec /usr/bin/openclaw node run --display-name "Home Gateway"'\n`,
+    );
+    await write(
+      path.join(userDir, "env.service"),
+      "[Service]\nExecStart=/usr/bin/env NODE_ENV=production node /opt/clawdbot/dist/entry.js gateway run\n",
+    );
+    await write("/lib/systemd/system", "unreadable service directory");
+
+    const extras = await findExtraGatewayServices({ HOME: home }, { deep: true });
+
+    expect(extras.services.map((service) => service.label).toSorted()).toEqual([
+      "clawdbot-gateway.service",
+      "env.service",
+      "openclaw@.service",
+      "rescue.service",
+      "runtime-options.service",
+      "shell.service",
+      "vendor-gateway.service",
     ]);
+    expect(extras.errors).toEqual([
+      { source: "/lib/systemd/system", message: expect.stringContaining("could not be inspected") },
+    ]);
+    for (const service of extras.services) {
+      expect(service).not.toHaveProperty("extra");
+    }
   });
 
-  it("reports duplicate root tasks that only share the gateway task prefix", async () => {
-    execSchtasksMock.mockResolvedValueOnce({
-      code: 0,
-      stdout: [
-        "TaskName:\\OpenClaw Gateway",
-        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
-        "",
-        "TaskName:\\OpenClaw Gateway (dev)",
-        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run --profile dev",
-        "",
-        "TaskName:\\OpenClaw Gateway Backup",
-        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
-        "",
-      ].join("\n"),
-      stderr: "",
-    });
+  it.each([
+    {
+      name: "default",
+      label: "ai.openclaw.gateway",
+      env: {},
+      executable: "/usr/bin/openclaw",
+      metadata: "",
+    },
+    {
+      name: "named profile",
+      label: "ai.openclaw.rescue",
+      env: { OPENCLAW_PROFILE: "rescue" },
+      executable: "/usr/bin/openclaw",
+      metadata: "",
+    },
+    {
+      name: "custom managed label",
+      label: "org.example.rescue",
+      env: { OPENCLAW_LAUNCHD_LABEL: "org.example.rescue" },
+      executable: "/usr/bin/worker",
+      metadata:
+        "<key>EnvironmentVariables</key><dict><key>OPENCLAW_SERVICE_MARKER</key><string>openclaw</string><key>OPENCLAW_SERVICE_KIND</key><string>gateway</string></dict>",
+    },
+  ])(
+    "reports global copies of the $name user LaunchAgent",
+    async ({ label, env, executable, metadata }) => {
+      Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+      const home = tempDirs.make("launchd-global-copies-", os.tmpdir());
+      const write = isolateNativeRoots(home);
+      const plist = `<plist><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array><string>${executable}</string><string>gateway</string></array>${metadata}</dict></plist>`;
+      const globalPaths = [
+        `/Library/LaunchAgents/${label}.plist`,
+        `/Library/LaunchDaemons/${label}.plist`,
+      ];
+      for (const file of [
+        path.join(home, "Library/LaunchAgents", `${label}.plist`),
+        ...globalPaths,
+      ]) {
+        await write(file, plist);
+      }
 
-    const result = await findExtraGatewayServices({}, { deep: true });
-    expect(result).toEqual([
-      {
-        platform: "win32",
-        label: "\\OpenClaw Gateway Backup",
-        detail:
-          "task: \\OpenClaw Gateway Backup, run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
-        scope: "system",
-        marker: "openclaw",
-        legacy: false,
-      },
+      const inventory = await findExtraGatewayServices({ HOME: home, ...env }, { deep: true });
+
+      expect(inventory).toEqual({
+        services: globalPaths.map((file) => ({
+          platform: "darwin",
+          label,
+          detail: `plist: ${file}`,
+          scope: "system",
+          marker: "openclaw",
+          legacy: false,
+        })),
+        errors: [],
+      });
+    },
+  );
+
+  it("reports global and custom launchd extras without admitting authenticated Node jobs", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    const home = tempDirs.make("managed-launchd-", os.tmpdir());
+    const write = isolateNativeRoots(home);
+    const userDir = path.join(home, "Library/LaunchAgents");
+    const plist = (label: string, executable = "openclaw", command = "gateway") =>
+      `<plist><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array><string>/usr/bin/${executable}</string><string>${command}</string></array></dict></plist>`;
+    for (const label of ["ai.openclaw.gateway", "ai.openclaw.gateway.dev", "org.example.rescue"]) {
+      await write(path.join(userDir, `${label}.plist`), plist(label));
+    }
+    await write("/Library/LaunchAgents/org.example.global.plist", plist("org.example.global"));
+    await write("/Library/LaunchDaemons/ai.openclaw.gateway.plist", plist("ai.openclaw.gateway"));
+    for (const [label, args] of [
+      [
+        "org.example.shell",
+        [
+          "/bin/sh",
+          "-c",
+          "NODE_ENV=production exec /usr/bin/openclaw --profile rescue gateway run",
+        ],
+      ],
+      [
+        "org.example.env",
+        ["/usr/bin/env", "NODE_ENV=production", "node", "/opt/openclaw/openclaw.mjs", "gateway"],
+      ],
+      [
+        "org.example.shell-node",
+        ["/bin/sh", "-c", 'exec /usr/bin/openclaw node run --display-name "Home Gateway"'],
+      ],
+      [
+        "org.example.named-node",
+        [
+          "/usr/bin/node",
+          "/opt/openclaw/openclaw.mjs",
+          "node",
+          "run",
+          "--display-name",
+          "Home Gateway",
+        ],
+      ],
+      [
+        "org.example.wrapped",
+        [
+          "/bin/sh",
+          "/opt/service-env/rescue-env-wrapper.sh",
+          "/opt/service-env/rescue.env",
+          "/usr/bin/node",
+          "--import",
+          "/opt/bootstrap.mjs",
+          "/opt/openclaw/openclaw.mjs",
+          "--profile",
+          "rescue",
+          "gateway",
+        ],
+      ],
+      [
+        "org.example.direct-wrapper",
+        [
+          "/opt/service-env/rescue-env-wrapper.sh",
+          "/opt/service-env/rescue.env",
+          "/usr/bin/openclaw",
+          "gateway",
+        ],
+      ],
+      [
+        "org.example.wrapped-node",
+        [
+          "/bin/sh",
+          "/opt/service-env/rescue-env-wrapper.sh",
+          "/opt/service-env/rescue.env",
+          "/usr/bin/openclaw",
+          "node",
+          "run",
+          "--display-name",
+          "gateway",
+        ],
+      ],
+      [
+        "org.example.direct-wrapped-node",
+        [
+          "/opt/service-env/rescue-env-wrapper.sh",
+          "/opt/service-env/rescue.env",
+          "/usr/bin/openclaw",
+          "--profile",
+          "gateway",
+          "node",
+          "run",
+        ],
+      ],
+    ] as const) {
+      await write(
+        path.join(userDir, `${label}.plist`),
+        `<plist><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array>${args.map((arg) => `<string>${arg}</string>`).join("")}</array></dict></plist>`,
+      );
+    }
+    await write(
+      path.join(userDir, "org.example.program.plist"),
+      plist("org.example.program", "alias").replace(
+        "<key>ProgramArguments</key>",
+        "<key>Program</key><string>/usr/bin/openclaw</string><key>ProgramArguments</key>",
+      ),
+    );
+    await write(
+      path.join(userDir, "org.example.argv-alias.plist"),
+      plist("org.example.argv-alias").replace(
+        "<key>ProgramArguments</key>",
+        "<key>Program</key><string>/usr/bin/node</string><key>ProgramArguments</key>",
+      ),
+    );
+    await write(
+      "/Library/LaunchDaemons/ai.openclaw.node.plist",
+      plist("ai.openclaw.node", "openclaw", "node").replace(
+        "</dict>",
+        "<key>EnvironmentVariables</key><dict><key>OPENCLAW_SERVICE_MARKER</key><string>openclaw</string><key>OPENCLAW_SERVICE_KIND</key><string>node</string><key>OPENCLAW_GATEWAY_TOKEN</key><string>synthetic-token</string></dict></dict>",
+      ),
+    );
+    await write(
+      path.join(userDir, "com.clawdbot.gateway.plist"),
+      plist("com.clawdbot.gateway", "clawdbot"),
+    );
+    const unreadable = path.join(userDir, "ai.openclaw.broken.plist");
+    await write(unreadable, "malformed plist");
+
+    const extras = await findExtraGatewayServices({ HOME: home }, { deep: true });
+
+    expect(
+      extras.services.map((service) => `${service.scope}:${service.label}`).toSorted(),
+    ).toEqual([
+      "system:ai.openclaw.gateway",
+      "system:org.example.global",
+      "user:com.clawdbot.gateway",
+      "user:org.example.direct-wrapper",
+      "user:org.example.env",
+      "user:org.example.program",
+      "user:org.example.rescue",
+      "user:org.example.shell",
+      "user:org.example.wrapped",
     ]);
+    expect(extras.errors).toEqual([
+      { source: unreadable, message: expect.stringContaining("could not be inspected") },
+    ]);
+    for (const service of extras.services) {
+      expect(service).not.toHaveProperty("extra");
+    }
   });
 });

@@ -51,6 +51,16 @@ describe("resolveGatewayNativeServiceIdentityConflict", () => {
       envKey: "OPENCLAW_WINDOWS_TASK_NAME",
       value: "OpenClaw Gateway",
     },
+    {
+      platform: "win32" as const,
+      envKey: "OPENCLAW_WINDOWS_TASK_NAME",
+      value: "\\Nested\\OpenClaw Gateway (work)",
+    },
+    {
+      platform: "win32" as const,
+      envKey: "OPENCLAW_WINDOWS_TASK_NAME",
+      value: "\\OpenClaw Gateway (other)",
+    },
   ])("rejects $envKey overrides for named profiles on $platform", ({ platform, envKey, value }) => {
     expect(
       resolveGatewayNativeServiceIdentityConflict(
@@ -60,19 +70,31 @@ describe("resolveGatewayNativeServiceIdentityConflict", () => {
     ).toMatchObject({ envKey });
   });
 
-  it("accepts canonical named-profile identities and default-profile overrides", () => {
-    expect(
-      resolveGatewayNativeServiceIdentityConflict(
-        { OPENCLAW_PROFILE: "work", OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-work" },
-        "linux",
-      ),
-    ).toBeNull();
-    expect(
-      resolveGatewayNativeServiceIdentityConflict(
-        { OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service" },
-        "linux",
-      ),
-    ).toBeNull();
+  it.each([
+    {
+      name: "canonical named-profile systemd identity",
+      platform: "linux",
+      env: { OPENCLAW_PROFILE: "work", OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-work" },
+    },
+    {
+      name: "default-profile systemd override",
+      platform: "linux",
+      env: { OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service" },
+    },
+    ...["OpenClaw Gateway (work)", "\\OpenClaw Gateway (work)", "\\OPENCLAW GATEWAY (WORK)"].map(
+      (taskName) => ({
+        name: `native Windows identity ${taskName}`,
+        platform: "win32" as const,
+        env: { OPENCLAW_PROFILE: "work", OPENCLAW_WINDOWS_TASK_NAME: taskName },
+      }),
+    ),
+    {
+      name: "default-profile nested Windows override",
+      platform: "win32",
+      env: { OPENCLAW_WINDOWS_TASK_NAME: "\\Nested\\Custom Gateway" },
+    },
+  ] as const)("accepts $name", ({ env, platform }) => {
+    expect(resolveGatewayNativeServiceIdentityConflict(env, platform)).toBeNull();
   });
 });
 

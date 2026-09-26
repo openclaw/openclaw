@@ -587,6 +587,8 @@ it.each(["canonical-wrapper", "legacy-wrapper", "malformed-args", "wrapper", "me
 
 it.each([
   "canonical",
+  "released-waiting",
+  "released-waiting-custom",
   "script",
   "launcher",
   "metadata",
@@ -596,6 +598,7 @@ it.each([
   "custom-script",
   "native-defaults",
 ])("checks generated Scheduled Task %s before a rewrite", async (kind) => {
+  const releasedWaiting = kind.startsWith("released-waiting");
   const home = dirs.make("rewrite-task-preservation-");
   const env = {
     USERPROFILE: home,
@@ -604,6 +607,9 @@ it.each([
     ...(kind === "custom-script" ? { OPENCLAW_TASK_SCRIPT_NAME: "gateway.bat" } : {}),
   };
   const environment: Record<string, string> = { ...staleServiceEnvironment };
+  if (releasedWaiting) {
+    environment.OPENCLAW_SERVICE_VERSION = "2026.9.3";
+  }
   if (kind === "path") {
     environment.PATH = "C:\\operator-private";
   }
@@ -621,8 +627,10 @@ it.each([
     buildTaskScript(command) +
     (kind === "script" ? "echo operator-private\r\n" : "");
   const launcher =
-    buildHiddenLauncherScript({ scriptPath, taskSupervisor: true }) +
-    (kind === "launcher" || kind === "planned-launcher"
+    (releasedWaiting
+      ? `' OpenClaw Gateway (v2026.9.3)\r\nWScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath.replaceAll('"', '""')}""", 0, True)\r\n`
+      : buildHiddenLauncherScript({ scriptPath, taskSupervisor: true })) +
+    (kind === "launcher" || kind === "planned-launcher" || kind === "released-waiting-custom"
       ? 'WScript.Echo "operator-private"\r\n'
       : "");
   await fs.writeFile(scriptPath, script);
@@ -664,8 +672,18 @@ it.each([
       environment: { ...environment, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" },
     },
   });
-  if (kind === "canonical" || kind === "missing-launcher" || kind === "custom-script") {
+  if (
+    kind === "canonical" ||
+    kind === "released-waiting" ||
+    kind === "missing-launcher" ||
+    kind === "custom-script"
+  ) {
     expect(result.definitionDrift).toBeUndefined();
+  } else if (kind === "script") {
+    expect(result.definitionDrift).toBeUndefined();
+    expect(result.definitionDriftError).toBe(
+      "Service definition inspection could not be completed.",
+    );
   } else if (kind === "native-defaults") {
     expect(result.definitionDrift).toEqual(
       expect.arrayContaining([
@@ -695,18 +713,18 @@ it.each([
       expect.objectContaining({
         kind: "unknown-edit",
         key:
-          kind === "script"
-            ? "TaskScript"
-            : kind === "launcher" || kind === "planned-launcher"
-              ? "TaskLauncher"
-              : kind === "path"
-                ? "Environment.PATH"
-                : "RegistrationInfo.Description",
+          kind === "launcher" || kind === "planned-launcher" || kind === "released-waiting-custom"
+            ? "TaskLauncher"
+            : kind === "path"
+              ? "Environment.PATH"
+              : "RegistrationInfo.Description",
       }),
     );
     expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
   }
-  expect(result.definitionDriftError).toBeUndefined();
+  if (kind !== "script") {
+    expect(result.definitionDriftError).toBeUndefined();
+  }
   expect(await fs.readFile(scriptPath, "utf8")).toBe(script);
   if (kind === "missing-launcher") {
     await expect(fs.stat(hiddenPath)).rejects.toMatchObject({ code: "ENOENT" });

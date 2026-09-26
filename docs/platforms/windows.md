@@ -169,6 +169,13 @@ regenerate the launcher if the update did not refresh it.
 
 Gateway status and Doctor read the Scheduled Task's numeric current state, independently of the Windows display language or console code page. A previous task exit result does not prove whether it is running now. Queued or unknown tasks do not count as safely stopped for Doctor maintenance. Stop a queued task through its service owner; if inspection is inaccessible, restore Task Scheduler inspection permissions before retrying.
 
+Strict maintenance inspection follows the task's registered CMD or VBS launcher, or a directly registered executable with literal arguments, and rechecks its captured definition before using the result. Runtime inspection uses that registered command rather than a default launcher. Direct executable inspection does not grant ownership to rewrite the executable or its task definition. Automatic update service management still reports these custom actions as unavailable and leaves them untouched because it cannot restore a managed launcher; environment expansion and ambiguous argument quoting remain uninspectable. Deep discovery identifies OpenClaw and legacy helpers from executable or launcher evidence; an unrelated task's display name alone does not identify a service. Canonical and selected task names suppress extra-service findings only when the registered action is a modern Gateway; legacy and Node actions remain visible. Doctor reports incomplete inspection separately from services eligible for existing cleanup.
+
+Doctor and deep status provide read-only `schtasks /Query` hints for extra Scheduled Tasks, including Node hosts. Discovery shares one 60-second budget across the inventory query and launcher inspection. If it expires, completed discoveries remain available and Doctor reports that some services could not be inspected. Review the registered command and purpose before choosing removal through the service's owner.
+
+Doctor recognizes the waiting VBS launcher shipped with 2026.9.3 during an owned
+service refresh. Custom launcher behavior still preserves the existing definition.
+
 Doctor compares task definitions using Task Scheduler's defaults. An omitted
 `Enabled` element means `true` for both the task and its logon trigger, so XML
 export differences do not cause drift warnings or failed refresh verification.
@@ -177,11 +184,19 @@ Explicitly disabled tasks and triggers are still reported.
 The task probe allows Windows PowerShell to inherit or create a console because
 some PowerShell 5.1 hosts fail inspection when console creation is disabled.
 Invoking it from an app without a console can briefly display a console window.
+Without an explicit caller deadline, each probe allows up to 60 seconds for
+PowerShell's cold startup. Registration inspection uses the same native probe
+and shares its budget with any Startup-folder checks. Explicit inspection
+budgets replace the default allowance. Direct lifecycle commands retain their
+existing limits. Access-denied and timeout results remain inspection failures,
+not proof that a task is absent.
 If inspection fails, Doctor and update refusals include the underlying probe
 detail; an empty response identifies the exit code and reports that PowerShell
 produced no output.
 
-During previous-Gateway readiness verification, each Scheduled Task runtime probe allows at most five seconds, or the shorter remaining budget. Other service inspections retain their caller's budget, including the longer allowance for verifying that a runtime rebuild is safe. Update preflight retries a timed-out probe once and reports the enforced probe budget. If ownership remains unverified, it skips service changes with a warning; losing verified ownership after admission blocks the service mutation.
+During previous-Gateway readiness verification, each Scheduled Task runtime probe allows at most five seconds, or the shorter remaining budget. Other service inspections retain their caller's budget, including the longer allowance for verifying that a runtime rebuild is safe.
+
+During update preflight, Scheduled Task inspection uses the update's `--timeout` budget. A registration or runtime timeout retries the complete strict inspection once. If inspection remains unavailable, the update reports the enforced budget and probe detail, preserves the recorded service definition, and skips automatic service restart. Inspect the service with `openclaw gateway status --deep`, then restart it manually after the update. Losing verified ownership after admission blocks the service mutation.
 
 Gateway startup creates private SQLite staging directories through Windows APIs,
 without compiling C# or launching PowerShell for their permissions. The owner,

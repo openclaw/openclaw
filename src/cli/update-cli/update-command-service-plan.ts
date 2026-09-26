@@ -227,6 +227,11 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
       ? { kind: "absent" }
       : unavailable();
   }
+  // Direct Windows actions are readable, but the updater cannot restore them
+  // through its managed CMD/VBS definition and control owners.
+  if (process.platform === "win32" && !command.sourcePath) {
+    return unavailable();
+  }
   if (
     !params.allowIncompleteInspection &&
     (state.loadState.status === "unknown" ||

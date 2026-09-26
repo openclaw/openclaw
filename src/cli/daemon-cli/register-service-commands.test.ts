@@ -371,6 +371,29 @@ describe("addGatewayServiceCommands", () => {
     expect(expectSingleDaemonCall(runner).json).toBe(true);
   });
 
+  it.each(
+    ["gateway", "daemon"].flatMap((name) =>
+      [undefined, "10000", "200"].map((timeout) => ({ name, timeout })),
+    ),
+  )(
+    "preserves $name status timeout $timeout without inventing an explicit value",
+    async ({ name, timeout }) => {
+      const program = new Command().enablePositionalOptions().exitOverride();
+      if (name === "daemon") {
+        registerDaemonCli(program);
+      } else {
+        createGatewayParentLikeCommand(program);
+      }
+
+      await program.parseAsync(
+        [name, "status", ...(timeout === undefined ? [] : ["--timeout", timeout])],
+        { from: "user" },
+      );
+
+      expect(expectSingleDaemonCall(runDaemonStatus).rpc).toHaveProperty("timeout", timeout);
+    },
+  );
+
   it("inherits an explicit parent port instead of a status leaf default", async () => {
     const gateway = createGatewayParentLikeCommand().enablePositionalOptions();
     const status = gateway.commands.find((command) => command.name() === "status")!;

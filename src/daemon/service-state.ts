@@ -70,17 +70,24 @@ export async function readGatewayServiceState(
   const inspectionDeadline = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
   let args = { ...input, timeoutMs };
   const baseEnv = args.env ?? process.env;
+  const supplied = args.systemdInstallation;
+  const selected = supplied?.kind === "system" || supplied?.kind === "user" ? supplied : undefined;
   try {
-    if (service.readCommand === readSystemdServiceExecStart && !args.systemdReadTarget) {
+    if (
+      !args.systemdReadTarget &&
+      (selected || service.readCommand === readSystemdServiceExecStart)
+    ) {
       if (inspectionDeadline !== undefined && performance.now() >= inspectionDeadline) {
         throw new ServiceInspectionDeadlineError();
       }
-      const installation = await findSystemdGatewayInstallation(baseEnv, {
-        requireLoaded: args.requireLoadedCommand,
-        loadForInspection: args.loadForInspection,
-        timeoutMs:
-          inspectionDeadline === undefined ? undefined : inspectionDeadline - performance.now(),
-      });
+      const installation =
+        selected ??
+        (await findSystemdGatewayInstallation(baseEnv, {
+          requireLoaded: args.requireLoadedCommand,
+          loadForInspection: args.loadForInspection,
+          timeoutMs:
+            inspectionDeadline === undefined ? undefined : inspectionDeadline - performance.now(),
+        }));
       if (installation.kind === "dueling" && args.requireEffective && args.requireLoadedCommand) {
         throw new ServiceOwnershipRefusalError("systemd-competing-managers");
       }
@@ -224,12 +231,16 @@ async function readGatewayServiceStateWithBinding(
             }
             return null;
           });
-  const env = mergeGatewayServiceEnv(
+  const mergedEnv = mergeGatewayServiceEnv(
     systemdReadTarget?.scope === "system" && !resolveGatewayProfileSuffix(baseEnv.OPENCLAW_PROFILE)
       ? { ...baseEnv, OPENCLAW_SYSTEMD_UNIT: systemdReadTarget.unitName }
       : baseEnv,
     command,
   );
+  const env =
+    process.platform === "win32" && args.requireLoadedCommand && command?.sourcePath
+      ? { ...mergedEnv, OPENCLAW_TASK_SCRIPT: command.sourcePath }
+      : mergedEnv;
   // Reject persisted selector drift before invoking the native service manager.
   args.validateEnvBeforeStatusRead?.(env);
   // Strict user-unit absence still needs the platform owner's system-scope proof.

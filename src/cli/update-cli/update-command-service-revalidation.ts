@@ -1,4 +1,7 @@
-import { resolveGatewayProfileSuffix } from "../../daemon/constants.js";
+import {
+  normalizeWindowsTaskIdentity,
+  resolveGatewayProfileSuffix,
+} from "../../daemon/constants.js";
 import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import { resolveTaskName } from "../../daemon/schtasks-layout.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
@@ -26,7 +29,7 @@ function matchesStoppedService(
     process.platform === "darwin"
       ? resolveLaunchAgentLabel
       : process.platform === "win32"
-        ? resolveTaskName
+        ? (env: GatewayServiceState["env"]) => normalizeWindowsTaskIdentity(resolveTaskName(env))
         : resolveSystemdServiceName;
   // Explicit default metadata selects the same manager; protected command hashes
   // still pin the effective launcher and its environment through normalization.

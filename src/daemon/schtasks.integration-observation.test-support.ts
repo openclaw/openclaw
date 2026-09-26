@@ -4,6 +4,7 @@ import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import { setScheduledTaskXmlEnabled } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
@@ -36,6 +37,27 @@ export async function readTaskXml(taskName: string): Promise<string | null> {
   return result.code === 0
     ? result.stdout.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "")
     : null;
+}
+
+export function disableScheduledTaskXmlForFixture(xml: string): string {
+  return setScheduledTaskXmlEnabled(xml, false).replace(
+    /(<Settings(?:\s[^>]*)?>)([\s\S]*?)(<\/Settings>)/iu,
+    (_match, open: string, body: string, close: string) => {
+      const field = /<AllowStartOnDemand>\s*(true|false)\s*<\/AllowStartOnDemand>/iu;
+      const disabled = "<AllowStartOnDemand>false</AllowStartOnDemand>";
+      return `${open}${field.test(body) ? body.replace(field, disabled) : `${disabled}${body}`}${close}`;
+    },
+  );
+}
+
+export function normalizeScheduledTaskXmlEnabledForFixture(xml: string): string {
+  // COM exports omit Enabled=true and place an explicit false in schema order.
+  // Normalize only that setting and its line; every other definition byte remains checked.
+  return setScheduledTaskXmlEnabled(xml, false).replace(
+    /(<Settings(?:\s[^>]*)?>)([\s\S]*?)(<\/Settings>)/iu,
+    (_match, open: string, body: string, close: string) =>
+      `${open}<Enabled>false</Enabled>${body.replace(/(?:\r?\n[\t ]*)?<Enabled>false<\/Enabled>/u, "")}${close}`,
+  );
 }
 
 export function readTaskPrincipal(taskName: string): ScheduledTaskPrincipal {
