@@ -34,6 +34,7 @@ export type CodexThreadPromptContext = Pick<
   | "extraSystemPrompt"
   | "gitCoauthorPrompt"
   | "runtimePlan"
+  | "pluginHarnessToolPolicyRestricted"
 >;
 
 export function buildDeveloperInstructions(
@@ -98,13 +99,14 @@ export function buildDeveloperInstructions(
     params.disableTools !== true &&
     params.delegationCapability !== "report_only" &&
     !isMessageOnlyCodexSourceReply(params);
-  const nativeDelegationAvailable =
+  const nativeDelegationGuidanceAllowed =
     delegationGuidanceAvailable &&
     !isCodexResponsesOAuthRun(params) &&
+    params.pluginHarnessToolPolicyRestricted !== true &&
     !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
     !shouldDisableCodexToolSearchForModel(params.modelId);
   const deferredToolDiscoveryGuidance =
-    deferredToolNames.size > 0 || nativeDelegationAvailable
+    deferredToolNames.size > 0
       ? "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`."
       : undefined;
   const sections = [
@@ -116,14 +118,13 @@ export function buildDeveloperInstructions(
       : undefined,
     deferredToolDiscoveryGuidance,
     hasSkillWorkshop ? buildSkillWorkshopPromptSection().join("\n") : undefined,
-    // Codex defers native collab tools behind tool_search on search-capable
-    // models (codex-rs spec_plan add_collaboration_tools). Without this hint
-    // models cannot see spawn_agent and grab the always-direct sessions_spawn.
-    nativeDelegationAvailable
-      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork." : ""}`
+    // Codex owns native tool exposure: v1 may be deferred; v2 defaults to direct-only.
+    // OpenClaw must not teach either backend the other's discovery or calling convention.
+    nativeDelegationGuidanceAllowed
+      ? `For native Codex subagents, follow the collaboration tools and calling conventions exposed by Codex, including discovery, follow-up work, and waits.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for an available native collaboration tool on internal legwork." : ""}`
       : undefined,
-    hasSessionsYield && nativeDelegationAvailable
-      ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
+    hasSessionsYield && nativeDelegationGuidanceAllowed
+      ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. For an intentional same-turn wait, use a native waiting tool only if Codex exposes one. Never loop-poll for native child completion."
       : undefined,
     delegationGuidanceAvailable
       ? buildDelegationGuidanceSection({
@@ -134,8 +135,8 @@ export function buildDeveloperInstructions(
           }),
           // Subagent/none prompt modes stay lean and must not be told to delegate further.
           isMinimal: params.promptMode === "minimal" || params.promptMode === "none",
-          hiddenDelegationTool: nativeDelegationAvailable
-            ? "native `spawn_agent`"
+          hiddenDelegationTool: nativeDelegationGuidanceAllowed
+            ? "available native collaboration tools"
             : hasSessionsSpawn
               ? "`sessions_spawn`"
               : "",

@@ -1,12 +1,14 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it } from "vitest";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
+import { buildCodexThreadConfiguration } from "./thread-requests.js";
 
 const delegationTools: CodexDynamicToolSpec[] = [
   {
@@ -153,13 +155,36 @@ describe("buildDeveloperInstructions credential routing", () => {
 });
 
 describe("buildDeveloperInstructions delegation guidance", () => {
+  it("does not advertise native delegation disabled by the request tool policy", () => {
+    const request = buildCodexThreadConfiguration(
+      createParams({ pluginHarnessToolPolicyRestricted: true, toolsAllow: ["read"] }),
+      {
+        appServer: resolveCodexAppServerRuntimeOptions({ env: {} }),
+        dynamicTools: [],
+      },
+    );
+
+    expect(request.config["agents.enabled"]).toBe(false);
+    expect(request.config["features.multi_agent_v2"]).toBe(false);
+    expect(request.developerInstructions).not.toContain("For native Codex subagents");
+    expect(request.developerInstructions).not.toContain("## Delegation");
+    expect(request.developerInstructions).not.toContain("ALL_TOOLS");
+  });
+
+  it("preserves offered OpenClaw delegation when the native surface is restricted", () => {
+    const instructions = buildInstructions({ pluginHarnessToolPolicyRestricted: true });
+
+    expect(instructions).toContain("delegate via `sessions_spawn`");
+    expect(instructions).not.toContain("For native Codex subagents");
+  });
+
   it("shares the visible-session delegation policy with a canonical main session", () => {
     const instructions = buildInstructions();
 
     expect(instructions).toContain("## Delegation");
-    expect(instructions).toContain("delegate via native `spawn_agent`");
+    expect(instructions).toContain("delegate via available native collaboration tools");
     expect(instructions).toContain(
-      "For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.",
+      "For native Codex subagents, follow the collaboration tools and calling conventions exposed by Codex, including discovery, follow-up work, and waits.",
     );
     expect(instructions).toContain("spawn `sessions_spawn` with `visible=true`");
     expect(instructions).toContain("Announcing spawns notify when the run ends");

@@ -160,7 +160,6 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
 export type CodexThreadConfigurationContext = CodexThreadPromptContext &
   Pick<
     EmbeddedRunAttemptParams,
-    | "pluginHarnessToolPolicyRestricted"
     | "pluginHarnessToolPolicySafeDeniedTools"
     | "authoredContextTokenCap"
     | "bootstrapContextMode"
