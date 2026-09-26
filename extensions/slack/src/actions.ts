@@ -181,7 +181,11 @@ function normalizeSlackReadTimestamp(
   raw: string | undefined,
   field: "before" | "after",
 ): string | undefined {
-  const trimmed = raw?.trim();
+  // Models occasionally send a string arg JSON-escaped a second time, so the
+  // parsed value literally contains surrounding double quotes. A Slack
+  // timestamp or ISO-8601 date never contains quote characters, so one unwrap
+  // is safe; the value is re-validated below either way.
+  const trimmed = raw?.trim().replace(/^"(.*)"$/su, "$1");
   if (!trimmed) {
     return undefined;
   }
