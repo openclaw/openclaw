@@ -34,6 +34,10 @@ import type {
   TelegramEventAuthorizationMode,
   TelegramHandlerAuthorization,
 } from "./bot-handlers.inbound-authorization.js";
+import {
+  buildSyntheticContext,
+  buildSyntheticTextMessage,
+} from "./bot-handlers.message-context.js";
 import type {
   RegisterTelegramHandlerParams,
   TelegramCallbackRouter,
@@ -92,8 +96,7 @@ export function createTelegramCallbackRouter({
   message: TelegramCallbackMessageRuntime;
   authorization: TelegramHandlerAuthorization;
 }): TelegramCallbackRouter {
-  const { buildSyntheticTextMessage, buildSyntheticContext, processMessageWithReplyChain } =
-    messageRuntime;
+  const { processMessageWithReplyChain } = messageRuntime;
   const {
     resolveTelegramEventAuthorizationContext,
     authorizeTelegramEventSender,

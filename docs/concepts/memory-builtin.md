@@ -38,6 +38,11 @@ increased measured latency; other retrieval reads run off the Gateway event loop
 reader; recall metadata is read after candidate retrieval so forgotten chunks
 are excluded. This does not change stored data, configuration, or upgrade behavior.
 
+After Gateway readiness, idle warmup loads the active Memory Core retrieval
+worker before the first search. It does not open an index, start an embedding
+provider, or delay readiness. Requests arriving before warmup completes still
+initialize retrieval normally; the worker keeps its existing idle retirement policy.
+
 If semantic retrieval reaches the 30-second tool deadline after keyword matches
 from memory files are ready, `memory_search` returns those matches with a
 partial-result warning. Session transcript hits require fresh visibility checks

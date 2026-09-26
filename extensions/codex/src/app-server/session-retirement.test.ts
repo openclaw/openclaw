@@ -59,7 +59,7 @@ describe("Codex session deletion subscriptions", () => {
     const request = vi.spyOn(client, "request").mockResolvedValue({ status: "unsubscribed" });
     const releaseClientLease = vi.fn();
     vi.spyOn(sharedClients, "retainSharedCodexAppServerClientByInstanceId").mockImplementation(
-      (clientId) =>
+      async (clientId) =>
         clientId === binding.clientId ? { client, release: releaseClientLease } : undefined,
     );
     ensureCodexAppServerClientRuntime(client, {

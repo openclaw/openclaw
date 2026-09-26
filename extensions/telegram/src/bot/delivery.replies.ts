@@ -1,5 +1,4 @@
 import type { Bot } from "grammy";
-import type { Message } from "grammy/types";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createOutboundPayloadPlan,
@@ -282,8 +281,8 @@ async function deliverMediaReply(params: {
     markDelivered(params.progress);
   };
   const deliverAcceptedMedia = async (options: {
-    sender: TelegramOutboundMediaSender<Message>;
-    documentSender?: TelegramOutboundMediaSender<Message>;
+    sender: TelegramOutboundMediaSender;
+    documentSender?: TelegramOutboundMediaSender;
     mediaUrl: string;
     requestParams: Record<string, unknown>;
     plainCaption?: string;
@@ -315,7 +314,7 @@ async function deliverMediaReply(params: {
       tableMode: params.tableMode,
       preparedHtml: true,
     });
-    const { sender: mediaSender, documentSender } = resolveTelegramOutboundMediaSenders<Message>({
+    const { sender: mediaSender, documentSender } = resolveTelegramOutboundMediaSenders({
       api: params.bot.api,
       chatId: params.chatId,
       media,

@@ -1,6 +1,11 @@
 // Defines shared legacy config rule contracts for detection and migration.
+import {
+  asNullableRecord as getRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import { isRecord } from "../utils.js";
+
+export { getRecord };
 export type LegacyConfigRule = {
   path: string[];
   message: string;
@@ -31,9 +36,6 @@ export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
   legacyRules?: LegacyConfigRule[];
 };
 
-export const getRecord = (value: unknown): Record<string, unknown> | null =>
-  isRecord(value) ? value : null;
-
 export const ensureRecord = (
   root: Record<string, unknown>,
   key: string,
@@ -60,9 +62,6 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
     return null;
   }
   const rawExecutable = command[0].trim();
-  if (!rawExecutable) {
-    return null;
-  }
   if (!isSafeExecutableValue(rawExecutable)) {
     return null;
   }

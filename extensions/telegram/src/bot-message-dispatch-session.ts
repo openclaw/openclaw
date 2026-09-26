@@ -1,4 +1,3 @@
-// Telegram plugin module owns dispatch-time session and transcript access.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

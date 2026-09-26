@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { constants as fsConstants, cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect } from "vitest";
 import type { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
+type PublisherTempDirs = ReturnType<typeof useAutoCleanupTempDirTracker>;
 
 function sanitizedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -56,10 +57,7 @@ export function runGatesBash(
   );
 }
 
-export function makePublisherRepo(tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker>) {
-  const root = tempDirs.make("openclaw-pr-publication-");
-  const repoDir = join(root, "repo");
-  const remote = join(root, "remote.git");
+function createPublisherGit(repoDir: string) {
   const env = sanitizedEnv({
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
@@ -68,12 +66,23 @@ export function makePublisherRepo(tempDirs: ReturnType<typeof useAutoCleanupTemp
     OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH: "1",
     OPENCLAW_PR_PUSH_MODE: "git",
   });
-  mkdirSync(repoDir);
   function git(...args: string[]) {
     const result = spawnSync("git", args, { cwd: repoDir, env, encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
     return result.stdout.trim();
   }
+  return { env, git };
+}
+
+function createPublisherRepo(tempDirs: PublisherTempDirs) {
+  const root = tempDirs.make("openclaw-pr-publication-template-");
+  const repoDir = join(root, "repo");
+  const remote = join(root, "remote.git");
+  mkdirSync(repoDir);
+  const { env, git } = createPublisherGit(repoDir);
+  // A detached maintenance process must not mutate the seed while cases copy it.
+  env.GIT_CONFIG_PARAMETERS =
+    `${env.GIT_CONFIG_PARAMETERS ?? ""} 'maintenance.auto=false' 'gc.auto=0'`.trim();
   git("init", "-q", "-b", "prep");
   git("config", "user.name", "Fixture");
   git("config", "user.email", "fixture@example.invalid");
@@ -144,8 +153,40 @@ export function makePublisherRepo(tempDirs: ReturnType<typeof useAutoCleanupTemp
   };
 }
 
+export function createPublisherRepoFactory(dirs: {
+  cases: PublisherTempDirs;
+  templates: PublisherTempDirs;
+}) {
+  let template: ReturnType<typeof createPublisherRepo> | undefined;
+  return () => {
+    template ??= createPublisherRepo(dirs.templates);
+    const root = dirs.cases.make("openclaw-pr-publication-");
+    const repoDir = join(root, "repo");
+    const remote = join(root, "remote.git");
+    const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+    // Each case owns complete refs, indexes and object stores, without alternates or hardlinks.
+    cpSync(template.repoDir, repoDir, copyOptions);
+    cpSync(template.remote, remote, copyOptions);
+    const { env, git } = createPublisherGit(repoDir);
+    git("remote", "set-url", "origin", remote);
+    return {
+      repoDir,
+      remote,
+      local: join(repoDir, ".local"),
+      env,
+      git,
+      base: template.base,
+      source: template.source,
+      candidate: template.candidate,
+      sameTree: template.sameTree,
+      advance: template.advance,
+      observation: structuredClone(template.observation),
+    };
+  };
+}
+
 export function runPublisher(
-  f: ReturnType<typeof makePublisherRepo>,
+  f: ReturnType<typeof createPublisherRepo>,
   command = "prepare_sync_head 4242",
   setup: string[] = [],
 ) {

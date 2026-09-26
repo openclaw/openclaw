@@ -66,6 +66,7 @@ function createLazyMemoryTool(params: {
     name: params.contract.name,
     description: params.contract.describe(initialContext.sources),
     parameters: params.contract.parameters,
+    prepareArguments: params.contract.prepareArguments,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
       const tool = await loadTool();
       if (!tool) {

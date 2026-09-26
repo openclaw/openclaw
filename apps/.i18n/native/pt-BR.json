@@ -903,6 +903,7 @@
     "native.android.8363c18ba7fdf0fd": "Limite de taxa",
     "native.android.837744e8aa3c8155": "Conectado",
     "native.android.83e4fdeca6722756": "Inspecione e gerencie o estado das Skills instaladas.",
+    "native.android.83e7a975bb7a5ea0": "Recolher prévia do link",
     "native.android.83e80579dc21643d": "Fale com seu agente",
     "native.android.841570a28a49db67": "As alterações do Cron exigem operator.admin. Os códigos de configuração não concedem esse acesso intencionalmente. Reconecte-se usando o token compartilhado ou a senha do Gateway para solicitar acesso de administrador. Se este dispositivo ainda não tiver esse acesso, aprove a atualização de escopo pendente em um cliente administrador existente.",
     "native.android.84244f73da2b8e3b": "OpenClaw",

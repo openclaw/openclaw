@@ -340,6 +340,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Close search" to R.string.native_55656b5e434f4c06,
     "Code Execution" to R.string.native_afc798a41a0c1b60,
     "Collapse child sessions" to R.string.native_f85b29a41b3598bb,
+    "Collapse link preview" to R.string.native_df4589b6c2b4eb96,
     "Collapse progress card" to R.string.native_1cac239d3c742bf2,
     "Collapsed" to R.string.native_b322b65227bc3ec9,
     "Color" to R.string.native_6b73191a0a4b6742,

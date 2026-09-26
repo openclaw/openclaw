@@ -520,7 +520,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
   const initialEntry = sessionStoreEntry("sess-fast-drain", { fastMode: false });
   await writeSessionStore({ entries: { main: initialEntry } });
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
-  const claim = placements.claimTurn({
+  const claim = await placements.claimTurn({
     agentId: "main",
     sessionKey: key,
     sessionId: initialEntry.sessionId,
@@ -566,7 +566,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
     releaseWriter.resolve();
     await heldWriter;
     expect(await persisted).toMatchObject({ status: "current", entry: { fastMode: true } });
-    placements.releaseTurn(claim);
+    await placements.releaseTurn(claim);
     admission.release();
     expect(await reset).toMatchObject({
       ok: false,
@@ -584,7 +584,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
     releaseWriter.resolve();
     await heldWriter;
     if (placements.validateTurnClaim(claim)) {
-      placements.releaseTurn(claim);
+      await placements.releaseTurn(claim);
     }
     admission.release();
     await reset;

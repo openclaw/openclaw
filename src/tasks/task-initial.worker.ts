@@ -48,11 +48,31 @@ export function executeTaskInitialMutation(
       },
     });
   const write = <T>(operation: () => T): T =>
-    runOpenClawStateWriteTransaction(operation, {
-      database,
-      path: database.path,
-      env: getSqliteWorkerStateContext().environment,
-    });
+    runOpenClawStateWriteTransaction(
+      () => {
+        const result = operation();
+        if (
+          command.type === "tasks.bindRunOwner" ||
+          command.type === "tasks.finalizeActive" ||
+          command.type === "tasks.settleUnstarted"
+        ) {
+          requestSqliteWorkerOperationAdmission({
+            stage: "commit",
+            facts: {
+              kind: "task-registry-mutation",
+              operation: command.type,
+              taskId: command.input.taskId,
+            },
+          });
+        }
+        return result;
+      },
+      {
+        database,
+        path: database.path,
+        env: getSqliteWorkerStateContext().environment,
+      },
+    );
   try {
     return withSharedStateWriteCoordinator(
       { databasePath: database.path, existing: database.db, operationLabel: command.type },
