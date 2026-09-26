@@ -124,6 +124,15 @@ describe("security fix", () => {
     expectPerms(configMode, 0o600);
   };
 
+  const expectWhatsAppGroupPolicy = (
+    channels: Record<string, Record<string, unknown>>,
+    expectedPolicy = "allowlist",
+  ) => {
+    expect(expectDefined(channels.whatsapp, "channels.whatsapp test invariant").groupPolicy).toBe(
+      expectedPolicy,
+    );
+  };
+
   const expectWhatsAppAccountGroupPolicy = (
     channels: Record<string, Record<string, unknown>>,
     accountId: string,
@@ -252,6 +261,21 @@ describe("security fix", () => {
     ).toBeUndefined();
     expect(
       expectDefined(accounts.work, "accounts.work test invariant").groupAllowFrom,
+    ).toBeUndefined();
+  });
+
+  it("does not seed WhatsApp groupAllowFrom if allowFrom is set", async () => {
+    const { res, channels } = await fixWhatsAppConfigScenario({
+      whatsapp: {
+        groupPolicy: "open",
+        allowFrom: ["+15552223333"],
+      },
+      allowFromStore: ["+15550001111"],
+    });
+    expect(res.ok).toBe(true);
+    expectWhatsAppGroupPolicy(channels);
+    expect(
+      expectDefined(channels.whatsapp, "channels.whatsapp test invariant").groupAllowFrom,
     ).toBeUndefined();
   });
 

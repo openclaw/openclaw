@@ -64,7 +64,6 @@ describe("memory reindex state", () => {
       code: "provenance_version",
       owner: "openclaw",
       versionOrder: "older",
-      ...(code === "chunking_version" ? { chunkingVersionOnly: true } : {}),
     });
   });
 
@@ -82,6 +81,8 @@ describe("memory reindex state", () => {
         reason: "index chunking implementation changed",
         code: "chunking_version",
         owner: "openclaw",
+        versionOrder: "older",
+        chunkingVersionOnly: true,
       });
     },
   );

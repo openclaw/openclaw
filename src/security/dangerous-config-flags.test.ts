@@ -259,4 +259,23 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
       ),
     ).toContain("agents.list.1.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
   });
+  it("uses keyed roster paths for entries-shaped dangerous sandbox flags", () => {
+    expect(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
+        asConfig({
+          agents: {
+            entries: {
+              worker: {
+                sandbox: {
+                  docker: {
+                    dangerouslyAllowContainerNamespaceJoin: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ),
+    ).toContain("agents.entries.worker.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
+  });
 });

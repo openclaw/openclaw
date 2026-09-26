@@ -10,7 +10,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { flushLogger, getChildLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { createTalkLogRecord, recordTalkLogEvent } from "./logging.js";
+import { recordTalkLogEvent } from "./logging.js";
 import { recordTalkObservabilityEvent } from "./observability.js";
 import { createTalkEventSequencer } from "./talk-events.js";
 

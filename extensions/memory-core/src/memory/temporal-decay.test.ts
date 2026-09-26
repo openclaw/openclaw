@@ -39,14 +39,10 @@ describe("temporal decay", () => {
   it("uses indexed remote mtimes in hybrid ranking while retaining evergreen and dated paths", async () => {
     const paths = ["imports/note.md", "MEMORY.md", "memory/2026-02-09.md"];
     const results = await mergeHybridResults({
-      vector: paths.map((filePath) =>
-        createVectorMemoryEntry({
-          id: filePath,
-          path: filePath,
-          snippet: "host content",
-          vectorScore: 1,
-        }),
-      ),
+      vector: paths.map((filePath) => ({
+        ...createVectorMemoryEntry(filePath, 1),
+        snippet: "host content",
+      })),
       keyword: [],
       vectorWeight: 1,
       textWeight: 0,

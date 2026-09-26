@@ -105,10 +105,40 @@ describe("llama-server provider discovery", () => {
       );
     });
 
+    it("prefers configured Authorization over ambient API-key discovery auth", async () => {
+      discoverMock.mockResolvedValue(success());
+      const ctx = catalogContext();
+      ctx.config.models = {
+        providers: {
+          "llama-cpp": {
+            baseUrl: "http://localhost:8080/v1",
+            headers: { Authorization: "Bearer proxy-key" },
+            models: [],
+          },
+        },
+      };
+      ctx.resolveProviderApiKey = vi.fn(() => ({
+        apiKey: "LLAMA_SERVER_API_KEY",
+        discoveryApiKey: "ambient-key",
+        profileId: "llama-cpp:ambient",
+      }));
+
+      const result = await discoverLlamaServerProvider(ctx);
+      expect(result?.outcomes).toEqual([{ provider: "llama-cpp", status: "ready" }]);
+
+      expect(discoverMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          apiKey: undefined,
+          headers: { Authorization: "Bearer proxy-key" },
+        }),
+      );
+    });
+
     it.each([
       { failure: { kind: "http-error", status: 401 }, status: "auth-rejected" },
       { failure: { kind: "http-error", status: 403 }, status: "auth-rejected" },
       { failure: { kind: "http-error", status: 503 }, status: "unavailable" },
+      { failure: { kind: "unreachable", error: new Error("offline") }, status: "unavailable" },
       {
         failure: { kind: "invalid-response", error: new Error("malformed") },
         status: "unavailable",
