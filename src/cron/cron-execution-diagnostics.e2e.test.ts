@@ -33,8 +33,15 @@ const { resetCronModelProviderPreflightCacheForTest } =
 
 type ModelRef = { provider: string; model: string };
 
-function makeCommandLaneTaskTimeoutError(lane: string, timeoutMs: number): Error {
-  const error = new Error(`Command lane "${lane}" task timed out after ${timeoutMs}ms`);
+function makeCommandLaneTaskTimeoutError(
+  lane: string,
+  timeoutMs: number,
+  details: { idleMs: number; elapsedMs: number },
+): Error {
+  const error = new Error(
+    `Command lane "${lane}" task timed out: no progress for ${details.idleMs}ms ` +
+      `(task budget ${timeoutMs}ms, elapsed ${details.elapsedMs}ms)`,
+  );
   error.name = "CommandLaneTaskTimeoutError";
   return error;
 }
@@ -195,11 +202,14 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
     }
   });
 
-  it("persists and emits the canonical terminal timeout diagnostic", async () => {
+  it("keeps the canonical timeout text while persisting the lane deadline detail", async () => {
     const modelRef = { provider: "openai", model: "gpt-5.4" };
     resolveConfiguredModelRefMock.mockReturnValue(modelRef);
     runWithModelFallbackMock.mockRejectedValueOnce(
-      makeCommandLaneTaskTimeoutError("cron-nested", 330_000),
+      makeCommandLaneTaskTimeoutError("cron-nested", 330_000, {
+        idleMs: 330_000,
+        elapsedMs: 330_812,
+      }),
     );
 
     const { finished, history } = await runPersistedDiagnosticCase({
@@ -213,13 +223,16 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
         status: "error",
         provider: "openai",
         model: "gpt-5.4",
+        // Operator-facing summary stays the stable cron timeout text.
         error: "cron: job execution timed out",
         diagnostics: {
           entries: expect.arrayContaining([
             expect.objectContaining({
               source: "cron-setup",
               severity: "error",
-              message: "cron: job execution timed out",
+              // The lane error carries which deadline fired (cause + idle budget),
+              // so diagnostics have to keep it instead of flattening it away.
+              message: expect.stringContaining("no progress for 330000ms"),
             }),
           ]),
         },
