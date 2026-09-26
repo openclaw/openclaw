@@ -34,7 +34,7 @@ describe("overflow recovery deadline ownership through the public runner", () =>
   let runEmbeddedAgent: TestRunEmbeddedAgent;
   let prepareTimeout: typeof import("./run/attempt-timeout-prepare.js").prepareEmbeddedAttemptTimeout;
   let engine: ContextEngine;
-  let originalCompact: ContextEngine["compact"];
+  let restoreCompact: () => void;
   let delegate: ContextEngine["compact"];
   let queuedTasks: Promise<unknown>[];
   let restoreQueue: (() => void) | undefined;
@@ -51,7 +51,13 @@ describe("overflow recovery deadline ownership through the public runner", () =>
       await import("./run/attempt-timeout-prepare.js"));
     ({ delegateCompactionToRuntime: delegate } = await import("../../context-engine/delegate.js"));
     engine = await (await import("../../context-engine/registry.js")).resolveContextEngine();
-    originalCompact = engine.compact;
+    const originalCompact = Object.getOwnPropertyDescriptor(engine, "compact");
+    if (!originalCompact) {
+      throw new Error("The shared runner fixture must own its compaction method");
+    }
+    restoreCompact = () => {
+      Object.defineProperty(engine, "compact", originalCompact);
+    };
   });
 
   beforeEach(async () => {
@@ -131,7 +137,7 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     releaseCompaction.resolve({ ok: false, compacted: false, reason: "test settled" });
     await Promise.allSettled(queuedTasks);
     restoreQueue?.();
-    engine.compact = originalCompact;
+    restoreCompact();
     vi.useRealTimers();
   });
   afterAll(cleanupSharedRunIntegrationSessions);
