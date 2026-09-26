@@ -1,0 +1,26 @@
+title: Memory dreaming provenance admission
+
+scenario:
+  id: memory-dreaming-provenance
+  surface: session-memory
+  coverage:
+    primary:
+      - session-memory.memory-provenance-promotion-and-forgetting
+  objective: Verify provenance-aware dreaming excludes restricted session captures while an explicitly owned agent workspace can reach deep consolidation with retained source lineage.
+  successCriteria:
+    - A restricted session-memory capture is recorded before memory-core is selected and is absent from the subsequent real dreaming provider request.
+    - The tool-free dreaming request includes a grandfathered legacy memory marker that remains present on disk afterward.
+    - Under explicit agent ownership, a researcher recall records the exact workspace memory source before the managed dreaming job runs successfully.
+    - The resulting deep-consolidation request carries the researcher memory candidate with its file-and-line source reference and agent provenance, without an owner-selection error.
+  docsRefs:
+    - docs/concepts/dreaming.md
+    - docs/concepts/memory-provenance.md
+    - docs/reference/memory-config.md
+  codeRefs:
+    - extensions/memory-core/src/dreaming-consolidation-candidates.ts
+    - extensions/memory-core/src/dreaming-phases.ts
+    - test/e2e/qa-lab/runtime/memory-dreaming-provenance.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/memory-dreaming-provenance.e2e.test.ts
+    summary: Run two real child-Gateway cases that prove restricted session-memory exclusion and explicit-owner provenance through the dreaming consolidation boundary.
