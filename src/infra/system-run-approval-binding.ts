@@ -174,16 +174,16 @@ export function matchSystemRunApprovalBinding(params: {
   actualEnvKeys: string[];
 }): SystemRunApprovalMatchResult {
   if (!argvMatches(params.expected.argv, params.actual.argv)) {
-    return requestMismatch();
+    return requestMismatch({ mismatchField: "argv" });
   }
   if (params.expected.cwd !== params.actual.cwd) {
-    return requestMismatch();
+    return requestMismatch({ mismatchField: "cwd" });
   }
   if (params.expected.agentId !== params.actual.agentId) {
-    return requestMismatch();
+    return requestMismatch({ mismatchField: "agentId" });
   }
   if (params.expected.sessionKey !== params.actual.sessionKey) {
-    return requestMismatch();
+    return requestMismatch({ mismatchField: "sessionKey" });
   }
   return matchSystemRunApprovalEnvHash({
     expectedEnvHash: params.expected.envHash,

@@ -7,6 +7,24 @@ import {
 import type { RespondFn } from "./types.js";
 export { parseGatewayPayload } from "../server-json.js";
 
+function markNodeCommandNotDispatched(details?: Record<string, unknown>) {
+  return { ...details, nodeCommandDispatched: false as const };
+}
+
+export function respondPreDispatchNodeInvokeError(
+  respond: RespondFn,
+  message: string,
+  details?: Record<string, unknown>,
+) {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, message, {
+      details: markNodeCommandNotDispatched(details),
+    }),
+  );
+}
+
 /** Narrows successful node invoke results or responds with the node error details. */
 export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; error?: unknown }>(
   respond: RespondFn,

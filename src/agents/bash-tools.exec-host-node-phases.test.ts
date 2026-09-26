@@ -71,13 +71,6 @@ describe("invokeNodeSystemRun failure classification", () => {
 
   it.each([
     {
-      name: "deadline before dispatch",
-      error: gatewayNodeInvokeError({
-        code: "TIMEOUT",
-        nodeCommandDispatched: false,
-      }),
-    },
-    {
       name: "missing dispatch provenance",
       error: gatewayNodeInvokeError({ code: "NOT_CONNECTED" }),
     },
@@ -96,6 +89,48 @@ describe("invokeNodeSystemRun failure classification", () => {
     await expect(invokeFailure(error)).resolves.toMatchObject({
       reason: "outcome-unknown",
       retrySafe: false,
+    });
+  });
+
+  it("classifies approval mismatch as pre-dispatch but not retry-safe", async () => {
+    const failure = await invokeFailure(
+      Object.assign(new Error("approval id does not match request"), {
+        details: {
+          code: "APPROVAL_REQUEST_MISMATCH",
+          mismatchField: "argv",
+          nodeCommandDispatched: false,
+        },
+      }),
+    );
+    expect(failure).toEqual({
+      reason: "pre-dispatch-rejected",
+      retrySafe: false,
+      code: "APPROVAL_REQUEST_MISMATCH",
+      message: "approval id does not match request",
+      nodeCommandDispatched: false,
+    });
+    expect(
+      formatNodeInvokeFailureFollowup({
+        failure,
+        nodeId: "node-1",
+        approvalId: "approval-1",
+        command: "Synthetic.exe",
+      }),
+    ).toContain("Do not retry it automatically");
+  });
+
+  it("keeps other proven pre-dispatch failures non-retryable", async () => {
+    await expect(
+      invokeFailure(
+        gatewayNodeInvokeError({
+          code: "TIMEOUT",
+          nodeCommandDispatched: false,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      reason: "pre-dispatch-rejected",
+      retrySafe: false,
+      nodeCommandDispatched: false,
     });
   });
 

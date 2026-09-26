@@ -24,6 +24,14 @@ type NodeInvokeFailure =
       requestSent?: boolean;
     }
   | {
+      reason: "pre-dispatch-rejected";
+      retrySafe: false;
+      code?: string;
+      message: string;
+      nodeCommandDispatched: false;
+      requestSent?: boolean;
+    }
+  | {
       reason: "outcome-unknown";
       retrySafe: false;
       code?: string;
@@ -41,7 +49,7 @@ function classifyNodeInvokeFailure(error: unknown): NodeInvokeFailure {
   const errorRecord = asNullableRecord(error);
   const details = asNullableRecord(errorRecord?.details);
   const nodeError = asNullableRecord(details?.nodeError);
-  const code = readString(nodeError?.code);
+  const code = readString(nodeError?.code) ?? readString(details?.code);
   const message =
     readString(nodeError?.message) ??
     (error instanceof Error ? error.message : readString(error)) ??
@@ -59,6 +67,16 @@ function classifyNodeInvokeFailure(error: unknown): NodeInvokeFailure {
       reason: "not-dispatched",
       retrySafe: true,
       code,
+      message,
+      nodeCommandDispatched,
+      ...(requestSent !== undefined ? { requestSent } : {}),
+    };
+  }
+  if (nodeCommandDispatched === false) {
+    return {
+      reason: "pre-dispatch-rejected",
+      retrySafe: false,
+      ...(code ? { code } : {}),
       message,
       nodeCommandDispatched,
       ...(requestSent !== undefined ? { requestSent } : {}),
@@ -90,10 +108,15 @@ function formatNodeInvokeFailureText(params: {
             `Node command was denied before execution on ${params.nodeId}.`,
             "Resolve the reported refusal before retrying.",
           ]
-        : [
-            `Node command was not dispatched to ${params.nodeId}.`,
-            "It can be retried after the node reconnects.",
-          ];
+        : params.failure.reason === "pre-dispatch-rejected"
+          ? [
+              `Node command was rejected before dispatch to ${params.nodeId}.`,
+              "Do not retry it automatically; resolve the reported request error first.",
+            ]
+          : [
+              `Node command was not dispatched to ${params.nodeId}.`,
+              "It can be retried after the node reconnects.",
+            ];
   return [
     ...summary,
     "",
@@ -115,7 +138,9 @@ export function formatNodeInvokeFailureFollowup(params: {
       ? `Exec outcome unknown (node=${params.nodeId} id=${params.approvalId}, outcome-unknown)`
       : params.failure.reason === "policy-denied"
         ? `Exec denied (node=${params.nodeId} id=${params.approvalId}, policy-denied)`
-        : `Exec not dispatched (node=${params.nodeId} id=${params.approvalId}, not-dispatched)`;
+        : params.failure.reason === "pre-dispatch-rejected"
+          ? `Exec rejected (node=${params.nodeId} id=${params.approvalId}, pre-dispatch)`
+          : `Exec not dispatched (node=${params.nodeId} id=${params.approvalId}, not-dispatched)`;
   return `${prefix}\n${formatNodeInvokeFailureText(params)}`;
 }
 
