@@ -214,7 +214,11 @@ export function migrateBlankAgentCwdForWrite(
  * entries and filters roster paths from the injected explicit set, so without
  * this remap the write migration cannot tell that a converted blank was
  * explicitly authored and would silently migrate it away instead of letting
- * strict validation report the field error. */
+ * strict validation report the field error.
+ *
+ * Whole-list (`agents.list`) and single-entry (`agents.list.<N>`) replacements
+ * are expanded to every entry path they touch, so a blank the current write
+ * re-authors over a saved blank is preserved for validation too. */
 export function remapLegacyListExplicitPaths(
   explicitSetPaths: readonly (readonly string[])[] | undefined,
   nextConfig: unknown,
@@ -225,19 +229,37 @@ export function remapLegacyListExplicitPaths(
     return [];
   }
   const remapped: string[] = [];
+  const remapEntry = (index: number, suffix: string[]): void => {
+    const entry = list[index];
+    if (isRecord(entry) && typeof entry.id === "string") {
+      remapped.push(["agents", "entries", entry.id, ...suffix].join("."));
+    }
+  };
   for (const path of explicitSetPaths) {
-    if (path.length < 4 || path[0] !== "agents" || path[1] !== "list") {
+    if (path[0] !== "agents" || path[1] !== "list") {
+      continue;
+    }
+    if (path.length === 2) {
+      // Whole-list replacement: every authored list entry is explicitly set.
+      list.forEach((_entry, index) => remapEntry(index, []));
+      continue;
+    }
+    if (path.length === 3) {
+      // Single-entry replacement: the whole entry is explicitly set.
+      const index = Number(path[2]);
+      if (Number.isInteger(index) && index >= 0 && index < list.length) {
+        remapEntry(index, []);
+      }
+      continue;
+    }
+    if (path.length < 4) {
       continue;
     }
     const index = Number(path[2]);
     if (!Number.isInteger(index) || index < 0 || index >= list.length) {
       continue;
     }
-    const entry = list[index];
-    if (!isRecord(entry) || typeof entry.id !== "string") {
-      continue;
-    }
-    remapped.push(["agents", "entries", entry.id, ...path.slice(3)].join("."));
+    remapEntry(index, path.slice(3));
   }
   return remapped;
 }
