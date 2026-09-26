@@ -84,6 +84,11 @@ for stage in "${stages[@]}"; do
     swiftformat --lint "$checkout/apps/shared/OpenClawKit/Sources/OpenClawChatUI" \
       --config "$checkout/config/swiftformat" \
       --unexclude "$checkout/apps/shared/OpenClawKit/Sources/OpenClawChatUI"
+    (
+      cd "$checkout"
+      node scripts/run-swiftlint.mts --strict --config apps/ios/.swiftlint.yml \
+        apps/shared/OpenClawKit/Sources/OpenClawChatUI
+    ) > "$output/$stage-swiftlint.log" 2>&1
   fi
   # The index freezes the reviewed product bytes, including newly added files.
   # Build helpers may change generated files, never the pinned native sources.

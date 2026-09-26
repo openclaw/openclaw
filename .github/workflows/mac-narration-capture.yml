@@ -25,7 +25,7 @@ jobs:
     env:
       CANDIDATE_SHA: b9ae24aec6ad8ef987f904d3ed2fb748daac4892
       BASELINE_SHA: b9ae24aec6ad8ef987f904d3ed2fb748daac4892
-      GROUPING_PATCH_SHA256: 043ac196922c7a7536e1044da929a19de9a918fdde6ac3977198a28aa58cabc4
+      GROUPING_PATCH_SHA256: b80dff99f29e45f1ad887f7d882f2a2ec3fec1a9dee3426419a2e4b917cdb549
     steps:
       - name: Checkout exact product candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

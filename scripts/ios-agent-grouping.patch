@@ -1,5 +1,5 @@
 diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCompletedWork.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCompletedWork.swift
-index 63788dcdd87..9aa4f16055e 100644
+index 63788dcdd872..9aa4f16055ea 100644
 --- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCompletedWork.swift
 +++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCompletedWork.swift
 @@ -158,7 +158,7 @@ extension OpenClawChatMessage {
@@ -12,7 +12,7 @@ index 63788dcdd87..9aa4f16055e 100644
          if let key = self.idempotencyKey, key.hasSuffix(":user") { return String(key.dropLast(5)) }
          let fallbackRunID = self.streamFallback?.runId?.trimmingCharacters(in: .whitespacesAndNewlines)
 diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift
-index 9e56e917d1b..a9acf990300 100644
+index 9e56e917d1be..ecf72cdc3b0f 100644
 --- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift
 +++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift
 @@ -287,7 +287,9 @@ private struct ChatBubbleShape: InsettableShape {
@@ -67,7 +67,7 @@ index 9e56e917d1b..a9acf990300 100644
      }
  
      private var shouldRenderBubble: Bool {
-@@ -628,12 +635,9 @@ private struct ChatMessageBody: View {
+@@ -628,12 +635,11 @@ private struct ChatMessageBody: View {
                  activityPrepared: self.message.activity != nil)]
          }
          guard self.message.role.lowercased() == "assistant" else { return [] }
@@ -78,12 +78,14 @@ index 9e56e917d1b..a9acf990300 100644
 -            return prepared
 -        }
 +        return ChatToolActivity.items(
-+            calls: self.toolCalls, results: self.inlineToolResults,
-+            activity: self.message.activity, liveTools: self.liveToolCalls)
++            calls: self.toolCalls,
++            results: self.inlineToolResults,
++            activity: self.message.activity,
++            liveTools: self.liveToolCalls)
      }
  
      private var linkPreviewURL: URL? {
-@@ -879,6 +883,7 @@ private struct AttachmentRow: View {
+@@ -879,6 +885,7 @@ private struct AttachmentRow: View {
  
  @MainActor
  struct ChatTypingIndicatorBubble: View {
@@ -91,7 +93,7 @@ index 9e56e917d1b..a9acf990300 100644
      let style: OpenClawChatView.Style
      let assistantName: String?
      let assistantAvatarText: String?
-@@ -890,7 +895,7 @@ struct ChatTypingIndicatorBubble: View {
+@@ -890,7 +897,7 @@ struct ChatTypingIndicatorBubble: View {
  
      var body: some View {
          HStack(alignment: .center, spacing: 8) {
@@ -100,7 +102,7 @@ index 9e56e917d1b..a9acf990300 100644
                  ChatAgentAvatar(
                      text: self.assistantAvatarText,
                      name: self.assistantName,
-@@ -1063,13 +1068,14 @@ extension EnvironmentValues {
+@@ -1063,13 +1070,14 @@ extension EnvironmentValues {
  // swiftformat:enable environmentEntry
  
  private struct AssistantBubbleContainerStyle: ViewModifier {
@@ -116,7 +118,7 @@ index 9e56e917d1b..a9acf990300 100644
              content
          } else {
              content
-@@ -1086,7 +1092,7 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
+@@ -1086,7 +1094,7 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
  }
  
  extension View {
@@ -125,7 +127,7 @@ index 9e56e917d1b..a9acf990300 100644
          self.modifier(AssistantBubbleContainerStyle(isClean: isClean, cornerRadius: cornerRadius))
              .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
              .focusable(false)
-@@ -1095,6 +1101,7 @@ extension View {
+@@ -1095,6 +1103,7 @@ extension View {
  
  @MainActor
  struct ChatStreamingAssistantBubble: View {
@@ -133,7 +135,7 @@ index 9e56e917d1b..a9acf990300 100644
      @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
      @Environment(\.colorScheme) private var colorScheme
      @Environment(\.colorSchemeContrast) private var colorSchemeContrast
-@@ -1109,7 +1116,7 @@ struct ChatStreamingAssistantBubble: View {
+@@ -1109,7 +1118,7 @@ struct ChatStreamingAssistantBubble: View {
  
      var body: some View {
          HStack(alignment: .top, spacing: 8) {
@@ -142,7 +144,7 @@ index 9e56e917d1b..a9acf990300 100644
                  ChatAgentAvatar(
                      text: self.assistantAvatarText,
                      name: self.assistantName,
-@@ -1144,19 +1151,7 @@ struct ChatPendingToolsBubble: View {
+@@ -1144,19 +1153,7 @@ struct ChatPendingToolsBubble: View {
      }
  
      private var items: [ChatToolActivityItem] {
@@ -164,7 +166,7 @@ index 9e56e917d1b..a9acf990300 100644
  }
  
 diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModels.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModels.swift
-index 98fc7d0c271..c0217cb15eb 100644
+index 98fc7d0c2717..c0217cb15ebb 100644
 --- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModels.swift
 +++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModels.swift
 @@ -1057,6 +1057,7 @@ public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {
@@ -176,7 +178,7 @@ index 98fc7d0c271..c0217cb15eb 100644
  
  public struct OpenClawGatewayHealthOK: Codable, Sendable {
 diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift
-index 5626bcd27b6..5ecc8888069 100644
+index 5626bcd27b67..5ecc8888069e 100644
 --- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift
 +++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift
 @@ -55,6 +55,22 @@ struct ChatToolActivityItem: Identifiable, Equatable {
@@ -261,10 +263,10 @@ index 5626bcd27b6..5ecc8888069 100644
          return items
      }
 diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift
-index f0d56a22f1c..d71840630c8 100644
+index f0d56a22f1c9..7a6a9add5d41 100644
 --- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift
 +++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift
-@@ -562,33 +562,102 @@ public struct OpenClawChatView: View {
+@@ -562,33 +562,103 @@ public struct OpenClawChatView: View {
                  .frame(maxWidth: .infinity, alignment: .leading)
          }
  
@@ -361,7 +363,8 @@ index f0d56a22f1c..d71840630c8 100644
 +        switch row {
 +        case let .message(message):
 +            self.messageRow(
-+                for: message, contextWindowTokens: contextWindowTokens,
++                for: message,
++                contextWindowTokens: contextWindowTokens,
 +                showsActions: !isGrouped || message.id == answerID)
 +                .background(
 +                    RoundedRectangle(cornerRadius: 12)
@@ -389,7 +392,7 @@ index f0d56a22f1c..d71840630c8 100644
          if self.showsWorkingIndicator {
              ChatTypingIndicatorBubble(
                  style: self.style,
-@@ -609,12 +678,6 @@ public struct OpenClawChatView: View {
+@@ -609,12 +679,6 @@ public struct OpenClawChatView: View {
                  .frame(maxWidth: .infinity, alignment: .leading)
          }
  
@@ -402,7 +405,7 @@ index f0d56a22f1c..d71840630c8 100644
          if let text = viewModel.streamingAssistantText, self.hasVisibleStreamingAssistantText {
              ChatStreamingAssistantBubble(
                  text: text,
-@@ -632,10 +695,14 @@ public struct OpenClawChatView: View {
+@@ -632,10 +696,14 @@ public struct OpenClawChatView: View {
      @ViewBuilder
      private func messageRow(
          for msg: OpenClawChatMessage,
@@ -418,7 +421,7 @@ index f0d56a22f1c..d71840630c8 100644
              sourcePreviews: self.viewModel.sourcePreviews(for: msg),
              sourceContextRevision: self.viewModel.sourcePreviewState.revision,
              sourceFaviconsEnabled: self.viewModel.sourcePreviewState.context?.automaticallyFetchFavicons == true,
-@@ -691,7 +758,7 @@ public struct OpenClawChatView: View {
+@@ -691,7 +759,7 @@ public struct OpenClawChatView: View {
                      .padding(.leading, 8)
              }
              #if os(iOS)
@@ -427,7 +430,7 @@ index f0d56a22f1c..d71840630c8 100644
                  self.messageActionsMenu(for: msg)
                      .labelStyle(.iconOnly)
                      .buttonStyle(.borderless)
-@@ -706,7 +773,7 @@ public struct OpenClawChatView: View {
+@@ -706,7 +774,7 @@ public struct OpenClawChatView: View {
              }
              #endif
              #if os(macOS)
@@ -436,7 +439,7 @@ index f0d56a22f1c..d71840630c8 100644
                  HStack(spacing: 12) {
                      self.copyMessageButton(for: msg)
                          .help("Copy message")
-@@ -739,7 +806,7 @@ public struct OpenClawChatView: View {
+@@ -739,7 +807,7 @@ public struct OpenClawChatView: View {
              }
          }
          #if os(iOS)
@@ -446,7 +449,7 @@ index f0d56a22f1c..d71840630c8 100644
          } else {
              row
 diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ToolActivity.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ToolActivity.swift
-index c44aae953a0..2ba1c8e3406 100644
+index c44aae953a01..2ba1c8e3406a 100644
 --- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ToolActivity.swift
 +++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ToolActivity.swift
 @@ -30,6 +30,7 @@ extension OpenClawChatViewModel {
@@ -458,7 +461,7 @@ index c44aae953a0..2ba1c8e3406 100644
          pending.isComplete = activity.phase == "end"
          self.turnToolCallsById[toolCallId] = pending
 diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+TransportEvents.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+TransportEvents.swift
-index d5de9795280..4677e37dac7 100644
+index d5de9795280f..4677e37dac72 100644
 --- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+TransportEvents.swift
 +++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+TransportEvents.swift
 @@ -747,7 +747,8 @@ extension OpenClawChatViewModel {
@@ -483,10 +486,10 @@ index d5de9795280..4677e37dac7 100644
                      pending.isComplete = true
 diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatAssistantRunGroup.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatAssistantRunGroup.swift
 new file mode 100644
-index 00000000000..53467d2fd59
+index 000000000000..44701fb9d204
 --- /dev/null
 +++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatAssistantRunGroup.swift
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,184 @@
 +import Foundation
 +import SwiftUI
 +
@@ -610,7 +613,9 @@ index 00000000000..53467d2fd59
 +                } else {
 +                    groups.append(Self(
 +                        id: .run(liveRunID, boundary, segments[liveRunID, default: 0]),
-+                        runID: liveRunID, parts: [], includesLive: true))
++                        runID: liveRunID,
++                        parts: [],
++                        includesLive: true))
 +                }
 +            } else {
 +                groups.append(Self(id: .live, runID: nil, parts: [], includesLive: true))
@@ -671,7 +676,7 @@ index 00000000000..53467d2fd59
 +}
 diff --git a/apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatAssistantRunGroupTests.swift b/apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatAssistantRunGroupTests.swift
 new file mode 100644
-index 00000000000..784cd31bbbe
+index 000000000000..784cd31bbbe7
 --- /dev/null
 +++ b/apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatAssistantRunGroupTests.swift
 @@ -0,0 +1,133 @@

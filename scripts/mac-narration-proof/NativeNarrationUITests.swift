@@ -1,4 +1,5 @@
 import Foundation
+import Vision
 import XCTest
 
 /// Opt-in desktop proof: exact baseline/grouped app bytes with the same loopback Gateway scenario.
@@ -70,10 +71,18 @@ final class NativeNarrationUITests: XCTestCase {
             XCTAssertLessThan(second.frame.minY, current.frame.minY)
         }
         XCTAssertTrue(activeVisible, "Both narration segments must remain visible while working")
-        let liveRead = app.descendants(matching: .any).matching(NSPredicate(
-            format: "label == %@ AND value CONTAINS %@", "Read", "Layout.swift")).firstMatch
+        let liveRead = app.otherElements["Read"]
         XCTAssertTrue(liveRead.waitForExistence(timeout: 5), "Pending tool must be visible")
-        XCTAssertTrue((liveRead.value as? String)?.contains("Working") == true)
+        // SwiftUI exposes this noninteractive row's label, but not AXValue, on macOS.
+        // Recognize its actual pixels so missing arguments or status still fail proof.
+        let toolText = VNRecognizeTextRequest()
+        toolText.recognitionLevel = .accurate
+        toolText.usesLanguageCorrection = false
+        try VNImageRequestHandler(data: liveRead.screenshot().pngRepresentation, options: [:]).perform([toolText])
+        let visibleToolText = (toolText.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            .joined(separator: " ")
+        XCTAssertTrue(visibleToolText.contains("Layout.swift"), "Missing tool arguments: \(visibleToolText)")
+        XCTAssertTrue(visibleToolText.contains("Working"), "Missing live tool state: \(visibleToolText)")
         if stage == "after" {
             XCTAssertLessThan(first.frame.minY, liveRead.frame.minY)
             XCTAssertLessThan(liveRead.frame.minY, second.frame.minY)
