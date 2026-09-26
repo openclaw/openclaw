@@ -1,3 +1,4 @@
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.types.js";
 
@@ -77,7 +78,9 @@ export function createIngressSettleOwner<TPayload, TMetadata>(
     try {
       await settlePromise;
     } catch (err) {
-      settlePromise = undefined;
+      if (!hasSqliteWorkerOutcomeUnknown(err)) {
+        settlePromise = undefined;
+      }
       throw err;
     }
   };

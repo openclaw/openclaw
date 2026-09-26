@@ -298,11 +298,11 @@ async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
     return { fetchImpl };
   }
-  const { prepareHttpCapture, resolveDebugProxyFetchTransport } =
+  const { prepareHttpCaptureForTransport, resolveDebugProxyFetchTransport } =
     await import("../../proxy-capture/runtime.js");
   return {
     fetchImpl: resolveDebugProxyFetchTransport(fetchImpl),
-    capture: prepareHttpCapture(),
+    capture: prepareHttpCaptureForTransport(),
   };
 }
 
@@ -684,10 +684,10 @@ async function fetchWithSsrFGuardInternal(
           ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
           : await captureAdmission.fetchImpl(parsedUrl.toString(), init);
       } catch (error) {
-        captureAdmission.capture?.({ ...captureParams, error });
+        void captureAdmission.capture?.({ ...captureParams, error });
         throw error;
       }
-      captureAdmission.capture?.({ ...captureParams, response });
+      void captureAdmission.capture?.({ ...captureParams, response });
 
       if (isRedirectStatus(response.status)) {
         redirectCount += 1;

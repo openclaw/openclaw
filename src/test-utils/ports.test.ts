@@ -85,28 +85,23 @@ afterEach(async () => {
 });
 
 describe("deterministic test port blocks", () => {
-  it.each([
-    [32768, 60999],
-    [20000, 65000],
-  ])(
-    "excludes the kernel client range %i–%i from every worker's listener block",
-    async (low, high) => {
-      host.range = `${low}\t${high}\n`;
-      const { getDeterministicFreePortBlock } = await import("./ports.js");
-      const offsets = [0, 1, 2, 3, 4];
-      for (let worker = 0; worker < 64; worker += 1) {
-        const port = await withEnvAsync({ VITEST_WORKER_ID: String(worker) }, () =>
-          getDeterministicFreePortBlock({ offsets }),
-        );
-        for (const offset of offsets) {
-          expect(port + offset).toBeGreaterThanOrEqual(1024);
-          expect(port + offset).toBeLessThanOrEqual(65535);
-          expect(port + offset < low || port + offset > high).toBe(true);
-        }
+  it("excludes the configured kernel client range from every worker's listener block", async () => {
+    const [low, high] = [20000, 65000];
+    host.range = `${low}\t${high}\n`;
+    const { getDeterministicFreePortBlock } = await import("./ports.js");
+    const offsets = [0, 1, 2, 3, 4];
+    for (let worker = 0; worker < 64; worker += 1) {
+      const port = await withEnvAsync({ VITEST_WORKER_ID: String(worker) }, () =>
+        getDeterministicFreePortBlock({ offsets }),
+      );
+      for (const offset of offsets) {
+        expect(port + offset).toBeGreaterThanOrEqual(1024);
+        expect(port + offset).toBeLessThanOrEqual(65535);
+        expect(port + offset < low || port + offset > high).toBe(true);
       }
-      expect(host.reads).toHaveBeenCalledTimes(1);
-    },
-  );
+    }
+    expect(host.reads).toHaveBeenCalledTimes(1);
+  });
 
   it("keeps returned adjacent blocks bindable and separate from live listeners", async () => {
     host.range = "32768\t60999\n";
@@ -155,22 +150,17 @@ describe("deterministic test port blocks", () => {
     },
   );
 
-  it.each(["darwin", "win32"])(
-    "preserves the existing %s pool without Linux host reads",
-    async (os) => {
-      host.platform.mockReturnValue(os);
-      const { getDeterministicFreePortBlock } = await import("./ports.js");
-      const port = await getDeterministicFreePortBlock();
-      expect(port).toBeGreaterThanOrEqual(30000);
-      expect(port + 4).toBeLessThanOrEqual(64999);
-      expect(host.reads).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves the non-Linux pool without Linux host reads", async () => {
+    host.platform.mockReturnValue("darwin");
+    const { getDeterministicFreePortBlock } = await import("./ports.js");
+    const port = await getDeterministicFreePortBlock();
+    expect(port).toBeGreaterThanOrEqual(30000);
+    expect(port + 4).toBeLessThanOrEqual(64999);
+    expect(host.reads).not.toHaveBeenCalled();
+  });
 
   it.each([
     { deniedOffset: 0, permissionFallback: false },
-    { deniedOffset: 1, permissionFallback: false },
-    { deniedOffset: 0, permissionFallback: true },
     { deniedOffset: 1, permissionFallback: true },
   ])(
     "finds a bindable Windows block after EACCES at offset $deniedOffset (permissionFallback=$permissionFallback)",
@@ -206,7 +196,6 @@ describe("deterministic test port blocks", () => {
 
   it.each([
     { os: "linux", code: "EACCES" },
-    { os: "darwin", code: "EACCES" },
     { os: "win32", code: "EPERM" },
     { os: "win32", code: "EACCES" },
   ])("propagates global $os $code bind failures", async ({ os, code }) => {

@@ -89,16 +89,6 @@ function resolveArchiveDashboardAfterMs(maintenance?: SessionMaintenanceConfig):
   return parsed > 0 ? parsed : null;
 }
 
-function resolveResetArchiveRetentionMs(
-  maintenance: SessionMaintenanceConfig | undefined,
-): number | null {
-  // null = keep extracted transcripts indefinitely (the disk budget still removes
-  // old archive artifacts under pressure). An explicit duration opts back into
-  // wall-clock deletion; parse failures stay on the keep side because losing
-  // history is the worse failure mode.
-  return resolveMaintenanceDuration(maintenance?.resetArchiveRetention, null);
-}
-
 function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | null {
   const raw = maintenance?.maxDiskBytes;
   if (raw === false) {
@@ -167,7 +157,8 @@ export function resolveMaintenanceConfigFromInput(
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
     modelRunPruneAfterMs: DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
     preserveRecentMs: resolveMaintenanceDuration(maintenance?.preserveRecent, null),
-    resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance),
+    // Missing or invalid retention keeps extracted transcripts until disk-budget pressure.
+    resetArchiveRetentionMs: resolveMaintenanceDuration(maintenance?.resetArchiveRetention, null),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };
@@ -532,12 +523,14 @@ function isProtectedSessionMaintenanceEntry(
   return chatType === "group" || chatType === "channel" || chatType === "thread";
 }
 
-function shouldPreserveNonArchivedMaintenanceEntry(params: {
+type SessionMaintenanceEntryParams = {
   key: string;
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;
   preserveRecentMs?: number | null;
-}): boolean {
+};
+
+function shouldPreserveNonArchivedMaintenanceEntry(params: SessionMaintenanceEntryParams): boolean {
   if (params.entry?.pinnedAt !== undefined && isPinnableSessionEntry(params.key, params.entry)) {
     return true;
   }
@@ -554,12 +547,7 @@ function shouldPreserveNonArchivedMaintenanceEntry(params: {
   );
 }
 
-export function shouldPreserveMaintenanceEntry(params: {
-  key: string;
-  entry: SessionEntry | undefined;
-  preserveKeys?: ReadonlySet<string>;
-  preserveRecentMs?: number | null;
-}): boolean {
+export function shouldPreserveMaintenanceEntry(params: SessionMaintenanceEntryParams): boolean {
   // Ordinary age/count maintenance never deletes an archived session. Disk-budget cleanup has a
   // separate positive eligibility check for rows that this product automatically archived.
   return (
@@ -567,12 +555,9 @@ export function shouldPreserveMaintenanceEntry(params: {
   );
 }
 
-export function isSessionEntryDiskBudgetEvictable(params: {
-  key: string;
-  entry: SessionEntry | undefined;
-  preserveKeys?: ReadonlySet<string>;
-  preserveRecentMs?: number | null;
-}): params is { key: string; entry: SessionEntry } {
+export function isSessionEntryDiskBudgetEvictable(
+  params: SessionMaintenanceEntryParams,
+): params is { key: string; entry: SessionEntry } {
   return (
     params.entry?.archivedAt !== undefined &&
     params.entry.archiveReason === "active-session-cap" &&

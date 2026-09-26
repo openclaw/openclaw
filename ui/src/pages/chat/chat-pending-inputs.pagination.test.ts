@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  ChatInputReceipts,
+  ChatPendingInputsPage,
+} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -42,6 +45,86 @@ afterEach(() => {
 });
 
 describe("server-owned pending input pagination", () => {
+  it.each(["empty-queue", "complete-page", "partial-page-receipts"] as const)(
+    "retires consumed server queue chips outside the transcript window using %s",
+    async (source) => {
+      const queuedInput = (id: string, acceptedAt: number) => ({
+        ...input,
+        id,
+        runId: id,
+        acceptedAt,
+        state: "queued" as const,
+        queued: true as const,
+        message: { role: "user", content: id },
+      });
+      const consumed = queuedInput("Already handled while disconnected", 1);
+      const retained = queuedInput("Still waiting on the server", 2);
+      const replacement = queuedInput("New request from another participant", 3);
+      let pendingInputs: ChatPendingInputsPage = {
+        items: [consumed, retained],
+        total: 2,
+        queuedCount: 2,
+      };
+      let inputReceipts: ChatInputReceipts | undefined = undefined;
+      const host = makeChatHost({
+        sessionKey,
+        currentSessionId: sessionId,
+        requestHandlers: {
+          "chat.history": () => ({
+            sessionId,
+            // Consumption happened outside this retained transcript window.
+            messages: [{ role: "assistant", content: "Recent activity only" }],
+            pendingInputs,
+            ...(inputReceipts ? { inputReceipts } : {}),
+          }),
+        },
+      });
+      const queueText = () =>
+        Array.from(
+          renderChatView({
+            historyState: host,
+            sessionKey,
+            messages: host.chatMessages,
+          }).querySelectorAll(".chat-queue__text"),
+          (row) => row.textContent,
+        );
+      await loadChatHistory(host);
+      expect(queueText()).toEqual([consumed.message.content, retained.message.content]);
+
+      // A partial page alone cannot retire either previously observed input.
+      pendingInputs = { items: [], total: 21, nextBefore: 21, queuedCount: 2 };
+      await loadChatHistory(host);
+      expect(queueText()).toEqual([consumed.message.content, retained.message.content]);
+
+      pendingInputs =
+        source === "empty-queue"
+          ? { items: [], total: 21, nextBefore: 21, queuedCount: 0 }
+          : {
+              items: [replacement],
+              total: source === "complete-page" ? 1 : 21,
+              queuedCount: source === "complete-page" ? 1 : 2,
+              ...(source === "partial-page-receipts" ? { nextBefore: 21 } : {}),
+            };
+      // Complete queue snapshots stand alone; partial pages need exact receipts
+      // because ordinary consumption deletes its custody record.
+      inputReceipts =
+        source === "partial-page-receipts"
+          ? [{ runId: retained.runId, state: "pending", queued: true }]
+          : undefined;
+      await loadChatHistory(host);
+
+      expect(queueText()).toEqual(
+        source === "empty-queue"
+          ? []
+          : source === "complete-page"
+            ? [replacement.message.content]
+            : [retained.message.content, replacement.message.content],
+      );
+      expect(readChatInputRunIds(host)).not.toContain(consumed.runId);
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    },
+  );
+
   it("refreshes every live queued input across receipt batches without reordering the shelf", async () => {
     const inputs = Array.from({ length: 51 }, (_, index) => ({
       ...input,

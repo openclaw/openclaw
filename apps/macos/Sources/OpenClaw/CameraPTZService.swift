@@ -282,33 +282,18 @@ actor CameraPTZService: CameraPTZServicing {
             guard let pan = status.pan, let tilt = status.tilt else {
                 throw CameraPTZError.axisUnsupported(axes.panDegrees != nil ? "pan" : "tilt")
             }
-            let appliedPan: Int32
-            if let panDegrees = axes.panDegrees {
-                let requested = Self.requestedDegrees(
-                    value: panDegrees,
-                    current: Self.arcsecondsToDegrees(pan.current),
-                    operation: operation)
-                appliedPan = pan.range.normalize(Self.degreesToArcseconds(requested))
-                if Self.valuesDiffer(Self.arcsecondsToDegrees(appliedPan), requested) {
-                    adjusted.append("panDegrees")
+            func planAngle(_ value: Double?, axis: CameraPTZRawAxisStatus, name: String) -> Int32 {
+                guard let value else { return axis.current }
+                let requested = operation == .move ? Self.arcsecondsToDegrees(axis.current) + value : value
+                let applied = axis.range.normalize(Self.degreesToArcseconds(requested))
+                if Self.valuesDiffer(Self.arcsecondsToDegrees(applied), requested) {
+                    adjusted.append(name)
                 }
-            } else {
-                appliedPan = pan.current
+                return applied
             }
-            let appliedTilt: Int32
-            if let tiltDegrees = axes.tiltDegrees {
-                let requested = Self.requestedDegrees(
-                    value: tiltDegrees,
-                    current: Self.arcsecondsToDegrees(tilt.current),
-                    operation: operation)
-                appliedTilt = tilt.range.normalize(Self.degreesToArcseconds(requested))
-                if Self.valuesDiffer(Self.arcsecondsToDegrees(appliedTilt), requested) {
-                    adjusted.append("tiltDegrees")
-                }
-            } else {
-                appliedTilt = tilt.current
-            }
-            plannedPanTilt = (appliedPan, appliedTilt)
+            plannedPanTilt = (
+                planAngle(axes.panDegrees, axis: pan, name: "panDegrees"),
+                planAngle(axes.tiltDegrees, axis: tilt, name: "tiltDegrees"))
         }
 
         var plannedZoom: Int32?
@@ -335,14 +320,6 @@ actor CameraPTZService: CameraPTZServicing {
             nil
         }
         return WritePlan(panTilt: panTilt, zoom: status.zoom?.range.default, adjusted: [])
-    }
-
-    private static func requestedDegrees(
-        value: Double,
-        current: Double,
-        operation: OpenClawCameraPTZOperation) -> Double
-    {
-        operation == .move ? current + value : value
     }
 
     private func execute(
