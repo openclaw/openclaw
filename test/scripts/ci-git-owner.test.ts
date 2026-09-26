@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { EOL, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -717,7 +717,7 @@ finally:
     reclaimLocks ? [] : [["rev-parse", "HEAD"]],
   );
   if (!reclaimLocks) {
-    expect(report.output).toBe(`${head}\n`);
+    expect(report.output).toBe(`${head}${EOL}`);
   }
 });
 

@@ -1374,7 +1374,13 @@ async function supervise() {
       process.platform === "win32"
         ? [
             "-c",
-            'export PATH="$(cygpath -u "$1"):$PATH"; export TEMP="$3" TMP="$4"; source "$2"',
+            `export PATH="$(cygpath -u "$1"):$PATH"
+git() {
+  ${gitArgs.map((value) => quote(shellPath(value))).join(" ")} "$@"
+}
+export -f git
+export TEMP="$3" TMP="$4"
+source "$2"`,
             "checkout-fixture",
             bin,
             checkoutScript,
