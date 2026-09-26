@@ -23,12 +23,13 @@ import {
   sameFileMutationFingerprint,
   type FileMutationFingerprint,
 } from "./file-descriptor.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveSqliteFilesystemPath } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationInProcess } from "./sqlite-readonly-location.js";
+import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { withSqliteSnapshotSource } from "./sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
@@ -550,8 +551,8 @@ export async function createVerifiedSqliteSnapshot(
       undefined,
       options.onProgress,
     );
-    return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
-      verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+    return withPreparedSqliteSnapshot(prepared, () =>
+      verifyAndPublishSqliteSnapshot(options, prepared),
     );
   }
   return verifyAndPublishSqliteSnapshot(options);
@@ -559,14 +560,25 @@ export async function createVerifiedSqliteSnapshot(
 
 async function verifyAndPublishSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
-  privateSourcePath?: string,
+  prepared?: PreparedSqliteReadOnlyLocation,
 ): Promise<VerifiedSqliteSnapshot> {
+  const privateSourcePath = prepared?.location;
   const stagingDir = privateSourcePath
     ? path.dirname(privateSourcePath)
     : await createPrivateSqliteTempDirectory(path.dirname(options.targetPath), ".sqlite-snapshot-");
   await fs.chmod(stagingDir, 0o700);
   const stagedPath = privateSourcePath ?? path.join(stagingDir, "database.sqlite");
-  let stagedIdentity: Stats | undefined;
+  let compactedDir: string | undefined;
+  const retireSource = async () => {
+    if (prepared) {
+      // Use the acquisition owner's retirement token, after all native readers close.
+      if (!(await prepared.cleanupAsync())) {
+        throw new Error(`SQLite snapshot cleanup failed: ${prepared.cleanupRoot ?? stagingDir}`);
+      }
+    } else {
+      await fs.rm(stagingDir, { force: true, recursive: true });
+    }
+  };
   try {
     await withSqliteSnapshotSource(
       privateSourcePath ?? options.sourcePath,
@@ -601,7 +613,7 @@ async function verifyAndPublishSqliteSnapshot(
     );
 
     await fs.chmod(stagedPath, 0o600);
-    const snapshot = openNodeSqliteDatabase(stagedPath, {
+    let snapshot = openNodeSqliteDatabase(stagedPath, {
       allowExtension: true,
     });
     try {
@@ -613,25 +625,50 @@ async function verifyAndPublishSqliteSnapshot(
       if (options.transform) {
         await options.transform(snapshot);
       }
-      // Ordinary backups erase deleted/transformed data from free pages. Update
-      // checkpoints opt out because VACUUM can rewrite implicit row IDs. DELETE
-      // journaling above still makes the published artifact single-file.
+      let verifiedPath = stagedPath;
+      // VACUUM INTO erases free-page data without overlapping the raw image,
+      // an in-place rollback journal, and SQLite's temporary rebuilt database.
+      // Keep the output outside the acquisition owner's recursive cleanup root.
+      // Recovery checkpoints still opt out to preserve implicit row IDs.
       if (!options.preserveRowIds) {
-        snapshot.exec("VACUUM;");
+        compactedDir = await createPrivateSqliteTempDirectory(
+          path.dirname(options.targetPath),
+          ".sqlite-snapshot-",
+        );
+        verifiedPath = path.join(compactedDir, "database.sqlite");
+        snapshot.prepare("VACUUM INTO ?;").run(resolveSqliteFilesystemPath(verifiedPath));
+        snapshot.close();
+        await fs.chmod(verifiedPath, 0o600);
+        snapshot = openNodeSqliteDatabase(verifiedPath, { allowExtension: true, readOnly: true });
+        snapshot.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
+        await loadSqliteVecExtension({ db: snapshot });
       }
       assertSqliteIntegrity(snapshot, options.targetPath);
       options.validate?.(snapshot, options.targetPath);
       const userVersion = readSqliteUserVersion(snapshot);
       snapshot.close();
-      await syncFile(stagedPath);
-      stagedIdentity = await fs.lstat(stagedPath);
-      const expectedContent = await hashPublishedFile(stagedPath, stagedIdentity);
+      if (compactedDir) {
+        await retireSource();
+      }
+      await syncFile(verifiedPath);
+      const verifiedIdentity = await fs.lstat(verifiedPath);
+      const expectedContent = await hashPublishedFile(verifiedPath, verifiedIdentity);
       await publishVerifiedSqliteFile({
-        sourceIdentity: stagedIdentity,
-        sourcePath: stagedPath,
+        sourceIdentity: verifiedIdentity,
+        sourcePath: verifiedPath,
         targetPath: options.targetPath,
         expectedContent,
-        beforePublish: options.beforePublish,
+        beforePublish: async () => {
+          // The publisher now owns an independently verified, synced copy and
+          // has closed our file. Retire only our consumed input before a possible
+          // fallback copy allocates the target, then recheck caller authority.
+          if (compactedDir) {
+            await fs.rm(compactedDir, { force: true, recursive: true });
+          } else {
+            await retireSource();
+          }
+          await options.beforePublish?.();
+        },
         afterPublish: options.afterPublish,
         validatePublished: async (publishedPath) => {
           const published = openNodeSqliteDatabase(publishedPath, {
@@ -666,6 +703,9 @@ async function verifyAndPublishSqliteSnapshot(
       { cause: error },
     );
   } finally {
+    if (compactedDir) {
+      await fs.rm(compactedDir, { force: true, recursive: true }).catch(() => undefined);
+    }
     if (!privateSourcePath) {
       await fs.rm(stagingDir, { force: true, recursive: true }).catch(() => undefined);
     }

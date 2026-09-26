@@ -8,6 +8,7 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 
 type PublishFileExclusive = typeof import("@openclaw/fs-safe/durability").publishFileExclusive;
 type PublicationFixture = (
@@ -68,6 +69,8 @@ afterEach(async () => {
   durabilityTestState.publicationSyncUnsupported = false;
   durabilityTestState.syncOutcome = undefined;
   vi.restoreAllMocks();
+  // Failed retirement retains a native token. Release it before deleting fixture paths.
+  await cleanupSnapshotOperations();
   await Promise.all(tempDirs.splice(0).map((tempDir) => fs.rm(tempDir, { recursive: true })));
 });
 
@@ -306,31 +309,28 @@ describe("createVerifiedSqliteSnapshot", () => {
     },
   );
 
-  it.each([undefined, false, true])(
-    "preserves implicit row IDs only when requested (%s), including committed WAL data",
-    async (preserveRowIds) => {
-      const source = new sqlite.DatabaseSync(sourcePath);
-      try {
-        source.exec(
-          "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE records(value TEXT); INSERT INTO records(rowid,value) VALUES(71,'online turn')",
-        );
-        await createVerifiedSqliteSnapshot({ sourcePath, targetPath, preserveRowIds });
-        withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
-          expect(snapshot.prepare("SELECT rowid,value FROM records").all()).toEqual([
-            { rowid: preserveRowIds ? 71 : 1, value: "online turn" },
-          ]);
-          expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
-          expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
-            integrity_check: "ok",
-          });
+  it("preserves implicit row IDs when requested, including committed WAL data", async () => {
+    const source = new sqlite.DatabaseSync(sourcePath);
+    try {
+      source.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE records(value TEXT); INSERT INTO records(rowid,value) VALUES(71,'online turn')",
+      );
+      await createVerifiedSqliteSnapshot({ sourcePath, targetPath, preserveRowIds: true });
+      withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
+        expect(snapshot.prepare("SELECT rowid,value FROM records").all()).toEqual([
+          { rowid: 71, value: "online turn" },
+        ]);
+        expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
+          integrity_check: "ok",
         });
-        await expect(fs.access(`${targetPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.access(`${targetPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        source.close();
-      }
-    },
-  );
+      });
+      await expect(fs.access(`${targetPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(`${targetPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      source.close();
+    }
+  });
 
   it("captures committed WAL state and removes deleted page contents", async () => {
     const deletedValue = `deleted-secret-${"x".repeat(256)}`;
@@ -470,18 +470,63 @@ describe("createVerifiedSqliteSnapshot", () => {
     });
   });
 
-  it("uses online backup before compacting the private copy", async () => {
+  it.each([
+    { isolated: false, preserveRowIds: false },
+    { isolated: true, preserveRowIds: false },
+    { isolated: false, preserveRowIds: true },
+    { isolated: true, preserveRowIds: true },
+  ])("retires consumed payload before copy publication (%j)", async (mode) => {
     const setup = new sqlite.DatabaseSync(sourcePath);
-    setup.exec("CREATE TABLE records (value TEXT NOT NULL); INSERT INTO records VALUES ('ok');");
-    setup.close();
-    const backupSpy = vi.spyOn(sqlite, "backup");
-    const prepareSpy = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare");
+    try {
+      setup.exec(`
+        CREATE TABLE records (id INTEGER PRIMARY KEY, value BLOB);
+        INSERT INTO records(id, value) VALUES (71, zeroblob(65536));
+        PRAGMA user_version = 7;
+      `);
+    } finally {
+      setup.close();
+    }
+    const sourceBefore = await fs.readFile(sourcePath);
+    const payloads = async () => {
+      const files = await fs.readdir(tempDir, { recursive: true, withFileTypes: true });
+      const found: string[] = [];
+      for (const file of files) {
+        const filePath = path.join(file.parentPath, file.name);
+        if (file.isFile() && filePath !== sourcePath && (await fs.stat(filePath)).size >= 65536) {
+          found.push(filePath);
+        }
+      }
+      return found;
+    };
+    let publicationChecked = false;
+    const publish = mockExclusiveCopyPublication(async () => {
+      expect(await payloads()).toHaveLength(2);
+    });
 
-    await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-    expect(backupSpy).toHaveBeenCalledTimes(1);
-    expect(prepareSpy.mock.calls.some(([sql]) => /\bVACUUM\s+INTO\b/iu.test(sql))).toBe(false);
+    await expect(
+      createVerifiedSqliteSnapshot({
+        sourcePath,
+        targetPath,
+        preserveRowIds: mode.preserveRowIds,
+        ...(mode.isolated
+          ? { sourceAcquisition: { mode: "isolated-process" as const, stagingRoot: tempDir } }
+          : {}),
+        beforePublish: async () => {
+          expect(await payloads()).toHaveLength(1);
+          await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+          publicationChecked = true;
+        },
+      }),
+    ).resolves.toEqual({ path: targetPath, userVersion: 7 });
+
+    expect(publicationChecked).toBe(true);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
+    await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
     withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
-      expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "ok" });
+      expect(snapshot.prepare("SELECT id, length(value) AS bytes FROM records").all()).toEqual([
+        { id: 71, bytes: 65536 },
+      ]);
     });
   });
 
@@ -825,19 +870,52 @@ describe("createVerifiedSqliteSnapshot", () => {
     );
   });
 
-  it("uses a private sibling staging file for atomic publication", async () => {
-    const originalOpen = fs.open.bind(fs);
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(originalOpen);
+  it.each([false, true])(
+    "refuses publication if input retirement fails (isolated=%s)",
+    async (isolated) => {
+      const sourceBefore = await fs.readFile(sourcePath);
+      const remove = fs.rm.bind(fs);
+      let consumedRoot: string | undefined;
+      let refused = false;
+      let published = false;
+      vi.spyOn(fs, "rm").mockImplementation(async (filePath, options) => {
+        const candidate = await fs
+          .realpath(String(filePath))
+          .catch(() => path.resolve(String(filePath)));
+        if (
+          consumedRoot &&
+          (candidate === consumedRoot || candidate.startsWith(`${consumedRoot}${path.sep}`))
+        ) {
+          refused = true;
+          throw Object.assign(new Error("retirement refused"), { code: "EACCES" });
+        }
+        return remove(filePath, options);
+      });
 
-    await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-    expect(
-      openSpy.mock.calls.some(
-        ([filePath, flags]) =>
-          flags === "wx+" &&
-          path.basename(path.dirname(String(filePath))).startsWith(".sqlite-publish-"),
-      ),
-    ).toBe(true);
-  });
+      await expectSnapshotFailureWithoutTarget(
+        {
+          sourcePath,
+          targetPath,
+          ...(isolated
+            ? { sourceAcquisition: { mode: "isolated-process" as const, stagingRoot: tempDir } }
+            : {}),
+          transform: (database) => {
+            const databaseFile = database.prepare("PRAGMA database_list").get()?.file;
+            expect(typeof databaseFile).toBe("string");
+            consumedRoot = fsSync.realpathSync.native(path.dirname(String(databaseFile)));
+          },
+          beforePublish: () => {
+            published = true;
+          },
+        },
+        /retirement refused|snapshot cleanup failed/iu,
+      );
+
+      expect(refused).toBe(true);
+      expect(published).toBe(false);
+      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
+    },
+  );
 
   it("accepts an exclusive-copy publication receipt", async () => {
     const publish = mockExclusiveCopyPublication();
