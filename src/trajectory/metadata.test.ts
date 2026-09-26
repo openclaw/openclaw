@@ -7,6 +7,7 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { SkillSnapshot } from "../skills/types.js";
 
 type ResolvedSkillEntry = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
@@ -119,42 +120,20 @@ describe("trajectory metadata", () => {
 
   it("captures redacted config plus active plugin and skill inventory", () => {
     const registry = createEmptyPluginRegistry();
-    registry.plugins.push({
-      id: "demo-plugin",
-      name: "Demo Plugin",
-      version: "1.2.3",
-      source: "bundled",
-      origin: "bundled",
-      enabled: true,
-      activated: true,
-      imported: true,
-      status: "loaded",
-      toolNames: ["demo_tool"],
-      hookNames: [],
-      channelIds: ["demo-channel"],
-      cliBackendIds: [],
-      providerIds: ["demo-provider"],
-      embeddingProviderIds: [],
-      speechProviderIds: [],
-      realtimeTranscriptionProviderIds: [],
-      realtimeVoiceProviderIds: [],
-      mediaUnderstandingProviderIds: [],
-      transcriptSourceProviderIds: [],
-      imageGenerationProviderIds: [],
-      videoGenerationProviderIds: [],
-      musicGenerationProviderIds: [],
-      webFetchProviderIds: [],
-      webSearchProviderIds: [],
-      migrationProviderIds: [],
-      agentHarnessIds: ["openclaw"],
-      cliCommands: [],
-      services: [],
-      gatewayDiscoveryServiceIds: [],
-      commands: [],
-      httpRoutes: 0,
-      hookCount: 0,
-      configSchema: false,
-    });
+    registry.plugins.push(
+      createPluginRecord({
+        id: "demo-plugin",
+        name: "Demo Plugin",
+        version: "1.2.3",
+        source: "bundled",
+        origin: "bundled",
+        imported: true,
+        toolNames: ["demo_tool"],
+        channelIds: ["demo-channel"],
+        providerIds: ["demo-provider"],
+        agentHarnessIds: ["openclaw"],
+      }),
+    );
     setActivePluginRegistry(registry, "trajectory-metadata-test");
 
     const metadata = buildTrajectoryRunMetadata({
