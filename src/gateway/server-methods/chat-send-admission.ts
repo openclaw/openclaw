@@ -374,6 +374,7 @@ export async function admitChatSend(
       assertAllowed: () => {
         params.assertCurrent?.();
         assertSessionTargetCurrent();
+        assertChatSendExclusiveAdmission(request, session);
       },
       revalidateAllowed: commitChatWorkAdmission,
       onInterrupt: (reason) => {
