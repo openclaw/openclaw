@@ -10,6 +10,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 // Whatsapp tests cover deliver reply plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createWebSendApi } from "../inbound/send-api.js";
 import { normalizeWhatsAppSendResult } from "../inbound/send-result.js";
 import { createAcceptedWhatsAppSendResult } from "../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
