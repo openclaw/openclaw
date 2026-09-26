@@ -100,6 +100,9 @@ describe("subagent registry query regressions", () => {
     index = index.patch(toRunMap([structuredClone(latest)]), toRunMap([latest]));
     expect(index.getDisplaySubagentRun("child")).toBe(older);
     expect(index.getDisplaySubagentRun("moved")).toBe(latest);
+    const replay = buildSubagentRunReadIndexFromRuns(index.inputs);
+    expect(replay.getDisplaySubagentRun("child")).toBe(older);
+    expect(replay.getDisplaySubagentRun("moved")).toBe(latest);
     expect(index.runsByControllerSessionKey.get("parent")?.map((run) => run.runId)).toEqual([
       "older",
     ]);
@@ -118,6 +121,9 @@ describe("subagent registry query regressions", () => {
     ]);
     index = index.patch(new Map(), new Map([[latest.runId, undefined]]));
     expect(index.getDisplaySubagentRun("moved")).toBe(runs.get("latest"));
+    expect(buildSubagentRunReadIndexFromRuns(index.inputs).getDisplaySubagentRun("moved")).toBe(
+      runs.get("latest"),
+    );
     index = index.patch(new Map([[latest.runId, undefined]]), new Map());
     expect(index.getDisplaySubagentRun("moved")).toBeNull();
     expect(index.runsByControllerSessionKey.has("controller")).toBe(false);
