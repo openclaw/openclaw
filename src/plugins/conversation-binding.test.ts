@@ -934,34 +934,21 @@ describe("plugin conversation binding approvals", () => {
       decision: "allow-once" as const,
       expectedStatus: "approved" as const,
       expectCallback: (payload: unknown) => {
-        const callback = payload as {
-          status: string;
-          binding?: {
-            pluginId: string;
-            pluginRoot: string;
-            conversationId: string;
-          };
-          decision: string;
+        expect(payload).toMatchObject({
+          status: "approved",
+          binding: {
+            pluginId: "codex",
+            pluginRoot: "/plugins/callback-test",
+            conversationId: "channel:callback-test",
+          },
+          decision: "allow-once",
           request: {
-            summary: string;
-            detachHint?: string;
-            requestedBySenderId: string;
-            conversation: {
-              channel: string;
-              accountId: string;
-              conversationId: string;
-            };
-          };
-        };
-        expect(callback.status).toBe("approved");
-        expect(callback.binding?.pluginId).toBe("codex");
-        expect(callback.binding?.pluginRoot).toBe("/plugins/callback-test");
-        expect(callback.binding?.conversationId).toBe("channel:callback-test");
-        expect(callback.decision).toBe("allow-once");
-        expect(callback.request.summary).toBe("Bind this conversation to Codex thread abc.");
-        expect(callback.request.detachHint).toBeUndefined();
-        expect(callback.request.requestedBySenderId).toBe("user-1");
-        expect(callback.request.conversation).toEqual({
+            summary: "Bind this conversation to Codex thread abc.",
+            detachHint: undefined,
+            requestedBySenderId: "user-1",
+          },
+        });
+        expect(payload).toHaveProperty("request.conversation", {
           channel: "discord",
           accountId: "isolated",
           conversationId: "channel:callback-test",
@@ -986,28 +973,17 @@ describe("plugin conversation binding approvals", () => {
       decision: "deny" as const,
       expectedStatus: "denied" as const,
       expectCallback: (payload: unknown) => {
-        const callback = payload as {
-          status: string;
-          binding?: unknown;
-          decision: string;
+        expect(payload).toMatchObject({
+          status: "denied",
+          binding: undefined,
+          decision: "deny",
           request: {
-            summary: string;
-            detachHint?: string;
-            requestedBySenderId: string;
-            conversation: {
-              channel: string;
-              accountId: string;
-              conversationId: string;
-            };
-          };
-        };
-        expect(callback.status).toBe("denied");
-        expect(callback.binding).toBeUndefined();
-        expect(callback.decision).toBe("deny");
-        expect(callback.request.summary).toBe("Bind this conversation to Codex thread deny.");
-        expect(callback.request.detachHint).toBeUndefined();
-        expect(callback.request.requestedBySenderId).toBe("user-1");
-        expect(callback.request.conversation).toEqual({
+            summary: "Bind this conversation to Codex thread deny.",
+            detachHint: undefined,
+            requestedBySenderId: "user-1",
+          },
+        });
+        expect(payload).toHaveProperty("request.conversation", {
           channel: "telegram",
           accountId: "default",
           conversationId: "8460800771",

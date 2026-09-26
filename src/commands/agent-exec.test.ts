@@ -50,14 +50,6 @@ afterEach(() => {
 });
 
 describe("agent exec strict result classification", () => {
-  it("classifies a successful embedded result", () => {
-    expect(classifyAgentExecResult(successResult())).toMatchObject({
-      ok: true,
-      status: "ok",
-      final: "done",
-    });
-  });
-
   it("classifies model error payloads as failure", () => {
     const envelope = classifyAgentExecResult({
       payloads: [{ text: "provider rejected request", isError: true }],

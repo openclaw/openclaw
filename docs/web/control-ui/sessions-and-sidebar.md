@@ -129,6 +129,8 @@ enablement and sizing.
 
 ## Sidebar navigation
 
+The chat header links to an accessible parent session even when it is outside the current session list, including Incognito parents.
+
 The agent switcher and workspace header preview their menu when you move the
 pointer over them and pause. Click the header to keep the menu open. Returning
 from Settings leaves menus closed under a stationary pointer.

@@ -857,24 +857,6 @@ describe("chat page split layout host", () => {
     });
   });
 
-  it("replaces and activates the pane under a layout center drop", () => {
-    const page = new ChatPage();
-    page.data = { sessionKey: "main" };
-    setLayout(page, createSplitLayout("main"));
-    const navigation = setNavigationContext(page);
-
-    applySessionDrop(page, WORK_SESSION_KEY, "p1", { kind: "center" });
-
-    const layout = getLayout(page);
-    expect(layout?.columns.at(0)?.panes.at(0)?.sessionKey).toBe(WORK_SESSION_KEY);
-    expect(layout?.activePaneId).toBe("p1");
-    expect(loadSettings().chatSplitLayout).toEqual(layout);
-    expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: sessionPath(WORK_SESSION_KEY),
-      search: "?__openclawSessionFacePreference=1",
-    });
-  });
-
   it("leaves a same-session center drop unchanged", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
@@ -1081,6 +1063,8 @@ describe("chat page split layout host", () => {
     } as unknown as DragEvent);
 
     expect(getLayout(page)?.columns.at(0)?.panes.at(0)?.sessionKey).toBe(WORK_SESSION_KEY);
+    expect(getLayout(page)?.activePaneId).toBe("p1");
+    expect(loadSettings().chatSplitLayout).toEqual(getLayout(page));
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: sessionPath(WORK_SESSION_KEY),
       search: "?__openclawSessionFacePreference=1",

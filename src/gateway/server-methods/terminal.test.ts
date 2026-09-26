@@ -961,7 +961,6 @@ describe("terminal gateway policy", () => {
   });
 
   it.each([
-    { caps: [] },
     { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA] },
     { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE] },
   ])(

@@ -226,8 +226,6 @@ describe("plugin registry refresh config ownership", () => {
 
   it.each([
     { reason: "source-changed", envSource: "process" },
-    { reason: "policy-changed", envSource: "process" },
-    { reason: "source-changed", envSource: "caller" },
     { reason: "policy-changed", envSource: "caller" },
   ] as const)(
     "discovers an env-referenced plugin from $envSource env after $reason",

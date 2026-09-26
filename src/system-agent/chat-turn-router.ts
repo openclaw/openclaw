@@ -97,6 +97,9 @@ export function redactSensitiveCommandText(text: string): string {
       return `config set ${displayPath} <redacted secret>`;
     }
   }
+  if (operation.kind === "config-unset") {
+    return `config unset ${redactSystemAgentConfigPath(operation.path)}`;
+  }
   if (operation.kind === "config-set-ref") {
     const displayPath = redactSystemAgentConfigPath(operation.path);
     return `config set-ref ${displayPath} <redacted reference>`;
@@ -231,6 +234,7 @@ export class ChatTurnRouter {
     }
     if (
       typed.kind === "config-set" ||
+      typed.kind === "config-unset" ||
       typed.kind === "config-set-ref" ||
       typed.kind === "config-get" ||
       typed.kind === "config-schema"
@@ -300,7 +304,10 @@ export class ChatTurnRouter {
     }
     const capture = createCaptureRuntime();
     const result = await this.executeOperation(operation, capture, true, beforePersistentApply);
-    const configWrite = operation.kind === "config-set" || operation.kind === "config-set-ref";
+    const configWrite =
+      operation.kind === "config-set" ||
+      operation.kind === "config-unset" ||
+      operation.kind === "config-set-ref";
     if (configWrite && result === undefined) {
       return {
         text: await resolveConfigWriteRepair(capture.read(), (message) =>

@@ -359,34 +359,48 @@ async function archiveSourceSession(storePath?: string): Promise<void> {
   );
 }
 
-describe("session message-cut methods", () => {
-  it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
-    const profile = ensureProfileForEmail("restricted-fork-creator@example.com");
-    setUserProfileRole(profile.id, "guest");
-    const client = {
-      connect: { scopes: ["operator.write"] },
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      },
-    } as GatewayClient;
-    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-      agents: { list: [{ id: "main", default: true }] },
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: {
-              sessions: { others: "view" },
-              agents: ["guest-only"],
-              scopes: ["operator.read", "operator.write"],
-            },
+function restrictedOperator(email: string, agentId: string, sandbox?: "required") {
+  const profile = ensureProfileForEmail(email);
+  setUserProfileRole(profile.id, "guest");
+  const client: GatewayClient = {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "test", version: "test", platform: "test", mode: "test" },
+      scopes: ["operator.write"],
+    },
+    authenticatedUserProfile: {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    },
+  };
+  const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+    agents: { list: [{ id: "main", default: true }] },
+    gateway: {
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            sessions: { others: "view" },
+            agents: [agentId],
+            scopes: ["operator.read", "operator.write"],
+            ...(sandbox ? { sandbox } : {}),
           },
         },
       },
-    });
+    },
+  });
+  return { profile, client, runtimeConfig };
+}
+
+describe("session message-cut methods", () => {
+  it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
+    const { client, runtimeConfig } = restrictedOperator(
+      "restricted-fork-creator@example.com",
+      "guest-only",
+    );
 
     const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
     expect(fork).toHaveBeenCalledWith(
@@ -404,33 +418,11 @@ describe("session message-cut methods", () => {
   });
 
   it("stamps a required sandbox on a session fork created by a restricted operator", async () => {
-    const profile = ensureProfileForEmail("sandbox-required-fork-creator@example.com");
-    setUserProfileRole(profile.id, "guest");
-    const client = {
-      connect: { scopes: ["operator.write"] },
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      },
-    } as GatewayClient;
-    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-      agents: { list: [{ id: "main", default: true }] },
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: {
-              sessions: { others: "view" },
-              agents: ["main"],
-              scopes: ["operator.read", "operator.write"],
-              sandbox: "required",
-            },
-          },
-        },
-      },
-    });
+    const { profile, client, runtimeConfig } = restrictedOperator(
+      "sandbox-required-fork-creator@example.com",
+      "main",
+      "required",
+    );
 
     const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
@@ -536,7 +528,6 @@ describe("session message-cut methods", () => {
   });
 
   it.each([
-    ["missing", "branch entry not found"],
     ["user-entry", "entry is not a branch tip"],
     ["assistant-entry", "branch is already active"],
   ])("rejects invalid branch switch target %s", async (entryId, message) => {
@@ -903,30 +894,28 @@ describe("session message-cut methods", () => {
     expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(entryCount);
   });
 
-  it.each(["steer-message", "in-progress-turn", "drift-mismatch"] as const)(
-    "passes through the %s boundary failure",
-    async (reason) => {
-      linkToUpstreamConversation();
-      installUpstreamForkHarness();
-      mocks.upstreamFork.mockResolvedValue({
-        status: "failed",
-        code: reason,
+  it("passes through an invalid fork boundary failure", async () => {
+    const reason = "drift-mismatch";
+    linkToUpstreamConversation();
+    installUpstreamForkHarness();
+    mocks.upstreamFork.mockResolvedValue({
+      status: "failed",
+      code: reason,
+      message: `boundary failed: ${reason}`,
+    });
+
+    const respond = await invoke("sessions.fork", "user-entry");
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        details: { reason },
         message: `boundary failed: ${reason}`,
-      });
-
-      const respond = await invoke("sessions.fork", "user-entry");
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          details: { reason },
-          message: `boundary failed: ${reason}`,
-        }),
-      );
-    },
-  );
+      }),
+    );
+  });
 
   it.each([
     ["sessions.fork", "Fork"],

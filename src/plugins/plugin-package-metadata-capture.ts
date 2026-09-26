@@ -250,16 +250,16 @@ export function capturePluginPackageMetadata(
 export const packageName = (specifier: string) =>
   specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0]!;
 export const importTargetNames = (value: unknown): string[] => {
-  if (typeof value === "string") {
-    return value &&
-      !value.startsWith(".") &&
-      !value.startsWith("#") &&
-      !path.isAbsolute(value) &&
-      !isBuiltin(value)
-      ? [packageName(value)]
-      : [];
-  }
-  return value && typeof value === "object" ? Object.values(value).flatMap(importTargetNames) : [];
+  return [...pluginPackageTargets(value)]
+    .filter(
+      (target) =>
+        target &&
+        !target.startsWith(".") &&
+        !target.startsWith("#") &&
+        !path.isAbsolute(target) &&
+        !isBuiltin(target),
+    )
+    .map(packageName);
 };
 
 /** Capture declared targets; native loading owns conditions and subpath selection. */

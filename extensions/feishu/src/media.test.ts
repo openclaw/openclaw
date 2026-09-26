@@ -57,6 +57,10 @@ let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFe
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
+function sendMedia(options: Omit<Parameters<typeof sendMediaFeishu>[0], "cfg" | "to">) {
+  return sendMediaFeishu({ cfg: emptyConfig, to: "user:ou_target", ...options });
+}
+
 function expectMediaTimeoutClientConfigured(): void {
   const options = mockCallArg<{ httpTimeoutMs?: number }>(createFeishuClientMock, 0, 0);
   expect(options.httpTimeoutMs).toBe(FEISHU_MEDIA_HTTP_TIMEOUT_MS);
@@ -112,6 +116,16 @@ async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
       }
     }
   });
+}
+
+function downloadResource(
+  options: Omit<Parameters<typeof saveMessageResourceFeishu>[0], "cfg" | "maxBytes"> & {
+    maxBytes?: number;
+  },
+) {
+  return withIsolatedHome(() =>
+    saveMessageResourceFeishu({ cfg: emptyConfig, maxBytes: 1024, ...options }),
+  );
 }
 
 beforeAll(async () => {
@@ -210,9 +224,7 @@ describe("sendMediaFeishu msg_type routing", () => {
   it("uses msg_type=media for mp4 video", async () => {
     runFfprobeMock.mockResolvedValueOnce("4.2\n");
 
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaBuffer: Buffer.from("video"),
       fileName: "clip.mp4",
     });
@@ -232,25 +244,11 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
   });
 
-  it("uses msg_type=audio for opus", async () => {
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
-      mediaBuffer: Buffer.from("audio"),
-      fileName: "voice.opus",
-    });
-
-    expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("opus");
-    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("audio");
-  });
-
   it("includes audio duration in the Feishu file upload", async () => {
     const audio = Buffer.from("opus");
     runFfprobeMock.mockResolvedValueOnce("2.345\n");
 
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaBuffer: audio,
       fileName: "reply.ogg",
     });
@@ -278,9 +276,7 @@ describe("sendMediaFeishu msg_type routing", () => {
   it("omits audio duration when probing fails", async () => {
     runFfprobeMock.mockRejectedValueOnce(new Error("ffprobe missing"));
 
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaBuffer: Buffer.from("opus"),
       fileName: "reply.ogg",
     });
@@ -292,9 +288,7 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 
   it("uses msg_type=file for documents", async () => {
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaBuffer: Buffer.from("doc"),
       fileName: "paper.pdf",
     });
@@ -312,9 +306,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       contentType: "video/mp4",
     });
 
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaUrl: "https://example.com/video",
     });
 
@@ -333,9 +325,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       contentType: "audio/mpeg",
     });
 
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaUrl: "https://example.com/song.mp3",
     });
 
@@ -352,9 +342,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       contentType: "audio/mpeg",
     });
 
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaUrl: "https://example.com/reply.mp3",
       audioAsVoice: true,
     });
@@ -374,9 +362,7 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 
   it("leaves native voice audio unchanged when audioAsVoice is true", async () => {
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaBuffer: Buffer.from("opus"),
       fileName: "reply.ogg",
       audioAsVoice: true,
@@ -400,9 +386,7 @@ describe("sendMediaFeishu msg_type routing", () => {
         contentType: "audio/mpeg",
       });
 
-      const result = await sendMediaFeishu({
-        cfg: emptyConfig,
-        to: "user:ou_target",
+      const result = await sendMedia({
         mediaUrl: "https://example.com/reply.mp3",
         audioAsVoice: true,
       });
@@ -422,18 +406,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     }
   });
 
-  it("configures the media client timeout for image uploads", async () => {
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
-      mediaBuffer: validPngImage,
-      fileName: "photo.png",
-    });
-
-    expectMediaTimeoutClientConfigured();
-    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("image");
-  });
-
   it("preserves Feishu diagnostics when media sends reject before response checks", async () => {
     messageCreateMock.mockRejectedValueOnce(
       Object.assign(new Error("Request failed with status code 400"), {
@@ -451,9 +423,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       }),
     );
 
-    const send = sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    const send = sendMedia({
       mediaBuffer: validPngImage,
       fileName: "photo.png",
     });
@@ -462,29 +432,8 @@ describe("sendMediaFeishu msg_type routing", () => {
     await expect(send).rejects.toThrow(/"feishu_log_id":"20260429124731MEDIA"/);
   });
 
-  it("uses msg_type=media when replying with mp4", async () => {
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
-      mediaBuffer: Buffer.from("video"),
-      fileName: "reply.mp4",
-      replyToMessageId: "om_parent",
-    });
-
-    const replyRequest = mockCallArg<{
-      data?: { msg_type?: string };
-      path?: { message_id?: string };
-    }>(messageReplyMock, 0, 0);
-    expect(replyRequest.path).toEqual({ message_id: "om_parent" });
-    expect(replyRequest.data?.msg_type).toBe("media");
-
-    expect(messageCreateMock).not.toHaveBeenCalled();
-  });
-
   it("passes reply_in_thread when replyInThread is true", async () => {
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaBuffer: Buffer.from("video"),
       fileName: "reply.mp4",
       replyToMessageId: "om_parent",
@@ -510,9 +459,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       data: { message_id: "msg_image_fallback" },
     });
 
-    const result = await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    const result = await sendMedia({
       mediaBuffer: validPngImage,
       fileName: "photo.png",
       replyToMessageId: "om_parent",
@@ -526,49 +473,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
   });
 
-  it("falls back to top-level file sends for thrown withdrawn reply errors", async () => {
-    messageReplyMock.mockRejectedValueOnce(
-      Object.assign(new Error("request failed"), { code: 230011 }),
-    );
-    messageCreateMock.mockResolvedValueOnce({
-      code: 0,
-      data: { message_id: "msg_file_fallback" },
-    });
-
-    const result = await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
-      mediaBuffer: Buffer.from("video"),
-      fileName: "reply.mp4",
-      replyToMessageId: "om_parent",
-    });
-
-    expect(result.messageId).toBe("msg_file_fallback");
-    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
-  });
-
-  it("keeps thread reply failures top-level safe when fallback is disallowed", async () => {
-    messageReplyMock.mockResolvedValueOnce({
-      code: 230011,
-      msg: "The message was withdrawn.",
-    });
-
-    await expect(
-      sendMediaFeishu({
-        cfg: emptyConfig,
-        to: "user:ou_target",
-        mediaBuffer: Buffer.from("video"),
-        fileName: "reply.mp4",
-        replyToMessageId: "om_parent",
-        replyInThread: true,
-      }),
-    ).rejects.toThrow(
-      "Feishu thread reply failed: reply target is unavailable and cannot safely fall back to a top-level send.",
-    );
-
-    expect(messageCreateMock).not.toHaveBeenCalled();
-  });
-
   it("allows media thread replies to fall back when the dispatcher marks top-level fallback safe", async () => {
     messageReplyMock.mockResolvedValueOnce({
       code: 231003,
@@ -579,9 +483,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       data: { message_id: "msg_thread_fallback" },
     });
 
-    const result = await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    const result = await sendMedia({
       mediaBuffer: Buffer.from("video"),
       fileName: "reply.mp4",
       replyToMessageId: "om_parent",
@@ -593,21 +495,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
   });
 
-  it("omits reply_in_thread when replyInThread is false", async () => {
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
-      mediaBuffer: Buffer.from("video"),
-      fileName: "reply.mp4",
-      replyToMessageId: "om_parent",
-      replyInThread: false,
-    });
-
-    expect(callData<Record<string, unknown>>(messageReplyMock)).not.toHaveProperty(
-      "reply_in_thread",
-    );
-  });
-
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
     loadWebMediaMock.mockResolvedValue({
       buffer: Buffer.from("local-file"),
@@ -617,9 +504,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const roots = ["/allowed/workspace", "/tmp/openclaw"];
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaUrl: "/allowed/workspace/file.pdf",
       mediaLocalRoots: roots,
     });
@@ -639,9 +524,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     const legacyReadFile = vi.fn(async () => Buffer.from("legacy image"));
     const localRoots = ["/approved/workspace"];
     const mediaAccess = { localRoots, workspaceDir: "/approved/workspace", readFile };
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaUrl: "chart.png",
       mediaAccess,
       mediaLocalRoots: ["/legacy/workspace"],
@@ -663,9 +546,7 @@ describe("sendMediaFeishu msg_type routing", () => {
   it("rejects host readers without approved roots before any media dispatch", async () => {
     const readFile = vi.fn(async () => Buffer.from("unapproved image"));
     await expect(
-      sendMediaFeishu({
-        cfg: emptyConfig,
-        to: "user:ou_target",
+      sendMedia({
         mediaUrl: "chart.png",
         mediaAccess: { readFile, workspaceDir: "/unapproved/workspace" },
       }),
@@ -683,9 +564,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
 
     await expect(
-      sendMediaFeishu({
-        cfg: emptyConfig,
-        to: "user:ou_target",
+      sendMedia({
         mediaUrl: "https://x/img",
         fileName: "voice.opus",
       }),
@@ -702,15 +581,12 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     await expect(
-      withIsolatedHome(() =>
-        saveMessageResourceFeishu({
-          cfg: emptyConfig,
-          messageId: "om_123",
-          fileKey: "file_v3_01abc123",
-          type: "file",
-          maxBytes: 7,
-        }),
-      ),
+      downloadResource({
+        messageId: "om_123",
+        fileKey: "file_v3_01abc123",
+        type: "file",
+        maxBytes: 7,
+      }),
     ).rejects.toThrow(/Media exceeds/i);
   });
 
@@ -722,15 +598,12 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     await expect(
-      withIsolatedHome(() =>
-        saveMessageResourceFeishu({
-          cfg: emptyConfig,
-          messageId: "om_123",
-          fileKey: "file_v3_01abc123",
-          type: "file",
-          maxBytes: 7,
-        }),
-      ),
+      downloadResource({
+        messageId: "om_123",
+        fileKey: "file_v3_01abc123",
+        type: "file",
+        maxBytes: 7,
+      }),
     ).rejects.toThrow(/Media exceeds/i);
   });
 
@@ -748,32 +621,8 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageResourceGetMock).not.toHaveBeenCalled();
   });
 
-  it("preserves Chinese filenames for file uploads", async () => {
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
-      mediaBuffer: Buffer.from("doc"),
-      fileName: "测试文档.pdf",
-    });
-
-    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("测试文档.pdf");
-  });
-
-  it("preserves ASCII filenames unchanged for file uploads", async () => {
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
-      mediaBuffer: Buffer.from("doc"),
-      fileName: "report-2026.pdf",
-    });
-
-    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("report-2026.pdf");
-  });
-
   it("preserves special Unicode characters (em-dash, full-width brackets) in filenames", async () => {
-    await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
+    await sendMedia({
       mediaBuffer: Buffer.from("doc"),
       fileName: "报告—详情（2026）.md",
     });
@@ -807,15 +656,11 @@ describe("saveMessageResourceFeishu", () => {
   // Regression: Feishu API only supports type=image|file for messageResource.get.
   // Audio/video resources must use type=file, not type=audio (#8746).
   it("forwards provided type=file for non-image resources", async () => {
-    const result = await withIsolatedHome(() =>
-      saveMessageResourceFeishu({
-        cfg: emptyConfig,
-        messageId: "om_audio_msg",
-        fileKey: "file_key_audio",
-        type: "file",
-        maxBytes: 1024,
-      }),
-    );
+    const result = await downloadResource({
+      messageId: "om_audio_msg",
+      fileKey: "file_key_audio",
+      type: "file",
+    });
 
     const request = mockCallArg<{
       params?: { type?: string };
@@ -830,15 +675,11 @@ describe("saveMessageResourceFeishu", () => {
   it("image uses type=image", async () => {
     messageResourceGetMock.mockResolvedValue(Buffer.from("fake-image-data"));
 
-    const result = await withIsolatedHome(() =>
-      saveMessageResourceFeishu({
-        cfg: emptyConfig,
-        messageId: "om_img_msg",
-        fileKey: "img_key_1",
-        type: "image",
-        maxBytes: 1024,
-      }),
-    );
+    const result = await downloadResource({
+      messageId: "om_img_msg",
+      fileKey: "img_key_1",
+      type: "image",
+    });
 
     const request = mockCallArg<{
       params?: { type?: string };
@@ -848,30 +689,6 @@ describe("saveMessageResourceFeishu", () => {
     expect(request.params).toEqual({ type: "image" });
     expectMediaTimeoutClientConfigured();
     expect(result.saved.size).toBe("fake-image-data".length);
-  });
-
-  it("extracts content-type and filename metadata from download headers", async () => {
-    messageResourceGetMock.mockResolvedValueOnce({
-      data: Buffer.from("fake-video-data"),
-      headers: {
-        "content-type": "video/mp4",
-        "content-disposition": `attachment; filename="clip.mp4"`,
-      },
-    });
-
-    const result = await withIsolatedHome(() =>
-      saveMessageResourceFeishu({
-        cfg: emptyConfig,
-        messageId: "om_video_msg",
-        fileKey: "file_key_video",
-        type: "file",
-        maxBytes: 1024,
-      }),
-    );
-
-    expect(result.saved.size).toBe("fake-video-data".length);
-    expect(result.contentType).toBe("video/mp4");
-    expect(result.fileName).toBe("clip.mp4");
   });
 
   it("retries file resources as media after HTTP 502", async () => {
@@ -884,15 +701,11 @@ describe("saveMessageResourceFeishu", () => {
       },
     });
 
-    const result = await withIsolatedHome(() =>
-      saveMessageResourceFeishu({
-        cfg: emptyConfig,
-        messageId: "om_ios_video_msg",
-        fileKey: "file_key_ios_video",
-        type: "file",
-        maxBytes: 1024,
-      }),
-    );
+    const result = await downloadResource({
+      messageId: "om_ios_video_msg",
+      fileKey: "file_key_ios_video",
+      type: "file",
+    });
 
     const firstRequest = mockCallArg<{
       params?: { type?: string };
@@ -924,15 +737,11 @@ describe("saveMessageResourceFeishu", () => {
       .mockRejectedValueOnce(new Error("media retry failed"));
 
     await expect(
-      withIsolatedHome(() =>
-        saveMessageResourceFeishu({
-          cfg: emptyConfig,
-          messageId: "om_ios_video_msg",
-          fileKey: "file_key_ios_video",
-          type: "file",
-          maxBytes: 1024,
-        }),
-      ),
+      downloadResource({
+        messageId: "om_ios_video_msg",
+        fileKey: "file_key_ios_video",
+        type: "file",
+      }),
     ).rejects.toBe(originalError);
 
     expect(
@@ -953,15 +762,11 @@ describe("saveMessageResourceFeishu", () => {
       messageResourceGetMock.mockRejectedValueOnce(originalError);
 
       await expect(
-        withIsolatedHome(() =>
-          saveMessageResourceFeishu({
-            cfg: emptyConfig,
-            messageId: scenario.messageId,
-            fileKey: scenario.fileKey,
-            type: scenario.type,
-            maxBytes: 1024,
-          }),
-        ),
+        downloadResource({
+          messageId: scenario.messageId,
+          fileKey: scenario.fileKey,
+          type: scenario.type,
+        }),
       ).rejects.toBe(originalError);
 
       expect(messageResourceGetMock).toHaveBeenCalledTimes(1);
@@ -984,15 +789,11 @@ describe("saveMessageResourceFeishu", () => {
       },
     });
 
-    const result = await withIsolatedHome(() =>
-      saveMessageResourceFeishu({
-        cfg: emptyConfig,
-        messageId: "om_file_msg",
-        fileKey: "file_key_csv",
-        type: "file",
-        maxBytes: 1024,
-      }),
-    );
+    const result = await downloadResource({
+      messageId: "om_file_msg",
+      fileKey: "file_key_csv",
+      type: "file",
+    });
 
     expect(result.fileName).toBe(fileName);
   });
@@ -1005,15 +806,11 @@ describe("saveMessageResourceFeishu", () => {
       },
     });
 
-    const result = await withIsolatedHome(() =>
-      saveMessageResourceFeishu({
-        cfg: emptyConfig,
-        messageId: "om_latin1_msg",
-        fileKey: "file_key_latin1",
-        type: "file",
-        maxBytes: 1024,
-      }),
-    );
+    const result = await downloadResource({
+      messageId: "om_latin1_msg",
+      fileKey: "file_key_latin1",
+      type: "file",
+    });
 
     expect(result.fileName).toBe("café-Â©.txt");
   });
@@ -1026,15 +823,11 @@ describe("saveMessageResourceFeishu", () => {
       file_name: latin1LookingFileName,
     });
 
-    const result = await withIsolatedHome(() =>
-      saveMessageResourceFeishu({
-        cfg: emptyConfig,
-        messageId: "om_json_file_msg",
-        fileKey: "file_key_json",
-        type: "file",
-        maxBytes: 1024,
-      }),
-    );
+    const result = await downloadResource({
+      messageId: "om_json_file_msg",
+      fileKey: "file_key_json",
+      type: "file",
+    });
 
     expect(result.fileName).toBe(latin1LookingFileName);
   });

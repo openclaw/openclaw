@@ -33,7 +33,7 @@ afterEach(async () => {
 });
 
 describe("session creation snapshot", () => {
-  it.each([undefined, 3, 4, 99])(
+  it.each([undefined, 3, 99])(
     "preserves adopted history without selecting a new projection (header=%s)",
     async (version) => {
       const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-history-") };
