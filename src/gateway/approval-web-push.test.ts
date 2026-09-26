@@ -39,7 +39,6 @@ vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
 
 vi.mock("../infra/push-web.js", () => ({
   deleteWebPushApprovalDeliveryTargets: deleteWebPushApprovalDeliveryTargetsMock,
-  listBoundWebPushSubscriptions: listBoundWebPushSubscriptionsMock,
   withBoundWebPushSubscriptions: async <T>(
     stateDir: string | undefined,
     prepare: (
