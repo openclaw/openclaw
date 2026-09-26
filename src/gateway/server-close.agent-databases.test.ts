@@ -1,8 +1,20 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+} from "../state/agent-deletion-journal.js";
 import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   OpenClawAgentDatabaseLeaseActiveError,
@@ -13,8 +25,74 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+
+it("closes a Gateway with an active plugin while retaining a deleted agent store", async () => {
+  const fixture = await createGatewayMetadataCloseFixture("gateway-retained-deleted-agent-close");
+  try {
+    const pluginId = fixture.pluginId;
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: pluginId });
+    const registered = new PluginInstance(record.id, { record, registry });
+    let disposed = false;
+    registered.lifecycle.onDispose(() => {
+      disposed = true;
+    });
+    registry.plugins.push(record);
+    setActivePluginRegistry(registry);
+    const port = await fixture.reservePort();
+    const server = await fixture.start(port);
+    expect(fixture.kernels.get(port)?.pluginRuntime.registry.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: pluginId })]),
+    );
+    const activeStore = path.join(fixture.state.sessionsDir("main"), "sessions.json");
+    const retainedStore = path.join(fixture.state.sessionsDir("retired"), "sessions.json");
+    for (const [agentId, storePath] of [
+      ["main", activeStore],
+      ["retired", retainedStore],
+    ] as const) {
+      await replaceSessionEntry(
+        { agentId, storePath, sessionKey: `agent:${agentId}:main` },
+        {
+          sessionId: `${agentId}-session`,
+          updatedAt: 1,
+          pluginExtensions: { [pluginId]: { active: true } },
+        },
+      );
+    }
+    const retainedDatabase = path.join(fixture.state.agentDir("retired"), "openclaw-agent.sqlite");
+    const operationId = randomUUID();
+    beginAgentDeletionJournal(
+      {
+        agentId: "retired",
+        operationId,
+        agentDir: fixture.state.agentDir("retired"),
+        sessionsDir: fixture.state.sessionsDir("retired"),
+        workspaceDir: path.join(fixture.state.root, "workspace-retired"),
+        databasePaths: [retainedDatabase],
+        deleteFiles: false,
+      },
+      { env: fixture.state.env },
+    );
+    runOpenClawStateWriteTransaction(
+      (database) => completeAgentDeletionJournalInDatabase(database, "retired", operationId),
+      { env: fixture.state.env },
+    );
+    await expect(server.close({ reason: "gateway stopping" })).resolves.toBeUndefined();
+    expect(disposed).toBe(true);
+    expect((await fs.stat(retainedDatabase)).isFile()).toBe(true);
+    expect(
+      loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
+        ?.pluginExtensions,
+    ).toBeUndefined();
+  } finally {
+    await fixture.cleanup();
+  }
+}, 300_000);
 
 it.each(["stop", "restart"] as const)(
   "releases agent leases for Doctor after the final Gateway %s while its process stays alive",

@@ -3,6 +3,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { cleanupPluginHostSessionStore } from "../config/sessions/session-accessor.js";
 import {
+  isConfiguredSessionStoreAgentId,
   resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
 } from "../config/sessions/targets.js";
@@ -10,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { listRetainedDeletedAgentIdsForCleanup } from "../state/agent-deletion-discovery.js";
 import { appendPluginInstanceCleanupFailures } from "./host-hook-cleanup-result.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import type {
@@ -49,6 +51,7 @@ async function clearPluginSessionStores(params: {
   storeTargets?: readonly SessionStoreTarget[];
   resolveStoreTargets?: ResolveCleanupSessionStoreTargets;
   shouldCleanup?: () => boolean;
+  failures: PluginHostCleanupFailure[];
 }): Promise<number> {
   if (
     (!params.pluginId && !params.sessionKey) ||
@@ -60,24 +63,46 @@ async function clearPluginSessionStores(params: {
     params.storeTargets ??
     params.resolveStoreTargets?.() ??
     resolveAllAgentSessionStoreTargetsSync(params.cfg);
+  let retainedAgentIds: ReadonlySet<string> = new Set();
+  if (storeTargets.some((target) => !isConfiguredSessionStoreAgentId(params.cfg, target.agentId))) {
+    try {
+      retainedAgentIds = await listRetainedDeletedAgentIdsForCleanup(process.env);
+    } catch {
+      // A failed advisory read must not prevent per-store admission from cleaning healthy stores.
+    }
+  }
   let cleared = 0;
   for (const target of storeTargets) {
     if (params.shouldCleanup && !params.shouldCleanup()) {
       break;
     }
-    if (readAgentDatabaseAdmissionRefusal(target.agentId)) {
-      continue;
+    try {
+      if (readAgentDatabaseAdmissionRefusal(target.agentId)) {
+        continue;
+      }
+      if (
+        !isConfiguredSessionStoreAgentId(params.cfg, target.agentId) &&
+        retainedAgentIds.has(target.agentId)
+      ) {
+        continue;
+      }
+      cleared += await cleanupPluginHostSessionStore({
+        agentId: target.agentId,
+        storePath: target.storePath,
+        mode: params.mode,
+        pluginId: params.pluginId,
+        sessionKey: params.sessionKey,
+        sessionEntrySlotKeys: params.sessionEntrySlotKeys,
+        preserveLockedHarnessIds: params.preserveLockedHarnessIds,
+        shouldCleanup: params.shouldCleanup,
+      });
+    } catch (error) {
+      params.failures.push({
+        pluginId: params.pluginId ?? "plugin-host",
+        hookId: "session-store",
+        error,
+      });
     }
-    cleared += await cleanupPluginHostSessionStore({
-      agentId: target.agentId,
-      storePath: target.storePath,
-      mode: params.mode,
-      pluginId: params.pluginId,
-      sessionKey: params.sessionKey,
-      sessionEntrySlotKeys: params.sessionEntrySlotKeys,
-      preserveLockedHarnessIds: params.preserveLockedHarnessIds,
-      shouldCleanup: params.shouldCleanup,
-    });
   }
   return cleared;
 }
@@ -167,6 +192,7 @@ export async function runPluginHostCleanup(params: {
           storeTargets: params.sessionStoreTargets,
           resolveStoreTargets: params.resolveSessionStoreTargets,
           shouldCleanup,
+          failures,
         });
       } catch (error) {
         failures.push({
