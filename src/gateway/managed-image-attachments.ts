@@ -1490,7 +1490,8 @@ export async function createManagedOutgoingMediaBlocks(params: {
         };
         let playback: "native" | "transcode" | undefined;
         if (mediaKind === "audio" || mediaKind === "video") {
-          await using opened = await openLocalFileSafely({ filePath: savedOriginal.path });
+          const opened = await openLocalFileSafely({ filePath: savedOriginal.path });
+          await opened[Symbol.asyncDispose]();
           const metadata = await resolvePlaybackMetadataForSource({
             sourcePath: opened.realPath,
             sourceStat: opened.stat,

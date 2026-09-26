@@ -465,60 +465,6 @@ describe("resolvePlaybackTranscode", () => {
     }
   });
 
-  it("bounds concurrent inspections and retries once capacity is available", async () => {
-    const sources = await Promise.all([
-      createSource("inspection-capacity-first.mp4"),
-      createSource("inspection-capacity-second.mp4"),
-      createSource("inspection-capacity-fallback.mp4"),
-    ]);
-    const probesStarted = createDeferred();
-    const probeGate = createDeferred<PlaybackMediaProbeResult>();
-    let probeCount = 0;
-    probePlaybackMediaFileDescriptor.mockImplementation(async () => {
-      if (++probeCount === 2) {
-        probesStarted.resolve();
-      }
-      return await probeGate.promise;
-    });
-    const makeParams = (index: number) => ({
-      ...sources[index]!,
-      mimeType: "video/mp4",
-      kind: "video" as const,
-    });
-
-    const nativeProbe: PlaybackMediaProbeResult = {
-      durationMs: 1000,
-      videoCodec: "h264",
-      videoProfile: "high",
-      videoPixelFormat: "yuv420p",
-      videoStreamIndex: 0,
-    };
-    const first = playback.resolvePlaybackMetadataForSource(makeParams(0));
-    const second = playback.resolvePlaybackMetadataForSource(makeParams(1));
-    try {
-      await probesStarted.promise;
-      expect(
-        (await playback.resolvePlaybackMetadataForSource(makeParams(2))).playback,
-      ).toBeUndefined();
-      expect(probePlaybackMediaFileDescriptor).toHaveBeenCalledTimes(2);
-
-      probeGate.resolve(nativeProbe);
-      await expect(Promise.all([first, second])).resolves.toEqual([
-        expect.objectContaining({ playback: "native" }),
-        expect.objectContaining({ playback: "native" }),
-      ]);
-      await expect(playback.resolvePlaybackMetadataForSource(makeParams(2))).resolves.toMatchObject(
-        {
-          playback: "native",
-        },
-      );
-      expect(probePlaybackMediaFileDescriptor).toHaveBeenCalledTimes(3);
-    } finally {
-      probeGate.resolve(nativeProbe);
-      await Promise.allSettled([first, second]);
-    }
-  });
-
   it("does not cache an inconclusive duration probe for an exotic container", async () => {
     const source = await createSource("duration-retry.mkv");
     probePlaybackMediaFileDescriptor

@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as fsSafe from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import * as playback from "../media/playback-transcode.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -13,7 +16,10 @@ vi.mock("../media/ffmpeg-exec.js", async (importOriginal) => ({
   runFfprobe,
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => runFfprobe.mockReset());
+afterEach(() => {
+  vi.restoreAllMocks();
+  runFfprobe.mockReset();
+});
 
 async function readMetadata(filePath: string) {
   const { res, end } = makeMockHttpResponse();
@@ -74,20 +80,66 @@ it("shares audio metadata probes, retries failures, and reinspects replacements"
   });
 });
 
-it("marks exotic assistant media metadata for playback transcoding", async () => {
-  runFfprobe.mockResolvedValueOnce(
-    JSON.stringify({
+it("retains exotic playback metadata while distinct files fill the inspection slots", async () => {
+  const probesStarted = createDeferred();
+  const probeGate = createDeferred();
+  let activeProbes = 0;
+  let peakProbes = 0;
+  runFfprobe.mockImplementation(async () => {
+    peakProbes = Math.max(peakProbes, ++activeProbes);
+    if (runFfprobe.mock.calls.length === 2) {
+      probesStarted.resolve();
+    }
+    await probeGate.promise;
+    activeProbes--;
+    return JSON.stringify({
       format: { duration: "1" },
       streams: [{ index: 0, codec_type: "audio", codec_name: "pcm_s16le" }],
-    }),
-  );
-  const root = tempDirs.make("ui-media-transcode-meta-", resolvePreferredOpenClawTmpDir());
-  const filePath = path.join(root, "voice.caf");
-  await fs.writeFile(filePath, Buffer.from("caff-original"));
-  expect(await readMetadata(filePath)).toMatchObject({
-    available: true,
-    mimeType: "audio/x-caf",
-    playback: "transcode",
-    durationMs: 1000,
+    });
   });
+  const root = tempDirs.make("ui-media-transcode-meta-", resolvePreferredOpenClawTmpDir());
+  const paths = ["first.caf", "second.caf", "third.caf"].map((name) => path.join(root, name));
+  await Promise.all(paths.map((filePath) => fs.writeFile(filePath, Buffer.from("caff-original"))));
+  const queuedPath = await fs.realpath(paths[2]!);
+  const openedFiles: fsSafe.OpenResult[] = [];
+  const openFile = fsSafe.openLocalFileSafely;
+  vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (params) => {
+    const opened = await openFile(params);
+    openedFiles.push(opened);
+    return opened;
+  });
+  const requests = paths.slice(0, 2).map(readMetadata);
+  try {
+    await probesStarted.promise;
+    const queuedRequestsStarted = createDeferred();
+    const resolveMetadata = playback.resolvePlaybackMetadataForSource;
+    let queuedRequests = 0;
+    vi.spyOn(playback, "resolvePlaybackMetadataForSource").mockImplementation((params) => {
+      const result = resolveMetadata(params);
+      if (++queuedRequests === 2) {
+        queuedRequestsStarted.resolve();
+      }
+      return result;
+    });
+    requests.push(readMetadata(paths[2]!), readMetadata(paths[2]!));
+    await queuedRequestsStarted.promise;
+    expect(runFfprobe).toHaveBeenCalledTimes(2);
+    for (const opened of openedFiles.filter((entry) => entry.realPath === queuedPath)) {
+      expect(opened.handle.fd).toBe(-1);
+    }
+    probeGate.resolve();
+    for (const metadata of await Promise.all(requests)) {
+      expect(metadata).toMatchObject({
+        available: true,
+        mimeType: "audio/x-caf",
+        playback: "transcode",
+        durationMs: 1000,
+      });
+    }
+    expect(runFfprobe).toHaveBeenCalledTimes(3);
+    expect(peakProbes).toBe(2);
+  } finally {
+    probeGate.resolve();
+    await Promise.allSettled(requests);
+  }
 });

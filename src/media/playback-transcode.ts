@@ -7,6 +7,7 @@ import { fileStore } from "@openclaw/fs-safe/store";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import pLimit from "p-limit";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
@@ -146,11 +147,12 @@ const PLAYBACK_TRANSCODE_MAX_DURATION_SECS = 20 * 60;
 const PLAYBACK_TRANSCODE_MAX_INPUT_PIXELS = 4096 * 4096;
 const PLAYBACK_TRANSCODE_THREADS = 2;
 const PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS = 60_000;
-const MAX_PLAYBACK_ENTRIES = { failures: 32, inspections: 32, inspectionJobs: 2 } as const;
+const MAX_PLAYBACK_ENTRIES = { failures: 32, inspections: 32 } as const;
 const playbackJobs = new Map<string, Promise<void>>();
 const playbackFailures = new Map<string, number>();
 const playbackInspections = new Map<string, PlaybackInspection>();
 const playbackInspectionJobs = new Map<string, Promise<PlaybackInspection>>();
+const limitPlaybackInspections = pLimit(2);
 const log = createSubsystemLogger("media/playback");
 
 /** Hashes the immutable source identity used by playback cache file names. */
@@ -307,17 +309,12 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
     cachePlaybackInspection(cacheKey, inspection);
     return inspection;
   };
-  const existingJob = playbackInspectionJobs.get(cacheKey);
-  if (existingJob) {
-    return await existingJob;
-  }
-  if (playbackInspectionJobs.size >= MAX_PLAYBACK_ENTRIES.inspectionJobs) {
-    return { mode: "fallback" };
-  }
-
-  return await getOrCreatePromise(playbackInspectionJobs, cacheKey, computeInspection, {
-    evictOnSettled: true,
-  });
+  return await getOrCreatePromise(
+    playbackInspectionJobs,
+    cacheKey,
+    () => limitPlaybackInspections(computeInspection),
+    { evictOnSettled: true },
+  );
 }
 
 /** Shares display metadata and playback classification by file identity. */

@@ -464,13 +464,14 @@ async function resolveAssistantMediaAvailability(
 ): Promise<AssistantMediaAvailability & { mediaTicket?: string; mediaTicketExpiresAt?: string }> {
   try {
     const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
-    await using mediaOwner = opened;
+    // The inspection owner reopens and verifies this identity after queue admission.
+    await opened[Symbol.asyncDispose]();
     const mediaKind = kindFromMime(mimeType);
     const playbackMetadata =
       mimeType && (mediaKind === "audio" || mediaKind === "video")
         ? await resolvePlaybackMetadataForSource({
-            sourcePath: mediaOwner.realPath,
-            sourceStat: mediaOwner.stat,
+            sourcePath: opened.realPath,
+            sourceStat: opened.stat,
             mimeType,
             kind: mediaKind,
           })
@@ -478,7 +479,7 @@ async function resolveAssistantMediaAvailability(
     return {
       available: true,
       ...(mimeType ? { mimeType } : {}),
-      sizeBytes: mediaOwner.stat.size,
+      sizeBytes: opened.stat.size,
       ...playbackMetadata,
       ...createAssistantMediaTicket({
         source,
