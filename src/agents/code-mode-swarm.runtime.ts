@@ -33,7 +33,8 @@ import { ToolInputError } from "./tools/common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-resolution.js";
 
 function resolveCodeModeRequesterSessionKey(ctx: ToolSearchToolContext): string {
-  const sessionKey = ctx.sessionKey?.trim();
+  // sessions_spawn records collectors under the run key, not a per-peer policy key.
+  const sessionKey = ctx.runSessionKey?.trim() || ctx.sessionKey?.trim();
   if (!sessionKey) {
     throw new ToolInputError("code mode swarm globals require session and run identity.");
   }

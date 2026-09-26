@@ -77,6 +77,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  const runSessionKey = attempt.sessionKey?.trim() || attempt.sessionId;
   const requireExplicitMessageTarget =
     attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey);
   const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
@@ -98,6 +99,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     config: attempt.config,
     agentId: params.setup.sessionAgentId,
     sessionKey: params.setup.sandboxSessionKey,
+    runSessionKey,
     forceMessageTool: forceDirectMessageTool,
     model: attempt.model,
     modelProvider: attempt.provider,
@@ -188,7 +190,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     requireExplicitMessageTarget,
     config: toolSearchRuntimeConfig,
     sessionKey: params.setup.sandboxSessionKey,
-    runSessionKey: attempt.sessionKey?.trim() || attempt.sessionId,
+    runSessionKey,
     sessionId: attempt.sessionId,
     runId: attempt.runId,
     agentDir: params.agentDir,

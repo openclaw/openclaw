@@ -14,11 +14,13 @@ import type { createOpenClawCodingTools } from "../../agent-tools.js";
 import { Agent, type AgentEvent, type AgentTool } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
+import { collectorRun } from "../../tools/agents-wait-tool.test-support.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import {
   cleanupTempPaths,
@@ -31,6 +33,25 @@ import {
 } from "./attempt-spawn-workspace.test-support.js";
 
 const hoisted = getHoisted();
+const collectors = vi.hoisted(() => new Map<string, SubagentRunRecord>());
+
+vi.mock("../../subagents/registry/subagent-registry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../subagents/registry/subagent-registry.js")>();
+  return {
+    ...actual,
+    // Serve collectors the mocked spawn launched; everything else reads the real registry.
+    prepareSubagentRunsByRunIds: async (runIds: readonly string[]) =>
+      runIds.every((runId) => collectors.has(runId))
+        ? {
+            consume: <T>(consume: (runs: ReadonlyMap<string, SubagentRunRecord>) => T) => ({
+              ready: true as const,
+              value: consume(new Map(runIds.map((runId) => [runId, collectors.get(runId)!]))),
+            }),
+          }
+        : await actual.prepareSubagentRunsByRunIds(runIds),
+  };
+});
 const tempPaths: string[] = [];
 
 function catalogProbeTools() {
@@ -70,6 +91,7 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
   });
 
   afterEach(async () => {
+    collectors.clear();
     await cleanupTempPaths(tempPaths);
     tempPaths.length = 0;
   });
@@ -321,4 +343,112 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
       expect(catalogRef?.current).toBeUndefined();
     },
   );
+
+  it("joins a direct-message agents.run collector under the run session key", async () => {
+    const runId = "run-dm-swarm";
+    const config = { tools: { codeMode: true, toolSearch: false, swarm: { enabled: true } } };
+    // Like createOpenClawTools, the spawn tool registers collectors under the run key.
+    const spawnTool = createSessionsSpawnTool({
+      config,
+      agentSessionKey: "agent:main:main",
+      requesterRunId: runId,
+    });
+    // Launch stands in for the collector the real spawn would record under the run key.
+    const launch = vi.fn(async (_toolCallId: string, _input: unknown) => {
+      collectors.set(
+        "collector-dm",
+        collectorRun("collector-dm", "agent:main:main", { status: "done" }),
+      );
+      return {
+        content: [],
+        details: {
+          status: "accepted",
+          runId: "collector-dm",
+          sessionKey: "agent:main:subagent:dm",
+        },
+      };
+    });
+    spawnTool.execute = launch;
+    hoisted.createOpenClawCodingToolsMock.mockReturnValue([spawnTool]);
+    const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:main",
+      tempPaths,
+      createSession: () => {
+        const session = createDefaultEmbeddedSession();
+        // SAFETY: The runner supplied the model and finalized tools to this session factory.
+        const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0] as {
+          model: Model;
+          customTools: AgentTool[];
+        };
+        let turn = 0;
+        const agent = new Agent({
+          initialState: { model: options.model, tools: options.customTools },
+          streamFn: () => {
+            const message: AssistantMessage = {
+              role: "assistant",
+              content:
+                turn++ === 0
+                  ? [
+                      {
+                        type: "toolCall",
+                        id: "swarm",
+                        name: "exec",
+                        arguments: {
+                          title: "Run one collector",
+                          code: 'return await agents.run("inspect");',
+                        },
+                      },
+                    ]
+                  : [{ type: "text", text: "Joined." }],
+              api: options.model.api,
+              provider: options.model.provider,
+              model: options.model.id,
+              usage: createZeroUsageFixture(),
+              stopReason: turn === 1 ? "toolUse" : "stop",
+              timestamp: Date.now(),
+            };
+            const stream = createAssistantMessageEventStream();
+            queueMicrotask(() => {
+              stream.push({ type: "done", reason: turn === 1 ? "toolUse" : "stop", message });
+              stream.end();
+            });
+            return stream;
+          },
+        });
+        agent.subscribe((event) => {
+          if (event.type === "tool_execution_end") {
+            outcomes.push(event);
+          }
+        });
+        // SAFETY: This session fixture delegates its agent operations to the real loop below.
+        session.agent = agent as typeof session.agent;
+        session.setActiveToolsByName = (names) => {
+          agent.state.tools = options.customTools.filter((tool) => names.includes(tool.name));
+        };
+        session.getActiveToolNames = () => agent.state.tools.map((tool) => tool.name);
+        session.prompt = async (prompt, opts) => {
+          opts?.preflightResult?.(true);
+          await agent.prompt(prompt);
+        };
+        return session;
+      },
+      attemptOverrides: {
+        runId,
+        disableTools: false,
+        // Direct-message peer policy key; sessions_spawn owns collectors under the run key.
+        sandboxSessionKey: "agent:main:telegram:default:direct:123",
+        config,
+      },
+    });
+    expect(launch).toHaveBeenCalledOnce();
+    expect(launch.mock.calls[0]?.[1]).toMatchObject({
+      collect: true,
+      groupId: `swarm:agent:main:main:${runId}`,
+    });
+    const outcome = outcomes.find((event) => event.toolName === "exec");
+    expect(JSON.stringify(outcome?.result)).not.toContain("not_owner");
+    expect(outcome).toMatchObject({ isError: false, result: { details: { status: "completed" } } });
+  });
 });
