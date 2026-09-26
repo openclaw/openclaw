@@ -185,6 +185,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         locationPayload: MatrixLocationPayload | null;
         reservedHistorySlot?: ReservedHistorySlot;
         selfUserId: string;
+        selfTriggerMarker: Record<string, unknown> | null;
       }) => {
         const access = await resolveMatrixIngressAccess({
           handler: handlerConfig,
