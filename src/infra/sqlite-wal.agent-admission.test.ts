@@ -60,8 +60,15 @@ it.each(["keep", "close", "replace"] as const)(
         exec.mock.calls.filter(([sql]) => sql.startsWith("PRAGMA incremental_vacuum("));
       const checkpointCalls = () =>
         prepare.mock.calls.filter(([sql]) => sql.startsWith("PRAGMA wal_checkpoint("));
+      const options = { agentId: "main", path: database.path };
       const unobserve = onSqliteWalCheckpoint((observation) => {
         if (observation.databasePath !== database.path || retirement !== "keep") {
+          return;
+        }
+        if (observation.health.state === "error") {
+          tickReclaimed.reject(
+            new Error(observation.health.error ?? "Periodic WAL maintenance failed"),
+          );
           return;
         }
         const remaining = freePages();
@@ -73,88 +80,93 @@ it.each(["keep", "close", "replace"] as const)(
           });
         }
       });
-      const options = { agentId: "main", path: database.path };
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const reservation = runOpenClawAgentWorkerWrite(options, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      await entered.promise;
       try {
-        periodic();
-        periodic();
-        periodic();
-        expect(vacuumCalls()).toHaveLength(0);
-        expect(checkpointCalls()).toHaveLength(0);
-        expect(freePages()).toBe(before);
-        if (retirement !== "keep") {
-          expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-          if (retirement === "replace") {
-            const replacement = openOpenClawAgentDatabase(options);
-            expect(replacement.db.isOpen).toBe(true);
-            expect(replacement.db === database.db).toBe(false);
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const reservation = runOpenClawAgentWorkerWrite(options, async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        await entered.promise;
+        try {
+          periodic();
+          periodic();
+          periodic();
+          expect(vacuumCalls()).toHaveLength(0);
+          expect(checkpointCalls()).toHaveLength(0);
+          expect(freePages()).toBe(before);
+          if (retirement !== "keep") {
+            expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+            if (retirement === "replace") {
+              const replacement = openOpenClawAgentDatabase(options);
+              expect(replacement.db.isOpen).toBe(true);
+              expect(replacement.db === database.db).toBe(false);
+            }
           }
+        } finally {
+          release.resolve();
+          await reservation;
+          if (retirement === "keep") {
+            await tickReclaimed.promise;
+          }
+          await runOpenClawAgentWriteAdmission(options, () => undefined);
+          await foreground;
+        }
+        if (retirement === "keep") {
+          expect(vacuumCalls()).toEqual([]);
+          expect(checkpointCalls()).toEqual([]);
+          expect(database.walMaintenance.health).toMatchObject({
+            state: "complete",
+            warning: false,
+          });
+          const reclaimed = before - freePages();
+          expect(reclaimed).toBe(512);
+          expect(foregroundFreePages).toBeGreaterThan(before - 512);
+          expect(foregroundFreePages).toBeLessThan(before);
+          const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+          try {
+            reader.exec("BEGIN");
+            reader.prepare("SELECT COUNT(*) FROM cache_entries").get();
+            database.db
+              .prepare(
+                "INSERT INTO cache_entries(scope,key,blob,updated_at) VALUES('wal-proof','held',zeroblob(4096),1)",
+              )
+              .run();
+            const heldFreePages = freePages();
+            for (const expectedState of ["blocked", "blocked", "complete"] as const) {
+              if (expectedState === "complete") {
+                reader.exec("ROLLBACK");
+              }
+              const observed = createDeferredCore();
+              const stop = onSqliteWalCheckpoint((event) => {
+                if (event.databasePath === database.path) {
+                  observed.resolve();
+                }
+              });
+              try {
+                periodic();
+                await observed.promise;
+                expect(database.walMaintenance.health?.state).toBe(expectedState);
+                if (expectedState === "blocked") {
+                  expect(freePages()).toBe(heldFreePages);
+                }
+              } finally {
+                stop();
+              }
+              // Let the original scheduler settle before triggering the next interval.
+              await runOpenClawAgentWriteAdmission(options, () => undefined);
+            }
+            expect(checkpointCalls()).toEqual([]);
+            expect(vacuumCalls()).toEqual([]);
+          } finally {
+            reader.close();
+          }
+        } else {
+          expect(vacuumCalls()).toEqual([]);
         }
       } finally {
-        release.resolve();
-        await reservation;
-        if (retirement === "keep") {
-          await tickReclaimed.promise;
-        }
-        await runOpenClawAgentWriteAdmission(options, () => undefined);
-        await foreground;
+        unobserve();
       }
-      if (retirement === "keep") {
-        expect(vacuumCalls()).toEqual([]);
-        expect(checkpointCalls()).toEqual([]);
-        expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
-        const reclaimed = before - freePages();
-        expect(reclaimed).toBe(512);
-        expect(foregroundFreePages).toBeGreaterThan(before - 512);
-        expect(foregroundFreePages).toBeLessThan(before);
-        const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
-        try {
-          reader.exec("BEGIN");
-          reader.prepare("SELECT COUNT(*) FROM cache_entries").get();
-          database.db
-            .prepare(
-              "INSERT INTO cache_entries(scope,key,blob,updated_at) VALUES('wal-proof','held',zeroblob(4096),1)",
-            )
-            .run();
-          const heldFreePages = freePages();
-          for (const expectedState of ["blocked", "blocked", "complete"] as const) {
-            if (expectedState === "complete") {
-              reader.exec("ROLLBACK");
-            }
-            const observed = createDeferredCore();
-            const stop = onSqliteWalCheckpoint((event) => {
-              if (event.databasePath === database.path) {
-                observed.resolve();
-              }
-            });
-            try {
-              periodic();
-              await observed.promise;
-              expect(database.walMaintenance.health?.state).toBe(expectedState);
-              if (expectedState === "blocked") {
-                expect(freePages()).toBe(heldFreePages);
-              }
-            } finally {
-              stop();
-            }
-            // Let the original scheduler settle before triggering the next interval.
-            await runOpenClawAgentWriteAdmission(options, () => undefined);
-          }
-          expect(checkpointCalls()).toEqual([]);
-          expect(vacuumCalls()).toEqual([]);
-        } finally {
-          reader.close();
-        }
-      } else {
-        expect(vacuumCalls()).toEqual([]);
-      }
-      unobserve();
     });
   },
 );

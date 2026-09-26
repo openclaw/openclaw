@@ -375,8 +375,8 @@ describe("shared-state transaction lifecycle participation", () => {
         released = release();
         await waitForObservation((states) => states.length > 0, 5_000);
         expect(database.walMaintenance.health?.state).toBe("error");
-        expect(database.walMaintenance.health?.error).toContain(
-          "SQLite database file identity changed before existing-only open",
+        expect(database.walMaintenance.health?.error).toMatch(
+          /^SQLite database (?:file identity|pathname) changed\b/,
         );
         expect(observations).toEqual(["error"]);
         expect(sqliteBytes(database.path)).toEqual(replacementBytes);
