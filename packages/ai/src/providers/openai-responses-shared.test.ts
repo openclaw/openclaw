@@ -2991,9 +2991,9 @@ describe("processResponsesStream", () => {
       }
     })();
 
-    const snapshot1 = "Self-attention computes";
-    const snapshot2 = "Self-attention computes Q/K/V projections";
-    const snapshot3 = "Self-attention computes Q/K/V projections for each token.";
+    const snapshot1 = `${"Self-attention computes 🙂 ".repeat(128)}.`;
+    const snapshot2 = `${snapshot1} Q/K/V projections`;
+    const snapshot3 = `${snapshot2} for each token.`;
     const messageItem = (id: string, text: string) => ({
       type: "message",
       id,
@@ -3014,6 +3014,12 @@ describe("processResponsesStream", () => {
           type: "response.output_item.added",
           item: { type: "message", id: "msg_2", phase: "final_answer" },
         },
+        { type: "response.output_text.delta", delta: "" },
+        ...Array.from({ length: Math.ceil(snapshot2.length / 16) }, (_, index) => ({
+          type: "response.output_text.delta",
+          delta: snapshot2.slice(index * 16, (index + 1) * 16),
+        })),
+        { type: "response.output_text.delta", delta: "" },
         { type: "response.output_item.done", item: messageItem("msg_2", snapshot2) },
         {
           type: "response.output_item.added",
@@ -3087,6 +3093,8 @@ describe("processResponsesStream", () => {
           type: "response.output_item.added",
           item: { type: "message", id: "msg_2", phase: "final_answer" },
         },
+        { type: "response.output_text.delta", delta: b.slice(0, 4) },
+        { type: "response.output_text.delta", delta: b.slice(4) },
         {
           type: "response.output_item.done",
           item: {
@@ -3128,95 +3136,103 @@ describe("processResponsesStream", () => {
     ]);
   });
 
-  it("streams a deferred distinct message live once its text diverges from the prior block", async () => {
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-    const events: Array<Record<string, unknown>> = [];
-    const liveTextBlockSignatures: Array<[string, number, string | undefined]> = [];
-    const collect = (async () => {
-      for await (const event of stream) {
-        events.push(event as unknown as Record<string, unknown>);
-        if (event.type === "text_start" || event.type === "text_delta") {
-          const block =
-            event.partial && Array.isArray(event.partial.content)
-              ? (event.partial.content[event.contentIndex] as
-                  | { textSignature?: string }
-                  | undefined)
-              : undefined;
-          liveTextBlockSignatures.push([event.type, event.contentIndex, block?.textSignature]);
-        }
-      }
-    })();
+  it.each([
+    ["first delta", "Hello.", "", "Good", "bye"],
+    ["prior boundary", `${"prefix".repeat(512)}X`, "prefix".repeat(512), "Y tail", " after"],
+  ])(
+    "streams a deferred message live when it diverges at the %s",
+    async (_label, prior, prefix, divergentDelta, remainingDelta) => {
+      const output = createAssistantOutput();
+      const events: AssistantMessageEvent[] = [];
+      const liveTextBlockSignatures: Array<[string, number, string | undefined]> = [];
+      const stream = {
+        push(event: AssistantMessageEvent) {
+          events.push(event);
+          if (event.type === "text_start" || event.type === "text_delta") {
+            const block = event.partial?.content[event.contentIndex];
+            liveTextBlockSignatures.push([
+              event.type,
+              event.contentIndex,
+              block?.type === "text" ? block.textSignature : undefined,
+            ]);
+          }
+        },
+      };
 
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_1", phase: "final_answer" },
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_1",
-            phase: "final_answer",
-            content: [{ type: "output_text", text: "Hello." }],
+      await processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            item: { type: "message", id: "msg_1", phase: "final_answer" },
           },
-        },
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_2", phase: "final_answer" },
-        },
-        { type: "response.content_part.added", part: { type: "output_text", text: "" } },
-        { type: "response.output_text.delta", delta: "Good" },
-        { type: "response.output_text.delta", delta: "bye" },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_2",
-            phase: "final_answer",
-            content: [{ type: "output_text", text: "Goodbye" }],
+          {
+            type: "response.output_item.done",
+            item: {
+              type: "message",
+              id: "msg_1",
+              phase: "final_answer",
+              content: [{ type: "output_text", text: prior }],
+            },
           },
-        },
-        { type: "response.completed", response: { id: "resp_1", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-    stream.end();
-    await collect;
+          {
+            type: "response.output_item.added",
+            item: { type: "message", id: "msg_2", phase: "final_answer" },
+          },
+          { type: "response.content_part.added", part: { type: "output_text", text: "" } },
+          { type: "response.output_text.delta", delta: prefix },
+          { type: "response.output_text.delta", delta: divergentDelta },
+          { type: "response.output_text.delta", delta: remainingDelta },
+          {
+            type: "response.output_item.done",
+            item: {
+              type: "message",
+              id: "msg_2",
+              phase: "final_answer",
+              content: [{ type: "output_text", text: prefix + divergentDelta + remainingDelta }],
+            },
+          },
+          { type: "response.completed", response: { id: "resp_1", status: "completed" } },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      );
 
-    expect(output.content).toEqual([
-      {
-        type: "text",
-        text: "Hello.",
-        textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" }),
-      },
-      {
-        type: "text",
-        text: "Goodbye",
-        textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
-      },
-    ]);
-    // The withheld prefix is replayed as one delta at divergence ("Good"
-    // diverges from "Hello."), then later deltas stream live.
-    expect(events.map((event) => [event.type, event.contentIndex, event.delta ?? null])).toEqual([
-      ["text_start", 0, null],
-      ["text_end", 0, null],
-      ["text_start", 1, null],
-      ["text_delta", 1, "Good"],
-      ["text_delta", 1, "bye"],
-      ["text_end", 1, null],
-    ]);
-    expect(liveTextBlockSignatures).toEqual([
-      ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
-      ["text_start", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
-      ["text_delta", 1, undefined],
-      ["text_delta", 1, undefined],
-    ]);
-  });
+      expect(output.content).toEqual([
+        {
+          type: "text",
+          text: prior,
+          textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" }),
+        },
+        {
+          type: "text",
+          text: prefix + divergentDelta + remainingDelta,
+          textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
+        },
+      ]);
+      // Replay the entire withheld prefix at divergence, then stream subsequent deltas live.
+      expect(
+        events.map((event) => [
+          event.type,
+          "contentIndex" in event ? event.contentIndex : undefined,
+          event.type === "text_delta" ? event.delta : null,
+        ]),
+      ).toEqual([
+        ["text_start", 0, null],
+        ["text_end", 0, null],
+        ["text_start", 1, null],
+        ["text_delta", 1, prefix + divergentDelta],
+        ["text_delta", 1, remainingDelta],
+        ["text_end", 1, null],
+      ]);
+      expect(liveTextBlockSignatures).toEqual([
+        ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
+        ["text_start", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
+        ["text_delta", 1, undefined],
+        ["text_delta", 1, undefined],
+      ]);
+    },
+  );
 
   it("keeps prefix-nested message items separated by a reasoning item as separate blocks", async () => {
     const output = createAssistantOutput();
@@ -3289,6 +3305,8 @@ describe("processResponsesStream", () => {
           type: "response.output_item.added",
           item: { type: "message", id: "msg_2", phase: "final_answer" },
         },
+        { type: "response.output_text.delta", delta: "Do" },
+        { type: "response.output_text.delta", delta: "ne." },
         {
           type: "response.output_item.done",
           item: {
