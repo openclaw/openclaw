@@ -16,6 +16,11 @@ export type DiscordAudioWorkerThread = Pick<Worker, "postMessage" | "terminate">
 export function createDiscordAudioWorkerThread(
   options: DiscordAudioWorkerOptions,
 ): DiscordAudioWorkerThread {
+  // DAVE's Rayon pool survives Worker exit. Native getenv reads the parent's
+  // environment, not a Worker's copy; bound its default before the first rekey.
+  if (process.env.RAYON_NUM_THREADS === undefined && process.env.RAYON_RS_NUM_CPUS === undefined) {
+    process.env.RAYON_NUM_THREADS = "1";
+  }
   const url = resolveRuntimeWorkerUrl({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "audio-worker.runtime",
