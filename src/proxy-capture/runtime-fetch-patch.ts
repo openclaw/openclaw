@@ -54,9 +54,9 @@ export function installDebugProxyGlobalFetchPatch(
     const admission = resolveSessionCaptureOwner(sessionAdmission)?.admission;
     const admitted = Boolean(admission?.current);
     const request = typeof Request !== "undefined" && input instanceof Request ? input : undefined;
-    const method = request?.method ?? normalizedInit?.method ?? "GET";
-    const headers = request?.headers ?? normalizedInit?.headers;
-    const body = request?.body ?? normalizedInit?.body ?? null;
+    const method = normalizedInit?.method ?? request?.method ?? "GET";
+    const headers = normalizedInit?.headers ?? request?.headers;
+    const body = normalizedInit?.body ?? request?.body ?? null;
     const requestHeaders = admitted && headers ? new Headers(headers) : undefined;
     const requestBody = admitted && Buffer.isBuffer(body) ? Buffer.from(body) : body;
     let response: Response;

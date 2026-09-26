@@ -16,6 +16,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -65,7 +66,7 @@ it("finalizes capture after media drains even when stopping media cleanup fails"
   const owner = createPluginRegistryOwner(registry);
   const params = createGatewayCloseTestDeps({
     closePluginRegistry: owner.close,
-    pluginMetadata: retainGatewayPluginMetadata(),
+    pluginMetadata: retainGatewayPluginMetadata(createTestGatewayScheduler()),
     stopMediaCleanup: async () => {
       throw new Error("media cleanup stop failed");
     },
@@ -124,7 +125,7 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
     source: "drain-cleanup-fixture",
     lifecycle: { id: "async-cleanup", cleanup },
   });
-  const metadata = retainGatewayPluginMetadata();
+  const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
   getPluginLoaderCacheState().set("drain-cleanup", registry);
   const servingRegistry = createEmptyPluginRegistry();
   setActivePluginRegistry(servingRegistry);

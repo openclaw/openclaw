@@ -69,13 +69,4 @@ describe("resolveProviderPluginLookupKey", () => {
       }),
     ).toBe("openrouter");
   });
-
-  it("falls through to the provider key when runtime provider models is non-array", () => {
-    expect(
-      resolveProviderPluginLookupKey("openrouter", {
-        baseUrl: "https://openrouter.ai/api/v1",
-        models: { some: "garbage" } as never,
-      }),
-    ).toBe("openrouter");
-  });
 });

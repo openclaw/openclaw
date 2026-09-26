@@ -21,16 +21,12 @@ type ExplicitMessageTargetGuard = {
   require(params: Record<string, unknown>, action: ChannelMessageActionName): void;
 };
 
-function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
-  return action === "broadcast" || actionRequiresTarget(action);
-}
-
 function requireExplicitMessageTarget(
   params: Record<string, unknown>,
   action: ChannelMessageActionName,
   context: ExplicitMessageTargetContext,
 ): void {
-  if (!actionNeedsExplicitTarget(action)) {
+  if (action !== "broadcast" && !actionRequiresTarget(action)) {
     return;
   }
   const hasCanonicalTarget =

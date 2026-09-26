@@ -454,6 +454,8 @@ Code blocks keep your expansion and wrapping choices when their closing fence
 arrives and later paragraphs stream into the same assistant reply. Replacing the
 message, correcting earlier content, or changing rendering options starts a fresh
 view. References that change earlier Markdown can also reset the view.
+Completed lists also stay cached as later blocks arrive; loose or nested list
+continuations remain together until the list ends.
 
 **Copy URL** in browser tab cards also works on plain HTTP connections where the
 browser does not provide its Clipboard API.

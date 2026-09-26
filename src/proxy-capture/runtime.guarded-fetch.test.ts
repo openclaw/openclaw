@@ -71,6 +71,59 @@ async function captureRoots() {
 }
 
 describe("guarded capture ownership", () => {
+  it("captures RequestInit overrides as sent by the global fetch transport", async () => {
+    const fixture = await captureRoots();
+    try {
+      await withServer(
+        (request, response) => {
+          const chunks: Buffer[] = [];
+          request.on("data", (chunk: Buffer) => chunks.push(chunk));
+          request.on("end", () => {
+            response.setHeader("content-type", "application/json");
+            response.end(
+              JSON.stringify({
+                method: request.method,
+                originalHeader: request.headers["x-original"],
+                overrideHeader: request.headers["x-override"],
+                body: Buffer.concat(chunks).toString(),
+              }),
+            );
+          });
+        },
+        async (baseUrl) => {
+          const request = new Request(`${baseUrl}/overrides`, {
+            method: "PUT",
+            headers: { "x-original": "original" },
+            body: "original body",
+          });
+          const response = await fixture.savedWrapper(request, {
+            method: "POST",
+            headers: { "x-override": "override", "content-type": "application/json" },
+            body: "override body",
+          });
+          expect(await response.json()).toEqual({
+            method: "POST",
+            overrideHeader: "override",
+            body: "override body",
+          });
+        },
+      );
+      await fixture.close();
+      const [events] = await fixture.readEvents();
+      expect(events?.[0]).toMatchObject({
+        kind: "request",
+        method: "POST",
+        dataText: "override body",
+      });
+      expect(JSON.parse(String(events?.[0]?.headersJson))).toEqual({
+        "content-type": "application/json",
+        "x-override": "override",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it.each([
     "same-owner",
     "other-owner",

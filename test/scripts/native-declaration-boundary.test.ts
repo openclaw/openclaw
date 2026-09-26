@@ -122,6 +122,55 @@ function createNativeFixture(root: string, declared = root) {
   return { native, write, compile };
 }
 
+it.each(
+  (["all", "declarations"] as const).flatMap((diagnostics) => [
+    {
+      diagnostics,
+      kind: "declaration transform",
+      source: "export const factory = () => class { private value = 1; };",
+      error: /TS4094: Property 'value' of exported anonymous class type/u,
+    },
+    {
+      diagnostics,
+      kind: "lazy global",
+      source: "export function* values() { yield 1; }",
+      error: /TS2318: Cannot find global type 'IterableIterator'/u,
+    },
+  ]),
+)(
+  "rejects $kind errors in $diagnostics diagnostic mode",
+  async ({ diagnostics, source, error }) => {
+    const root = fs.realpathSync.native(roots.make("native-declaration-errors-"));
+    const fixture = createNativeFixture(root);
+    fixture.write("src/index.ts", source);
+    const boundary = createDeclarationInputBoundary(root);
+    await expect(
+      emitNativeDeclarations({
+        cwd: root,
+        compilerRoot: root,
+        configFile: path.join(root, "tsconfig.json"),
+        roots: [path.join(root, "src/index.ts")],
+        diagnostics,
+        compilerOptions: { lib: ["es5"] },
+        assertInput: (file) => boundary.assert(file),
+      }),
+    ).rejects.toThrow(error);
+  },
+);
+
+it("rejects semantic errors before returning valid native declarations", async () => {
+  const root = fs.realpathSync.native(roots.make("native-declaration-semantics-"));
+  const fixture = createNativeFixture(root);
+  fixture.write("src/index.ts", 'export const count: number = "wrong";');
+  await expect(fixture.compile()).rejects.toThrow(/TS2322: Type 'string' is not assignable/u);
+
+  fixture.write("src/index.ts", "export const count: number = 42;");
+  const emitted = await fixture.compile();
+  expect(emitted.declarations.get(path.join(root, "src/index.ts"))?.code).toContain(
+    "export declare const count: number;",
+  );
+});
+
 it("bounds optional SDK relative imports and manifest probes to the checkout", async () => {
   const ancestor = fs.realpathSync.native(roots.make("native-declaration-optional-imports-"));
   const root = path.join(ancestor, ".worktrees/validation");

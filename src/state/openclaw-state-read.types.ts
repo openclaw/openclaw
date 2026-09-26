@@ -73,6 +73,7 @@ import type {
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
 } from "../tasks/task-registry.store.types.js";
+import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
   AgentDatabaseDeletionSnapshot,
   AgentDeletionJournalPurpose,
@@ -121,6 +122,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
   | { type: "capture.readOnlyEvents"; sessionId: string; limit?: number }
   | { type: "capture.readOnlyBlob"; blobId: string }
@@ -226,6 +228,13 @@ export type OpenClawStateReadRequest = {
   command: OpenClawStateReadCommand | { type: "admit" };
 };
 export type OpenClawStateReadReply = (
+  | {
+      ok: true;
+      type: "tui.lastSession.read";
+      sourceAdmitted: true;
+      row: Pick<Selectable<ConfigMachineState>, "value_json" | "updated_at_ms"> | undefined;
+    }
+  | { ok: true; type: "tui.lastSession.retiredPointers"; sourceAdmitted: true; stateKeys: string[] }
   | ChannelIngressReadReply
   | {
       ok: true;

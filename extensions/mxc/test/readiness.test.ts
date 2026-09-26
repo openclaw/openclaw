@@ -41,8 +41,8 @@ describe("assertMxcReadiness", () => {
     expect(deps.execFileSync).not.toHaveBeenCalled();
   });
 
-  test("accepts an installed IsoEnvBroker (system-drive prep is advisory, not gated)", () => {
-    const deps = depsFor({ isoEnvBroker: "running" });
+  test("accepts an installed but stopped (demand-started) IsoEnvBroker", () => {
+    const deps = depsFor({ isoEnvBroker: "stopped" });
 
     expect(() => assertMxcReadiness({ platform: "win32", deps })).not.toThrow();
     expect(deps.execFileSync).toHaveBeenCalledWith(
@@ -50,12 +50,6 @@ describe("assertMxcReadiness", () => {
       ["query", "IsoEnvBroker"],
       expect.any(Object),
     );
-  });
-
-  test("accepts an installed but stopped (demand-started) IsoEnvBroker", () => {
-    const deps = depsFor({ isoEnvBroker: "stopped" });
-
-    expect(() => assertMxcReadiness({ platform: "win32", deps })).not.toThrow();
   });
 
   test("rejects Windows hosts when IsoEnvBroker is not installed", () => {

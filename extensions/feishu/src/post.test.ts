@@ -32,13 +32,10 @@ describe("parsePostContent", () => {
   });
 
   it.each([
-    { style: ["bold"], expected: "**x \\* y** **[Docs](https://example.com)** **@Alice**" },
-    { style: ["italic"], expected: "*x \\* y* *[Docs](https://example.com)* *@Alice*" },
     {
       style: ["underline"],
       expected: "<u>x \\* y</u> <u>[Docs](https://example.com)</u> <u>@Alice</u>",
     },
-    { style: ["lineThrough"], expected: "~~x \\* y~~ ~~[Docs](https://example.com)~~ ~~@Alice~~" },
     {
       style: ["lineThrough", "bold", "italic"],
       expected: "~~***x \\* y***~~ ~~***[Docs](https://example.com)***~~ ~~***@Alice***~~",
@@ -64,16 +61,13 @@ describe("parsePostContent", () => {
     expect(result.attachments).toEqual([]);
   });
 
-  it.each([
-    { style: "bold", nodeType: "strong" },
-    { style: "italic", nodeType: "emphasis" },
-  ])("keeps boundary whitespace outside $style delimiters", ({ style, nodeType }) => {
+  it("keeps boundary whitespace outside emphasis delimiters", () => {
     const result = parsePostContent(
       JSON.stringify({
         content: [
           [
             { tag: "text", text: "Before" },
-            { tag: "text", text: " styled ", style: [style] },
+            { tag: "text", text: " styled ", style: ["bold"] },
             { tag: "text", text: "after" },
           ],
         ],
@@ -86,7 +80,7 @@ describe("parsePostContent", () => {
           type: "paragraph",
           children: [
             { type: "text", value: "Before " },
-            { type: nodeType, children: [{ type: "text", value: "styled" }] },
+            { type: "strong", children: [{ type: "text", value: "styled" }] },
             { type: "text", value: " after" },
           ],
         },

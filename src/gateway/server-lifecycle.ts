@@ -373,11 +373,6 @@ export async function prepareGatewayLifecycle(params: {
       }
     },
   });
-  const postReadyState: {
-    maintenanceTimer: ReturnType<typeof setTimeout> | null;
-  } = {
-    maintenanceTimer: null,
-  };
   let deliveryRecoveryStopPromise: Promise<void> | null = null;
   const stopDeliveryRecoveryForClose = () =>
     (deliveryRecoveryStopPromise ??= runtimeState.stopDeliveryRecovery());
@@ -417,8 +412,6 @@ export async function prepareGatewayLifecycle(params: {
     kernel.setDispatchReady(false);
     gatewayInstanceRuntimeRef.current?.close();
     cronReconciliation.invalidate();
-    clearTimeout(postReadyState.maintenanceTimer ?? undefined);
-    postReadyState.maintenanceTimer = null;
     return prelude;
   };
   let configReloaderStopPromise: Promise<void> | null = null;
@@ -690,7 +683,6 @@ export async function prepareGatewayLifecycle(params: {
     pluginHostServices,
     shutdownRuntime,
     lifecycle,
-    postReadyState,
     cronReconciliation,
     beginClosePrelude,
     getRuntimeSnapshot,

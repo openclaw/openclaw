@@ -68,6 +68,8 @@ import {
   readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshot,
 } from "../tasks/task-registry.store.kernel.js";
+import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
+import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
 import {
   readAgentDatabaseDeletionSnapshotInDatabase,
   readAgentDeletionJournalStatusInDatabase,
@@ -84,7 +86,10 @@ import {
 } from "./openclaw-state-db-read-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
-import { readStateDiagnosticCommand } from "./openclaw-state-read-diagnostics.js";
+import {
+  isStateDiagnosticCommand,
+  readStateDiagnosticCommand,
+} from "./openclaw-state-read-diagnostics.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
@@ -397,12 +402,7 @@ serveOwnedWorkerTasks(
                     }),
                   };
                 }
-                if (
-                  command.type === "capture.readOnlyEvents" ||
-                  command.type === "capture.readOnlyBlob" ||
-                  command.type === "config.snapshot.read" ||
-                  command.type === "audit.run.inspect"
-                ) {
+                if (isStateDiagnosticCommand(command)) {
                   return readStateDiagnosticCommand(db, command);
                 }
                 if (command.type === "pluginBlob.entries") {
@@ -678,7 +678,9 @@ serveOwnedWorkerTasks(
                     ),
                   };
                 }
-                return readStateRegistryCommand(db, command);
+                return isTuiLastSessionReadCommand(command)
+                  ? readTuiLastSessionCommand(db, command)
+                  : readStateRegistryCommand(db, command);
               },
               ...locationArgs,
             );

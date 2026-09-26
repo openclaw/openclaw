@@ -11,18 +11,31 @@ import type {
   OpenClawStateReadReply,
 } from "./openclaw-state-read.types.js";
 
+type StateDiagnosticCommand = Extract<
+  OpenClawStateReadCommand,
+  {
+    type:
+      | "capture.readOnlyEvents"
+      | "capture.readOnlyBlob"
+      | "config.snapshot.read"
+      | "audit.run.inspect";
+  }
+>;
+
+export function isStateDiagnosticCommand(
+  command: OpenClawStateReadCommand,
+): command is StateDiagnosticCommand {
+  return (
+    command.type === "capture.readOnlyEvents" ||
+    command.type === "capture.readOnlyBlob" ||
+    command.type === "config.snapshot.read" ||
+    command.type === "audit.run.inspect"
+  );
+}
+
 export function readStateDiagnosticCommand(
   db: DatabaseSync,
-  command: Extract<
-    OpenClawStateReadCommand,
-    {
-      type:
-        | "capture.readOnlyEvents"
-        | "capture.readOnlyBlob"
-        | "config.snapshot.read"
-        | "audit.run.inspect";
-    }
-  >,
+  command: StateDiagnosticCommand,
 ): OpenClawStateReadReply {
   const admitted = { ok: true, sourceAdmitted: true } as const;
   if (command.type === "capture.readOnlyEvents") {

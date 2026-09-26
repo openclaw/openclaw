@@ -10,7 +10,7 @@ openclaw-sidebar-attention.sidebar-attention--floating {
   --sidebar-issues-background: color-mix(in srgb, var(--panel) 92%, transparent);
 
   position: fixed;
-  top: 10px;
+  top: calc((var(--rail-header-height) - var(--shell-chrome-control-size)) / 2);
   left: calc(var(--shell-chrome-controls-inset) + var(--shell-controls-width) + 8px);
   z-index: 45;
   display: flex;
