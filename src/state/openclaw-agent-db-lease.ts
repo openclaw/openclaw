@@ -570,6 +570,8 @@ function isAgentDatabaseLeaseStale(row: {
     return true;
   }
   const currentStartTime = getFileLockProcessStartTime(row.owner_pid);
+  // A wall-clock rollback can put a live owner's creation time after opened_at.
+  // Only stored and current process identities can establish replacement; unknown stays held.
   return (
     row.owner_start_time !== null &&
     currentStartTime !== null &&
