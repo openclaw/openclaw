@@ -68,17 +68,20 @@ it("reads full and scoped task snapshots without host SQL or writable broker adm
   sql.expectIdle();
 });
 
-it("rejects a retired task read admission after the same database reopens", async () => {
-  const { options } = fixture();
-  const context = captureOpenClawStateWorkerContext(options);
-  await closeOpenClawStateDatabaseAsync();
-  openOpenClawStateDatabase(options);
-  await expect(getTaskRegistryStore().loadMutationSnapshotAsync(context)).rejects.toThrow(
-    /admission|closed|generation|invalidated/i,
-  );
-});
+it.each([undefined, { missingDatabase: "empty" }] as const)(
+  "rejects a retired task read admission after the same database reopens: %j",
+  async (options) => {
+    const { options: databaseOptions } = fixture();
+    const context = captureOpenClawStateWorkerContext(databaseOptions);
+    await closeOpenClawStateDatabaseAsync();
+    openOpenClawStateDatabase(databaseOptions);
+    await expect(
+      getTaskRegistryStore().loadMutationSnapshotAsync(context, undefined, options),
+    ).rejects.toThrow(/admission|closed|generation|invalidated/i);
+  },
+);
 
-it("does not create missing task state or report an empty snapshot", async () => {
+it("keeps missing state absent and reports empty only to discovery readers", async () => {
   const root = tempDirs.make("task-snapshot-missing-");
   const pathname = path.join(root, "state.sqlite");
   const context = captureOpenClawStateWorkerContext({
@@ -88,5 +91,10 @@ it("does not create missing task state or report an empty snapshot", async () =>
   await expect(getTaskRegistryStore().loadMutationSnapshotAsync(context)).rejects.toThrow(
     "Task registry snapshot requires an admitted database",
   );
+  const snapshot = await getTaskRegistryStore().loadMutationSnapshotAsync(context, undefined, {
+    missingDatabase: "empty",
+  });
+  expect([...snapshot.tasks.values()]).toEqual([]);
+  expect([...snapshot.deliveryStates.values()]).toEqual([]);
   expect(fs.existsSync(pathname)).toBe(false);
 });

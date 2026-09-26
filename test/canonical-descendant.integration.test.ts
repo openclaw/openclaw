@@ -26,10 +26,10 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
-  readClosedTranscriptTurn,
   replaceTranscriptEvents,
 } from "../src/config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
+import { readClosedTranscriptTurnInDatabase } from "../src/config/sessions/session-accessor.transcript-range.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type {
@@ -41,7 +41,9 @@ import { seedAttachedPlacementEnvironment } from "../src/gateway/worker-environm
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
 import {
+  createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
@@ -76,7 +78,10 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../src/sessions/user-turn-transcript.js";
-import { runOpenClawAgentWriteTransaction } from "../src/state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../src/state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 import { useCanonicalDescendantState } from "./helpers/canonical-descendant-state.js";
 
@@ -193,8 +198,10 @@ async function withFixture(
       agent: createRuntimeAgent(),
       config: { current: () => config },
       state: {
+        openKeyedStore: <T>(storeOptions: OpenAsyncKeyedStoreOptions) =>
+          createPluginStateKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
         openSyncKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) =>
-          createPluginStateSyncKeyedStore<T>("codex", storeOptions),
+          createPluginStateSyncKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
       },
     });
     const admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }> = [];
@@ -960,11 +967,14 @@ describe("canonical descendant lifecycle through real owners", () => {
           before.slice(0, -1),
         );
         expect(
-          readClosedTranscriptTurn({
-            boundary: { admission, terminal: admission },
-            maxEvents: 100,
-            maxBytes: 100_000,
-          }),
+          readClosedTranscriptTurnInDatabase(
+            openOpenClawAgentDatabase({ agentId: admission.agentId, path: admission.storePath }).db,
+            {
+              boundary: { admission, terminal: admission },
+              maxEvents: 100,
+              maxBytes: 100_000,
+            },
+          ),
         ).toMatchObject({ kind: "ok", messages: [added.message] });
         expect(await fork(source.sessionKey, admission.entryId)).toMatchObject({ ok: true });
       }

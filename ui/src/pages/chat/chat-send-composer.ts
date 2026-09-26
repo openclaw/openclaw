@@ -1,5 +1,6 @@
 import type {
   ChatAttachment,
+  ChatGoalDraftMode,
   ChatQueueItem,
   ChatReplyTarget,
   HumanMention,
@@ -101,6 +102,7 @@ export type ChatCommandComposerRecovery = {
     draft: string;
     mentions?: readonly HumanMention[];
     replyTarget?: ChatReplyTarget | null;
+    goalMode?: ChatGoalDraftMode | null;
     fallbackOwnership?: ChatComposerMemoryFallbackOwnership;
   };
   connectionEpoch: ChatHost["connectionEpoch"];
@@ -134,6 +136,7 @@ export function captureChatCommandComposerRecovery(
       ? {
           composer: {
             ...composer,
+            goalMode: host.chatGoalDraftMode,
             ...(fallbackHost
               ? {
                   fallbackOwnership: captureChatComposerMemoryFallbackOwnership(
@@ -298,6 +301,7 @@ function restoreFailedCommandComposer(
     previousDraft: composer.draft,
     previousMentions: composer.mentions,
     previousReplyTarget: composer.replyTarget,
+    previousGoalDraftMode: composer.goalMode,
   });
   if (restorePlan.draft) {
     owner.chatMessage = composer.draft;
@@ -342,14 +346,16 @@ type PendingComposerSnapshot = {
   previousDraft?: string;
   previousMentions?: readonly HumanMention[];
   previousReplyTarget?: ChatReplyTarget | null;
+  previousGoalDraftMode?: ChatGoalDraftMode | null;
 };
 
 function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot) {
-  // A quote-only or attachment-only edit is still a newer draft. Restoring old text beside it
-  // would combine sends; annotations retained by this exact command are not edits.
+  // Empty Goal mode is newer intent unless this same pending Goal owns the restore.
+  // Submitted annotations can remain in the otherwise empty composer.
   const composerBlank =
     !host.chatMessage.trim() &&
     !host.chatReplyTarget &&
+    (!host.chatGoalDraftMode || host.chatGoalDraftMode === snapshot.previousGoalDraftMode) &&
     (host.chatAttachments.length === 0 ||
       composerRetainsSubmittedAnnotations(host, snapshot.previousAttachments));
   const attachments = Boolean(snapshot.previousAttachments?.length && composerBlank);

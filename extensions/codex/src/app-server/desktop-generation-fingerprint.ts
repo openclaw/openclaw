@@ -18,9 +18,15 @@ export async function readMacOSDesktopGenerationFingerprint(
   ),
 ): Promise<string> {
   const entries: string[] = [];
+  const bundles = new Set<string>();
   for (const candidate of candidates) {
     const command = await statFingerprint(candidate.appServerCommandPath);
     entries.push(`candidate:${candidate.appName}:${candidate.appServerCommandPath}:${command}`);
+    // Executable layouts share one bundle's Computer Use assets.
+    if (bundles.has(candidate.appBundlePath)) {
+      continue;
+    }
+    bundles.add(candidate.appBundlePath);
     for (const artifactPath of resolveMacOSDesktopGenerationPaths(candidate)) {
       entries.push(`${artifactPath}\0${await statFingerprint(artifactPath)}`);
     }
@@ -37,8 +43,8 @@ function resolveMacOSDesktopGenerationPaths(
   return [
     candidate.appBundlePath,
     path.join(candidate.bundledMarketplacePath, ".agents", "plugins", "marketplace.json"),
-    path.join(path.dirname(candidate.appServerCommandPath), "cua_node", "bin", "node"),
-    path.join(path.dirname(candidate.appServerCommandPath), "cua_node", "bin", "node_repl"),
+    path.join(candidate.appBundlePath, "Contents", "Resources", "cua_node", "bin", "node"),
+    path.join(candidate.appBundlePath, "Contents", "Resources", "cua_node", "bin", "node_repl"),
     ...candidate.computerUseServiceAppPaths.flatMap((servicePath) => [
       servicePath,
       path.join(servicePath, "Contents", "Info.plist"),
@@ -57,7 +63,9 @@ function resolveMacOSDesktopGenerationPaths(
 
 function resolveComputerUseArtifactRoots(candidate: MacOSDesktopCodexAppPathCandidate): string[] {
   const modules = path.join(
-    path.dirname(candidate.appServerCommandPath),
+    candidate.appBundlePath,
+    "Contents",
+    "Resources",
     "cua_node",
     "lib",
     "node_modules",

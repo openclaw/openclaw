@@ -134,6 +134,7 @@ export async function handleSendChat(
   const previousDraft = host.chatMessage;
   const previousMentions = host.chatMentions?.map((mention) => ({ ...mention }));
   const previousReplyTarget = host.chatReplyTarget ? { ...host.chatReplyTarget } : null;
+  const previousGoalDraftMode = host.chatGoalDraftMode;
   const intent = opts?.intent;
   const rawMessage = messageOverride ?? host.chatMessage;
   const draftMentions = messageOverride == null ? previousMentions : opts?.mentionsOverride;
@@ -672,6 +673,7 @@ export async function handleSendChat(
         previousAttachments: cleared.previousAttachments,
         previousMentions: cleared.previousMentions,
         previousReplyTarget: cleared.previousReplyTarget,
+        previousGoalDraftMode,
       });
       setChatError(host, formatChatQueueAdmissionError(admissionResult, Boolean(resumedEdit)));
       return;
@@ -693,6 +695,7 @@ export async function handleSendChat(
           previousAttachments: cleared.previousAttachments,
           previousMentions: cleared.previousMentions,
           previousReplyTarget: cleared.previousReplyTarget,
+          previousGoalDraftMode,
           ...(allowActiveRunSend ? { allowActiveRunSend: true } : {}),
           ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
           ...(pendingSettings ? { pendingSettings } : {}),

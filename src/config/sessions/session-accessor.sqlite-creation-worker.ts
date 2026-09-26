@@ -85,6 +85,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
                 runWithSessionEntryCreationPublication(operation, () => run(assertCurrent)),
               )
           : undefined;
+        options.onPhase?.("entry");
         const created = await createEntry({
           ...context,
           isLabelInUse: (label) => labels.has(label),
@@ -122,6 +123,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
           }
           return undefined;
         };
+        options.onPhase?.("transcript");
         const transcriptError = withCommit ? await withCommit(initialize) : await initialize();
         if (transcriptError !== undefined) {
           return { ok: false, error: transcriptError, phase: "transcript" };
@@ -200,10 +202,12 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
           return { ok: true, entry: created.entry, sessionFile: normalizedKey };
         }
         let adopted = false;
+        options.onPhase?.("writerAdmission");
         const commit = (assertSourceCurrent?: () => void) =>
           runExclusiveSqliteSessionWrite(
             scope,
             async () => {
+              options.onPhase?.("commit");
               const assertHeld = () => {
                 assertCurrent();
                 assertSourceCurrent?.();
