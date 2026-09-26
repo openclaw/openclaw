@@ -223,6 +223,8 @@ export async function extractFileContext(params: {
   skipAttachmentIndexes?: Set<number>;
   assertCurrent?: () => void;
   selfServePathsEnabled: boolean;
+  /** Retained context shares one text budget across its ordered attachments. */
+  totalMaxChars?: number;
 }) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
   if (!attachments || attachments.length === 0) {
@@ -231,19 +233,28 @@ export async function extractFileContext(params: {
   const blocks: AttachmentContextBlock[] = [];
   const images: ExtractedFileImage[] = [];
   const localPathSelfServeUpgrades: LocalPathSelfServeUpgrade[] = [];
+  let remainingChars = params.totalMaxChars;
   for (const attachment of attachments) {
     if (!attachment) {
       continue;
     }
-    const { outcome, filename, mimeType } = await classifyFileAttachment({
+    params.assertCurrent?.();
+    const classified = await classifyFileAttachment({
       attachment,
       cache,
       cfg,
-      limits,
+      limits:
+        remainingChars === undefined
+          ? limits
+          : { ...limits, maxChars: Math.min(limits.maxChars, Math.max(0, remainingChars)) },
       skipAttachmentIndexes,
       assertCurrent: params.assertCurrent,
     }).finally(() => cache.releaseBuffer(attachment.index));
     params.assertCurrent?.();
+    const { filename, mimeType, outcome } = classified;
+    if (remainingChars !== undefined && outcome.kind === "extracted") {
+      remainingChars -= outcome.text.length;
+    }
     if (outcome.kind === "extracted" || outcome.kind === "rendered-to-images") {
       images.push(
         ...outcome.images.map((image) => ({
@@ -350,6 +361,7 @@ export async function renderInboundDocumentContext(params: {
           ? limits
           : { ...limits, maxChars: Math.min(limits.maxChars, params.maxChars) },
       selfServePathsEnabled: false,
+      totalMaxChars: params.maxChars,
       assertCurrent: params.assertCurrent,
     });
     params.assertCurrent?.();
