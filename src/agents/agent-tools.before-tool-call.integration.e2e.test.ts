@@ -32,7 +32,6 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
 import {
-  authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
   deactivateClientVoiceConfirmationSession,
@@ -41,7 +40,6 @@ import {
   noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance,
   resetClientVoiceConfirmationStateForTest,
 } from "../talk/client-voice-confirmation.test-support.js";
-import * as clientVoiceSession from "../talk/client-voice-session.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -63,6 +61,11 @@ import {
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import {
+  approveVoiceToolParams,
+  authorizeVoiceToolParams,
+  installVoiceRunBinding,
+} from "./agent-tools.voice-confirmation.test-support.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
 import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
@@ -139,56 +142,6 @@ function installBeforeToolCallHooks(hooks: BeforeToolCallHookInstall[]): void {
     });
   }
   initializeGlobalHookRunner(registry);
-}
-
-function installVoiceRunBinding(runId: string): void {
-  const binding = {
-    agentId: "main",
-    voiceSessionId: `voice-${runId}`,
-    sessionKey: "agent:main:voice",
-  };
-  vi.spyOn(clientVoiceSession, "resolveClientVoiceRunBinding").mockImplementation(
-    (candidateRunId) => (candidateRunId === runId ? binding : undefined),
-  );
-  vi.spyOn(clientVoiceSession, "isClientVoiceSessionConfirmable").mockReturnValue(true);
-}
-
-function authorizeVoiceToolParams(runId: string, toolParams: unknown, now = Date.now()) {
-  const voiceSessionId = `voice-${runId}`;
-  const challenge = checkClientVoiceToolConfirmationPolicy({
-    agentId: "main",
-    voiceSessionId,
-    runId,
-    toolName: "message",
-    toolParams,
-    isConfirmable: () => true,
-    now,
-  });
-  if (challenge.allowed) {
-    throw new Error("expected voice confirmation challenge");
-  }
-  const confirmationId = challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
-  if (!confirmationId) {
-    throw new Error("missing voice confirmation id");
-  }
-  noteClientVoiceConfirmationUtterance({
-    agentId: "main",
-    voiceSessionId,
-    text: "yes",
-    timestamp: now + 1,
-  });
-  const grant = authorizeClientVoiceConfirmation({
-    agentId: "main",
-    voiceSessionId,
-    confirmationId,
-    now: now + 2,
-  });
-  return { confirmationId, grant, voiceSessionId };
-}
-
-function approveVoiceToolParams(runId: string, toolParams: unknown): void {
-  const { grant } = authorizeVoiceToolParams(runId, toolParams);
-  bindAuthorizedClientVoiceConfirmation({ grant, runId });
 }
 
 describe("before_tool_call hook integration", () => {
