@@ -2,7 +2,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import { renderPluginCatalogDetail } from "./catalog-detail.ts";
-import { createDiscoveryDetail } from "./plugins-page.test-support.ts";
+import { createDiscoveryDetail, createPlugin } from "./plugins-page.test-support.ts";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -63,6 +63,33 @@ describe("catalog README", () => {
 });
 
 describe("renderPluginCatalogDetail", () => {
+  it("uses a white tile for an official package icon", () => {
+    const imageUrl = "https://example.com/icon.png";
+    const result = createDiscoveryDetail(createPlugin({ origin: "official" }));
+    result.plugin.catalog.imageUrl = imageUrl;
+    const container = document.createElement("div");
+
+    render(
+      renderPluginCatalogDetail({
+        connected: true,
+        result,
+        error: null,
+        backHref: "/plugins",
+        onBack: vi.fn(),
+        onRetry: vi.fn(),
+        canInstall: true,
+        installBlockedReason: null,
+        onInstall: vi.fn(),
+        iconUrls: { [imageUrl]: "blob:package-icon" },
+      }),
+      container,
+    );
+
+    expect(
+      container.querySelector(".plugin-catalog-detail__icon .plugins-tile--white"),
+    ).not.toBeNull();
+  });
+
   it("does not invent a ClawHub link for an unproven local package", () => {
     const result = {
       plugin: {

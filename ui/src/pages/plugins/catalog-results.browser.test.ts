@@ -168,3 +168,21 @@ it.each([40, 80])("fills icon tiles without cropping a %ipx-wide source", async 
     expect(getComputedStyle(image.parentElement!).borderWidth).toBe("0px");
   }
 });
+
+it("renders the official icon background as opaque white", async () => {
+  const icon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="15" fill="blue"/></svg>')}`;
+  render(
+    renderArtTile("official", "Official", { iconUrl: icon, whiteBackground: true }),
+    container,
+  );
+  const image = container.querySelector<HTMLImageElement>(".plugins-icon")!;
+  await new Promise<void>((resolve, reject) => {
+    image.addEventListener("load", () => resolve(), { once: true });
+    image.addEventListener("error", reject, { once: true });
+  });
+
+  const tile = image.parentElement!;
+  expect(tile.classList.contains("plugins-tile--white")).toBe(true);
+  expect(getComputedStyle(tile).backgroundColor).toBe("rgb(255, 255, 255)");
+  expect(getComputedStyle(image).padding).toBe("4px");
+});
