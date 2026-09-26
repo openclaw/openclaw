@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawProtocol
 import SwiftUI
 
 struct MobileBackgroundTask: Decodable, Identifiable, Equatable {
@@ -96,16 +97,6 @@ private struct MobileBackgroundTasksEnvelope: Decodable {
 
 private struct MobileBackgroundTaskEnvelope: Decodable {
     let task: MobileBackgroundTask
-}
-
-private struct MobileBackgroundTasksListParams: Encodable {
-    let agentId: String
-    let status: [String]?
-    let limit: Int
-}
-
-private struct MobileBackgroundTaskGetParams: Encodable {
-    let taskId: String
 }
 
 enum MobileBackgroundTaskList {
@@ -293,7 +284,7 @@ struct BackgroundTasksScreen: View {
     }
 
     private func requestTasks(status: [String]?, limit: Int) async throws -> [MobileBackgroundTask] {
-        let params = MobileBackgroundTasksListParams(agentId: self.agentID, status: status, limit: limit)
+        let params = TasksListParams(status: status.map { AnyCodable($0) }, agentid: self.agentID, limit: limit)
         let data = try await self.request(method: "tasks.list", params: params)
         return try JSONDecoder().decode(MobileBackgroundTasksEnvelope.self, from: data).tasks
     }
@@ -374,7 +365,7 @@ private struct BackgroundTaskDetailScreen: View {
     private func loadDetail() async {
         self.loading = true
         do {
-            let params = MobileBackgroundTaskGetParams(taskId: self.task.id)
+            let params = TasksGetParams(taskid: self.task.id)
             let payload = try JSONEncoder().encode(params)
             guard let paramsJSON = String(data: payload, encoding: .utf8) else {
                 throw CocoaError(.fileReadCorruptFile)

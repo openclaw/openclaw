@@ -26,14 +26,6 @@ struct OnboardingActivationCanvas<Content: View>: View {
     }
 }
 
-private struct OnboardingHeroGlyph: View {
-    var mood: OpenClawMascotMood = .idle
-
-    var body: some View {
-        OpenClawActivationGlyph(size: 78, mood: self.mood, interactive: true)
-    }
-}
-
 struct OnboardingHeroHeader: View {
     let title: LocalizedStringKey
     let subtitle: LocalizedStringKey?
@@ -41,7 +33,7 @@ struct OnboardingHeroHeader: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            OnboardingHeroGlyph(mood: self.mood)
+            OpenClawActivationGlyph(size: 78, mood: self.mood, interactive: true)
 
             VStack(spacing: 8) {
                 Text(self.title)
@@ -74,8 +66,6 @@ private struct OnboardingWelcomePrompt: View {
     }
 }
 
-private typealias OnboardingPrimaryButtonStyle = OpenClawPrimaryActionButtonStyle
-
 private enum OnboardingIntroPanelStyle {
     static let iconSize: CGFloat = 34
     static let contentSpacing: CGFloat = 12
@@ -92,7 +82,7 @@ struct OnboardingIntroPanel<Content: View>: View {
 
     var body: some View {
         self.content
-            .padding(Self.panelPadding)
+            .padding(OnboardingIntroPanelStyle.panelPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: OnboardingIntroPanelStyle.panelCornerRadius, style: .continuous)
@@ -107,10 +97,6 @@ struct OnboardingIntroPanel<Content: View>: View {
                 RoundedRectangle(cornerRadius: OnboardingIntroPanelStyle.panelCornerRadius, style: .continuous)
                     .stroke(OnboardingIntroPanelStyle.stroke, lineWidth: 0.5)
             }
-    }
-
-    private static var panelPadding: CGFloat {
-        OnboardingIntroPanelStyle.panelPadding
     }
 }
 
@@ -276,7 +262,7 @@ struct OnboardingIntroStep: View {
                         Text("Continue")
                             .font(OpenClawType.subheadSemiBold)
                     }
-                    .buttonStyle(OnboardingPrimaryButtonStyle())
+                    .buttonStyle(OpenClawPrimaryActionButtonStyle())
                 }
             }
         }
@@ -320,7 +306,7 @@ struct OnboardingWelcomeStep: View {
                                     .font(OpenClawType.subheadSemiBold)
                             }
                         }
-                        .buttonStyle(OnboardingPrimaryButtonStyle())
+                        .buttonStyle(OpenClawPrimaryActionButtonStyle())
                         .disabled(self.isConnecting)
                     }
 
@@ -410,7 +396,7 @@ struct OnboardingSuccessStep: View {
                     Label("Go to Chat", systemImage: "bubble.left.and.bubble.right.fill")
                         .font(OpenClawType.subheadSemiBold)
                 }
-                .buttonStyle(OnboardingPrimaryButtonStyle())
+                .buttonStyle(OpenClawPrimaryActionButtonStyle())
             }
         }
     }
