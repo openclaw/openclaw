@@ -76,7 +76,7 @@ describe("worker turn launcher remote handoff", () => {
       timeoutMs: 10_000,
     });
     expect(initialized.code).toBe(0);
-    seedActivePlacement();
+    await seedActivePlacement();
     const manager = openSessionManager();
     const earlierRequestId = manager.appendMessage(
       makeAgentUserMessage({ content: "Earlier request", timestamp: 10 }),
@@ -365,7 +365,7 @@ describe("worker turn launcher remote handoff", () => {
     setActiveNodeContext({ nodeId: "disconnected-mac" }, { isCurrent: () => false });
     const remote = path.join(await realpath(root), "remote");
     await mkdir(remote);
-    seedActivePlacement("worker-turn", remote);
+    await seedActivePlacement("worker-turn", remote);
     const image = {
       type: "image" as const,
       data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",

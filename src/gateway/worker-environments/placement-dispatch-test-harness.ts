@@ -200,9 +200,9 @@ export function createHarness(
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
-    startDispatch: (params) => {
+    startDispatch: (params, dispatchOptions) => {
       log.push("placement:requested");
-      return placementStore.startDispatch(params);
+      return placementStore.startDispatch(params, dispatchOptions);
     },
     bindPreparedEnvironment: (params) => placementStore.bindPreparedEnvironment(params),
     transition: (params) => {
@@ -492,7 +492,7 @@ export function createHarness(
         fail("preflight");
       }
       authorize?.();
-      const placement = startDispatch();
+      const placement = await startDispatch();
       if (options.failAt === "barrier") {
         throw new Error("barrier failed");
       }
@@ -617,8 +617,8 @@ export function createHarness(
       seedStarting: () => seedStartingPlacement(placementStore, environmentId),
       seedActive: (ownerEpoch: number, executionMode?: "worker-turn" | "remote-exec") =>
         seedActive(ownerEpoch, executionMode),
-      seedDraining: (ownerEpoch: number) => {
-        const active = seedActive(ownerEpoch);
+      seedDraining: async (ownerEpoch: number) => {
+        const active = await seedActive(ownerEpoch);
         if (active.state !== "active") {
           throw new Error("active placement fixture was not active");
         }

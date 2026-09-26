@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
@@ -297,6 +298,7 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
   child.on("exit", (code, signal) => {
     childExit = { code, signal };
     if (forwardedSignal) {
+      forwardedSignalPids = forwardedSignalPids.filter((pid) => pid !== child.pid);
       waitForForwardedSignalChildren();
       return;
     }
@@ -347,14 +349,7 @@ function collectChildProcessTreePids(child: ChildProcess): { pids: number[]; com
 }
 
 function processTreeIsAlive(pids: number[]): boolean {
-  return pids.some((pid) => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (error) {
-      return hasErrorCode(error, "EPERM");
-    }
-  });
+  return pids.some((pid) => !isPidDefinitelyDead(pid));
 }
 
 function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals, pids: number[]): void {

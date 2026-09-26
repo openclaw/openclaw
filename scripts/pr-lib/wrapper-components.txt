@@ -533,7 +533,7 @@ src/config/zod-schema.ts
 src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
 src/cron/run-diagnostics-normalize.ts
-src/cron/task-run-detail.ts
+src/cron/run-history-detail.ts
 src/daemon/arg-split.ts
 src/daemon/constants.ts
 src/daemon/runtime-binary.ts

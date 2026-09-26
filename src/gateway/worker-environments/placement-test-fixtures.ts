@@ -27,13 +27,13 @@ export function createPlacementTurnClaimFixtureOps(database: OpenClawStateDataba
   });
 }
 
-export function advancePlacementFixtureToActive(
+export async function advancePlacementFixtureToActive(
   store: WorkerSessionPlacementStore,
   database: OpenClawStateDatabase,
   identity: WorkerSessionPlacementIdentity,
   executionMode: "worker-turn" | "remote-exec" = "worker-turn",
 ) {
-  let placement = store.startDispatch({ ...identity, executionMode });
+  let placement = await store.startDispatch({ ...identity, executionMode });
   placement = store.transition({
     sessionId: identity.sessionId,
     from: "requested",

@@ -95,16 +95,80 @@ describe("browser trash", () => {
     );
   });
 
-  it("rejects browser-subtree symlinks that escape the configured state directory", async () => {
+  it("trashes an in-root symlink entry without moving its outside profile", async () => {
     const browserDir = path.join(configDir, "browser");
     const outsideDir = path.join(testRoot, "outside-profile");
     realMkdirSync(browserDir, { recursive: true });
     realMkdirSync(outsideDir, { recursive: true });
+    realWriteFileSync(path.join(outsideDir, "Preferences"), "outside profile");
     const target = path.join(browserDir, "constructor");
     fs.symlinkSync(outsideDir, target, "dir");
+
+    const moved = await movePathToTrash(target);
+
+    expect(fs.lstatSync(moved).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(moved)).toBe(outsideDir);
+    expect(fs.lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
+    expect(fs.lstatSync(outsideDir).isDirectory()).toBe(true);
+    expect(fs.readdirSync(outsideDir)).toEqual(["Preferences"]);
+    expect(fs.readFileSync(path.join(outsideDir, "Preferences"), "utf8")).toBe("outside profile");
+    const trashDir = path.join(homeDir, ".Trash");
+    const reservation = path.dirname(moved);
+    expect(path.dirname(reservation)).toBe(trashDir);
+    expect(fs.readdirSync(trashDir)).toEqual([path.basename(reservation)]);
+    expect(fs.readdirSync(reservation)).toEqual([path.basename(target)]);
+  });
+
+  it("rejects entries whose symlinked parent resolves outside the Browser root", async () => {
+    const browserDir = path.join(configDir, "browser");
+    const outsideDir = path.join(testRoot, "outside-profile");
+    const outsideTarget = path.join(outsideDir, "nested", "profile");
+    realMkdirSync(browserDir, { recursive: true });
+    realMkdirSync(outsideTarget, { recursive: true });
+    realWriteFileSync(path.join(outsideTarget, "Preferences"), "outside profile");
+    const parentAlias = path.join(browserDir, "escaped-parent");
+    fs.symlinkSync(outsideDir, parentAlias, "dir");
+    const target = path.join(parentAlias, "nested", "profile");
 
     await expect(movePathToTrash(target)).rejects.toThrow(
       "Refusing to trash path outside allowed roots",
     );
+    expect(fs.readlinkSync(parentAlias)).toBe(outsideDir);
+    expect(fs.lstatSync(outsideTarget).isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(outsideTarget, "Preferences"), "utf8")).toBe(
+      "outside profile",
+    );
+    expect(fs.readdirSync(path.join(homeDir, ".Trash"))).toEqual([]);
+  });
+
+  it("trashes an in-root symlink entry without moving its profile data", async () => {
+    const browserDir = path.join(configDir, "browser");
+    const profileDir = path.join(browserDir, "profile");
+    realMkdirSync(profileDir, { recursive: true });
+    realWriteFileSync(path.join(profileDir, "Preferences"), "profile data");
+    const target = path.join(browserDir, "alias");
+    fs.symlinkSync(profileDir, target, "dir");
+
+    const moved = await movePathToTrash(target);
+
+    expect(fs.lstatSync(moved).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(moved)).toBe(profileDir);
+    expect(fs.lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
+    expect(fs.readFileSync(path.join(profileDir, "Preferences"), "utf8")).toBe("profile data");
+  });
+
+  it("preserves trash support for dangling in-root symlink entries", async () => {
+    const browserDir = path.join(configDir, "browser");
+    realMkdirSync(browserDir, { recursive: true });
+    const target = path.join(browserDir, "dangling");
+    const missingProfile = path.join(browserDir, "missing");
+    fs.symlinkSync(missingProfile, target, "dir");
+
+    const moved = await movePathToTrash(target);
+
+    expect(fs.lstatSync(moved).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(moved)).toBe(missingProfile);
+    expect(fs.lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
+    expect(fs.existsSync(missingProfile)).toBe(false);
   });
 });

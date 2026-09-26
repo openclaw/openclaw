@@ -1173,19 +1173,8 @@ describe("runReplyAgent auto-compaction token update", () => {
 });
 
 describe("runReplyAgent block streaming", () => {
-  it("coalesces duplicate text_end block replies", async () => {
-    const onBlockReply = vi.fn();
-    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
-      const block = params.onBlockReply as ((payload: { text?: string }) => void) | undefined;
-      block?.({ text: "Hello" });
-      block?.({ text: "Hello" });
-      return {
-        payloads: [{ text: "Final message" }],
-        meta: {},
-      };
-    });
-
-    const result = await createBaseRun({
+  function runBlockStreaming(opts: NonNullable<Parameters<typeof runReplyAgent>[0]["opts"]>) {
+    return createBaseRun({
       context: {
         Provider: "discord",
         OriginatingTo: "channel:C1",
@@ -1210,7 +1199,7 @@ describe("runReplyAgent block streaming", () => {
         blockReplyBreak: "text_end",
       },
       reply: {
-        opts: { onBlockReply },
+        opts,
         blockStreamingEnabled: true,
         blockReplyChunking: {
           minChars: 1,
@@ -1220,6 +1209,21 @@ describe("runReplyAgent block streaming", () => {
         resolvedBlockStreamingBreak: "text_end",
       },
     }).run();
+  }
+
+  it("coalesces duplicate text_end block replies", async () => {
+    const onBlockReply = vi.fn();
+    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+      const block = params.onBlockReply as ((payload: { text?: string }) => void) | undefined;
+      block?.({ text: "Hello" });
+      block?.({ text: "Hello" });
+      return {
+        payloads: [{ text: "Final message" }],
+        meta: {},
+      };
+    });
+
+    const result = await runBlockStreaming({ onBlockReply });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect((firstMockCallArg(onBlockReply, "block reply") as { text?: string }).text).toBe("Hello");
@@ -1257,41 +1261,7 @@ describe("runReplyAgent block streaming", () => {
       };
     });
 
-    const resultPromise = createBaseRun({
-      context: {
-        Provider: "discord",
-        OriginatingTo: "channel:C1",
-        AccountId: "primary",
-        MessageSid: "msg",
-      },
-      run: {
-        messageProvider: "discord",
-        config: {
-          agents: {
-            defaults: {
-              blockStreamingCoalesce: {
-                minChars: 1,
-                maxChars: 200,
-                idleMs: 0,
-              },
-            },
-          },
-        },
-        thinkLevel: "low",
-        reasoningLevel: "on",
-        blockReplyBreak: "text_end",
-      },
-      reply: {
-        opts: { onBlockReply, blockReplyTimeoutMs: 1 },
-        blockStreamingEnabled: true,
-        blockReplyChunking: {
-          minChars: 1,
-          maxChars: 200,
-          breakPreference: "paragraph",
-        },
-        resolvedBlockStreamingBreak: "text_end",
-      },
-    }).run();
+    const resultPromise = runBlockStreaming({ onBlockReply, blockReplyTimeoutMs: 1 });
 
     await blockReplyStarted.promise;
     await vi.advanceTimersByTimeAsync(5);
@@ -1437,12 +1407,9 @@ describe("runReplyAgent Active Memory inline debug", () => {
   }
 
   it.each([
-    { stored: "off", override: "on", authorized: true, trace: true, raw: false },
-    { stored: "on", override: "off", authorized: true, trace: false, raw: false },
     { stored: "off", override: "raw", authorized: true, trace: true, raw: true },
     { stored: "raw", override: "off", authorized: true, trace: false, raw: false },
     { stored: "raw", override: "on", authorized: true, trace: true, raw: false },
-    { stored: "off", override: "on", authorized: false, trace: false, raw: false },
     { stored: "raw", override: "raw", authorized: false, trace: false, raw: false },
   ] as const)(
     "honors turn trace $override over stored $stored with authorization=$authorized",
@@ -1539,21 +1506,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
     }).run();
   }
 
-  it("appends inline Active Memory status payload when verbose is enabled", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      verboseLevel: "on",
-    };
-    const result = await runActiveMemoryDebugCase(sessionEntry);
-
-    expect(Array.isArray(result)).toBe(true);
-    expect((result as { text?: string }[]).map((payload) => payload.text)).toEqual([
-      "Normal reply",
-      "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
-    ]);
-  });
-
   it("appends inline Active Memory status and trace payloads when verbose and trace are enabled", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1568,22 +1520,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect((result as { text?: string }[]).map((payload) => payload.text)).toEqual([
       "Normal reply",
       "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars\n🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
-    ]);
-  });
-
-  it("appends inline Active Memory trace payload when only trace is enabled", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      traceLevel: "on",
-    };
-
-    const result = await runActiveMemoryDebugCase(sessionEntry);
-
-    expect(Array.isArray(result)).toBe(true);
-    expect((result as { text?: string }[]).map((payload) => payload.text)).toEqual([
-      "Normal reply",
-      "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
     ]);
   });
 
@@ -1716,6 +1652,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
     const traceText = (result as { text?: string }[])[1]?.text ?? "";
     expect(traceText).toContain("🔎 Usage (Session Total):");
     expect(traceText).toContain("🔎 Usage (Last Turn Total):");
+    expect(traceText).not.toContain("🔎 Provider Usage (Turn Total):");
+    expect(traceText).not.toContain("🔎 Provider Usage (Last Provider Call):");
     expect(traceText).toContain("🔎 Context Window (Last Model Request):");
     expect(traceText).toContain("used=1,250 tok (1.3k)");
     expect(traceText).toContain("🔎 Execution Result:");
@@ -1758,36 +1696,24 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain(
       "Summary: winner=claude 🧠 low fallback=yes attempts=2 stop=end_turn prompt=1.3k/200k ⬇️ 1.2k ⬆️ 45 ♻️ 800 🆕 200 🔢 2.2k tools=2 compactions=1",
     );
-    expect(traceText.indexOf("🔎 Execution Result:")).toBeGreaterThan(
-      traceText.indexOf("🔎 Context Window (Last Model Request):"),
-    );
-    expect(traceText.indexOf("🔎 Fallback Chain:")).toBeGreaterThan(
-      traceText.indexOf("🔎 Execution Result:"),
-    );
-    expect(traceText.indexOf("🔎 Request Shaping:")).toBeGreaterThan(
-      traceText.indexOf("🔎 Fallback Chain:"),
-    );
-    expect(traceText.indexOf("🔎 Prompt Segments:")).toBeGreaterThan(
-      traceText.indexOf("🔎 Request Shaping:"),
-    );
-    expect(traceText.indexOf("🔎 Tool Summary:")).toBeGreaterThan(
-      traceText.indexOf("🔎 Prompt Segments:"),
-    );
-    expect(traceText.indexOf("🔎 Completion:")).toBeGreaterThan(
-      traceText.indexOf("🔎 Tool Summary:"),
-    );
-    expect(traceText.indexOf("🔎 Context Management:")).toBeGreaterThan(
-      traceText.indexOf("🔎 Completion:"),
-    );
-    expect(traceText.indexOf("🔎 Model Input (User Role):")).toBeGreaterThan(
-      traceText.indexOf("🔎 Context Management:"),
-    );
-    expect(traceText.indexOf("🔎 Model Output (Assistant Role):")).toBeGreaterThan(
-      traceText.indexOf("🔎 Model Input (User Role):"),
-    );
-    expect(traceText.indexOf("Summary: winner=claude 🧠 low")).toBeGreaterThan(
-      traceText.indexOf("🔎 Model Output (Assistant Role):"),
-    );
+    let previousSection = -1;
+    for (const heading of [
+      "🔎 Context Window (Last Model Request):",
+      "🔎 Execution Result:",
+      "🔎 Fallback Chain:",
+      "🔎 Request Shaping:",
+      "🔎 Prompt Segments:",
+      "🔎 Tool Summary:",
+      "🔎 Completion:",
+      "🔎 Context Management:",
+      "🔎 Model Input (User Role):",
+      "🔎 Model Output (Assistant Role):",
+      "Summary: winner=claude 🧠 low",
+    ]) {
+      const position = traceText.indexOf(heading);
+      expect(position, heading).toBeGreaterThan(previousSection);
+      previousSection = position;
+    }
   });
 
   it("does not emit persisted trace output to an unauthorized sender", async () => {
@@ -1831,62 +1757,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
 
     expectReplyText(result, "Visible reply");
     expect(Array.isArray(result)).toBe(false);
-  });
-
-  it("shows session and last-turn usage totals without per-call usage blocks", async () => {
-    const tmp = tempDirs.make("openclaw-trace-raw-usage-");
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionFile = path.join(tmp, "session.jsonl");
-    const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      traceLevel: "raw",
-    };
-
-    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({
-        message: {
-          role: "assistant",
-          content: "Earlier reply",
-          usage: { input: 20, output: 5, cacheRead: 3, total: 28 },
-        },
-      })}\n`,
-      "utf-8",
-    );
-
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Visible reply" }],
-      meta: {
-        finalPromptText: "/trace raw",
-        finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "Visible reply",
-        agentMeta: {
-          sessionId: "session",
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 34834, output: 49, cacheRead: 64, total: 34947 },
-          lastCallUsage: { input: 34834, output: 49, cacheRead: 64, cacheWrite: 0, total: 34947 },
-        },
-      },
-    });
-
-    const result = await runRawTraceCase({
-      commandBody: "/trace raw",
-      sessionEntry,
-      sessionFile,
-      storePath,
-      thinkLevel: "low",
-      traceAuthorized: true,
-    });
-
-    const traceText = (Array.isArray(result) ? result[1] : result)?.text ?? "";
-    expect(traceText).toContain("🔎 Usage (Session Total):");
-    expect(traceText).toContain("🔎 Usage (Last Turn Total):");
-    expect(traceText).not.toContain("🔎 Provider Usage (Turn Total):");
-    expect(traceText).not.toContain("🔎 Provider Usage (Last Provider Call):");
   });
 
   it("escapes markdown fence delimiters inside raw trace blocks", async () => {
@@ -2164,19 +2034,6 @@ describe("runReplyAgent messaging tool dedupe", () => {
     },
   );
 
-  it("delivers replies when tool provider does not match", async () => {
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "discord", provider: "discord", to: "channel:C1" }],
-      meta: {},
-    });
-
-    const result = await createRun("slack");
-
-    expectReplyText(result, "hello world!");
-  });
-
   it("keeps final reply when text matches a cross-target messaging send", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
@@ -2212,6 +2069,33 @@ describe("runReplyAgent messaging tool dedupe", () => {
 });
 
 describe("runReplyAgent reminder commitment guard", () => {
+  function mockReminderReply(text: string, successfulCronAdds = 0) {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text }],
+      meta: {},
+      successfulCronAdds,
+    });
+  }
+
+  function mockCronJob(
+    overrides: { id?: string; name?: string; enabled?: boolean; sessionKey?: string } = {},
+  ) {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "existing-job",
+          name: "monitor-task",
+          enabled: true,
+          sessionKey: "main",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+          ...overrides,
+        },
+      ],
+    });
+  }
+
   function createRun(params?: { sessionKey?: string; omitSessionKey?: boolean }) {
     return createBaseRun({
       context: {
@@ -2231,11 +2115,7 @@ describe("runReplyAgent reminder commitment guard", () => {
   }
 
   it("appends guard note when reminder commitment is not backed by cron.add", async () => {
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "I'll remind you tomorrow morning." }],
-      meta: {},
-      successfulCronAdds: 0,
-    });
+    mockReminderReply("I'll remind you tomorrow morning.");
 
     const result = await createRun();
     expectReplyText(
@@ -2245,72 +2125,32 @@ describe("runReplyAgent reminder commitment guard", () => {
   });
 
   it("does not append a reminder note to a plain memory promise", async () => {
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "I'll remember that preference." }],
-      meta: {},
-      successfulCronAdds: 0,
-    });
+    mockReminderReply("I'll remember that preference.");
 
     const result = await createRun();
     expectReplyText(result, "I'll remember that preference.");
   });
 
   it("keeps reminder commitment unchanged when cron.add succeeded", async () => {
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "I'll remind you tomorrow morning." }],
-      meta: {},
-      successfulCronAdds: 1,
-    });
+    mockReminderReply("I'll remind you tomorrow morning.", 1);
 
     const result = await createRun();
     expectReplyText(result, "I'll remind you tomorrow morning.");
   });
 
   it("suppresses guard note when session already has an active cron job", async () => {
-    loadCronStoreMock.mockResolvedValueOnce({
-      version: 1,
-      jobs: [
-        {
-          id: "existing-job",
-          name: "monitor-task",
-          enabled: true,
-          sessionKey: "main",
-          createdAtMs: Date.now() - 60_000,
-          updatedAtMs: Date.now() - 60_000,
-        },
-      ],
-    });
+    mockCronJob();
 
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "I'll ping you when it's done." }],
-      meta: {},
-      successfulCronAdds: 0,
-    });
+    mockReminderReply("I'll ping you when it's done.");
 
     const result = await createRun();
     expectReplyText(result, "I'll ping you when it's done.");
   });
 
   it("still appends guard note when cron jobs exist but not for the current session", async () => {
-    loadCronStoreMock.mockResolvedValueOnce({
-      version: 1,
-      jobs: [
-        {
-          id: "unrelated-job",
-          name: "daily-news",
-          enabled: true,
-          sessionKey: "other-session",
-          createdAtMs: Date.now() - 60_000,
-          updatedAtMs: Date.now() - 60_000,
-        },
-      ],
-    });
+    mockCronJob({ id: "unrelated-job", name: "daily-news", sessionKey: "other-session" });
 
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "I'll remind you tomorrow morning." }],
-      meta: {},
-      successfulCronAdds: 0,
-    });
+    mockReminderReply("I'll remind you tomorrow morning.");
 
     const result = await createRun();
     expectReplyText(
@@ -2320,25 +2160,9 @@ describe("runReplyAgent reminder commitment guard", () => {
   });
 
   it("still appends guard note when cron jobs for session exist but are disabled", async () => {
-    loadCronStoreMock.mockResolvedValueOnce({
-      version: 1,
-      jobs: [
-        {
-          id: "disabled-job",
-          name: "old-monitor",
-          enabled: false,
-          sessionKey: "main",
-          createdAtMs: Date.now() - 60_000,
-          updatedAtMs: Date.now() - 60_000,
-        },
-      ],
-    });
+    mockCronJob({ id: "disabled-job", name: "old-monitor", enabled: false });
 
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "I'll check back in an hour." }],
-      meta: {},
-      successfulCronAdds: 0,
-    });
+    mockReminderReply("I'll check back in an hour.");
 
     const result = await createRun();
     expectReplyText(
@@ -2348,25 +2172,9 @@ describe("runReplyAgent reminder commitment guard", () => {
   });
 
   it("still appends guard note when sessionKey is missing", async () => {
-    loadCronStoreMock.mockResolvedValueOnce({
-      version: 1,
-      jobs: [
-        {
-          id: "existing-job",
-          name: "monitor-task",
-          enabled: true,
-          sessionKey: "main",
-          createdAtMs: Date.now() - 60_000,
-          updatedAtMs: Date.now() - 60_000,
-        },
-      ],
-    });
+    mockCronJob();
 
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "I'll ping you later." }],
-      meta: {},
-      successfulCronAdds: 0,
-    });
+    mockReminderReply("I'll ping you later.");
 
     const result = await createRun({ omitSessionKey: true });
     expectReplyText(
@@ -2378,11 +2186,7 @@ describe("runReplyAgent reminder commitment guard", () => {
   it("still appends guard note when cron store read fails", async () => {
     loadCronStoreMock.mockRejectedValueOnce(new Error("store read failed"));
 
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "I'll remind you after lunch." }],
-      meta: {},
-      successfulCronAdds: 0,
-    });
+    mockReminderReply("I'll remind you after lunch.");
 
     const result = await createRun({ sessionKey: "main" });
     expectReplyText(

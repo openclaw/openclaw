@@ -142,7 +142,7 @@ describe("cloud turn media boundary", () => {
   });
 
   it("preserves ordered managed image input, follow-up files, replay and canonical paths", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const rig = harness();
     const png = createNoisyPngBuffer(256, 256);
     expect(png.length).toBeGreaterThan(64 * 1024);
@@ -256,7 +256,7 @@ describe("cloud turn media boundary", () => {
   });
 
   it("restores ordered mixed input without a recorder", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const rig = harness();
     const offloaded = createSolidPngBuffer(3, 3, { r: 0, g: 0, b: 255 });
     const inline = {
@@ -288,7 +288,7 @@ describe("cloud turn media boundary", () => {
   });
 
   it("honors a text-only selected model for current and replay images while staging attachments", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const rig = harness();
     const rawImage = {
       type: "image" as const,
@@ -380,7 +380,7 @@ describe("cloud turn media boundary", () => {
   });
 
   it("continues plaintext replay after a recent canonical image expires while private input survives", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const rig = harness();
     const png = createSolidPngBuffer(2, 2, { r: 255, g: 0, b: 0 });
     const expired = await saveMediaBuffer(png, "image/png", "inbound");
@@ -469,7 +469,7 @@ describe("cloud turn media boundary", () => {
   ])(
     "rejects unavailable current $contentType input (vision=$modelHasVision, suppressed=$hydrationSuppressed)",
     async ({ modelHasVision, contentType, hydrationSuppressed, error }) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const rig = harness();
       await expect(
         rig.execute({
@@ -487,7 +487,7 @@ describe("cloud turn media boundary", () => {
   it.each(["cancellation", "admission", "placement"] as const)(
     "does not omit %s loss while loading a historical source",
     async (failure) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const rig = harness();
       const input = turn("expired-authority");
       const controller = new AbortController();
@@ -542,7 +542,7 @@ describe("cloud turn media boundary", () => {
   ] as const)(
     "cancels in-flight attachments on %s closure without launching an abandoned turn",
     async (closure) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const rig = harness();
       const input = turn("in-flight-media");
       let cancelledAtBoundary: boolean | undefined;
@@ -614,7 +614,7 @@ describe("cloud turn media boundary", () => {
   it.each(["staging write", "transfer"] as const)(
     "propagates historical attachment %s failures",
     async (failure) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const rig = harness();
       const saved = await saveMediaBuffer(Buffer.from("document"), "text/plain", "inbound");
       openSessionManager().appendMessage(
@@ -649,7 +649,7 @@ describe("cloud turn media boundary", () => {
   );
 
   it("stages described image sources without reinjection or pruned history and rejects a retired turn before transfer", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const rig = harness();
     const unavailable = { path: path.join(root, "missing.png"), contentType: "image/png" };
     const manager = openSessionManager();

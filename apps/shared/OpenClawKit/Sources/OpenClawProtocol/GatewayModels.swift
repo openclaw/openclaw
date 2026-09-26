@@ -26529,6 +26529,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
     public let terminalatms: Int?
     public let recoveryerror: String
     public let recoveryaction: String?
+    public let retryonsend: Bool?
 
     public init(
         state: String,
@@ -26550,7 +26551,8 @@ public struct FailedSessionPlacement: Codable, Sendable {
         terminalreason: String? = nil,
         terminalatms: Int? = nil,
         recoveryerror: String,
-        recoveryaction: String? = nil)
+        recoveryaction: String? = nil,
+        retryonsend: Bool? = nil)
     {
         self.state = state
         self.generation = generation
@@ -26572,6 +26574,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
         self.terminalatms = terminalatms
         self.recoveryerror = recoveryerror
         self.recoveryaction = recoveryaction
+        self.retryonsend = retryonsend
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -26595,6 +26598,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
         case terminalatms = "terminalAtMs"
         case recoveryerror = "recoveryError"
         case recoveryaction = "recoveryAction"
+        case retryonsend = "retryOnSend"
     }
 }
 

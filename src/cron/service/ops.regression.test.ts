@@ -33,9 +33,9 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import { start } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { enqueueRun, run } from "./ops-run.js";
@@ -874,7 +874,7 @@ describe("cron service ops regressions", () => {
         }),
       ]);
       expect(
-        readCronTaskRunHistoryPage({
+        readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(store.storePath),
           jobId: job.id,
           runId,

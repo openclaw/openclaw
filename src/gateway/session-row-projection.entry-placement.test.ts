@@ -28,7 +28,7 @@ it("reuses placement facts after transcript writes and refreshes actual placemen
     };
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
     const placements = createWorkerSessionPlacementStore();
-    placements.startDispatch(target);
+    await placements.startDispatch(target);
     const projection = await createSessionRowProjection({
       cfg,
       modelCatalog: [],

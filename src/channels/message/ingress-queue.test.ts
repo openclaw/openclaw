@@ -53,6 +53,39 @@ describe("channel ingress queue", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it("purges all states only for the selected channel and account", async () => {
+    await withTempState(async (stateDir) => {
+      const queues = [
+        createChannelIngressQueue({ channelId: "telegram", accountId: "a", stateDir }),
+        createChannelIngressQueue({ channelId: "telegram", accountId: "b", stateDir }),
+        createChannelIngressQueue({ channelId: "other", accountId: "a", stateDir }),
+      ] as const;
+      const states = ["pending", "claimed", "completed", "failed"] as const;
+      for (const queue of queues) {
+        for (const state of states) {
+          await queue.enqueue(state, { text: "old identity" });
+        }
+        await queue.claim("claimed");
+        await queue.complete("completed");
+        await queue.fail("failed", { reason: "rejected" });
+      }
+
+      expect(await queues[0].purge?.()).toBe(4);
+      expect(await queues[0].purge?.()).toBe(0);
+      for (const state of states) {
+        expect(await queues[0].enqueue(state, { text: "new identity" })).toMatchObject({
+          kind: "accepted",
+          duplicate: false,
+        });
+        for (const queue of queues.slice(1)) {
+          expect(await queue.enqueue(state, { text: "duplicate" })).toMatchObject({
+            kind: state,
+            duplicate: true,
+          });
+        }
+      }
+    });
+  });
   it("deduplicates pending and completed ingress events", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue<

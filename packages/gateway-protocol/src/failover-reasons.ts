@@ -16,5 +16,3 @@ export const FAILOVER_REASONS = [
   "unclassified",
   "unknown",
 ] as const;
-
-export type FailoverReason = (typeof FAILOVER_REASONS)[number];

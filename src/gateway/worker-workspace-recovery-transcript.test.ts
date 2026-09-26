@@ -222,7 +222,7 @@ describe("worker workspace recovery transcript reporting", () => {
         workspacePath,
       };
       const harness = createHarness(openOpenClawStateDatabase(), placements, harnessOptions);
-      const active = harness.placements.seedActive(2);
+      const active = await harness.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("expected active worker placement");
       }

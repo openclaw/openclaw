@@ -162,7 +162,7 @@ describe("placement session retirement", () => {
     );
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-    const requested = placements.startDispatch({
+    const requested = await placements.startDispatch({
       sessionId: "session-requested",
       sessionKey: "agent:main:session-requested",
       agentId: "main",
@@ -178,7 +178,7 @@ describe("placement session retirement", () => {
       claimId: "requested-owner-claim",
       runId: "requested-owner-run",
     });
-    const ownedRequested = placements.startDispatch(ownedIdentity);
+    const ownedRequested = await placements.startDispatch(ownedIdentity);
     const retireSessionPlacement = vi.fn((input: WorkerSessionPlacementRetirement) =>
       placements.retireSessionPlacement(input),
     );

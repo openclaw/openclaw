@@ -186,6 +186,10 @@ export type WorkerPlacementDispatchRequest = {
   agentId: string;
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
+  expectedPlacement?: Pick<
+    WorkerSessionPlacementRecord,
+    "state" | "generation" | "environmentId" | "activeOwnerEpoch"
+  >;
   /** Current dispatch caller's setup authority; never inherited by a new caller. */
   runSetupScript?: boolean;
   devicePlacement?: DevicePlacementRequirement;

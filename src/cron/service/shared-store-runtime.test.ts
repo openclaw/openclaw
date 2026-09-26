@@ -14,14 +14,14 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../../tasks/task-registry.store.sqlite.js";
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
+import { cronRunRecordStoreKey } from "../run-history-detail.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronJobsStoreChanges, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "../store/run-receipt-trigger-state.js";
-import { cronTaskRecordStoreKey } from "../task-run-detail.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-shared-runtime-" });
@@ -423,7 +423,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
         runtime: "cron",
         sourceId: job.id,
-      }).filter((task) => cronTaskRecordStoreKey(task) === storeKey);
+      }).filter((task) => cronRunRecordStoreKey(task) === storeKey);
     const { child, closed, stderr, assertCompleted } = spawnSchedulerChild(
       overlappingRunsChildScript,
       { storePath, jobId: job.id, nowMs },
@@ -473,7 +473,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       const tasks = readTasks();
       expect(tasks).toHaveLength(2);
       expect(tasks.filter((task) => task.taskId !== firstTasks[0]?.taskId)).toHaveLength(1);
-      const readHistory = () => readCronTaskRunHistoryPage({ storeKey, jobId: job.id }).entries;
+      const readHistory = () => readCronRunHistoryPageForTests({ storeKey, jobId: job.id }).entries;
       const history = readHistory();
       expect(history).toHaveLength(2);
       for (const entry of history) {

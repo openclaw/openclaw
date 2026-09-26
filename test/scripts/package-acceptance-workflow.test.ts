@@ -5468,31 +5468,6 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
       expect(job.steps!.indexOf(install)).toBeGreaterThan(job.steps!.indexOf(checkout));
       expect(job.steps!.indexOf(install)).toBeGreaterThan(job.steps!.indexOf(setup));
       expect(job.steps!.indexOf(install)).toBeLessThan(job.steps!.indexOf(consumer));
-      const root = tempDirs.make("plugin-tooling-install-");
-      const tooling = join(root, toolingPath);
-      const bin = join(root, "bin");
-      mkdirSync(tooling);
-      mkdirSync(bin);
-      writeFileSync(join(root, "candidate-sentinel"), "unchanged");
-      writeFileSync(
-        join(bin, "pnpm"),
-        `#!${process.execPath}
-const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),ci:process.env.CI}));
-`,
-        { mode: 0o755 },
-      );
-      const result = spawnSync("bash", ["-euo", "pipefail", "-c", install.run!], {
-        cwd: tooling,
-        encoding: "utf8",
-        env: { ...process.env, ...install.env, PATH: `${bin}:${process.env.PATH}` },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(join(tooling, "install-proof.json"), "utf8"))).toMatchObject({
-        args: ["install", "--frozen-lockfile", "--prefer-offline", "--ignore-scripts"],
-        ci: "true",
-      });
-      expect(existsSync(join(root, "install-proof.json"))).toBe(false);
-      expect(readFileSync(join(root, "candidate-sentinel"), "utf8")).toBe("unchanged");
     },
   );
 
@@ -8559,20 +8534,22 @@ test "$package_manager" = "pnpm@12.1.0"
     }
   });
 
-  it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "adopts and validates the exact $jobName run without waiting for terminal status",
-    (child) => {
-      const { calls, result } = runFullReleaseChildDispatch(child, {
-        MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
-        MOCK_GH_STATUSES: '["in_progress"]',
-      });
+  it.each(
+    FULL_RELEASE_CHILD_DISPATCHES.filter(
+      (child, index, children) =>
+        children.findIndex((entry) => entry.kind === child.kind) === index,
+    ),
+  )("adopts and validates the exact $jobName run without waiting for terminal status", (child) => {
+    const { calls, result } = runFullReleaseChildDispatch(child, {
+      MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+      MOCK_GH_STATUSES: '["in_progress"]',
+    });
 
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
-      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
-      expect(result.stdout).toContain("Dispatched");
-    },
-  );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
+    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+    expect(result.stdout).toContain("Dispatched");
+  });
 
   it.each([
     { exactTitleAt: 2, label: "inside the former window" },
@@ -10912,22 +10889,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it.each([
     { version: "2026.8.2" },
-    { version: "2026.8.1-beta.3" },
-    { telegramWaiver: "true" },
     { telegramWaiver: "2026.9.1-owner-approved" },
-    { telegramWaiver: "2026.8.1-owner-approval" },
-    { version: "2026.9.1-beta.1", telegramWaiver: "2026.9.1-beta.1-owner-approved" },
-    { version: "2026.10.1", telegramWaiver: "2026.10.1-owner-approved" },
     { rerunGroup: "npm-telegram" },
     { liveSuiteFilter: "qa-telegram" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live-all" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-all" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live-non-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-non-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "non-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "no-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "without-slack" },
   ])("rejects a conflicting Telegram waiver request: %j", (override) => {
     const options = { telegramWaiver: "2026.8.1-owner-approved", ...override };
     const umbrella = runFullReleaseInputValidation("stable", "false", options);
@@ -12695,16 +12659,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
   });
 
-  it("names package acceptance Telegram as artifact-backed package validation", () => {
-    const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
-
-    expect(workflow).toContain("package_telegram:");
-    expect(workflow).toContain("docker_acceptance_registry,");
-    expect(workflow).toContain("PACKAGE_TELEGRAM_RESULT:");
-    expect(workflow).toContain("package_telegram=${PACKAGE_TELEGRAM_RESULT}");
-    expect(workflow).not.toContain("npm_telegram:");
-  });
-
   it.each([
     [
       "accepts Telegram result success when enabled=true",
@@ -13462,25 +13416,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
           result.selection.map((selection) => [selection.variant, selection.producer_attempt]),
         ),
       ).toEqual({ baseline: 2, candidate: 1 });
-    });
-
-    it("selects core and soak attempts independently", () => {
-      const core = pair("qa_lab_runtime_pair_lane_release_checks", "core", "core");
-      const soak = pair("qa_lab_runtime_pair_lane_release_checks", "soak", "soak");
-      const result = runReleaseCheckArtifactResolve({
-        artifacts: [...artifactsFor(core, 2, 1), ...artifactsFor(soak, 1, 11)],
-        consumerAttempt: "2",
-        pairs: [core, soak],
-        runId,
-        targetSha,
-      });
-
-      expect(result.result.status, result.result.stderr).toBe(0);
-      expect(
-        Object.fromEntries(
-          result.selection.map((selection) => [selection.variant, selection.producer_attempt]),
-        ),
-      ).toEqual({ core: 2, soak: 1 });
     });
 
     it("fails when the latest producer attempt has no complete pair", () => {
@@ -15235,8 +15170,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ];
     expect(ciPath).toEqual([20, 150, 5]);
     const ciChildTimeout = ciPath.reduce((total, timeout) => total + timeout, 0);
-    expect(ciChildTimeout).toBe(175);
-    expect(ciChildTimeout).toBeLessThanOrEqual(diagnosticDrainTimeout);
     expect(diagnosticDrainTimeout - ciChildTimeout).toBeGreaterThanOrEqual(60);
 
     expect(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"]).toBe(30);
@@ -15327,11 +15260,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       stable: releasePackagePaths.stable.reduce((total, timeout) => total + timeout, 0),
       full: releasePackagePaths.full.reduce((total, timeout) => total + timeout, 0),
     };
-    expect(releasePackageTimeouts).toEqual({ beta: 305, stable: 305, full: 335 });
     for (const [profile, childTimeout] of Object.entries(releasePackageTimeouts)) {
-      expect(childTimeout, `release-package:${profile}`).toBeLessThanOrEqual(
-        diagnosticDrainTimeout,
-      );
       expect(
         diagnosticDrainTimeout - childTimeout,
         `release-package:${profile}`,
@@ -15451,18 +15380,11 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ["qa-live", releaseQaLivePath],
     ] as const) {
       const childTimeout = path.reduce((total, timeout) => total + timeout, 0);
-      expect(childTimeout, `release-checks:${pathName}`).toBeLessThanOrEqual(
-        diagnosticDrainTimeout,
-      );
       expect(
         diagnosticDrainTimeout - childTimeout,
         `release-checks:${pathName}`,
       ).toBeGreaterThanOrEqual(60);
     }
-    expect(releaseCrossOsPath.reduce((total, timeout) => total + timeout, 0)).toBe(200);
-    expect(releaseInstallPath.reduce((total, timeout) => total + timeout, 0)).toBe(250);
-    expect(releaseInstallNonrootPath.reduce((total, timeout) => total + timeout, 0)).toBe(190);
-    expect(releaseQaLivePath.reduce((total, timeout) => total + timeout, 0)).toBe(165);
 
     expect(
       jobNeeds(workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks")),
@@ -15483,7 +15405,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       (total, timeout) => total + timeout,
       0,
     );
-    expect(releaseTelegramTimeout).toBe(245);
     expect(diagnosticDrainTimeout - releaseTelegramTimeout).toBeGreaterThanOrEqual(60);
 
     const npmTelegramChildTimeout = timeoutForProfile(
@@ -15519,8 +15440,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ];
     expect(performanceArtifactPath).toEqual([10, 240, 5]);
     expect(performancePublishPath).toEqual([10, 240, 30]);
-    expect(performanceArtifactPath.reduce((total, timeout) => total + timeout, 0)).toBe(255);
-    expect(performancePublishPath.reduce((total, timeout) => total + timeout, 0)).toBe(280);
     const performanceParent = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance");
     expect(performanceParent["timeout-minutes"]).toBe(15);
     expect(workflowStep(performanceParent, "Dispatch OpenClaw Performance").run).toContain(

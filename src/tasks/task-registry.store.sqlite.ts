@@ -17,7 +17,6 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
-  deleteTaskRowsWithDeliveryState,
   listTaskRecordsByRuntimeSourceIdInDatabase,
   readTaskRegistrySnapshot,
   readTaskRegistryMutationSnapshotInDatabase,
@@ -135,12 +134,6 @@ export function upsertTaskWithDeliveryStateToSqlite(params: {
   deliveryState?: TaskDeliveryState;
 }) {
   withWriteTransaction((database) => upsertTaskWithDeliveryStateInDatabase(database, params));
-}
-
-export function deleteTaskAndDeliveryStateFromSqlite(taskId: string) {
-  withWriteTransaction(({ db }) => {
-    deleteTaskRowsWithDeliveryState(db, taskId);
-  });
 }
 
 export function upsertTaskDeliveryStateToSqlite(state: TaskDeliveryState) {

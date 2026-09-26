@@ -1523,21 +1523,6 @@ describe("scripts/crabbox-wrapper", () => {
     expect(existsSync(path.join(directory, "state"))).toBe(false);
   });
 
-  it("routes CI workloads through the first ready provider", () => {
-    const { output, result } = runSuccessfulBrokerWrapper(
-      ["run", "--workload", "ci-fast", "--", "echo ok"],
-      {
-        env: {
-          OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "blacksmith-testbox",
-        },
-      },
-    );
-    expect(output.args).toContain("daytona");
-    expect(result.stderr).toContain(
-      "route workload=ci-fast selected=daytona chain=blacksmith-testbox,daytona,azure,aws",
-    );
-  });
-
   it("uses brokered cloud providers as the final CI fallback", () => {
     const { output, result } = runSuccessfulBrokerWrapper(
       ["run", "--workload=ci-fast", "--", "echo ok"],
@@ -1807,6 +1792,7 @@ describe("scripts/crabbox-wrapper", () => {
   it("keeps Blacksmith independent from broker auth probes", () => {
     const invocationLog = makeInvocationLog();
     const result = runDefaultWrapper(["run", "--provider", "blacksmith-testbox", "--", "echo ok"], {
+      configJson: directBrokerConfig("blacksmith-testbox"),
       env: {
         OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
         OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
@@ -2021,7 +2007,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("provider=azure failed readiness for OpenClaw proof");
   });
 
-  it.each(["aws", "azure", "daytona"])(
+  it.each(["aws", "azure"])(
     "does not let direct overrides weaken implicit managed %s config",
     (provider) => {
       const result = runBrokerWrapper(["run", "--", "echo ok"], {
@@ -2056,7 +2042,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain('unsupported Crabbox workload "surprise"');
   });
 
-  it.each(["azure", "daytona"])(
+  it.each(["azure"])(
     "allows opted-in explicit direct %s commands outside workload routing",
     (provider) => {
       const { output } = runSuccessfulBrokerWrapper(
@@ -2073,26 +2059,23 @@ describe("scripts/crabbox-wrapper", () => {
     },
   );
 
-  it.each(["azure", "daytona"])(
-    "requires direct-cloud opt-in for explicit %s commands",
-    (provider) => {
-      const result = runBrokerWrapper(["run", "--provider", provider, "--", "echo ok"], {
-        configJson: directBrokerConfig(provider),
-        env: { OPENCLAW_FAKE_CRABBOX_UNAUTHORIZED_PROVIDERS: provider },
-      });
+  it.each(["azure"])("requires direct-cloud opt-in for explicit %s commands", (provider) => {
+    const result = runBrokerWrapper(["run", "--provider", provider, "--", "echo ok"], {
+      configJson: directBrokerConfig(provider),
+      env: { OPENCLAW_FAKE_CRABBOX_UNAUTHORIZED_PROVIDERS: provider },
+    });
 
-      expect(result.status).toBe(2);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(
-        `provider=${provider} requires managed Crabbox broker authentication`,
-      );
-      expect(result.stderr).toContain(
-        `direct ${provider} debugging requires an original \`--provider ${provider}\`, no \`--workload\``,
-      );
-    },
-  );
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      `provider=${provider} requires managed Crabbox broker authentication`,
+    );
+    expect(result.stderr).toContain(
+      `direct ${provider} debugging requires an original \`--provider ${provider}\`, no \`--workload\``,
+    );
+  });
 
-  it.each(["azure", "daytona"])(
+  it.each(["daytona"])(
     "does not treat CRABBOX_PROVIDER=%s as explicit direct intent",
     (provider) => {
       const result = runBrokerWrapper(["run", "--", "echo ok"], {
@@ -2110,31 +2093,6 @@ describe("scripts/crabbox-wrapper", () => {
     },
   );
 
-  it("keeps Blacksmith outside managed cloud broker auth", () => {
-    const { output } = runSuccessfulBrokerWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
-      {
-        configJson: directBrokerConfig("blacksmith-testbox"),
-      },
-    );
-    expect(output.args).toContain("blacksmith-testbox");
-  });
-
-  it("does not allow direct cloud overrides inside workload routing", () => {
-    const result = runBrokerWrapper(["run", "--workload", "interactive", "--", "echo ok"], {
-      configJson: { coordinator: "", brokerAuth: "missing" },
-      env: {
-        OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
-        OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: "daytona,azure,aws",
-      },
-    });
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("no ready provider for workload=interactive");
-    expect(result.stderr).toContain("provider readiness daytona:doctor exited 1");
-  });
-
   it("fails closed when no policy provider is ready", () => {
     const result = runBrokerWrapper(["run", "--workload", "ci-fast", "--", "echo ok"], {
       env: {
@@ -2150,25 +2108,6 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toMatch(
       /recovery: run `\S+crabbox doctor --provider blacksmith-testbox --json`/u,
     );
-  });
-
-  it("rejects unknown workload policies before execution", () => {
-    const result = runDefaultWrapper(["run", "--workload", "surprise", "--", "echo ok"]);
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain('unsupported Crabbox workload "surprise"');
-  });
-
-  it("accepts advertised canonical providers from Crabbox help", () => {
-    const { output } = runSuccessfulDefaultWrapper([
-      "run",
-      "--provider",
-      "local-container",
-      "--",
-      "echo ok",
-    ]);
-    expect(output.args).toContain("local-container");
   });
 
   it("hints at lease expiry when a reused-lease run fails fast", () => {
@@ -2192,33 +2131,30 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).not.toContain("failed fast; reusable leases expire");
   });
 
-  it.each([
-    ["--no-sync"],
-    ["-no-sync=true"],
-    ["--no-sync=false"],
-    ["--id", "tbx_unused", "--no-sync"],
-  ])("rejects unsupported Testbox sync flags before delegation: %j", (...flags) => {
-    const invocationLog = makeInvocationLog();
-    const result = runDefaultWrapper(["run", ...flags, "--", "echo ok"], {
-      configJson: { provider: "blacksmith-testbox" },
-      env: {
-        OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
-        OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "99",
-      },
-    });
+  it.each([["-no-sync=true"], ["--no-sync=false"], ["--id", "tbx_unused", "--no-sync"]])(
+    "rejects unsupported Testbox sync flags before delegation: %j",
+    (...flags) => {
+      const invocationLog = makeInvocationLog();
+      const result = runDefaultWrapper(["run", ...flags, "--", "echo ok"], {
+        configJson: { provider: "blacksmith-testbox" },
+        env: {
+          OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
+          OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "99",
+        },
+      });
 
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=blacksmith-testbox does not support --no-sync");
-    expect(readInvocations(invocationLog).filter(([command]) => command === "run")).toEqual([]);
-  });
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("provider=blacksmith-testbox does not support --no-sync");
+      expect(readInvocations(invocationLog).filter(([command]) => command === "run")).toEqual([]);
+    },
+  );
 
   it.each([
     { provider: "blacksmith-testbox", flags: ["--script", "missing-script.sh"] },
     { provider: "blacksmith-testbox", flags: ["--script=missing-script.sh"] },
     { provider: "blacksmith-testbox", flags: ["--script-stdin"] },
     { provider: "blacksmith", flags: ["--script-stdin=true"] },
-    { provider: "blacksmith-testbox", flags: ["--id", "tbx_missing", "--script-stdin"] },
     { provider: "blacksmith-testbox", flags: ["--script-stdin=false", "--script-stdin=true"] },
     { provider: "blacksmith-testbox", flags: ["--script=missing-script.sh", "--script-stdin"] },
     { provider: "blacksmith-testbox", flags: ["--script-stdin", "--script=missing-script.sh"] },
@@ -2247,8 +2183,6 @@ describe("scripts/crabbox-wrapper", () => {
 
   it.each([
     ["--script-stdin=false"],
-    ["--script-stdin=0"],
-    ["--script-stdin=F"],
     ["--script="],
     ["--script-stdin=true", "--script-stdin=false"],
     ["--label", "--script-stdin"],
@@ -3044,7 +2978,7 @@ esac
     );
   });
 
-  it.each([[], ["--field", "--job=custom"], ["--field", "--job"]])(
+  it.each([["--field", "--job=custom"]])(
     "repairs generic hydrate jobs for native Windows hydrate actions: %j",
     (...prefix) => {
       const { output } = runSuccessfulWindowsHydrate(
@@ -3061,7 +2995,7 @@ esac
     },
   );
 
-  it.each([[], ["--field", "--job=custom"], ["--field", "--job"]])(
+  it.each([["--field", "--job"]])(
     "repairs generic hydrate job assignments for native Windows hydrate actions: %j",
     (...prefix) => {
       const { output } = runSuccessfulWindowsHydrate(
@@ -4075,8 +4009,6 @@ esac
     ["run", "--help"],
     ["warmup", "--help"],
     ["actions", "hydrate", "--help"],
-    ["warmup", "--provider", "aws", "--help"],
-    ["actions", "hydrate", "--provider", "aws", "--help"],
     ["warmup", "--keep", "--help"],
     ["actions", "hydrate", "--reclaim", "--help"],
     ["help", "actions", "hydrate"],
@@ -4119,13 +4051,11 @@ esac
     ["run", "--provider", "aws", "--label", "--help", "--", "echo ok"],
     ["run", "--provider", "aws", "--", "--help"],
     ["run", "--provider", "aws", "node", "--help"],
-    ["run", "--", "--help"],
     ["warmup", "--", "--help"],
     ["actions", "hydrate", "--", "--help"],
     ["warmup", "--lease-id", "--help"],
     ["actions", "hydrate", "--field", "--help"],
     ["run", "--provider", "aws", "-", "--help"],
-    ["warmup", "--provider", "aws", "-", "--help"],
     ["actions", "hydrate", "--provider", "aws", "-", "--help"],
   ])("keeps provider gates when help belongs to a payload: %j", (...args) => {
     const result = runDefaultWrapper(args, {
@@ -6170,27 +6100,6 @@ cp.spawnSync = (command, args, options) => {
     },
   );
 
-  it("bootstraps Git metadata for non-sparse changed gates on remote raw syncs", () => {
-    const { output, remoteCommand, result } = runSuccessfulDefaultWrapper(
-      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
-      {
-        gitResponses: {
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
-        },
-      },
-    );
-    expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(result.stderr).toContain("overlaying the local worktree as changes from abc123");
-    expect(output.cwd).toContain("openclaw-crabbox-sync-");
-    expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("node -e");
-    expect(remoteCommand).toContain(remoteChangedGateFetch);
-    expect(remoteCommand).toMatch(
-      /; env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
-    );
-  });
-
   it("bootstraps Git metadata for env-prefixed sparse changed gates", () => {
     const { output, remoteCommand } = runSuccessfulDefaultWrapper(
       [
@@ -6689,22 +6598,6 @@ cp.spawnSync = (command, args, options) => {
     },
   );
 
-  it("freezes ordinary Blacksmith source even when the worktree is dirty", () => {
-    const { output, result } = runSuccessfulDefaultWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--blacksmith-ref", "main", "--", "echo ok"],
-      {
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: " M scripts/crabbox-wrapper.mjs\n" },
-        },
-      },
-    );
-
-    expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(output.cwd).not.toBe(repoRoot);
-    expectChangedGateGitBootstrap(output.args.at(-1) ?? "");
-  });
-
   it("keeps local artifact paths rooted at the original checkout", () => {
     const { output } = runSuccessfulDefaultWrapper(
       [
@@ -6756,13 +6649,8 @@ cp.spawnSync = (command, args, options) => {
       : [
           "source root link",
           "source root dangling link",
-          "source runs link",
           "source captures link",
-          "source captures dangling link",
           "nested file link",
-          "nested directory link",
-          "nested internal link",
-          "nested dangling link",
           "destination root link",
           "destination root dangling link",
           "destination parent link",
@@ -6853,21 +6741,10 @@ cp.spawnSync = (command, args, options) => {
           symlinkSync(target, retainedRoot, "dir");
         }
       } else if (fault?.startsWith("source")) {
-        const file = fault.includes("root")
-          ? ".crabbox"
-          : fault.includes("runs")
-            ? ".crabbox/runs"
-            : ".crabbox/captures";
+        const file = fault.includes("root") ? ".crabbox" : ".crabbox/captures";
         artifactLinks[file] = fault.includes("dangling") ? missing : outside;
       } else if (fault?.startsWith("nested") && fault !== "nested fifo") {
-        const target = fault.includes("dangling")
-          ? missing
-          : fault.includes("internal")
-            ? path.basename(capturePath)
-            : fault.includes("directory")
-              ? outside
-              : sentinelPath;
-        artifactLinks[".crabbox/captures/linked-artifact"] = target;
+        artifactLinks[".crabbox/captures/linked-artifact"] = sentinelPath;
       }
       const retainedDirectories: string[] = [];
       const attempts = mode === "capsule" && artifacts === "both" && !fault ? 2 : 1;

@@ -3629,6 +3629,7 @@ jobs:
             ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts \
+            ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts \
             ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts \
             ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
             ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts \
