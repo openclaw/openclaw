@@ -78,6 +78,14 @@ describe("detectChangedScope Windows routing", () => {
 
   for (const { name, paths } of [
     {
+      name: "routes Knip cleanup owners and their native proof to Windows",
+      paths: [
+        "scripts/check-deadcode-unused-files.mts",
+        "scripts/deadcode-knip-runner.mts",
+        "test/scripts/check-deadcode-unused-files.test.ts",
+      ],
+    },
+    {
       name: "routes worker bundle producers, archives, installers, and regression coverage to Windows",
       paths: [
         "src/shared/worker-bundle-archive.ts",
