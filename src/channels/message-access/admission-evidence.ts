@@ -1,6 +1,10 @@
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
+  bindGatewayContextResolver,
+  getCanonicalGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import {
   createChannelAdmissionDecisionReceipt,
   type ChannelAdmissionDecisionReceiptInput,
 } from "./admission-decision-receipt.js";
@@ -416,10 +420,21 @@ export function prepareHostChannelContextAdmissionEvidence(params: {
         });
       })
     : [];
+  const owner = params.owner;
+  const gatewayResolver = valid ? owner?.resolveGatewayContext : undefined;
+  // Context copies retain this exact channel lifetime, not just the longer-lived Gateway.
+  const scopedGatewayContext =
+    gatewayResolver && owner ? () => (owner.isLive() ? gatewayResolver() : undefined) : undefined;
+  if (scopedGatewayContext && gatewayResolver) {
+    bindGatewayContextResolver(
+      scopedGatewayContext,
+      getCanonicalGatewayContextResolver(gatewayResolver),
+    );
+  }
   return new PreparedChannelAdmissionEvidence(
     valid ? combineChannelAdmissionEvidence(sources) : unknownChannelAdmissionEvidence(audit),
-    valid ? params.owner?.resolveGatewayContext : undefined,
-    params.owner,
+    scopedGatewayContext,
+    owner,
   );
 }
 

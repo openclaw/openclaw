@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildChannelInboundEventContext } from "../channels/inbound-event/context.js";
 import {
+  copyChannelParticipantAdmissionEvidence,
   createChannelAdmissionAudit,
   readChannelContextGatewayContextResolver,
   type ChannelAdmissionAudit,
 } from "../channels/message-access/admission-evidence.js";
 import type { ResolvedChannelMessageIngress } from "../channels/message-access/runtime-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+} from "../gateway/server-methods/types.js";
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
@@ -31,6 +35,7 @@ import {
 import { createPluginRegistry } from "./registry.js";
 import {
   bindGatewayContextResolver,
+  getCanonicalGatewayContextResolver,
   hasGatewayContextOwner,
 } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -299,6 +304,39 @@ describe("bundled channel ingress runtime ownership", () => {
           apiInbound.buildContext(contextParams({ ingress: retiredIngress })),
         ),
       ).toBeUndefined();
+    },
+  );
+
+  it.each(["retired", "replaced"] as const)(
+    "revokes copied Gateway resolution when the channel is %s while Gateway remains live",
+    async (lifecycle) => {
+      // Ingress admission resolves the live Gateway once, so count redemptions after revocation.
+      const gatewayContext = {} as GatewayRequestContext;
+      const gatewayContextResolver = vi.fn<GatewayContextResolver>(() => gatewayContext);
+      const first = createRuntimeBuilder({
+        origin: "bundled",
+        id: "gateway-channel-owner",
+        gatewayContextResolver,
+      });
+      const ingress = await first.resolveIngress("person-a", { channelId: first.record.id });
+      const context = first.buildContext(contextParams({ ingress, channelId: first.record.id }));
+      const copied = { ...context };
+      copyChannelParticipantAdmissionEvidence(context, copied);
+      const retained = readChannelContextGatewayContextResolver(copied);
+      expect(retained?.()).toBe(gatewayContext);
+      if (!retained) {
+        throw new Error("Expected registered channel Gateway resolution");
+      }
+      expect(getCanonicalGatewayContextResolver(retained)).toBe(gatewayContextResolver);
+      if (lifecycle === "retired") {
+        markPluginRegistryRetired(first.registryBuilder.registry);
+      } else {
+        createRuntimeBuilder({ origin: "bundled", id: first.record.id, gatewayContextResolver });
+      }
+      gatewayContextResolver.mockClear();
+      expect(retained()).toBeUndefined();
+      expect(gatewayContextResolver).not.toHaveBeenCalled();
+      expect(gatewayContextResolver()).toBe(gatewayContext);
     },
   );
 

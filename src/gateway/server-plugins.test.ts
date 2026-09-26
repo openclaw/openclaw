@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createTerminalTool } from "../agents/tools/terminal-tool.js";
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
@@ -40,6 +41,8 @@ import { withEnv } from "../test-utils/env.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+
+const channelOwnerTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
 const loadPluginLookUpTable = vi.hoisted(() =>
@@ -684,6 +687,192 @@ describe("loadGatewayPlugins", () => {
       sessionWorkerPlacementContext: context,
     });
   });
+
+  test.each([false, true])(
+    "captures registered channel replies at the root Gateway (retired=%s)",
+    async (retired) => {
+      const { createPluginRegistry } = await import("../plugins/registry.js");
+      const { markPluginRegistryActive, markPluginRegistryRetired } =
+        await import("../plugins/registry-lifecycle.js");
+      const { createChannelTestPluginBase } = await import("../test-utils/channel-plugins.js");
+      const { readChannelContextGatewayContextResolver } =
+        await import("../channels/message-access/admission-evidence.js");
+      const { createDispatchReplyOperationCoordinator } =
+        await import("../auto-reply/reply/dispatch-from-config.lifecycle.js");
+      const { createReplyDispatcher } = await import("../auto-reply/reply/reply-dispatcher.js");
+      const { captureGatewayReplyRunRestartAbort } =
+        await import("../auto-reply/reply/reply-run-registry.js");
+      const { captureGatewaySessionWorkAdmissions } =
+        await import("../sessions/session-lifecycle-admission.js");
+      const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
+      const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
+      const stateDir = channelOwnerTempDirs.make("openclaw-channel-restart-owner-");
+      const storePath = path.join(stateDir, "sessions.json");
+      // Equal resolved contexts must not make distinct root resolvers interchangeable.
+      const context = createTestContext("same-context-distinct-channel-owners");
+      const closingResolver = vi.fn(() => context);
+      const otherResolver = vi.fn(() => context);
+      const operations: import("../auto-reply/reply/reply-run-registry.js").ReplyOperation[] = [];
+      const runtimes: ReturnType<ServerPluginsModule["loadGatewayPlugins"]>[] = [];
+      const registries: PluginRegistry[] = [];
+      const admitChannelReply = async (name: string, resolver: typeof closingResolver) => {
+        const channelId = `restart-${name}`;
+        const sessionKey = `agent:main:${channelId}:dm:dm-1`;
+        const entry = { sessionId: name, updatedAt: Date.now() };
+        await replaceSessionEntry({ storePath, sessionKey }, entry);
+        // Stub discovery only: use the real Gateway runtime options and channel registrar.
+        loadOpenClawPlugins.mockImplementationOnce((options) => {
+          const builder = createPluginRegistry({
+            logger: createTestLog(),
+            runtime: runtimeModule.createPluginRuntime(options.runtimeOptions),
+            activateGlobalSideEffects: false,
+          });
+          const record = createPluginRecord({
+            id: channelId,
+            name: channelId,
+            source: `/tmp/${channelId}/index.js`,
+            origin: "bundled",
+            enabled: true,
+            configSchema: false,
+          });
+          builder.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({
+            plugin: createChannelTestPluginBase({ id: channelId }),
+          });
+          builder.registry.plugins.push(record);
+          return builder.registry;
+        });
+        const loaded = serverPluginsModule.loadGatewayPlugins({
+          loadIntent: "startup",
+          cfg: {},
+          autoEnabledReasons: {},
+          workspaceDir: stateDir,
+          log: createTestLog(),
+          baseMethods: [],
+          pluginIds: [channelId],
+          resolveGatewayContext: resolver,
+        });
+        runtimes.push(loaded);
+        registries.push(loaded.pluginRegistry);
+        markPluginRegistryActive(loaded.pluginRegistry);
+        const channel = loaded.pluginRegistry.channels[0]?.resolveChannelRuntime?.();
+        if (!channel) {
+          throw new Error("Expected registered channel runtime");
+        }
+        const ingress = await channel.inbound.ingress.resolveStable({
+          channelId,
+          accountId: "default",
+          subject: { stableId: "person-a" },
+          conversation: { kind: "direct", id: "dm-1" },
+          dmPolicy: "allowlist",
+          allowFrom: ["person-a"],
+          contextBinding: {
+            agentId: "main",
+            sessionKey,
+            messageId: "message-1",
+            inboundEventKind: "user_request",
+          },
+        });
+        const ctx = channel.inbound.buildContext({
+          channel: channelId,
+          accountId: "default",
+          from: `${channelId}:dm-1`,
+          sender: { id: "person-a" },
+          conversation: { kind: "direct", id: "dm-1" },
+          route: { agentId: "main", routeSessionKey: sessionKey },
+          reply: { to: `${channelId}:dm-1` },
+          messageId: "message-1",
+          message: { rawBody: "hello", inboundEventKind: "user_request" },
+          channelIngress: ingress,
+        });
+        const channelResolver = readChannelContextGatewayContextResolver(ctx);
+        expect(channelResolver?.()).toBe(context);
+        const runtime = createRuntimeFromLastGatewayLoad();
+        const dispatch = runtime.channel.reply.dispatchReplyFromConfig;
+        // Exercise production reply admission, including its preference for the ingress resolver.
+        dispatchReplyFromConfig.mockImplementationOnce(async () => {
+          const coordinator = createDispatchReplyOperationCoordinator({
+            agentId: "main",
+            cfg: {},
+            ctx,
+            dispatcher: createReplyDispatcher({ deliver: async () => {} }),
+            dispatchOperationSessionKey: sessionKey,
+            operationSessionStoreEntry: { entry, storePath },
+            resolveOperationExpectedSessionId: () => name,
+          });
+          expect(await coordinator.ensureDispatchReplyOperation("dispatch")).toEqual({
+            status: "ready",
+          });
+          const operation = coordinator.getDispatchReplyOperation();
+          if (!operation) {
+            throw new Error("Expected channel reply operation");
+          }
+          operations.push(operation);
+          expect(gatewayRequestScopeModule.getGatewayContextResolver(operation)).toBe(
+            channelResolver,
+          );
+          return { counts: {}, queuedFinal: false };
+        });
+        await dispatch({
+          ctx,
+          cfg: {},
+          dispatcher: createReplyDispatcher({ deliver: async () => {} }),
+        });
+        const request = () =>
+          gatewayRequestScopeModule.withPluginRuntimePluginScope(
+            { pluginId: channelId, pluginOrigin: "bundled" },
+            () => runtime.gateway.request("sessions.get", {}),
+          );
+        await expect(request()).resolves.toEqual({ messages: [] });
+        return { channelResolver, sessionKey, runtime, request };
+      };
+      try {
+        const closing = await admitChannelReply("closing", closingResolver);
+        await admitChannelReply("other", otherResolver);
+        if (retired) {
+          runtimes[0]!.retireGatewayRuntimeBindings();
+          expect(closing.channelResolver?.()).toBeUndefined();
+          expect(await closing.runtime.gateway.isAvailable()).toBe(false);
+          await expect(closing.request()).rejects.toThrow(
+            "gateway request scope or instance binding",
+          );
+        }
+        closingResolver.mockClear();
+        otherResolver.mockClear();
+        const admissions = captureGatewaySessionWorkAdmissions(closingResolver);
+        const abort = captureGatewayReplyRunRestartAbort(closingResolver);
+        expect(
+          admissions.isActive({
+            scope: storePath,
+            sessionKey: closing.sessionKey,
+            sessionId: "closing",
+          }),
+        ).toBe(true);
+        expect(
+          admissions.isActive({
+            scope: storePath,
+            sessionKey: "agent:main:restart-other:dm:dm-1",
+            sessionId: "other",
+          }),
+        ).toBe(false);
+        expect(abort(() => {})).toBe(1);
+        expect(operations.map((operation) => operation.abortSignal.aborted)).toEqual([true, false]);
+        expect(closingResolver).not.toHaveBeenCalled();
+        expect(otherResolver).not.toHaveBeenCalled();
+        operations[0]!.complete();
+        // A later channel incarnation on the same root must not redeem the old context or snapshot.
+        await admitChannelReply("closing", closingResolver);
+        expect(closing.channelResolver?.()).toBeUndefined();
+        expect(abort(() => {})).toBe(0);
+        expect(operations[2]!.abortSignal.aborted).toBe(false);
+      } finally {
+        operations.forEach((operation) => operation.complete());
+        runtimes.forEach((runtime) => runtime.retireGatewayRuntimeBindings());
+        registries.forEach(markPluginRegistryRetired);
+        await Promise.resolve();
+        closeOpenClawAgentDatabasesForTest();
+      }
+    },
+  );
 
   test("captures retired plugin reply owners through their canonical Gateway binding", async () => {
     const { admitReplyTurn } = await import("../auto-reply/reply/reply-turn-admission.js");
