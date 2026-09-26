@@ -142,8 +142,14 @@ generated workspaces below a stable operator-selected root; you do not predict
 environment/session directory names. Both node and worker check canonical
 containment, and the runtime pins directory identity during the turn. Use a
 narrower existing root when possible. Optional `sessionId` restricts a grant to
-one known session incarnation. List `models` explicitly: each child receives only
-its agent's grant and permitted model auth values.
+one known session incarnation. Every workspace **must declare `models` explicitly**
+as an array of configured `provider/model` references. Omission is invalid, not an
+all-model grant; `"models": []` is a valid deny-all grant. Unknown references or
+ambiguous duplicate model/workspace identities are rejected before credential
+capture. Fix the node registry rather than expecting Gateway inference fallback.
+Each child receives only its agent's explicit allowed-model set and those models'
+auth values, never an unrelated model's credentials. This set is per agent, not
+an additional per-turn credential policy.
 
 The supervisor snapshots the file and named auth values at startup. Rotation
 requires controlled node/worker replacement through your platform lifecycle; it

@@ -14,10 +14,12 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { resolveRuntimeWorkerUrl, resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import { snapshotNodeWorkerNativeInference } from "../node-host/node-worker-native-inference.js";
 import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-secret-input.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import {
+  projectNativeInferenceStartup,
   WORKER_NATIVE_INFERENCE_STARTUP_ENV,
   WORKER_NATIVE_INFERENCE_STARTUP_FD,
   type NativeInferenceStartup,
@@ -395,7 +397,22 @@ describe.skipIf(process.platform === "win32")(
           'const proof = { pid: process.pid, ancestors, startupPresent: "OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP" in process.env, credentialPresent: "WORKER_TEST_PROVIDER_KEY" in process.env, initialCarrierHasCredentials: initialStartup?.includes("credentials") ?? false };\n' +
           'writeFileSync(new URL("./tool-proof.json", import.meta.url), JSON.stringify(proof)); console.log("worker tool wrote proof");\n',
       );
-      const worker = await launch(descriptor, startupFor(descriptor, provider.baseUrl));
+      const registry = startupFor(descriptor, provider.baseUrl);
+      registry.config.models.push({
+        ...registry.config.models[0]!,
+        id: "other-worker-model",
+        apiKeyEnv: "OTHER_WORKER_KEY",
+      });
+      const configPath = path.join(owner().root, "native-grants.json");
+      await writeFile(configPath, JSON.stringify(registry.config), { mode: 0o600 });
+      const captured = snapshotNodeWorkerNativeInference(configPath, {
+        WORKER_TEST_PROVIDER_KEY: LOCAL_KEY,
+        OTHER_WORKER_KEY: "synthetic-other-worker-key",
+      })!;
+      const projected = projectNativeInferenceStartup(captured, descriptor);
+      expect(projected.config.models.map(({ id }) => id)).toEqual([MODEL.model]);
+      expect(projected.credentials).toEqual({ WORKER_TEST_PROVIDER_KEY: LOCAL_KEY });
+      const worker = await launch(descriptor, projected);
       const outcome = result(await worker.finish());
       expect(outcome).toMatchObject({
         type: "result",
@@ -458,17 +475,49 @@ describe.skipIf(process.platform === "win32")(
       expect(outcome.result).toMatchObject({
         transcriptLeafId: SessionManager.open(owner().sessionTarget).getLeafId(),
       });
+      expect(JSON.stringify(provider.requests)).not.toContain("synthetic-other-worker-key");
       expect(JSON.stringify(owner().requests)).not.toContain(LOCAL_KEY);
       expect(JSON.stringify(transcript)).not.toContain(LOCAL_KEY);
     }, 40_000);
 
-    it.each(["missing registry", "wrong workspace", "wrong session", "denied model"] as const)(
+    it.each([
+      "missing registry",
+      "missing model grant",
+      "unknown model grant",
+      "ungranted model",
+      "wrong agent",
+      "wrong workspace",
+      "wrong session",
+      "denied model",
+    ] as const)(
       "rejects %s before provider HTTP or Gateway admission",
       async (scenario) => {
         const provider = await providerFixture();
         const descriptor = await localDescriptor();
         const startup = startupFor(descriptor, provider.baseUrl);
+        startup.config.models.push({
+          ...startup.config.models[0]!,
+          id: "other-worker-model",
+          apiKeyEnv: "OTHER_WORKER_KEY",
+        });
+        startup.credentials.OTHER_WORKER_KEY = "synthetic-other-worker-key";
         const grant = startup.config.workspaces[0]!;
+        if (scenario === "missing model grant") {
+          // Deliberately malformed carrier bypasses the node parser to prove worker admission.
+          Reflect.deleteProperty(grant, "models");
+        }
+        if (scenario === "unknown model grant") {
+          grant.models = [MODEL.provider + "/" + MODEL.model, "missing/model"];
+        }
+        if (scenario === "ungranted model") {
+          descriptor.assignment.modelRef = {
+            ...descriptor.assignment.modelRef,
+            model: "other-worker-model",
+          };
+        }
+        if (scenario === "wrong agent") {
+          grant.id = "other-agent";
+        }
         if (scenario === "wrong workspace") {
           grant.path = path.dirname(grant.path);
         }
@@ -483,9 +532,17 @@ describe.skipIf(process.platform === "win32")(
           scenario === "missing registry" ? undefined : startup,
         );
         const exit = await worker.finish();
-        expect(exit.code).toBe(1);
+        expect({
+          code: exit.code,
+          httpRequests: provider.requests.length,
+          admissions: owner().admissions.length,
+        }).toEqual({ code: 1, httpRequests: 0, admissions: 0 });
         expect(exit.stderr).toContain(
-          scenario === "missing registry" ? "no node-local registry" : "not authorized",
+          scenario === "missing registry"
+            ? "no node-local registry"
+            : scenario === "missing model grant" || scenario === "unknown model grant"
+              ? "Invalid node-local inference startup configuration"
+              : "not authorized",
         );
         expect(provider.requests).toEqual([]);
         expect(owner().admissions).toEqual([]);

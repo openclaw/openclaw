@@ -128,30 +128,80 @@ it("leaves Windows defaults unchanged and rejects only native inference opt-in",
 
 // Windows native startup is deferred; its opt-in refusal and unchanged default are tested above.
 describe.skipIf(process.platform === "win32")("node-local native inference startup custody", () => {
-  it("projects only the admitted agent grant and its model credentials", () => {
+  it.each(["omitted", "unknown"])(
+    "rejects %s model grants before supervisor credential capture",
+    (grantKind) => {
+      const f = createFixture();
+      const { models: _models, ...workspace } = f.config.workspaces[0]!;
+      const config = {
+        ...f.config,
+        models: [
+          ...f.config.models,
+          { ...f.config.models[0]!, id: "other-model", apiKeyEnv: "OTHER_AGENT_KEY" },
+        ],
+        workspaces: [
+          {
+            ...workspace,
+            ...(grantKind === "unknown" ? { models: ["provider-1/model-1", "missing/model"] } : {}),
+          },
+        ],
+      };
+      fs.writeFileSync(f.configPath, JSON.stringify(config));
+      const reads = vi.fn(() => "synthetic-grant-credential");
+      for (const name of ["NATIVE_TEST_KEY", "OTHER_AGENT_KEY"]) {
+        Object.defineProperty(f.env, name, { get: reads, enumerable: true });
+      }
+      expect(() =>
+        createNodeWorkerSupervisor({
+          bundleRoot: f.bundleRoot,
+          env: f.env,
+          nativeInferenceConfig: f.configPath,
+        }),
+      ).toThrow("Node worker native inference configuration is invalid or unavailable");
+      expect(reads).not.toHaveBeenCalled();
+    },
+  );
+
+  it("projects the complete explicit agent grant, not just the current turn or other agents", () => {
     const f = createFixture();
-    const startup = snapshotNodeWorkerNativeInference(f.configPath, f.env)!;
-    startup.config.models.push({
-      ...startup.config.models[0]!,
-      id: "other-model",
-      apiKeyEnv: "OTHER_AGENT_KEY",
-      headers: { "x-private": "other-agent-header" },
-    });
-    startup.config.workspaces.push({
+    f.config.models.push(
+      { ...f.config.models[0]!, id: "same-agent-model", apiKeyEnv: "SAME_AGENT_KEY" },
+      {
+        ...f.config.models[0]!,
+        id: "other-model",
+        apiKeyEnv: "OTHER_AGENT_KEY",
+        headers: { "x-private": "other-agent-header" },
+      },
+    );
+    f.config.workspaces[0]!.models.push("provider-1/same-agent-model");
+    f.config.workspaces.push({
       id: "other-agent",
       path: f.root,
+      sessionId: "other-session",
       models: ["provider-1/other-model"],
     });
-    startup.credentials.OTHER_AGENT_KEY = "other-agent-secret";
+    fs.writeFileSync(f.configPath, JSON.stringify(f.config));
+    const startup = snapshotNodeWorkerNativeInference(f.configPath, {
+      ...f.env,
+      SAME_AGENT_KEY: "synthetic-same-agent-key",
+      OTHER_AGENT_KEY: "synthetic-other-agent-key",
+    })!;
     const descriptor = completeWorkerLaunchDescriptor(
       nativeInput(f.workspaceDir).descriptor,
       TEST_WORKER_ENDPOINT,
     );
     const projected = projectNativeInferenceStartup(startup, descriptor);
     expect(projected.config.workspaces).toHaveLength(1);
-    expect(projected.config.models).toHaveLength(1);
-    expect(projected.credentials).toEqual({ NATIVE_TEST_KEY: credential });
+    expect(projected.config.models.map((model) => model.id)).toEqual([
+      "model-1",
+      "same-agent-model",
+    ]);
+    expect(projected.credentials).toEqual({
+      NATIVE_TEST_KEY: credential,
+      SAME_AGENT_KEY: "synthetic-same-agent-key",
+    });
     expect(JSON.stringify(projected)).not.toContain("other-agent");
+    expect(projected.credentials).not.toHaveProperty("OTHER_AGENT_KEY");
     expect(projected.config.workspaces[0]!.id).toBe("agent-1");
     expect(projected.config.models[0]!.cost).not.toBe(startup.config.models[0]!.cost);
     delete startup.credentials.NATIVE_TEST_KEY;
@@ -309,6 +359,13 @@ describe.skipIf(process.platform === "win32")("node-local native inference start
     "rejects unauthorized %s before child creation",
     async (mismatch) => {
       const f = createFixture();
+      f.config.models.push({
+        ...f.config.models[0]!,
+        id: "other-model",
+        apiKeyEnv: "OTHER_AGENT_KEY",
+      });
+      Object.assign(f.env, { OTHER_AGENT_KEY: "synthetic-other-agent-key" });
+      fs.writeFileSync(f.configPath, JSON.stringify(f.config));
       const supervisor = createNodeWorkerSupervisor({
         bundleRoot: f.bundleRoot,
         env: f.env,
@@ -358,6 +415,13 @@ describe.skipIf(process.platform === "win32")("node-local native inference start
     "delivers private startup before the journal gate (native=$native, lineage=$lineage)",
     async ({ native, lineage }) => {
       const f = createFixture();
+      f.config.models.push({
+        ...f.config.models[0]!,
+        id: "other-model",
+        apiKeyEnv: "OTHER_AGENT_KEY",
+      });
+      Object.assign(f.env, { OTHER_AGENT_KEY: "synthetic-other-agent-key" });
+      fs.writeFileSync(f.configPath, JSON.stringify(f.config));
       // Exceed an anonymous pipe buffer: awaiting the start gate before draining deadlocks.
       f.env.NATIVE_TEST_KEY = credential.repeat(16 * 1024);
       const source = nativeWorkerSource().replace(
@@ -368,6 +432,9 @@ describe.skipIf(process.platform === "win32")("node-local native inference start
   closed: startupClosed,
   removed: process.env.OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP === undefined,
   namedKey: process.env.NATIVE_TEST_KEY !== undefined,
+  otherNamedKey: process.env.OTHER_AGENT_KEY !== undefined,
+  models: nativeStartup?.config.models.map(model => model.provider + "/" + model.id) ?? [],
+  credentialNames: Object.keys(nativeStartup?.credentials ?? {}),
 });
 const mode = descriptor.assignment.prompt;`,
       );
@@ -414,6 +481,9 @@ const mode = descriptor.assignment.prompt;`,
           closed: native,
           removed: true,
           namedKey: false,
+          otherNamedKey: false,
+          models: native ? ["provider-1/model-1"] : [],
+          credentialNames: native ? ["NATIVE_TEST_KEY"] : [],
         });
       } finally {
         await supervisor.close();

@@ -34,7 +34,9 @@ const startup = {
         apiKeyEnv: "NATIVE_TEST_KEY",
       },
     ],
-    workspaces: [{ id: "agent-1", path: path.resolve("synthetic-workspace") }],
+    workspaces: [
+      { id: "agent-1", path: path.resolve("synthetic-workspace"), models: ["provider-1/model-1"] },
+    ],
   },
   credentials: { NATIVE_TEST_KEY: "synthetic-opaque/Case+lease=v1.%25" },
 };

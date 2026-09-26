@@ -83,7 +83,7 @@ function config(api: string, baseUrl: string): NativeRuntimeConfig {
         sensitiveHeaderNames: ["x-worker-session"],
       },
     ],
-    workspaces: [{ id: "test", path: workspace }],
+    workspaces: [{ id: "test", path: workspace, models: ["fixture/fixture-model"] }],
   };
 }
 function run(
