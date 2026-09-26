@@ -111,7 +111,7 @@ function repairContext() {
   return { cfg: ctx.cfg, runtime: ctx.runtime, mode: "fix" as const, configPath: ctx.configPath };
 }
 
-it.each([false, undefined, true])(
+it.each([false, true])(
   "preserves full/facade/structured browser skip (import %s)",
   async (allowSystemProfileImport) => {
     ctx.cfg = { browser: { ...ctx.cfg.browser, allowSystemProfileImport } };

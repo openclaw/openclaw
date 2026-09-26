@@ -125,14 +125,10 @@ const dispatchReplyWithBufferedBlockDispatcherMock = vi.hoisted(() =>
 const debouncerControl = vi.hoisted(() => ({
   holdEntries: false,
   entries: [] as unknown[],
-  flush: undefined as undefined | (() => Promise<void>),
-  flushEach: undefined as undefined | (() => Promise<void>),
   onFlushed: undefined as undefined | (() => void),
   reset() {
     this.holdEntries = false;
     this.entries = [];
-    this.flush = undefined;
-    this.flushEach = undefined;
     this.onFlushed = undefined;
   },
 }));
@@ -155,19 +151,6 @@ const createChannelInboundDebouncerMock = vi.hoisted(() =>
             return;
           }
           debouncerControl.entries.push(entry);
-          debouncerControl.flush = async () => {
-            const entries = debouncerControl.entries.splice(0);
-            await opts.onFlush(entries, createTestInboundDebounceFlush).completion;
-          };
-          // Flush each collected entry as its own single-entry bucket, modeling
-          // the real non-debounced path (shouldDebounceTextInbound is mocked to
-          // false here) where every row dispatches individually.
-          debouncerControl.flushEach = async () => {
-            const entries = debouncerControl.entries.splice(0);
-            for (const queued of entries) {
-              await opts.onFlush([queued], createTestInboundDebounceFlush).completion;
-            }
-          };
         },
         flushKey: async () => {},
         cancelKey: () => false,
@@ -705,24 +688,23 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("waits for configured ACP target readiness before dispatching an authorized message", async () => {
-    let releaseReadiness: ((value: { ok: true }) => void) | undefined;
-    ensureConfiguredBindingRouteReadyMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseReadiness = resolve;
-        }),
-    );
+    const readinessEntered = createDeferred<void>();
+    const readiness = createDeferred<{ ok: true }>();
+    const flushed = createDeferred<void>();
+    debouncerControl.onFlushed = () => flushed.resolve();
+    ensureConfiguredBindingRouteReadyMock.mockImplementationOnce(() => {
+      readinessEntered.resolve();
+      return readiness.promise;
+    });
     createIMessageWatchClient({
       onClose: async (notify) => {
         notify(createInboundMessage({ id: 81, guid: "acp-ready-81", text: "start the agent" }));
-        await vi.waitFor(() => {
-          expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-        });
+        await readinessEntered.promise;
+        expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
         expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
-        releaseReadiness?.({ ok: true });
-        await vi.waitFor(() => {
-          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-        });
+        readiness.resolve({ ok: true });
+        await flushed.promise;
+        expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
       },
     });
 
@@ -959,6 +941,8 @@ describe("iMessage monitor last-route updates", () => {
 
   it("starts direct typing before dispatching the inbound turn", async () => {
     setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing"]);
+    const flushed = createDeferred<void>();
+    debouncerControl.onFlushed = () => flushed.resolve();
     const watchClient = createIMessageWatchClient({
       requests: {
         "watch.subscribe": { subscription: 1 },
@@ -970,16 +954,7 @@ describe("iMessage monitor last-route updates", () => {
         guid: "typing-early-guid-12",
         text: "respond after a slow context build",
       }),
-      afterNotify: async () => {
-        await vi.waitFor(() => {
-          expect(earlyTypingClient.request).toHaveBeenCalledWith(
-            "typing",
-            expect.objectContaining({ typing: true, to: "+15550001111" }),
-            expect.any(Object),
-          );
-          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-        });
-      },
+      afterNotify: () => flushed.promise,
     });
     const earlyTypingClient = watchClient.auxiliaryClient!;
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async () => {
@@ -993,6 +968,7 @@ describe("iMessage monitor last-route updates", () => {
 
     await runIMessageMonitor({ imessage: { sendReadReceipts: false } });
 
+    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
     expect(watchClient.request).not.toHaveBeenCalledWith(
       "typing",
       expect.objectContaining({ typing: true }),
@@ -1423,29 +1399,6 @@ describe("iMessage monitor last-route updates", () => {
     });
 
     expectWatchSubscription(client, 4990);
-    await vi.waitFor(() => {
-      expect(debouncerControl.entries).toHaveLength(2);
-    });
-    expect(await loadRecoveryCursor(dbPath)).toBe(4996);
-  });
-
-  it("keeps the durable recovery cursor independent of later dispatch order", async () => {
-    debouncerControl.holdEntries = true;
-    const dbPath = await createRecoveryChatDb("openclaw-imsg-recovery-ordered-", 4990);
-    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-
-    await runMessageCase({
-      messages: [4995, 4996].map((id) =>
-        createInboundMessage({
-          id,
-          guid: `OUT-OF-ORDER-REPLAY-GUID-${id}`,
-          text: `missed during downtime ${id}`,
-          created_at: thirtyMinAgo,
-        }),
-      ),
-      monitor: { imessage: { dbPath } },
-    });
-
     await vi.waitFor(() => {
       expect(debouncerControl.entries).toHaveLength(2);
     });

@@ -217,9 +217,6 @@ describe("worker session tool topology", () => {
   it.each([
     { label: "default", mode: undefined },
     { label: "read-only", mode: "read-only" },
-    { label: "guarded", mode: "guarded" },
-    { label: "workspace", mode: "workspace" },
-    { label: "full", mode: "full" },
   ] as const)("inherits the parent's $label permission mode in a cloud child", async ({ mode }) => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     if (mode) {

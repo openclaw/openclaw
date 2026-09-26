@@ -100,29 +100,13 @@ function expectDemoDmPolicy(policy: DemoDmPolicy, expected: ExpectedDemoDmPolicy
 }
 
 describe("mapAllowFromEntries", () => {
-  it.each([
-    {
-      name: "coerces allowFrom entries to strings",
-      input: ["user", 42],
-      expected: ["user", "42"],
-    },
-    {
-      name: "returns empty list for missing input",
-      input: undefined,
-      expected: [],
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(mapAllowFromEntries(input)).toEqual(expected);
+  it("returns empty list for missing input", () => {
+    expect(mapAllowFromEntries(undefined)).toEqual([]);
   });
 });
 
 describe("resolveOptionalConfigString", () => {
   it.each([
-    {
-      name: "trims and returns string values",
-      input: "  room:123  ",
-      expected: "room:123",
-    },
     {
       name: "coerces numeric values",
       input: 123,

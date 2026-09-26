@@ -17,13 +17,10 @@ import {
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
   clawReferenceWarnings: vi.fn(),
-  clawhubInstall: vi.fn(),
   commitRecords: vi.fn(),
   installRecords: vi.fn(),
   metadata: vi.fn(),
-  npmInstall: vi.fn(),
   officialCatalog: vi.fn(),
-  persistInstall: vi.fn(),
   preflight: vi.fn(),
   pluginVersionCategories: vi.fn(),
   readConfig: vi.fn(),
@@ -47,11 +44,6 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
 
-vi.mock("./install-persistence.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./install-persistence.js")>()),
-  persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
-}));
-
 vi.mock("./install-config-mutation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./install-config-mutation.js")>()),
   resolveInstallConfigMutationPreflights: (...args: unknown[]) => mocks.preflight(...args),
@@ -70,14 +62,6 @@ vi.mock("./registry-refresh.js", () => ({
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
   resolvePluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
-}));
-
-vi.mock("./clawhub.js", () => ({
-  installPluginFromClawHub: (...args: unknown[]) => mocks.clawhubInstall(...args),
-}));
-
-vi.mock("./install.js", () => ({
-  installPluginFromNpmSpec: (...args: unknown[]) => mocks.npmInstall(...args),
 }));
 
 vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
@@ -744,11 +728,10 @@ describe("plugin management service", () => {
     expect([mocks.commitRecords.mock.calls, mocks.applyUninstall.mock.calls]).toEqual([[], []]);
   });
 
-  it("surfaces uninstall plan failures as lifecycle errors", async () => {
+  it("rejects uninstalling an unknown plugin before mutation", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mocks.installRecords.mockResolvedValue({});
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mocks.planUninstall.mockReturnValue({ ok: false, error: "Plugin not found: ghost" });
 
     await expect(uninstallManagedPlugin({ pluginId: "ghost", env: {} })).rejects.toThrow(
       "Plugin not found: ghost",

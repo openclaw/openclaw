@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -44,32 +44,6 @@ const asPublishedOwner = (value: PublishedModelCatalogOwnerCandidate): Published
   value as unknown as PublishedOwnerSnapshot;
 
 describe("local gateway request context", () => {
-  let response: Awaited<ReturnType<typeof dispatchGatewayMethodInProcessRaw>>;
-
-  beforeAll(async () => {
-    const cfg = {
-      agents: {
-        defaults: {},
-      },
-    } as OpenClawConfig;
-
-    response = await withLocalGatewayRequestScope(
-      {
-        deps: {} as CliDeps,
-        getRuntimeConfig: () => cfg,
-      },
-      () =>
-        dispatchGatewayMethodInProcessRaw("agent.identity.get", {
-          agentId: "main",
-        }),
-    );
-  });
-
-  it("lets embedded local runs dispatch gateway methods in-process", () => {
-    expect(response.ok).toBe(true);
-    expect(response.payload).toMatchObject({ agentId: "main" });
-  });
-
   it("keeps local RPC available without claiming Gateway routing or readiness", async () => {
     await withLocalGatewayRequestScope(
       { deps: {} as CliDeps, getRuntimeConfig: () => ({ gateway: { port: 19970 } }) },
@@ -437,6 +411,7 @@ it("keeps standalone embedded RPC available inside its session admission", async
         agentId: "main",
       });
       expect(before.ok).toBe(true);
+      expect(before.payload).toMatchObject({ agentId: "main" });
       const admission = await beginSessionWorkAdmission({
         scope: "local-rpc-admission-regression",
         identities: ["agent:main:local-rpc"],

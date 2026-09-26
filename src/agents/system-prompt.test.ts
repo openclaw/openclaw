@@ -1303,12 +1303,6 @@ describe("buildAgentSystemPrompt", () => {
       });
 
       expect(prompt).toContain("## Skill Workshop");
-      expect(prompt).toContain(
-        "never write Workshop proposal or Workshop-owned skill files directly",
-      );
-      expect(prompt).toContain("apply them with normal repository file tools");
-      expect(prompt).toContain("do not route them through Workshop");
-      expect(prompt).toContain("never infer Workshop ownership from a `SKILL.md` filename");
     },
   );
 

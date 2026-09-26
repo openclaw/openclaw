@@ -500,8 +500,12 @@ Secret-store expiry runs in that worker for scheduled Gateway cleanup and
 post-mutation cleanup. The caller captures the database and expiry cutoffs before
 yielding; the worker retains the existing SQL and expiry rules and returns only
 the deleted count. Scheduled sweeps coalesce while one is active, and Gateway
-shutdown stops scheduling and joins accepted cleanup. Ordinary secret-store
-set/delete operations remain separate synchronous migration debt.
+shutdown stops scheduling and joins accepted cleanup. An OpenClaw chat that saves
+a key for a config path writes its store entry in the same worker: one
+transaction mints a random entry name, inserts a new row without touching
+existing ones, and admits the write through the requester's live
+authority at transaction and commit. Other secret-store set/delete operations
+remain separate synchronous migration debt.
 
 Placement change reporting reads its before/after snapshots in the shared-state
 read worker using the placement store's row codec. It transfers only session

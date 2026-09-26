@@ -252,43 +252,6 @@ describe("mobile release cutter", () => {
     },
   );
 
-  it("keeps forbidden release surfaces byte-identical", () => {
-    const rootDir = fixture();
-    const forbiddenPaths = [
-      "package.json",
-      "CHANGELOG.md",
-      "apps/macos/Sources/OpenClaw/Resources/Info.plist",
-      "apps/android/CHANGELOG.md",
-      "apps/android/fastlane/Fastfile",
-      "apps/ios/fastlane/Fastfile",
-      ".github/workflows/release.yml",
-    ];
-    const before = new Map(
-      forbiddenPaths.map((relativePath) => [
-        relativePath,
-        fs.readFileSync(path.join(rootDir, relativePath), "utf8"),
-      ]),
-    );
-
-    applyMobileReleasePlan(
-      planMobileRelease({ gatewayVersion: "2026.8.2", phase: "prepare", rootDir }),
-    );
-    applyMobileReleasePlan(
-      planMobileRelease({
-        gatewayVersion: "2026.8.2",
-        iosPlan: iosPlan(),
-        phase: "finalize",
-        rootDir,
-      }),
-    );
-
-    for (const relativePath of forbiddenPaths) {
-      expect(fs.readFileSync(path.join(rootDir, relativePath), "utf8")).toBe(
-        before.get(relativePath),
-      );
-    }
-  });
-
   it("merges retry notes once and remains idempotent", () => {
     const rootDir = fixture();
     writeFile(

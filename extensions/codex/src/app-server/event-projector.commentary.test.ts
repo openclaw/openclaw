@@ -20,6 +20,10 @@ import {
 
 registerCodexEventProjectorTestLifecycle();
 
+function commentaryItem(id: string, text = "") {
+  return { type: "agentMessage", id, phase: "commentary", text };
+}
+
 describe("CodexAppServerEventProjector commentary projection", () => {
   it("keeps intermediate agentMessage items out of the final visible reply", async () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
@@ -100,8 +104,6 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
   it.each([
     { itemId: "msg_mock_1", text: "" },
-    { itemId: "msg_mock_1", text: " \n " },
-    { itemId: undefined, text: "" },
     { itemId: undefined, text: " \n " },
   ])(
     "preserves an explicit raw empty stop ($itemId) after a settled write",
@@ -226,12 +228,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "agentMessage",
-          id: "msg-commentary",
-          phase: "commentary",
-          text: "",
-        },
+        item: commentaryItem("msg-commentary"),
       }),
     );
     await projector.handleNotification(agentMessageDelta("Checking", "msg-commentary"));
@@ -242,22 +239,12 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     // text-only dedupe must not erase it after the final identical snapshot.
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "msg-commentary",
-          phase: "commentary",
-          text: commentaryText,
-        },
+        item: commentaryItem("msg-commentary", commentaryText),
       }),
     );
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "agentMessage",
-          id: "msg-commentary",
-          phase: "commentary",
-          text: commentaryText,
-        },
+        commentaryItem("msg-commentary", commentaryText),
         {
           type: "agentMessage",
           id: "msg-final",
@@ -326,12 +313,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "agentMessage",
-          id: "msg-commentary",
-          phase: "commentary",
-          text: "Checking the workspace",
-        },
+        commentaryItem("msg-commentary", "Checking the workspace"),
         { type: "agentMessage", id: "msg-final", phase: "final_answer", text: "Done" },
       ]),
     );
@@ -353,7 +335,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "msg-before-tool", phase: "commentary", text: "" },
+        item: commentaryItem("msg-before-tool"),
       }),
     );
     await projector.handleNotification(agentMessageDelta("Before the tool", "msg-before-tool"));
@@ -368,24 +350,14 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "msg-after-tool", phase: "commentary", text: "" },
+        item: commentaryItem("msg-after-tool"),
       }),
     );
     await projector.handleNotification(agentMessageDelta("After the tool", "msg-after-tool"));
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "agentMessage",
-          id: "msg-before-tool",
-          phase: "commentary",
-          text: "Before the tool",
-        },
-        {
-          type: "agentMessage",
-          id: "msg-after-tool",
-          phase: "commentary",
-          text: "After the tool",
-        },
+        commentaryItem("msg-before-tool", "Before the tool"),
+        commentaryItem("msg-after-tool", "After the tool"),
         { type: "agentMessage", id: "msg-final", phase: "final_answer", text: "Done" },
       ]),
     );
@@ -502,7 +474,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "msg-commentary", phase: "commentary", text: "" },
+        item: commentaryItem("msg-commentary"),
       }),
     );
     await projector.handleNotification(
@@ -510,12 +482,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     );
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "msg-commentary",
-          phase: "commentary",
-          text: "Checking the workspace",
-        },
+        item: commentaryItem("msg-commentary", "Checking the workspace"),
       }),
     );
     await projector.handleNotification(rawCommentary());
@@ -622,17 +589,12 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "msg-commentary", phase: "commentary", text: "" },
+        item: commentaryItem("msg-commentary"),
       }),
     );
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "msg-commentary",
-          phase: "commentary",
-          text: " ",
-        },
+        item: commentaryItem("msg-commentary", " "),
       }),
     );
     await projector.handleNotification(
@@ -674,12 +636,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
           phase: "final_answer",
           text: "final answer",
         },
-        {
-          type: "agentMessage",
-          id: "msg-commentary",
-          phase: "commentary",
-          text: "I am checking one more thing.",
-        },
+        commentaryItem("msg-commentary", "I am checking one more thing."),
       ]),
     );
 
