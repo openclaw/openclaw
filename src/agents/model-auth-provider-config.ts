@@ -638,6 +638,10 @@ export function providerConfigMatchesRuntimeSnapshot(params: {
   });
   // Shared provider objects need no catalog traversal; distinct mutable inputs
   // still compare their current bytes before reusing runtime SecretRef provenance.
+  // A deep-equal pass is cheap next to hashing a large provider model catalog
+  // (400+ entries) and catches the common case -- structurally identical but
+  // not object-identical provider configs -- without the cost of two full
+  // structural hashes (openclaw/openclaw#138139).
   return inputProvider && runtimeProvider
     ? params.inputConfig === params.runtimeConfig ||
         inputProvider === runtimeProvider ||
