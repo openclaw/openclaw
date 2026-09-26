@@ -1151,15 +1151,12 @@ export function registerSkillsCli(program: Command) {
         opts,
         command,
         async ({ agentId, config, workspaceDir }) => {
-          const reviewed = await inspectSkillProposal(proposalId, { agentId, config });
-          if (!reviewed) throw new Error(`Skill proposal not found: ${proposalId}`);
           return await purgeRejectedSkillProposal({
             agentId,
             eventActor: { type: "system", id: "cli" },
             workspaceDir,
             config,
             proposalId,
-            expectedRevisionHash: reviewed.revisionHash,
           });
         },
         (result) => `Purged ${result.proposalId}\n`,

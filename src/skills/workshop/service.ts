@@ -296,12 +296,14 @@ export async function purgeRejectedSkillProposal(
       if (await readSkillProposalRollback(current.id, store)) {
         throw new Error("Proposal has unfinished apply recovery and cannot be purged.");
       }
-      await purgeRejectedStoredProposal(current.id, store);
       await removePathWithinRoot({
         rootDir: resolveSkillWorkshopStateDir(store),
         relativePath: path.join("skill-workshop", "proposals", current.id),
         recursive: true,
       });
+      // Keep the rejected record until artifact removal succeeds, so a failed
+      // filesystem operation remains visible and retryable.
+      await purgeRejectedStoredProposal(current.id, store);
       return { proposalId: current.id, purged: true };
     },
     store,
