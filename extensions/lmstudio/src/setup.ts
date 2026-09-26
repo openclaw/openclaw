@@ -1,4 +1,3 @@
-// Lmstudio setup module handles plugin onboarding behavior.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type {
   ProviderAppGuidedSetupContext,
@@ -298,19 +297,6 @@ function resolvePersistedLmstudioApiKey(params: {
     : undefined;
 }
 
-/** Preserves existing allowlist metadata and appends discovered LM Studio model refs. */
-function mergeDiscoveredLmstudioAllowlistEntries(params: {
-  existing?: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
-  discoveredModels: ModelDefinitionConfig[];
-}) {
-  return withAgentModelAliases(
-    params.existing,
-    normalizeStringEntries(params.discoveredModels.map((model) => model.id)).map(
-      (id) => `${PROVIDER_ID}/${id}`,
-    ),
-  );
-}
-
 function selectDefaultLmstudioModelId(
   discoveredModels: ModelDefinitionConfig[],
 ): string | undefined {
@@ -608,11 +594,12 @@ export async function promptAndConfigureLmstudioInteractive(params: {
   };
   let setupDiscovery = await discoverSetupModels();
   while ("failure" in setupDiscovery) {
-    if (params.suppliedApiKey || !params.isRemote || !params.prompter) {
-      await note?.(setupDiscovery.failure.noteLines.join("\n"), "LM Studio");
-      throw new WizardCancelledError(setupDiscovery.failure.reason);
-    }
-    if (!setupDiscovery.failure.retryLine) {
+    if (
+      params.suppliedApiKey ||
+      !params.isRemote ||
+      !params.prompter ||
+      !setupDiscovery.failure.retryLine
+    ) {
       await note?.(setupDiscovery.failure.noteLines.join("\n"), "LM Studio");
       throw new WizardCancelledError(setupDiscovery.failure.reason);
     }
@@ -649,10 +636,12 @@ export async function promptAndConfigureLmstudioInteractive(params: {
       requestedContextWindow,
     });
   }
-  const allowlistEntries = mergeDiscoveredLmstudioAllowlistEntries({
-    existing: params.config.agents?.defaults?.models,
-    discoveredModels,
-  });
+  const allowlistEntries = withAgentModelAliases(
+    params.config.agents?.defaults?.models,
+    normalizeStringEntries(discoveredModels.map((model) => model.id)).map(
+      (id) => `${PROVIDER_ID}/${id}`,
+    ),
+  );
   const defaultModel = params.requestedModelId
     ? `${PROVIDER_ID}/${params.requestedModelId}`
     : setupDiscovery.value.defaultModel;
@@ -697,7 +686,6 @@ export async function promptAndConfigureLmstudioInteractive(params: {
         },
       },
       models: {
-        // Respect existing global mode; self-hosted provider setup should merge by default.
         mode: params.config.models?.mode ?? "merge",
         providers: {
           [PROVIDER_ID]: buildLmstudioSetupProviderConfig({
@@ -891,10 +879,7 @@ export async function configureLmstudioNonInteractive(
     return null;
   }
 
-  // Delegate to the shared helper even when modelId is set so that onboarding
-  // state and credential storage are handled consistently. The pre-resolved key
-  // is injected via resolveApiKey to skip a second prompt. The returned config
-  // is then post-patched below to add the discovered model list and base URL.
+  // Reuse the verified key without prompting again; the shared owner persists credentials.
   const configured = await configureOpenAICompatibleSelfHostedProviderNonInteractive({
     ctx: {
       ...normalizedCtx,

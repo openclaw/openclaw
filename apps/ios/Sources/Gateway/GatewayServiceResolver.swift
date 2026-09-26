@@ -25,7 +25,7 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
     }
 
     func netServiceDidResolveAddress(_ sender: NetService) {
-        let host = Self.normalizeHost(sender.hostName)
+        let host = BonjourServiceResolverSupport.normalizeHost(sender.hostName)
         let port = sender.port
         guard let host, !host.isEmpty, port > 0 else {
             self.finish(result: nil)
@@ -44,9 +44,5 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
         self.service.stop()
         self.service.remove(from: .main, forMode: .common)
         self.completion(result)
-    }
-
-    private static func normalizeHost(_ raw: String?) -> String? {
-        BonjourServiceResolverSupport.normalizeHost(raw)
     }
 }

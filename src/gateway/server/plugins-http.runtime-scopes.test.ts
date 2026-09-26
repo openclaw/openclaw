@@ -234,6 +234,7 @@ describe("plugin HTTP route runtime scopes", () => {
         path: SECURE_HOOK_PATH,
         auth: "gateway",
         handler: async () => {
+          expect(getPluginRuntimeGatewayRequestScope()?.signal).toBe(grant.signal);
           entered.resolve();
           await release.promise;
           return false;

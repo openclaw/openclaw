@@ -23,17 +23,11 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   modelCatalog: ModelCatalogSnapshot;
 }>;
 
-export type ResolvedPublishedModelCatalogOwner = Readonly<{
-  catalogOwner: NonNullable<PublishedModelCatalogOwnerCandidate["catalogOwner"]>;
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  config: OpenClawConfig;
-  observationConfig: OpenClawConfig;
-  authModes: PreparedAgentCredentialModes;
-  authStore: AuthProfileStore;
-  metadataSnapshot: PluginMetadataSnapshot;
-  pluginRegistry?: PluginRegistry;
-  isCurrent: () => boolean;
-  modelCatalog: ModelCatalogSnapshot;
-}>;
+export type ResolvedPublishedModelCatalogOwner = Readonly<
+  PublishedModelCatalogOwnerCandidate & {
+    catalogOwner: NonNullable<PublishedModelCatalogOwnerCandidate["catalogOwner"]>;
+    agentId: string;
+    workspaceDir: string;
+    authStore: AuthProfileStore;
+  }
+>;

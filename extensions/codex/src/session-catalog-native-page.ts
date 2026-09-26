@@ -16,7 +16,10 @@ import {
   readControlCursor,
 } from "./session-catalog-parsing.js";
 import type { CodexCatalogSettingsIndex } from "./session-catalog-settings.js";
-import type { CodexCatalogStatusIndex } from "./session-catalog-status.js";
+import {
+  applyCodexCatalogLiveFields,
+  type CodexCatalogStatusIndex,
+} from "./session-catalog-status.js";
 import type {
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
@@ -169,13 +172,13 @@ export class CodexCatalogNativePages {
         {
           sessions: rows
             .flatMap((row) => row.page.sessions)
-            .map(({ status: _storedStatus, activeFlags: _storedFlags, ...session }) => {
-              const live = this.status.get(session.threadId);
-              return Object.assign(session, this.settings.get(session.threadId), {
-                status: live?.status ?? "notLoaded",
-                ...(live?.activeFlags ? { activeFlags: [...live.activeFlags] } : {}),
-              });
-            })
+            .map((session) =>
+              applyCodexCatalogLiveFields(
+                session,
+                this.status.get(session.threadId),
+                this.settings.get(session.threadId),
+              ),
+            )
             .filter((session) => !cwd || session.cwd === cwd),
         },
         params.searchTerm,

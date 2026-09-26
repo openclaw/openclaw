@@ -346,7 +346,7 @@ describe("initial worker setup admission", () => {
   );
 
   it("rejects orphan setup instead of waiting indefinitely or running locally", async () => {
-    const placement = placements.startDispatch(sessionTarget);
+    const placement = await placements.startDispatch(sessionTarget);
     const dispatch = coordinateWorkerPlacementDispatch(
       createCoordinatorTestService({}),
       (_request, run) => run(),

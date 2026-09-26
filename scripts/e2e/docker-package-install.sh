@@ -164,24 +164,8 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
     exec sleep infinity
   ' >/dev/null
 
-wait_for_proof() {
-  local container_name="$1"
-  for _ in $(seq 1 240); do
-    if docker exec "$container_name" test -f /tmp/openclaw-proof-ready; then
-      return 0
-    fi
-    if [ "$(docker inspect --format '{{.State.Running}}' "$container_name")" != "true" ]; then
-      docker logs "$container_name" >&2
-      return 1
-    fi
-    sleep 1
-  done
-  docker logs "$container_name" >&2
-  return 1
-}
-
 for container_name in "$NPM_PROOF_CONTAINER" "$PNPM_PROOF_CONTAINER" "$BUN_PROOF_CONTAINER" "$MUSL_PROOF_CONTAINER"; do
-  wait_for_proof "$container_name"
+  docker_e2e_wait_for_proof "$container_name" 240
 done
 
 bash "$ROOT_DIR/scripts/e2e/lib/docker-package-identity.sh" \

@@ -1,4 +1,3 @@
-// Openrouter provider module implements model/runtime integration.
 type OpenRouterExtraParamsContext = {
   config?: {
     models?: {

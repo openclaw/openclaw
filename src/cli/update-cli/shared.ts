@@ -180,11 +180,10 @@ const UPSTREAM_REPOSITORY_URL = "https://github.com/openclaw/openclaw.git";
 const GIT_CLONE_BLOB_FILTER = "--filter=blob:none";
 
 export const DEFAULT_PACKAGE_NAME = "openclaw";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 /** Normalize a CLI tag/version/spec into the npm target form accepted by update flows. */
 export function normalizeTag(value?: string | null): string | null {
-  return normalizePackageTagInput(value, ["openclaw", DEFAULT_PACKAGE_NAME]);
+  return normalizePackageTagInput(value, [DEFAULT_PACKAGE_NAME]);
 }
 
 function normalizeVersionTag(tag: string): string | null {
@@ -230,11 +229,6 @@ export async function isGitCheckout(root: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function isCorePackage(root: string): Promise<boolean> {
-  const name = await readPackageName(root);
-  return Boolean(name && CORE_PACKAGE_NAMES.has(name));
 }
 
 /** Return true only for existing directories with no entries. */
@@ -409,9 +403,8 @@ async function cloneGitCheckoutTransactionally(params: {
         );
       }
 
-      const expectedEntries = preserveDir ? [path.basename(storageRoot)] : [];
       const destinationEntries = await fs.readdir(targetDir);
-      if (destinationEntries.toSorted().join("\0") !== expectedEntries.toSorted().join("\0")) {
+      if (destinationEntries.length !== 1 || destinationEntries[0] !== path.basename(storageRoot)) {
         throw new Error(
           `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
         );
@@ -510,7 +503,7 @@ export async function ensureGitCheckout(params: {
     });
   }
 
-  if (!(await isCorePackage(params.dir))) {
+  if ((await readPackageName(params.dir)) !== DEFAULT_PACKAGE_NAME) {
     throw new UpdatePreMutationError(
       "invalid-git-directory",
       `OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`,

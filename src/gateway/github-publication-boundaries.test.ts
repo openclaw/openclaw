@@ -47,7 +47,7 @@ describe("Gateway GitHub publication boundaries", () => {
       const placements = createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase(),
       });
-      const requested = placements.startDispatch(REQUEST);
+      const requested = await placements.startDispatch(REQUEST);
       placements.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
@@ -805,7 +805,7 @@ describe("Gateway GitHub publication boundaries", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-deferred-request",
       ownerEpoch: 2,
     });
@@ -857,7 +857,7 @@ describe("Gateway GitHub publication boundaries", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-accepted-deferred",
       ownerEpoch: 2,
     });
@@ -899,7 +899,7 @@ describe("Gateway GitHub publication boundaries", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-1",
       ownerEpoch: 2,
     });
@@ -942,7 +942,7 @@ describe("Gateway GitHub publication boundaries", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-snapshot-failure",
       ownerEpoch: 2,
     });

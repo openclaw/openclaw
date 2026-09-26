@@ -1,12 +1,14 @@
 import Foundation
 
-struct ExecApprovalTerminalTombstone: Codable, Equatable {
+struct ExecApprovalTerminalTombstone: Equatable {
     var approvalId: String
     var gatewayStableID: String
     var outcome: WatchExecApprovalOutcome
     var outcomeIsAuthoritative: Bool?
     var recordedAt: Date
+}
 
+extension ExecApprovalTerminalTombstone: Codable {
     private enum CodingKeys: String, CodingKey {
         case approvalId
         case gatewayStableID
@@ -14,20 +16,6 @@ struct ExecApprovalTerminalTombstone: Codable, Equatable {
         case outcomeText
         case outcomeIsAuthoritative
         case recordedAt
-    }
-
-    init(
-        approvalId: String,
-        gatewayStableID: String,
-        outcome: WatchExecApprovalOutcome,
-        outcomeIsAuthoritative: Bool?,
-        recordedAt: Date)
-    {
-        self.approvalId = approvalId
-        self.gatewayStableID = gatewayStableID
-        self.outcome = outcome
-        self.outcomeIsAuthoritative = outcomeIsAuthoritative
-        self.recordedAt = recordedAt
     }
 
     init(from decoder: Decoder) throws {

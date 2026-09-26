@@ -17,13 +17,13 @@ it("filters reconciliation by exact session key across agents while preserving s
     let nowMs = 1_000;
     const store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
 
-    function advanceToActive(identity: WorkerSessionPlacementIdentity) {
+    async function advanceToActive(identity: WorkerSessionPlacementIdentity) {
       seedAttachedPlacementEnvironment(database, {
         environmentId: `environment-${identity.sessionId}`,
         sessionId: identity.sessionId,
         ownerEpoch: 7,
       });
-      let placement = store.startDispatch(identity);
+      let placement = await store.startDispatch(identity);
       for (const step of [
         { to: "provisioning", patch: { environmentId: `environment-${identity.sessionId}` } },
         { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
@@ -57,7 +57,7 @@ it("filters reconciliation by exact session key across agents while preserving s
       runId: "local-run",
     });
     await store.releaseTurn(localClaim);
-    const active = advanceToActive({ ...SESSION, sessionId: "reclaimed" });
+    const active = await advanceToActive({ ...SESSION, sessionId: "reclaimed" });
     const draining = store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -80,16 +80,16 @@ it("filters reconciliation by exact session key across agents while preserving s
       ["unrelated-case", SESSION.sessionKey.toUpperCase()],
       ["unrelated-child", `${SESSION.sessionKey}:child`],
     ] as const) {
-      store.startDispatch({ ...SESSION, sessionId, sessionKey });
+      await store.startDispatch({ ...SESSION, sessionId, sessionKey });
     }
     nowMs = 2_000;
-    advanceToActive({ ...SESSION, sessionId: "cross-agent", agentId: "other" });
+    await advanceToActive({ ...SESSION, sessionId: "cross-agent", agentId: "other" });
     nowMs = 3_000;
     for (const sessionId of ["requested-z", "requested-a"]) {
-      store.startDispatch({ ...SESSION, sessionId });
+      await store.startDispatch({ ...SESSION, sessionId });
     }
     nowMs = 4_000;
-    store.startDispatch({ ...SESSION, sessionId: "failed" });
+    await store.startDispatch({ ...SESSION, sessionId: "failed" });
     store.fail({ sessionId: "failed", recoveryError: "dispatch failed" });
 
     expect(

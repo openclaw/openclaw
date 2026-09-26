@@ -4,6 +4,7 @@ import {
   chmodSync,
   closeSync,
   constants,
+  copyFileSync,
   fstatSync,
   lstatSync,
   mkdirSync,
@@ -13,6 +14,7 @@ import {
   readSync,
   realpathSync,
   rmSync,
+  rmdirSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -21,8 +23,9 @@ import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
 import { sha256FileSync } from "@openclaw/fs-safe/durability";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { z } from "zod";
+import { mirrorStatStamp, openSourceMirror, type MirrorFile } from "./crabbox-source-mirror.mts";
 import { captureSourceWitness } from "./crabbox-staging-witness.mts";
-import { createStaging, type StagingHandle } from "./crabbox-staging.mts";
+import { createMirrorStaging, createStaging, type StagingHandle } from "./crabbox-staging.mts";
 
 const bundleFile = ".openclaw-crabbox-changed-gate.bundle";
 const capsuleRef = "refs/openclaw/source-capsule";
@@ -138,7 +141,10 @@ function hasUnverifiedGitPreparation(
   const names = callbacks.stdout.toString("utf8").toLowerCase().split("\0").filter(Boolean);
   if (
     !names.length ||
-    names.some((name) => name !== "core.fsmonitor" && !name.startsWith("filter."))
+    names.some(
+      (name) =>
+        name !== "core.fsmonitor" && name !== "core.hookspath" && !name.startsWith("filter."),
+    )
   ) {
     return true;
   }
@@ -146,12 +152,22 @@ function hasUnverifiedGitPreparation(
   if (names.some((name) => /^filter\.(unset|unspecified)\./u.test(name))) {
     return true;
   }
+  if (names.includes("core.hookspath")) {
+    const hooks = probe(["--null", "--get", "core.hooksPath"]);
+    if (hooks.error || hooks.status !== 0 || !hooks.stdout.equals(Buffer.from("/dev/null\0"))) {
+      return true;
+    }
+  }
   if (names.includes("core.fsmonitor")) {
-    const monitor = probe(["--type=bool", "--get", "core.fsmonitor"]);
+    // Typed config reads reject an overridden callback path before reaching the
+    // effective local false. Inspect that last value without interpreting older ones.
+    const effective = probe(["--null", "--get", "core.fsmonitor"]);
+    const disabled =
+      !effective.error && effective.status === 0 && effective.stdout.equals(Buffer.from("false\0"));
+    const monitor = disabled ? undefined : probe(["--type=bool", "--get", "core.fsmonitor"]);
     if (
-      monitor.error ||
-      monitor.status !== 0 ||
-      monitor.stdout.toString("utf8").trim() !== "false"
+      monitor &&
+      (monitor.error || monitor.status !== 0 || monitor.stdout.toString("utf8").trim() !== "false")
     ) {
       return true;
     }
@@ -189,19 +205,30 @@ export function prepareCrabboxSourceCapsule(options: {
   repoRoot: string;
   syncRoot: string;
   base: string;
+  reuseMirror?: boolean;
   syncPlan: { command: string; args: string[]; windowsVerbatimArguments?: boolean };
 }): CrabboxSourceCapsule {
+  const startedAt = Date.now();
   const repoRoot = realpathSync(options.repoRoot);
   const sourceEnv = sourceGitEnvironment();
   function git(cwd: string, args: string[], env = sourceEnv, input?: string) {
     let output: Buffer;
     try {
-      output = execFileSync("git", ["-C", cwd, ...args], {
-        env,
-        input,
-        maxBuffer: 64 * 1024 * 1024,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      output = execFileSync(
+        "git",
+        [
+          "-C",
+          cwd,
+          ...(options.reuseMirror && cwd === repoRoot ? ["-c", "core.fsmonitor=false"] : []),
+          ...args,
+        ],
+        {
+          env,
+          input,
+          maxBuffer: 64 * 1024 * 1024,
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
     } catch {
       throw new Error(`source capsule: git ${args[0]} failed; source was not uploaded`);
     }
@@ -247,13 +274,77 @@ export function prepareCrabboxSourceCapsule(options: {
     .split("\0")
     .filter(Boolean);
   const eligible = new Set(eligiblePaths.map(capsulePath));
+  function stamp(path: string) {
+    const entry = sourceStat(repoRoot, path);
+    return entry.kind === "present" ? mirrorStatStamp(entry.stat) : entry.kind;
+  }
+  // Capture before staging allocation and Git setup, not when each copy finally
+  // reaches the path. Recheck eligibility too: new or newly ignored files must
+  // not silently change the frozen policy's source set.
+  const observed = new Map<string, string>();
+  for (const path of new Set(
+    [...eligible].toSorted().concat([".crabboxignore", ".crabbox.yaml", "crabbox.yaml"]),
+  )) {
+    observed.set(path, stamp(path));
+  }
   mkdirSync(options.syncRoot, { recursive: true });
-  const staging = createStaging(options.syncRoot, repoRoot);
+  const witness = captureSourceWitness(repoRoot, sourceSha);
+  let mirror =
+    options.reuseMirror && witness ? createMirrorStaging(options.syncRoot, repoRoot) : undefined;
+  let cache: ReturnType<typeof openSourceMirror> | undefined;
+  try {
+    if (mirror) {
+      const context = {
+        gitVersion: git(repoRoot, ["--version"]).trim(),
+        witness: witness ? JSON.stringify(witness) : "",
+      };
+      try {
+        cache = openSourceMirror(
+          mirror.staging.root,
+          join(mirror.staging.payload, "source"),
+          mirror.reused,
+          context,
+        );
+      } catch (error) {
+        if (!mirror.reused) {
+          throw error;
+        }
+        console.error("[crabbox] source mirror failed verification; rebuilding a cold capsule");
+        mirror.discard();
+        mirror = createMirrorStaging(options.syncRoot, repoRoot);
+        if (mirror) {
+          cache = openSourceMirror(
+            mirror.staging.root,
+            join(mirror.staging.payload, "source"),
+            false,
+            context,
+          );
+        }
+      }
+    }
+  } catch (error) {
+    mirror?.discard();
+    throw error;
+  }
+  const staging = mirror?.staging ?? createStaging(options.syncRoot, repoRoot);
   const temporary = staging.payload;
   const directory = join(temporary, "source");
-  const cleanup = () => staging.dispose();
+  let complete = false;
+  const cleanup = () => {
+    cache?.close();
+    if (mirror) {
+      if (complete) {
+        mirror.finish();
+      } else {
+        mirror.discard();
+      }
+    } else {
+      staging.dispose();
+    }
+  };
   try {
-    mkdirSync(directory);
+    const warm = mirror?.reused ?? false;
+    mkdirSync(directory, { recursive: true });
     const privateEnv: NodeJS.ProcessEnv = {
       ...sourceEnv,
       GIT_CONFIG_GLOBAL: "/dev/null",
@@ -265,7 +356,16 @@ export function prepareCrabboxSourceCapsule(options: {
       GIT_COMMITTER_EMAIL: "ci@openclaw.local",
     };
     delete privateEnv.GIT_CONFIG_PARAMETERS;
-    git(directory, ["init", "--quiet", "--template="], privateEnv);
+    delete privateEnv.GIT_CONFIG;
+    if (!warm) {
+      git(directory, ["init", "--quiet", "--template="], privateEnv);
+    }
+    if (mirror) {
+      // Prevent callback writers instead of weakening the preparation hold.
+      // Local config also applies when native Git strips command-scoped config.
+      git(directory, ["config", "core.hooksPath", "/dev/null"], privateEnv);
+      git(directory, ["config", "core.fsmonitor", "false"], privateEnv);
+    }
     const objectDir = git(repoRoot, [
       "rev-parse",
       "--path-format=absolute",
@@ -295,20 +395,47 @@ export function prepareCrabboxSourceCapsule(options: {
       );
     } else if (excludesFile.status !== 1) {
       throw new Error("source capsule could not resolve Git exclusion policy");
+    } else if (warm) {
+      git(directory, ["config", "core.excludesFile", ""], privateEnv);
     }
     git(
       directory,
-      ["remote", "add", "origin", git(repoRoot, ["remote", "get-url", "origin"]).trim()],
+      [
+        "remote",
+        warm ? "set-url" : "add",
+        "origin",
+        git(repoRoot, ["remote", "get-url", "origin"]).trim(),
+      ],
       privateEnv,
     );
     // Original tracking, not the eventual raw candidate index, controls Crabbox's
     // tracked-source exceptions. Untracked candidates must remain untracked here.
-    git(
-      directory,
-      ["update-index", "-z", "--index-info"],
-      privateEnv,
-      [...tracked].map(([path, entry]) => `${entry.mode} ${entry.hash}\t${path}\0`).join(""),
-    );
+    if (warm) {
+      rmSync(join(directory, ".git", "index"));
+      copyFileSync(
+        join(directory, ".git", "mirror-selection-index"),
+        join(directory, ".git", "index"),
+      );
+    }
+    const previousTracked = new Map<string, string>();
+    for (const record of (cache?.tracked ?? "").split("\0").filter(Boolean)) {
+      const tab = record.indexOf("\t");
+      previousTracked.set(record.slice(tab + 1), record.slice(2, tab));
+    }
+    const trackingChanges: string[] = [];
+    const changedTracking = new Set<string>();
+    for (const path of previousTracked.keys()) {
+      if (!tracked.has(path)) {
+        trackingChanges.push(`0 ${"0".repeat(40)}\t${path}\0`);
+      }
+    }
+    for (const [path, entry] of tracked) {
+      if (previousTracked.get(path) !== `${entry.mode} ${entry.hash} 0`) {
+        trackingChanges.push(`${entry.mode} ${entry.hash}\t${path}\0`);
+        changedTracking.add(path);
+      }
+    }
+    git(directory, ["update-index", "-z", "--index-info"], privateEnv, trackingChanges.join(""));
     const exclude = git(repoRoot, [
       "rev-parse",
       "--path-format=absolute",
@@ -328,8 +455,48 @@ export function prepareCrabboxSourceCapsule(options: {
       } finally {
         closeSync(fd);
       }
+    } else if (warm) {
+      rmSync(join(directory, ".git", "info", "exclude"), { force: true });
     }
-    const frozen = new Map<string, { mode: string; blobPath: string }>();
+    const frozen = new Map<
+      string,
+      { mode: string; blobPath: string; blob?: string; stamp?: string }
+    >();
+    const retained = new Set<string>();
+    function removeFrozen(path: string) {
+      rmSync(join(directory, path));
+      for (let parent = dirname(path); parent !== "."; parent = dirname(parent)) {
+        try {
+          rmdirSync(join(directory, parent));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY") {
+            throw error;
+          }
+          break;
+        }
+      }
+    }
+    // Remove old namespaces before adding new ones (file <-> directory changes).
+    for (const [path, previous] of cache?.files ?? []) {
+      if (!eligible.has(path)) {
+        removeFrozen(path);
+        continue;
+      }
+      const source = observed.get(path)!;
+      const sparse = tracked.get(path);
+      const token =
+        source === "missing" && sparse?.sparse ? `sparse:${sparse.mode}:${sparse.hash}` : source;
+      if (previous.source !== token) {
+        removeFrozen(path);
+      } else {
+        retained.add(path);
+      }
+    }
+    if (warm) {
+      rmSync(join(directory, bundleFile));
+    }
+    let copiedFiles = 0;
+    let reusedFiles = 0;
     const linkBlobs = join(temporary, "links");
     mkdirSync(linkBlobs);
     function writeFailure(path: string, operation: string, error: unknown) {
@@ -366,23 +533,49 @@ export function prepareCrabboxSourceCapsule(options: {
       } catch (error) {
         throw writeFailure(path, operation, error);
       }
-      frozen.set(path, { mode, blobPath });
+      frozen.set(path, {
+        mode,
+        blobPath,
+        stamp: cache ? mirrorStatStamp(lstatSync(destination)) : undefined,
+      });
+      copiedFiles += 1;
     }
     function copySource(path: string) {
+      const previous = cache?.files.get(path);
+      if (retained.has(path) && previous) {
+        // The initial source observation selects reuse; the final source pass
+        // still rejects edits during freezing, including paths we did not copy.
+        frozen.set(path, {
+          mode: previous.mode,
+          blobPath: join(directory, path),
+          blob: previous.blob,
+          stamp: previous.stamp,
+        });
+        reusedFiles += 1;
+        return "present";
+      }
       const entry = sourceStat(repoRoot, path);
+      const source = entry.kind === "present" ? mirrorStatStamp(entry.stat) : entry.kind;
+      if (observed.has(path) && observed.get(path) !== source) {
+        throw new Error(
+          `source changed while freezing ${JSON.stringify(path)}; retry after edits finish`,
+        );
+      }
+      observed.set(path, source);
       if (entry.kind !== "present" || entry.stat.isDirectory()) {
         return entry.kind;
       }
       const info = entry.stat;
-      const source = join(repoRoot, path);
+      const sourcePath = join(repoRoot, path);
       if (info.isSymbolicLink()) {
-        const bytes = readlinkSync(source, { encoding: "buffer" });
+        const bytes = readlinkSync(sourcePath, { encoding: "buffer" });
         const after = sourceStat(repoRoot, path);
         if (
           after.kind !== "present" ||
           !after.stat.isSymbolicLink() ||
           after.stat.ino !== info.ino ||
-          !readlinkSync(source, { encoding: "buffer" }).equals(bytes)
+          !readlinkSync(sourcePath, { encoding: "buffer" }).equals(bytes) ||
+          mirrorStatStamp(after.stat) !== source
         ) {
           throw new Error(
             `symlink changed while freezing ${JSON.stringify(path)}; retry after edits finish`,
@@ -396,7 +589,7 @@ export function prepareCrabboxSourceCapsule(options: {
       }
       const destination = join(directory, path);
       const mode = (info.mode & 0o100) !== 0 ? "100755" : "100644";
-      const fd = openSync(source, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const fd = openSync(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         const opened = fstatSync(fd);
         let operation = "mkdir";
@@ -434,6 +627,8 @@ export function prepareCrabboxSourceCapsule(options: {
             after.kind !== "present" ||
             opened.ino !== info.ino ||
             opened.ino !== after.stat.ino ||
+            mirrorStatStamp(opened) !== source ||
+            mirrorStatStamp(after.stat) !== source ||
             opened.mode !== info.mode ||
             opened.mode !== after.stat.mode ||
             opened.size !== after.stat.size ||
@@ -455,7 +650,12 @@ export function prepareCrabboxSourceCapsule(options: {
       } finally {
         closeSync(fd);
       }
-      frozen.set(path, { mode, blobPath: destination });
+      frozen.set(path, {
+        mode,
+        blobPath: destination,
+        stamp: cache ? mirrorStatStamp(lstatSync(destination)) : undefined,
+      });
+      copiedFiles += 1;
       return "present";
     }
     const sparse: Array<{ path: string; mode: string; hash: string }> = [];
@@ -654,6 +854,45 @@ export function prepareCrabboxSourceCapsule(options: {
       }
       return selected;
     }
+    function refreshIndex(paths: string[]) {
+      if (!paths.length) {
+        return;
+      }
+      const result = spawnSync(
+        "git",
+        [
+          "-C",
+          directory,
+          ...(warm
+            ? ["add", "--refresh", "--pathspec-from-file=-", "--pathspec-file-nul"]
+            : ["update-index", "--refresh"]),
+        ],
+        {
+          env: { ...privateEnv, GIT_LITERAL_PATHSPECS: "1" },
+          input: warm ? paths.join("\0") + "\0" : undefined,
+          stdio: ["pipe", "pipe", "pipe"],
+          maxBuffer: 64 * 1024 * 1024,
+        },
+      );
+      // Dirty files legitimately need update; their existing tracked identity
+      // must not be changed merely to seed stat data for policy selection.
+      if (result.error || (result.status !== 0 && result.status !== 1)) {
+        throw new Error("source capsule could not refresh its Git index");
+      }
+    }
+    refreshIndex(
+      [...tracked.keys()].filter(
+        (path) => frozen.has(path) && (!warm || !retained.has(path) || changedTracking.has(path)),
+      ),
+    );
+    if (cache) {
+      // Deletion probes temporarily unstage missing entries. Save original
+      // tracking first so a later restored ignored file keeps its tracked status.
+      copyFileSync(
+        join(directory, ".git", "index"),
+        join(directory, ".git", "mirror-selection-index"),
+      );
+    }
     const directories = new Set<string>();
     for (const path of frozen.keys()) {
       for (let parent = dirname(path); parent !== "."; parent = dirname(parent)) {
@@ -709,7 +948,7 @@ export function prepareCrabboxSourceCapsule(options: {
         if (current.delete(path)) {
           deleted.push(path);
         }
-        rmSync(join(directory, path));
+        removeFrozen(path);
       }
       unstageDeletions(group);
       if (
@@ -753,31 +992,58 @@ export function prepareCrabboxSourceCapsule(options: {
     }
     for (const path of frozen.keys()) {
       if (!finalPaths.has(path)) {
-        rmSync(join(directory, path));
+        removeFrozen(path);
       }
     }
     // Hash frozen bytes without attributes or filters. Link blob inputs contain
     // readlink bytes, never the referent's contents; only selected blobs enter Git.
-    const hashes = git(
+    const unhashed = paths.filter((path) => !frozen.get(path)!.blob);
+    const newHashes = git(
       directory,
       ["hash-object", "-w", "--no-filters", "--stdin-paths"],
       privateEnv,
-      paths.map((path) => JSON.stringify(frozen.get(path)!.blobPath)).join("\n") +
-        (paths.length ? "\n" : ""),
+      unhashed.map((path) => JSON.stringify(frozen.get(path)!.blobPath)).join("\n") +
+        (unhashed.length ? "\n" : ""),
     )
       .trim()
       .split("\n")
       .filter(Boolean);
-    if (hashes.length !== paths.length || hashes.some((hash) => !/^[a-f0-9]{40}$/u.test(hash))) {
+    if (
+      newHashes.length !== unhashed.length ||
+      newHashes.some((hash) => !/^[a-f0-9]{40}$/u.test(hash))
+    ) {
       throw new Error("source capsule could not freeze every raw blob");
     }
-    git(directory, ["read-tree", "--empty"], privateEnv);
-    git(
-      directory,
-      ["update-index", "-z", "--index-info"],
-      privateEnv,
-      paths.map((path, index) => `${frozen.get(path)!.mode} ${hashes[index]}\t${path}\0`).join(""),
-    );
+    for (const [index, path] of unhashed.entries()) {
+      frozen.get(path)!.blob = newHashes[index]!;
+    }
+    const hashes = paths.map((path) => frozen.get(path)!.blob!);
+    if (warm) {
+      rmSync(join(directory, ".git", "index"));
+      copyFileSync(
+        join(directory, ".git", "mirror-candidate-index"),
+        join(directory, ".git", "index"),
+      );
+    } else {
+      git(directory, ["read-tree", "--empty"], privateEnv);
+    }
+    const candidateChanges: string[] = [];
+    for (const path of cache?.files.keys() ?? []) {
+      if (!finalPaths.has(path)) {
+        candidateChanges.push(`0 ${"0".repeat(40)}\t${path}\0`);
+      }
+    }
+    for (const path of paths) {
+      const entry = frozen.get(path)!;
+      const previous = cache?.files.get(path);
+      if (!warm || previous?.mode !== entry.mode || previous.blob !== entry.blob) {
+        candidateChanges.push(`${entry.mode} ${entry.blob}\t${path}\0`);
+      }
+    }
+    if (warm) {
+      candidateChanges.unshift(`0 ${"0".repeat(40)}\t${bundleFile}\0`);
+    }
+    git(directory, ["update-index", "-z", "--index-info"], privateEnv, candidateChanges.join(""));
     const tree = capsuleObjectId(git(directory, ["write-tree"], privateEnv));
     const carrier = capsuleObjectId(
       git(
@@ -810,11 +1076,48 @@ export function prepareCrabboxSourceCapsule(options: {
       ["update-index", "--add", "--cacheinfo", `100644,${bundleHash},${bundleFile}`],
       privateEnv,
     );
+    refreshIndex([...paths.filter((path) => !warm || !retained.has(path)), bundleFile]);
+    if (cache) {
+      copyFileSync(
+        join(directory, ".git", "index"),
+        join(directory, ".git", "mirror-candidate-index"),
+      );
+    }
+    for (const [path, source] of observed) {
+      if (stamp(path) !== source) {
+        throw new Error(
+          `source changed while freezing ${JSON.stringify(path)}; retry after edits finish`,
+        );
+      }
+    }
+    const localStage = relative(repoRoot, staging.root);
+    const localStagePrefix =
+      localStage &&
+      localStage !== ".." &&
+      !localStage.startsWith(`..${sep}`) &&
+      !isAbsolute(localStage)
+        ? `${localStage.split(sep).join("/")}/`
+        : undefined;
+    const finalEligible = git(repoRoot, [
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "-z",
+    ])
+      .split("\0")
+      .filter(Boolean)
+      // Unmarked repo-local staging is supported. Only this newly allocated
+      // generation is output rather than source; sibling edits still invalidate.
+      .filter((path) => !localStagePrefix || !path.startsWith(localStagePrefix));
     if (
       git(repoRoot, ["rev-parse", "HEAD"]).trim() !== sourceSha ||
-      git(repoRoot, ["ls-files", "-v", "--stage", "-z"]) !== trackedRecords
+      git(repoRoot, ["ls-files", "-v", "--stage", "-z"]) !== trackedRecords ||
+      finalEligible.join("\0") !== eligiblePaths.join("\0")
     ) {
-      throw new Error("source revision or index changed while freezing; retry after edits finish");
+      throw new Error(
+        "source revision, index, or eligibility changed while freezing; retry after edits finish",
+      );
     }
     // Preparation-only copies are no longer needed after the transport bundle
     // is sealed. Keep recovery metadata outside the recursively removed payload.
@@ -833,9 +1136,32 @@ export function prepareCrabboxSourceCapsule(options: {
           })),
           deleted,
         },
-        captureSourceWitness(repoRoot, sourceSha),
+        witness,
       );
     }
+    if (cache) {
+      const next = new Map<string, MirrorFile>();
+      for (const path of paths) {
+        const entry = frozen.get(path)!;
+        const indexed = tracked.get(path);
+        const observedSource = observed.get(path)!;
+        next.set(path, {
+          path,
+          source:
+            observedSource === "missing" && indexed?.sparse
+              ? `sparse:${indexed.mode}:${indexed.hash}`
+              : observedSource,
+          stamp: entry.stamp!,
+          mode: entry.mode as MirrorFile["mode"],
+          blob: entry.blob!,
+        });
+      }
+      cache.save(next, trackedRecords);
+      console.error(
+        `[crabbox] source mirror ${warm ? "warm" : "cold"}: copied ${copiedFiles} files, reused ${reusedFiles} files; preparation ${Date.now() - startedAt}ms`,
+      );
+    }
+    complete = true;
     return {
       sourceSha,
       baseSha,

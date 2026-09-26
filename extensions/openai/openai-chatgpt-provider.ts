@@ -1,4 +1,3 @@
-// Openai provider module implements model/runtime integration.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ProviderAuthContext,
@@ -9,8 +8,10 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import {
+  buildFirstTemplateModel,
   buildManifestModelProviderConfig,
   DEFAULT_CONTEXT_TOKENS,
+  matchesExactOrPrefix,
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-metadata";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
@@ -39,11 +40,7 @@ import {
   OPENAI_GPT_6_MODEL_IDS,
 } from "./model-route-contract.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import {
-  buildFirstTemplateModel,
-  matchesExactOrPrefix,
-  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-} from "./shared.js";
+import { OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS } from "./shared.js";
 import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "openai";
@@ -59,35 +56,52 @@ const OPENAI_CODEX_GPT_56_THINKING_LEVEL_MAP = {
 } as const;
 const OPENAI_CODEX_GPT_56_NATIVE_CONTEXT_TOKENS = 372_000;
 const OPENAI_CODEX_GPT_55_CODEX_CONTEXT_TOKENS = 400_000;
-const OPENAI_CODEX_GPT_55_PRO_NATIVE_CONTEXT_TOKENS = 1_000_000;
-const OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS = 1_050_000;
-const OPENAI_CODEX_GPT_54_MINI_NATIVE_CONTEXT_TOKENS = 400_000;
-const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
-const OPENAI_CODEX_GPT_55_PRO_COST = {
-  input: 30,
-  output: 180,
-  cacheRead: 0,
-  cacheWrite: 0,
-} as const;
-const OPENAI_CODEX_GPT_54_COST = {
-  input: 2.5,
-  output: 15,
-  cacheRead: 0.25,
-  cacheWrite: 0,
-} as const;
-const OPENAI_CODEX_GPT_54_PRO_COST = {
-  input: 30,
-  output: 180,
-  cacheRead: 0,
-  cacheWrite: 0,
-} as const;
 const OPENAI_CODEX_GPT_54_MINI_COST = {
   input: 0.75,
   output: 4.5,
   cacheRead: 0.075,
   cacheWrite: 0,
 } as const;
+const OPENAI_CODEX_FORWARD_COMPAT_PATCHES = new Map<string, Partial<ProviderRuntimeModel>>([
+  [
+    OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
+    {
+      contextWindow: 1_000_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    },
+  ],
+  [
+    OPENAI_CODEX_GPT_54_MODEL_ID,
+    {
+      contextWindow: 1_050_000,
+      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+    },
+  ],
+  [
+    OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
+    {
+      contextWindow: 1_050_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    },
+  ],
+  [
+    OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+    {
+      contextWindow: 400_000,
+      cost: OPENAI_CODEX_GPT_54_MINI_COST,
+    },
+  ],
+  [
+    OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+    {
+      input: ["text"],
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+      cost: OPENAI_CODEX_GPT_54_MINI_COST,
+    },
+  ],
+]);
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex"] as const;
 /** Legacy codex rows first; fall back to catalog `gpt-5.4` when the API omits 5.3/5.2. */
 const OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS = [
@@ -155,17 +169,7 @@ function matchesOpenAICodexImageCapableModel(modelId: string, modelName?: string
     .some((candidate) => matchesExactOrPrefix(candidate, OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS));
 }
 
-/**
- * Restore native `["text", "image"]` input capability on resolved Codex rows
- * for known image-capable modern model IDs.
- * Persisted/configured model rows can omit the `input` field
- * entirely when they were written by older OpenClaw versions. When that row wins
- * the catalog merge, `modelSupportsInput(entry, "image")` returns false and the
- * gateway's `chat.send` handler offloads inbound images as `media://inbound/<id>`
- * claim-check URIs instead of inlining them.
- *
- * Mirrors the Anthropic precedent set by upstream #83756.
- */
+// Older persisted rows can omit image input; restore it before chat.send chooses claim-check URIs.
 function applyOpenAICodexImageInputCapability(params: {
   modelId: string;
   model: ProviderRuntimeModel;
@@ -276,49 +280,19 @@ function resolveCodexForwardCompatModel(
 
   let templateIds: readonly string[];
   let patch: Parameters<typeof buildFirstTemplateModel>[0]["patch"];
-  if (lower === OPENAI_CODEX_GPT_55_PRO_MODEL_ID) {
-    templateIds = OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS;
+  const knownPatch = OPENAI_CODEX_FORWARD_COMPAT_PATCHES.get(
+    lower === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID ? OPENAI_CODEX_GPT_54_MODEL_ID : lower,
+  );
+  if (knownPatch) {
+    templateIds =
+      lower === OPENAI_CODEX_GPT_55_PRO_MODEL_ID
+        ? OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS
+        : OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS;
     patch = {
-      contextWindow: OPENAI_CODEX_GPT_55_PRO_NATIVE_CONTEXT_TOKENS,
       contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
-      cost: OPENAI_CODEX_GPT_55_PRO_COST,
-    };
-  } else if (
-    lower === OPENAI_CODEX_GPT_54_MODEL_ID ||
-    lower === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID
-  ) {
-    templateIds = OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS;
-    patch = {
-      contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
-      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-      maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
-      cost: OPENAI_CODEX_GPT_54_COST,
-    };
-  } else if (lower === OPENAI_CODEX_GPT_54_PRO_MODEL_ID) {
-    templateIds = OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS;
-    patch = {
-      contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
-      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-      maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
-      cost: OPENAI_CODEX_GPT_54_PRO_COST,
-    };
-  } else if (lower === OPENAI_CODEX_GPT_54_MINI_MODEL_ID) {
-    templateIds = OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS;
-    patch = {
-      contextWindow: OPENAI_CODEX_GPT_54_MINI_NATIVE_CONTEXT_TOKENS,
-      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-      maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
-      cost: OPENAI_CODEX_GPT_54_MINI_COST,
-    };
-  } else if (lower === OPENAI_CODEX_GPT_53_SPARK_MODEL_ID) {
-    templateIds = OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS;
-    patch = {
-      input: ["text"],
-      contextWindow: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
-      contextTokens: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
-      maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
-      cost: OPENAI_CODEX_GPT_54_MINI_COST,
+      ...knownPatch,
+      ...(knownPatch.input ? { input: [...knownPatch.input] } : {}),
     };
   } else if (
     ctx.agentRuntimeId === "codex" &&
@@ -585,8 +559,8 @@ export function buildOpenAIChatGPTAuthMethodRuns(): Readonly<
   Record<"oauth" | "device-code", ProviderAuthMethod["run"]>
 > {
   return {
-    oauth: async (ctx) => await runOpenAICodexOAuth(ctx),
-    "device-code": async (ctx) => await runOpenAICodexDeviceCode(ctx),
+    oauth: runOpenAICodexOAuth,
+    "device-code": runOpenAICodexDeviceCode,
   };
 }
 
@@ -603,7 +577,7 @@ export function buildOpenAICodexProviderHooks(): Required<
   >
 > {
   return {
-    resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
+    resolveDynamicModel: resolveCodexForwardCompatModel,
     preferRuntimeResolvedModel: (ctx) => {
       if (!isOpenAIOrLegacyCodexProvider(ctx.provider)) {
         return false;
@@ -635,6 +609,6 @@ export function buildOpenAICodexProviderHooks(): Required<
     },
     resolveUsageAuth: resolveOpenAIUsageAuth,
     fetchUsageSnapshot: fetchOpenAIUsage,
-    refreshOAuth: async (cred) => await refreshOpenAICodexOAuthCredential(cred),
+    refreshOAuth: refreshOpenAICodexOAuthCredential,
   };
 }

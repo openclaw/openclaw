@@ -14,6 +14,18 @@ export type PostCorePluginUpdateResult = NonNullable<
   NonNullable<UpdateRunResult["postUpdate"]>["plugins"]
 >;
 
+export function createPostCorePluginUpdateResult(
+  result: Pick<PostCorePluginUpdateResult, "status"> & Partial<PostCorePluginUpdateResult>,
+): PostCorePluginUpdateResult {
+  return {
+    changed: false,
+    sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
+    npm: { changed: false, outcomes: [] },
+    integrityDrifts: [],
+    ...result,
+  };
+}
+
 /** Producer-classified notices shared by current and published updater handoffs. */
 export function collectPostCorePluginAdvisories(
   result: PostCorePluginUpdateResult | undefined,
@@ -175,13 +187,8 @@ export function appendPluginUpdateWarnings(
   if (warnings.length === 0) {
     return result;
   }
-  const plugins: PostCorePluginUpdateResult = result.postUpdate?.plugins ?? {
-    status: "warning",
-    changed: false,
-    sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
-    npm: { changed: false, outcomes: [] },
-    integrityDrifts: [],
-  };
+  const plugins =
+    result.postUpdate?.plugins ?? createPostCorePluginUpdateResult({ status: "warning" });
   const combined = [...(plugins.warnings ?? [])];
   for (const warning of warnings) {
     if (
@@ -205,13 +212,7 @@ export function appendPluginUpdateWarnings(
   };
 }
 
-/**
- * Build the post-core-update result we return when the active config cannot
- * even be parsed. Mandatory post-core convergence requires a parseable
- * config to know which plugins are configured; if one isn't available, we
- * refuse to restart the gateway and surface this as a hard error so the
- * existing `status === "error"` => `exit 1` pre-restart gate fires.
- */
+/** Invalid config cannot establish the plugin set required for restart. */
 export function buildInvalidConfigPostCoreUpdateResult(snapshot: ConfigFileSnapshot): {
   message: string;
   guidance: string[];
@@ -227,22 +228,9 @@ export function buildInvalidConfigPostCoreUpdateResult(snapshot: ConfigFileSnaps
     message,
     guidance,
     result: {
-      status: "error",
+      ...createPostCorePluginUpdateResult({ status: "error" }),
       reason: failure.reason,
       failureFacts: failure.failureFacts,
-      changed: false,
-      sync: {
-        changed: false,
-        switchedToBundled: [],
-        switchedToNpm: [],
-        warnings: [],
-        errors: [],
-      },
-      npm: {
-        changed: false,
-        outcomes: [],
-      },
-      integrityDrifts: [],
       warnings: [{ reason: failure.reason, message, guidance }],
     },
   };

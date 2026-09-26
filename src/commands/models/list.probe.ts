@@ -7,7 +7,6 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import pMap from "p-map";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import {
-  type AgentRunResultView,
   agentRunHasVisibleReply,
   extractAgentRunTerminalError,
 } from "../../agents/agent-run-result.js";
@@ -83,22 +82,9 @@ export function redactAuthProbeError(error: string): string {
   return redactStatusSecrets(error);
 }
 
-/** Widened runner call shape for isolated auth probe generations (see setup-inference-core). */
-type ProbeRunEmbeddedAgentParams = Parameters<
-  (typeof import("../../agents/embedded-agent.js"))["runEmbeddedAgent"]
->[0] & {
-  preparedModelRuntimeMode?: "isolated-read-only";
-};
-
-type ProbeRunEmbeddedAgent = (
-  params: ProbeRunEmbeddedAgentParams,
-) => ReturnType<(typeof import("../../agents/embedded-agent.js"))["runEmbeddedAgent"]>;
-
-// The probe only calls runEmbeddedAgent; the widened loader type lets the call
-// request the isolated-read-only runtime generation without a call-site cast.
-const embeddedRunnerModuleLoader = createLazyImportLoader<{
-  runEmbeddedAgent: ProbeRunEmbeddedAgent;
-}>(() => import("../../agents/embedded-agent.js"));
+const embeddedRunnerModuleLoader = createLazyImportLoader(
+  () => import("../../agents/embedded-agent.js"),
+);
 
 /** Normalized probe status bucket for auth/model diagnostics. */
 export type AuthProbeStatus =
@@ -833,7 +819,7 @@ async function probeTarget(params: {
       agentId,
       "models.auth-probe",
     );
-    const runResult = (await work.run(() =>
+    const runResult = await work.run(() =>
       runEmbeddedAgent({
         preparedRunAdmission,
         sessionId: probeSessionTarget.sessionId,
@@ -867,7 +853,7 @@ async function probeTarget(params: {
         ...(isolatedAgentDir ? { preparedModelRuntimeMode: "isolated-read-only" as const } : {}),
         abortSignal: params.abortSignal,
       }),
-    )) as AgentRunResultView;
+    );
     const terminalError = extractAgentRunTerminalError(runResult);
     if (terminalError) {
       const described = describeFailoverError(new Error(terminalError));

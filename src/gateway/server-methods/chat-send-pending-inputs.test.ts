@@ -367,7 +367,7 @@ describe("ordinary chat input admission", () => {
     async (executionMode) => {
       const fixture = await createBrowserFollowupFixture({ active: false });
       const placements = createWorkerSessionPlacementStore();
-      const requested = placements.startDispatch({ ...fixture.scope, executionMode });
+      const requested = await placements.startDispatch({ ...fixture.scope, executionMode });
       const provisioning = placements.transition({
         sessionId: fixture.scope.sessionId,
         from: "requested",

@@ -6,8 +6,6 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
@@ -24,20 +22,12 @@ type ChatSessionMessageSubscriptionState = ChatState & {
   sessionsError?: string | null;
 };
 
-function resolveSelectedGlobalAgentId(state: ChatSessionMessageSubscriptionState): string {
-  const parsed = parseAgentSessionKey(state.sessionKey);
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
-  }
-  return resolveUiSelectedGlobalAgentId(state);
-}
-
 function resolveSelectedSessionMessageSubscriptionAgentId(
   state: ChatSessionMessageSubscriptionState,
   key: string,
 ): string | null {
   if (isUiGlobalSessionKey(key)) {
-    return resolveSelectedGlobalAgentId(state);
+    return resolveUiSelectedGlobalAgentId(state);
   }
   return resolveUiGlobalAliasAgentId(state, key);
 }
@@ -248,18 +238,14 @@ export async function syncSelectedSessionMessageSubscription(
       }
       return;
     }
-    if (subscribeResult.status === "rejected") {
-      if (isCurrent() && shouldUnsubscribePrevious) {
-        state.chatSessionMessageSubscriptionRequestedKey = null;
-        state.chatSessionMessageSubscription = null;
-      }
-      throw subscribeResult.reason;
-    }
-    const subscribed = subscribeResult.value;
+    const subscribed = subscribeResult.status === "fulfilled" ? subscribeResult.value : null;
     if (!subscribed) {
       if (isCurrent() && shouldUnsubscribePrevious) {
         state.chatSessionMessageSubscriptionRequestedKey = null;
         state.chatSessionMessageSubscription = null;
+      }
+      if (subscribeResult.status === "rejected") {
+        throw subscribeResult.reason;
       }
       return;
     }

@@ -1,20 +1,16 @@
-// Github Copilot plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicEphemeralCacheControlMarkers,
-  createPayloadPatchStreamWrapper,
   projectCopilotRequestFacts,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
-type StreamOptions = Parameters<StreamFn>[2];
-
 function patchOnPayloadResult(
   result: unknown,
-  patchPayload: (payload: unknown) => unknown = sanitizeCopilotReplayResponsePayload,
+  patchPayload: (payload: unknown) => unknown,
   fallbackPayload?: unknown,
 ): unknown {
   if (result && typeof result === "object" && "then" in result) {
@@ -118,71 +114,21 @@ function normalizeCopilotAnthropicToolIds(messages: unknown[]): void {
   }
 }
 
-function patchCopilotAnthropicPayload(payload: Record<string, unknown>): void {
-  if (Array.isArray(payload.messages)) {
-    const messages = stripCopilotAssistantThinkingMessages(payload.messages);
-    payload.messages = messages;
+function patchCopilotAnthropicPayload(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const record = payload as Record<string, unknown>;
+  if (Array.isArray(record.messages)) {
+    const messages = stripCopilotAssistantThinkingMessages(record.messages);
+    record.messages = messages;
     normalizeCopilotAnthropicToolIds(messages);
   }
-  applyAnthropicEphemeralCacheControlMarkers(payload);
-}
-
-function wrapCopilotAnthropicStream(baseStreamFn: StreamFn | undefined): StreamFn | undefined {
-  if (!baseStreamFn) {
-    return undefined;
-  }
-  const underlying = baseStreamFn;
-  const payloadWrapper = createPayloadPatchStreamWrapper(underlying, ({ payload }) =>
-    patchCopilotAnthropicPayload(payload),
-  );
-  return (model, context, options) => {
-    if (model.provider !== "github-copilot" || model.api !== "anthropic-messages") {
-      return underlying(model, context, options);
-    }
-
-    const originalOnPayload = options?.onPayload;
-    return payloadWrapper(model, context, {
-      ...options,
-      onPayload: (payload, payloadModel) =>
-        patchOnPayloadResult(
-          originalOnPayload?.(payload, payloadModel),
-          (replacement) => {
-            if (replacement && typeof replacement === "object") {
-              patchCopilotAnthropicPayload(replacement as Record<string, unknown>);
-            }
-          },
-          payload,
-        ),
-    });
-  };
-}
-
-function wrapCopilotOpenAIResponsesStream(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn | undefined {
-  if (!baseStreamFn) {
-    return undefined;
-  }
-  const underlying = baseStreamFn;
-  return (model, context, options) => {
-    if (model.provider !== "github-copilot" || model.api !== "openai-responses") {
-      return underlying(model, context, options);
-    }
-
-    const originalOnPayload = options?.onPayload;
-    const wrappedOptions: StreamOptions = {
-      ...options,
-      onPayload: (payload, payloadModel) => {
-        sanitizeCopilotReplayResponsePayload(payload);
-        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel), undefined, payload);
-      },
-    };
-    return underlying(model, context, wrappedOptions);
-  };
+  applyAnthropicEphemeralCacheControlMarkers(record);
 }
 
 export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  const stream = wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn));
+  const stream = ctx.streamFn;
   if (!stream) {
     return undefined;
   }
@@ -194,6 +140,13 @@ export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): Str
       return stream(model, context, options);
     }
     const facts = projectCopilotRequestFacts(context.messages, "nested");
+    const anthropic = model.api === "anthropic-messages";
+    const originalOnPayload = options?.onPayload;
+    const patchPayload = anthropic
+      ? patchCopilotAnthropicPayload
+      : model.api === "openai-responses"
+        ? sanitizeCopilotReplayResponsePayload
+        : undefined;
     return stream(model, context, {
       ...options,
       headers: buildCopilotRuntimeHeaders({
@@ -205,6 +158,18 @@ export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): Str
           ...options?.headers,
         },
       }),
+      ...(patchPayload
+        ? {
+            onPayload: (payload: unknown, payloadModel: Parameters<StreamFn>[0]) => {
+              patchPayload(payload);
+              return patchOnPayloadResult(
+                originalOnPayload?.(payload, anthropic ? model : payloadModel),
+                patchPayload,
+                payload,
+              );
+            },
+          }
+        : {}),
     });
   };
 }

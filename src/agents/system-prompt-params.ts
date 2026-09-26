@@ -19,30 +19,15 @@ import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
 import { resolveAgentIdentity } from "./identity.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import type { SystemPromptRuntimeInfo } from "./system-prompt.js";
 
 const MAX_RUNTIME_AGENT_NAME_CHARS = 128;
 const MAX_RUNTIME_SESSION_URL_CHARS = 512;
 
-type RuntimeInfoInput = {
-  agentId?: string;
-  agentName?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  sessionUrl?: string;
-  gitCoauthorPrompt?: string;
-  host: string;
-  os: string;
-  arch: string;
-  node: string;
-  model: string;
-  defaultModel?: string;
-  shell?: string;
-  channel?: string;
-  chatType?: ChatType;
-  capabilities?: string[];
-  repoRoot?: string;
-  activeNode?: string;
-};
+type RuntimeInfoInput = Omit<SystemPromptRuntimeInfo, "chatType"> &
+  Required<Pick<SystemPromptRuntimeInfo, "host" | "os" | "arch" | "node" | "model">> & {
+    chatType?: ChatType;
+  };
 
 type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;

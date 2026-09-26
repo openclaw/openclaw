@@ -82,16 +82,7 @@ function collectUserInputHistory(
   }
 
   candidates.sort((a, b) => b.ts - a.ts);
-  const items: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    if (seen.has(candidate.text)) {
-      continue;
-    }
-    seen.add(candidate.text);
-    items.push(candidate.text);
-  }
-  return items;
+  return [...new Set(candidates.map(({ text }) => text))];
 }
 
 export function recordNonTranscriptInputHistory(state: ChatInputHistoryState, text: string) {
@@ -163,28 +154,16 @@ function navigateChatInputHistory(state: ChatInputHistoryState, direction: "up" 
     return false;
   }
 
-  if (direction === "up") {
-    if (state.chatInputHistoryIndex >= items.length - 1) {
-      return false;
-    }
-    state.chatInputHistoryIndex += 1;
-    state.chatMessage = items[state.chatInputHistoryIndex] ?? state.chatMessage;
-    state.chatMentions = [];
-    return true;
-  }
-
-  if (state.chatInputHistoryIndex === -1) {
+  const nextIndex = state.chatInputHistoryIndex + (direction === "up" ? 1 : -1);
+  if (nextIndex < -1 || nextIndex >= items.length) {
     return false;
   }
-  if (state.chatInputHistoryIndex === 0) {
-    state.chatInputHistoryIndex = -1;
-    state.chatMessage = state.chatDraftBeforeHistory ?? "";
-    state.chatMentions = state.chatMentionsBeforeHistory;
-    return true;
-  }
-  state.chatInputHistoryIndex -= 1;
-  state.chatMessage = items[state.chatInputHistoryIndex] ?? state.chatMessage;
-  state.chatMentions = [];
+  state.chatInputHistoryIndex = nextIndex;
+  state.chatMessage =
+    nextIndex === -1
+      ? (state.chatDraftBeforeHistory ?? "")
+      : (items[nextIndex] ?? state.chatMessage);
+  state.chatMentions = nextIndex === -1 ? state.chatMentionsBeforeHistory : [];
   return true;
 }
 

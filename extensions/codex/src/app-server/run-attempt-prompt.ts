@@ -164,7 +164,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const applyContinuityProjection = async (messages: typeof historyState.messages) => {
     const projection = await projectContextEngineAssemblyForCodex({
       assembledMessages: messages,
-      originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
       maxRenderedContextChars: codexContinuityProjectionMaxChars,
       toolPayloadMode:
@@ -176,7 +175,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     contextImageGroups = projection.imageGroups ?? [];
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
-    promptState.prePromptMessageCount = projection.prePromptMessageCount;
     promptState.noEngineContinuityProjectionApplied = true;
   };
   const applyActiveContextEngineProjection = async (
@@ -229,7 +227,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         : { project: true, reason: "per-turn-projection" };
       const projection = await projectContextEngineAssemblyForCodex({
         assembledMessages: assembled.messages,
-        originalHistoryMessages: historyState.messages,
         prompt: params.prompt,
         systemPromptAddition: assembled.systemPromptAddition,
         maxRenderedContextChars: codexContextProjectionMaxChars,
@@ -272,7 +269,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         baseDeveloperInstructions,
         projection.developerInstructionAddition,
       );
-      promptState.prePromptMessageCount = projection.prePromptMessageCount;
     } catch (assembleErr) {
       if (
         assembleErr instanceof CodexContextAttachmentError ||

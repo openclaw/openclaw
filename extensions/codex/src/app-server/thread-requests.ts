@@ -32,6 +32,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
+import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
@@ -165,27 +166,6 @@ export type CodexThreadConfigurationContext = CodexThreadPromptContext &
     | "bootstrapContextMode"
     | "scheduledRuntimeAuthority"
   >;
-
-type CodexThreadConfigurationOptions = {
-  cwd?: string;
-  dynamicTools?: CodexDynamicToolSpec[];
-  appServer: CodexAppServerRuntimeOptions;
-  developerInstructions?: string;
-  skillsInstructions?: string;
-  config?: JsonObject;
-  nativeCodeModeEnabled?: boolean;
-  nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
-  nativeCodeModeOnlyEnabled?: boolean;
-  webSearchAllowed?: boolean;
-  environmentSelection?: CodexTurnEnvironmentParams[];
-  model?: string | null;
-  modelProvider?: string | null;
-  hostSystemAgentActive?: boolean;
-  restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
-  shellEnvironment?: Readonly<Record<string, string>>;
-  shellPathPrepend?: readonly string[];
-  disableLoginShell?: boolean;
-};
 
 /** Common deterministic start/resume/fork fields; no run resources or unsupported setters. */
 export function buildCodexThreadConfiguration(

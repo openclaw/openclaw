@@ -7,26 +7,6 @@ import type {
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 
-function actionButton(params: {
-  icon: unknown;
-  label: string;
-  busy: boolean;
-  onClick: () => void;
-}) {
-  return html`
-    <button
-      class="btn btn--ghost btn--icon session-suggestion__action"
-      type="button"
-      ?disabled=${params.busy}
-      aria-label=${params.label}
-      title=${params.label}
-      @click=${params.onClick}
-    >
-      ${params.icon}
-    </button>
-  `;
-}
-
 export function renderChatSessionSuggestions(props: {
   suggestions: readonly SessionSuggestion[];
   role?: SessionSharingRole;
@@ -52,36 +32,29 @@ export function renderChatSessionSuggestions(props: {
               canResolve && suggestion.state === "pending"
                 ? html`
                     <div class="session-suggestion__actions">
-                      ${
-                        props.archived
+                      ${(
+                        [
+                          ["send", "sendNow", icons.arrowUp],
+                          ["queue", "queue", icons.check],
+                          ["edit", "edit", icons.edit],
+                          ["dismiss", "dismiss", icons.trash],
+                        ] as const
+                      ).map(([resolution, key, icon]) =>
+                        props.archived && resolution !== "dismiss"
                           ? nothing
                           : html`
-                              ${actionButton({
-                                icon: icons.arrowUp,
-                                label: t("chat.sessionSuggestions.sendNow", { author }),
-                                busy,
-                                onClick: () => props.onResolve(suggestion, "send"),
-                              })}
-                              ${actionButton({
-                                icon: icons.check,
-                                label: t("chat.sessionSuggestions.queue", { author }),
-                                busy,
-                                onClick: () => props.onResolve(suggestion, "queue"),
-                              })}
-                              ${actionButton({
-                                icon: icons.edit,
-                                label: t("chat.sessionSuggestions.edit", { author }),
-                                busy,
-                                onClick: () => props.onResolve(suggestion, "edit"),
-                              })}
-                            `
-                      }
-                      ${actionButton({
-                        icon: icons.trash,
-                        label: t("chat.sessionSuggestions.dismiss", { author }),
-                        busy,
-                        onClick: () => props.onResolve(suggestion, "dismiss"),
-                      })}
+                              <button
+                                class="btn btn--ghost btn--icon session-suggestion__action"
+                                type="button"
+                                ?disabled=${busy}
+                                aria-label=${t(`chat.sessionSuggestions.${key}`, { author })}
+                                title=${t(`chat.sessionSuggestions.${key}`, { author })}
+                                @click=${() => props.onResolve(suggestion, resolution)}
+                              >
+                                ${icon}
+                              </button>
+                            `,
+                      )}
                     </div>
                   `
                 : html`<span class="session-suggestion__state"

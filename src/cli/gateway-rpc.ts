@@ -19,11 +19,6 @@ const gatewayRpcRuntimeLoader = createLazyImportLoader<GatewayRpcRuntimeModule>(
   () => import("./gateway-rpc.runtime.js"),
 );
 
-async function loadGatewayRpcRuntime(): Promise<GatewayRpcRuntimeModule> {
-  // Keep gateway transport/runtime imports out of help and shell completion startup.
-  return gatewayRpcRuntimeLoader.load();
-}
-
 export function addGatewayClientOptions(cmd: Command, defaults?: { timeoutMs?: number }) {
   return cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
@@ -82,7 +77,7 @@ export async function callGatewayFromCli(
 
 /** Resolve whether CLI Gateway options select the implicit local Gateway. */
 export async function isImplicitLocalGatewayTargetFromCli(opts: GatewayRpcOpts): Promise<boolean> {
-  const runtime = await loadGatewayRpcRuntime();
+  const runtime = await gatewayRpcRuntimeLoader.load();
   return await runtime.isImplicitLocalGatewayTargetFromCliRuntime(opts);
 }
 
@@ -120,6 +115,6 @@ export async function callGatewayFromCliWithTransport<T = Record<string, unknown
   params?: unknown,
   extra?: Parameters<GatewayRpcRuntimeModule["callGatewayFromCliRuntime"]>[3],
 ) {
-  const runtime = await loadGatewayRpcRuntime();
+  const runtime = await gatewayRpcRuntimeLoader.load();
   return await runtime.callGatewayFromCliRuntime<T>(method, opts, params, extra);
 }

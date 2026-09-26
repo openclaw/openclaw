@@ -8,7 +8,6 @@ import { performance } from "node:perf_hooks";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
-import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
 import {
   classifyGatewayReadyLog,
   collectOutputLines,
@@ -21,7 +20,6 @@ import { isPidAlive } from "../../src/shared/pid-alive.js";
 import { waitForPidToExit } from "../../src/test-utils/process-tree.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -657,11 +655,6 @@ server.listen(port, "127.0.0.1", () => {
         sampleIndex: 1,
       },
     ]);
-  });
-
-  registerStopChildBehaviorTests({
-    stopChild,
-    queuedExitCode: 7,
   });
 
   it("collects Count-suffixed startup trace metrics", () => {

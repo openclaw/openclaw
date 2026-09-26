@@ -27,10 +27,11 @@ import type {
 
 const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 
-async function prepareScopedReadOnlyModelCatalogWithMode(
+/** Builds a request-scoped read-only catalog; live discovery requires an explicit mode. */
+export async function prepareScopedReadOnlyModelCatalog(
   input: PreparedModelRuntimeInput,
   providerDiscoveryProviderIds: readonly string[],
-  catalogMode: PreparedModelRuntimeCatalogMode,
+  catalogMode: PreparedModelRuntimeCatalogMode = "static",
 ): Promise<ModelCatalogSnapshot> {
   const scopedInput = input.readOnly ? input : { ...input, readOnly: true };
   const { agentFacts, pluginGeneration } = await prepareWorkspaceBuildGroup(
@@ -65,22 +66,6 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
       ? []
       : configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model)),
   );
-}
-
-/** Builds a request-scoped read-only catalog without executing live provider discovery. */
-export function prepareScopedReadOnlyModelCatalog(
-  input: PreparedModelRuntimeInput,
-  providerDiscoveryProviderIds: readonly string[],
-): Promise<ModelCatalogSnapshot> {
-  return prepareScopedReadOnlyModelCatalogWithMode(input, providerDiscoveryProviderIds, "static");
-}
-
-/** Builds a request-scoped read-only catalog with live discovery for selected providers. */
-export function prepareScopedReadOnlyLiveModelCatalog(
-  input: PreparedModelRuntimeInput,
-  providerDiscoveryProviderIds: readonly string[],
-): Promise<ModelCatalogSnapshot> {
-  return prepareScopedReadOnlyModelCatalogWithMode(input, providerDiscoveryProviderIds, "live");
 }
 
 export async function prepareAgentCatalogSource(

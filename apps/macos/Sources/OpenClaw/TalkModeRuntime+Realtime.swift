@@ -617,16 +617,10 @@ extension TalkModeRuntime {
               isEnabled,
               !self.isPaused
         else { return }
-        if speaking {
-            phase = .speaking
-            _ = await self.projectRealtimeRelay(relayGeneration, session) {
-                TalkModeController.shared.updatePhase(.speaking)
-            }
-        } else if !isPaused {
-            phase = .listening
-            _ = await self.projectRealtimeRelay(relayGeneration, session) {
-                TalkModeController.shared.updatePhase(.listening)
-            }
+        let phase: TalkModePhase = speaking ? .speaking : .listening
+        self.phase = phase
+        _ = await self.projectRealtimeRelay(relayGeneration, session) {
+            TalkModeController.shared.updatePhase(phase)
         }
     }
 

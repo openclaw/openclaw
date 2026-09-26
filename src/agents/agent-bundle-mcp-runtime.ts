@@ -8,7 +8,8 @@ import {
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -115,17 +116,10 @@ function isMcpMethodNotFoundError(error: unknown): boolean {
 }
 
 function hasConfiguredMcpRequestTimeout(rawServer: unknown): boolean {
-  if (!rawServer || typeof rawServer !== "object") {
-    return false;
-  }
-  const record = rawServer as Record<string, unknown>;
-  for (const key of ["requestTimeoutMs", "timeout"]) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-      return true;
-    }
-  }
-  return false;
+  const record = asOptionalObjectRecord(rawServer);
+  return ["requestTimeoutMs", "timeout"].some(
+    (key) => asPositiveFiniteNumber(record?.[key]) !== undefined,
+  );
 }
 
 function getCatalogListTimeoutMs(rawServer: unknown, requestTimeoutMs: number): number {
@@ -921,13 +915,14 @@ function createServerMcpRuntime(
             message,
           },
         ];
-        if (!session.connected || isMcpHttpSessionExpired(session, error)) {
-          // A close is terminal for every catalog generation sharing this
-          // session. The identity guard preserves any newer replacement.
-          await retireSessionIfCurrent(session);
-        } else if (!reusedSession && catalogInvalidationGeneration === catalogGeneration) {
-          // An isolated startup failure gets a fresh process on retry. When a
-          // notification superseded this list, the queued generation reuses it.
+        if (
+          !session.connected ||
+          isMcpHttpSessionExpired(session, error) ||
+          (!reusedSession && catalogInvalidationGeneration === catalogGeneration)
+        ) {
+          // Closed, expired, or isolated failed startups need a fresh process.
+          // A superseding catalog may reuse a healthy session; identity guards
+          // preserve any replacement installed before retirement yields.
           await retireSessionIfCurrent(session);
         }
         failIfDisposed();

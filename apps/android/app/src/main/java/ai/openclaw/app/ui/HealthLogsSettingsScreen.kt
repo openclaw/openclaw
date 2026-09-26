@@ -4,9 +4,11 @@ import ai.openclaw.app.GatewayHealthLogsSummary
 import ai.openclaw.app.GatewayLogEntry
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.VoiceCaptureMode
+import ai.openclaw.app.gatewayConnectionStatusForDisplay
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.takeUtf16Safe
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawStatusRow
@@ -93,7 +95,7 @@ internal fun HealthLogsSettingsScreen(
         ),
     )
     HealthStatusPanel(
-      gateway = gatewayStatusForDisplay(gatewayConnectionDisplay.statusText),
+      gateway = gatewayConnectionStatusForDisplay(gatewayConnectionDisplay.statusText),
       node = if (isNodeConnected) nativeString("Online") else nativeString("Waiting"),
       chat = if (chatHealthOk) nativeString("Ready") else nativeString("Not ready"),
       models = nativeString("\${modelCount.size} available", modelCount.size),
@@ -220,14 +222,8 @@ private fun GatewayLogsPanel(
       }
     } else {
       ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-        val entries = summary.entries.takeLast(12)
-        Column {
-          entries.forEachIndexed { index, entry ->
-            GatewayLogRow(entry = entry, onClick = { onLogClick(entry) })
-            if (index != entries.lastIndex) {
-              HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-            }
-          }
+        ClawSeparatedColumn(items = summary.entries.takeLast(12), dividerColor = ClawTheme.colors.border) { entry ->
+          GatewayLogRow(entry = entry, onClick = { onLogClick(entry) })
         }
       }
     }

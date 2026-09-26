@@ -6,8 +6,8 @@ import { finished } from "node:stream/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
@@ -73,7 +73,7 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await fs.rm(temp, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -602,7 +602,7 @@ describe("assistant image session policy", () => {
             dispatched = true;
             // Dispatch admission already withdraws Gateway-local access; activation needs an
             // attached environment and must not turn this file-open hook into a false 404.
-            placements.startDispatch({
+            await placements.startDispatch({
               sessionId: entry.sessionId,
               sessionKey,
               agentId: "main",

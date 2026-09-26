@@ -60,7 +60,6 @@ function createStopFixture(scopes = ["operator.write"], useSessionOwner = false)
       onAbort: () => void handleAbortChat(state, { preserveDraft: true }),
       onRewind: vi.fn(async () => true),
       onFork: vi.fn(async () => {}),
-      onReset: vi.fn(),
     });
   const disconnect = (nextClient: typeof state.client = client) => {
     snapshot = { ...snapshot, client: nextClient, phase: "reconnecting", hello: null };

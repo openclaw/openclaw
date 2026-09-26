@@ -8,7 +8,7 @@ import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
 import { isGatewayAuthPolicyCurrent, resolveGatewayAuthPolicyGeneration } from "./auth-policy.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { finishFailedGatewayHttpResponse, sendUnauthorized } from "./http-common.js";
+import { sendUnauthorized } from "./http-common.js";
 import { sendGatewayHttpAuthFailure } from "./http-operator-access.js";
 import {
   GatewayOperatorAccessDeniedError,
@@ -23,11 +23,7 @@ export class GatewayHttpRequestAuthorityError extends Error {}
 /** Request owners consume authority outcomes; unexpected failures keep their own diagnostics. */
 export function finishGatewayHttpAuthorityError(res: ServerResponse, error: unknown): boolean {
   if (error instanceof GatewayOperatorAccessDeniedError) {
-    if (res.headersSent || res.writableEnded || res.destroyed) {
-      finishFailedGatewayHttpResponse(res);
-    } else {
-      sendGatewayHttpAuthFailure(res, { ok: false, reason: "operator_access_denied" });
-    }
+    sendGatewayHttpAuthFailure(res, { ok: false, reason: "operator_access_denied" });
     return true;
   }
   return error instanceof GatewayHttpRequestAuthorityError;

@@ -145,11 +145,11 @@ class VoiceE2eService : Service() {
         .orEmpty()
         .ifEmpty { "127.0.0.1" }
     val port = intent.getIntExtra("port", 18789)
-    runtime.setManualEnabled(true)
-    runtime.setManualHost(host)
-    runtime.setManualPort(port)
-    runtime.setManualTls(intent.getBooleanExtra("tls", false))
-    runtime.setOnboardingCompleted(true)
+    runtime.prefs.setManualEnabled(true)
+    runtime.prefs.setManualHost(host)
+    runtime.prefs.setManualPort(port)
+    runtime.prefs.setManualTls(intent.getBooleanExtra("tls", false))
+    runtime.prefs.setOnboardingCompleted(true)
     runtime.connect(
       ai.openclaw.app.gateway.GatewayEndpoint
         .manual(host, port),

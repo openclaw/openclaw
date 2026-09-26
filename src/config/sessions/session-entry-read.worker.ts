@@ -16,6 +16,7 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
+import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import { readSelectedSessionEntryMetadataInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
@@ -257,6 +258,9 @@ export function readExactSessionEntriesWithLifecycle(
                   : {}),
                 kind: "session-exact-entries" as const,
                 entries: selected.value,
+                ...(request.projection === "lifecycle"
+                  ? { pendingArchives: hasPendingSessionTranscriptArchives(database) }
+                  : {}),
                 lifecycleTimestamps: resolveSessionLifecycleTimestamps({
                   entry,
                   agentId: database.agentId,
@@ -274,7 +278,12 @@ export function readExactSessionEntriesWithLifecycle(
   if (result.reason !== "database-missing") {
     throw new SessionMetadataUnavailableError(result.reason);
   }
-  return { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} };
+  return {
+    kind: "session-exact-entries",
+    entries: [],
+    lifecycleTimestamps: {},
+    ...(request.projection === "lifecycle" ? { pendingArchives: false } : {}),
+  };
 }
 
 /** Entry, board presence, and summary validity describe one committed snapshot. */

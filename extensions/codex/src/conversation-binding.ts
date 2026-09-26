@@ -521,17 +521,9 @@ async function runBoundTurn(params: {
   });
 }
 
-export async function runBoundTurnWithMissingThreadRecovery(params: {
-  bindingStore: CodexAppServerBindingStore;
-  data: CodexAppServerConversationBindingData;
-  prompt: string;
-  event: PluginHookInboundClaimEvent;
-  pluginConfig?: unknown;
-  config?: CodexConversationConfig;
-  sessionKey?: string;
-  incognito: boolean;
-  timeoutMs?: number;
-}): Promise<BoundTurnResult> {
+export async function runBoundTurnWithMissingThreadRecovery(
+  params: Parameters<typeof runBoundTurn>[0],
+): Promise<BoundTurnResult> {
   await prepareCodexConversationBinding(params);
   try {
     return await runBoundTurn(params);

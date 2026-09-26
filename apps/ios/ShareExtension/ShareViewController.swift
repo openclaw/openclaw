@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import os
 import UIKit
 import UniformTypeIdentifiers
@@ -152,60 +153,42 @@ final class ShareViewController: UIViewController {
         defer {
             Task { await gateway.disconnect() }
         }
-        let makeOptions: (String) -> GatewayConnectOptions = { clientId in
-            GatewayConnectOptions(
-                role: "node",
-                scopes: [],
-                caps: [],
-                commands: [],
-                permissions: [:],
-                clientId: clientId,
-                clientMode: "node",
-                clientDisplayName: "OpenClaw Share",
-                deviceIdentityProfile: .shareExtension,
-                includeDeviceIdentity: true,
-                allowStoredDeviceAuth: config.gatewayStableID != nil,
-                deviceAuthGatewayID: config.gatewayStableID)
+        func connect(clientId: String) async throws {
+            try await gateway.connect(
+                url: url,
+                credentials: GatewayNodeSessionCredentials(
+                    token: config.token,
+                    password: config.password),
+                connectOptions: GatewayConnectOptions(
+                    role: "node",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: clientId,
+                    clientMode: "node",
+                    clientDisplayName: "OpenClaw Share",
+                    deviceIdentityProfile: .shareExtension,
+                    includeDeviceIdentity: true,
+                    allowStoredDeviceAuth: config.gatewayStableID != nil,
+                    deviceAuthGatewayID: config.gatewayStableID),
+                sessionBox: nil,
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { req in
+                    BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: OpenClawNodeError(
+                            code: .invalidRequest,
+                            message: "share extension does not support node invoke"))
+                })
         }
-
         do {
-            try await gateway.connect(
-                url: url,
-                credentials: GatewayNodeSessionCredentials(
-                    token: config.token,
-                    password: config.password),
-                connectOptions: makeOptions("openclaw-ios"),
-                sessionBox: nil,
-                onConnected: {},
-                onDisconnected: { _ in },
-                onInvoke: { req in
-                    BridgeInvokeResponse(
-                        id: req.id,
-                        ok: false,
-                        error: OpenClawNodeError(
-                            code: .invalidRequest,
-                            message: "share extension does not support node invoke"))
-                })
+            try await connect(clientId: "openclaw-ios")
         } catch {
-            let expectsLegacyClientId = self.shouldRetryWithLegacyClientId(error)
-            guard expectsLegacyClientId else { throw error }
-            try await gateway.connect(
-                url: url,
-                credentials: GatewayNodeSessionCredentials(
-                    token: config.token,
-                    password: config.password),
-                connectOptions: makeOptions("moltbot-ios"),
-                sessionBox: nil,
-                onConnected: {},
-                onDisconnected: { _ in },
-                onInvoke: { req in
-                    BridgeInvokeResponse(
-                        id: req.id,
-                        ok: false,
-                        error: OpenClawNodeError(
-                            code: .invalidRequest,
-                            message: "share extension does not support node invoke"))
-                })
+            guard self.shouldRetryWithLegacyClientId(error) else { throw error }
+            try await connect(clientId: "moltbot-ios")
         }
 
         struct AgentRequestPayload: Codable {
@@ -245,11 +228,7 @@ final class ShareViewController: UIViewController {
                 code: 12,
                 userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload."])
         }
-        struct NodeEventParams: Codable {
-            var event: String
-            var payloadJSON: String
-        }
-        let eventData = try JSONEncoder().encode(NodeEventParams(event: "agent.request", payloadJSON: json))
+        let eventData = try JSONEncoder().encode(NodeEventParams(event: "agent.request", payloadjson: json))
         guard let nodeEventParams = String(data: eventData, encoding: .utf8) else {
             throw NSError(
                 domain: "OpenClawShare",

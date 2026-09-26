@@ -361,8 +361,17 @@ describe("arcee provider plugin", () => {
     ]);
     expect(fetchGuard).toHaveBeenCalledOnce();
     const request = fetchGuard.mock.calls[0]?.[0];
-    expect(request?.url).toBe("https://api.arcee.ai/api/v1/models");
-    expect(new Headers(request?.init?.headers).get("authorization")).toBe("Bearer test-key");
+    expect(
+      JSON.stringify({
+        url: request?.url,
+        init: {
+          ...request?.init,
+          headers: Object.fromEntries(new Headers(request?.init?.headers)),
+        },
+      }),
+    ).toBe(
+      '{"url":"https://api.arcee.ai/api/v1/models","init":{"headers":{"accept":"application/json","authorization":"Bearer test-key"}}}',
+    );
     expect(release).toHaveBeenCalledOnce();
     const thinkingCompat = catalogProvider.models?.find(
       (model) => model.id === "trinity-large-thinking",

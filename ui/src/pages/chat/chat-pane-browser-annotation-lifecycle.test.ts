@@ -88,10 +88,7 @@ describe("staged attachment composer adoption", () => {
     pane.paneId = paneId;
     pane.sessionKey = sessionKey;
     const stopAfterRestore = new Error("stop after attachment restore");
-    vi.spyOn(
-      pane.chatState as unknown as { startComposerPersistence: () => void },
-      "startComposerPersistence",
-    ).mockImplementation(() => {
+    vi.spyOn(pane.chatState.composerPersistence, "start").mockImplementation(() => {
       throw stopAfterRestore;
     });
     expect(() => pane.connectedCallback()).toThrow(stopAfterRestore);

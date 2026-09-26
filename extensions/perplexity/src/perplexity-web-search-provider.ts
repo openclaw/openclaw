@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Perplexity provider module implements model/runtime integration.
 import {
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,

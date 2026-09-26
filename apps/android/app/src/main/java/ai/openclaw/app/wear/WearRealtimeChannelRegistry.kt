@@ -552,7 +552,6 @@ internal class WearRealtimeChannelRegistry(
   ) {
     val key = ChannelKey(channel.nodeId, channel.path)
     private val writeMutex = Mutex()
-    private val closeMutex = Mutex()
     private var closed = false
     val retirementStarted = AtomicBoolean()
     val retirementComplete = CompletableDeferred<Unit>()
@@ -578,11 +577,9 @@ internal class WearRealtimeChannelRegistry(
     suspend fun close(transport: WearRealtimeChannelTransport) {
       // Retirement must not close the stream beneath a frame already selected for this connection.
       writeMutex.withLock {
-        closeMutex.withLock {
-          if (closed) return
-          transport.close(channel, resources)
-          closed = true
-        }
+        if (closed) return
+        transport.close(channel, resources)
+        closed = true
       }
     }
   }

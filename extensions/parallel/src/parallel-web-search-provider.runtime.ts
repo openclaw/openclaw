@@ -15,7 +15,10 @@ import {
   withTrustedWebSearchEndpoint,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   executeParallelSearchRequest,
   type ParallelSearchResponse,
@@ -39,13 +42,6 @@ type ParallelConfig = {
   apiKey?: string;
   baseUrl?: string;
 };
-
-function resolveParallelConfig(searchConfig?: SearchConfigRecord): ParallelConfig {
-  const parallel = searchConfig?.parallel;
-  return parallel && typeof parallel === "object" && !Array.isArray(parallel)
-    ? (parallel as ParallelConfig)
-    : {};
-}
 
 function resolveParallelApiKey(parallel?: ParallelConfig): string | undefined {
   return (
@@ -178,7 +174,7 @@ export async function executeParallelWebSearchProviderTool(
     "parallel",
     resolveProviderWebSearchPluginConfig(ctx.config, "parallel"),
   ) as SearchConfigRecord | undefined;
-  const parallelConfig = resolveParallelConfig(searchConfig);
+  const parallelConfig = asOptionalRecord(searchConfig?.parallel);
   const apiKey = resolveParallelApiKey(parallelConfig);
   if (!apiKey) {
     return missingParallelKeyPayload();

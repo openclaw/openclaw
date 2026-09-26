@@ -350,13 +350,9 @@ async function validateResetAuthChoice(params: {
         return false;
       }
       applyCustomApiConfig({
+        ...custom,
         config: params.baseConfig,
-        baseUrl: custom.baseUrl,
-        modelId: custom.modelId,
-        compatibility: custom.compatibility,
         apiKey: undefined,
-        providerId: custom.providerId,
-        supportsImageInput: custom.supportsImageInput,
       });
     } catch (error) {
       const message =
@@ -366,8 +362,7 @@ async function validateResetAuthChoice(params: {
           : `Invalid custom provider config: ${formatErrorMessage(error)}`;
       return rejectOption(params.opts, params.runtime, message);
     }
-  }
-  if (authChoice !== "custom-api-key") {
+  } else {
     const runtimeProvider = providerAuthChoice
       ? resolveProviderMatch(
           resolvePluginProviders({

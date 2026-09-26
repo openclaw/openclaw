@@ -51,7 +51,7 @@ describe("worker turn execution", () => {
   it.each(["current", "cancel"] as const)(
     "waits for execution-start settlement before new-turn work (%s)",
     async (change) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const input = turn(`execution-start-${change}`);
       const abort = new AbortController();
       const entered = createDeferred();
@@ -128,7 +128,7 @@ describe("worker turn execution", () => {
   it.each(["current", "cancel", "run", "phase", "claim", "session"] as const)(
     "checks %s ownership after writable transcript hydration before acquiring credentials",
     async (change) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const source = SessionManager.open(sessionTarget);
       source.appendMessage(
         makeAgentUserMessage({ content: "Preserve 🦞\nexact history", timestamp: 1 }),
@@ -239,7 +239,7 @@ describe("worker turn execution", () => {
   );
 
   it("settles the committed terminal result when execution is cancelled during hydration", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const abort = new AbortController();
     const input = turn("terminal-hydration");
     const entered = createDeferred();
@@ -347,7 +347,7 @@ describe("worker turn execution", () => {
   it.each(["current", "cancel", "claim", "session"] as const)(
     "revalidates %s authority after node context preparation before measuring a launch",
     async (change) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const input = turn(`node-context-${change}`);
       const abort = new AbortController();
       const entered = createDeferred();
@@ -441,7 +441,7 @@ describe("worker turn execution", () => {
   )(
     "honors configured worker Ultra effort $expected in mode $mode with scheduled tools",
     async (testCase) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       let descriptor: WorkerLaunchPlan | undefined;
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         descriptor = roundTripWorkerLaunchDescriptor(
@@ -538,7 +538,7 @@ describe("worker turn execution", () => {
   ])(
     "fences a stale worker receipt %j while a current receipt proceeds to execution",
     async (...protocolFeatures) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const oldEnvironment = attachedEnvironment();
       const currentReceipt = oldEnvironment.bootstrapReceipt;
       oldEnvironment.bootstrapReceipt = {

@@ -7,10 +7,7 @@ import {
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config.js";
 import { refreshCodexPluginRuntimeState } from "./plugin-activation.js";
-import {
-  resolveOwnedAppApprovalOverrideKeys,
-  resolveRecoverableCodexPluginConfigKeys,
-} from "./plugin-inventory.js";
+import { resolveRecoverableCodexPluginConfigKeys } from "./plugin-inventory.js";
 import {
   appInfo,
   appSummary,
@@ -164,63 +161,6 @@ describe("Codex plugin thread config", () => {
       expect(result.provisionalAppIds).toEqual([runtimeId]);
       expect(request).toHaveBeenCalledWith("app/read", { appIds: [runtimeId], includeTools: true });
     }
-  });
-
-  it("keeps approval checks conservative when tool metadata is absent", () => {
-    expect(
-      resolveOwnedAppApprovalOverrideKeys({ name: "linear", toolSummaries: null }),
-    ).toStrictEqual({});
-    expect(
-      resolveOwnedAppApprovalOverrideKeys({ name: "linear", toolSummaries: [] }),
-    ).toStrictEqual({ approvalOverrideToolConfigKeys: [] });
-  });
-
-  it("retains disabled writable tools in the approval boundary", () => {
-    expect(
-      resolveOwnedAppApprovalOverrideKeys({
-        name: "linear",
-        toolSummaries: [
-          {
-            name: "save_issue",
-            title: "Save issue",
-            description: "Create or update an issue.",
-            isEnabled: false,
-            disabledReason: "App policy",
-            isReadOnly: false,
-          },
-        ],
-      }),
-    ).toStrictEqual({
-      approvalOverrideToolConfigKeys: ["Save issue", "linear_save_issue", "save_issue"],
-    });
-  });
-
-  it("preserves writable approval checks for keys shared with read-only tools", () => {
-    const app = {
-      name: "linear",
-      toolSummaries: [
-        {
-          name: "fetch",
-          title: "Fetch",
-          description: "Fetch a Linear issue.",
-          isEnabled: true,
-          disabledReason: null,
-          isReadOnly: true,
-        },
-        {
-          name: "linear_fetch",
-          title: "Save issue",
-          description: "Create or update a Linear issue.",
-          isEnabled: true,
-          disabledReason: null,
-          isReadOnly: false,
-        },
-      ],
-    };
-
-    expect(resolveOwnedAppApprovalOverrideKeys(app)).toStrictEqual({
-      approvalOverrideToolConfigKeys: ["Save issue", "linear_fetch", "linear_linear_fetch"],
-    });
   });
 
   it.each([

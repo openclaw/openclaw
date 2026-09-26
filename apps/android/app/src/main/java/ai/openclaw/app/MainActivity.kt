@@ -37,15 +37,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * Main Android activity that owns Compose UI attachment and runtime UI wiring.
- */
 class MainActivity : AppCompatActivity() {
   private val viewModel: MainViewModel by viewModels()
   private val permissionRequester: PermissionRequester
     get() = (application as NodeApp).permissionRequester
   private var initializedViewModel: MainViewModel? = null
-  private var didStartViewModelCollectors = false
   private var foreground = false
   private val pendingIntentRouter = MainActivityPendingIntentRouter()
   private val runtimeUiStarter = MainActivityRuntimeUiStarter()
@@ -134,11 +130,9 @@ class MainActivity : AppCompatActivity() {
   override fun onNewIntent(intent: android.content.Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
-    val accepted =
-      pendingIntentRouter.onNewIntent(intent) { routedIntent ->
-        initializedViewModel?.let { handleLaunchIntent(viewModel = it, intent = routedIntent) }
-      }
-    if (!accepted) return
+    pendingIntentRouter.onNewIntent(intent) { routedIntent ->
+      initializedViewModel?.let { handleLaunchIntent(viewModel = it, intent = routedIntent) }
+    }
   }
 
   override fun onRequestPermissionsResult(
@@ -173,9 +167,6 @@ class MainActivity : AppCompatActivity() {
    * Starts lifecycle collectors after ViewModel construction so they cannot force early startup.
    */
   private fun startViewModelCollectors(readyViewModel: MainViewModel) {
-    if (didStartViewModelCollectors) return
-    didStartViewModelCollectors = true
-
     lifecycleScope.launch {
       repeatOnLifecycle(Lifecycle.State.STARTED) {
         readyViewModel.preventSleep.collect { enabled ->
@@ -223,9 +214,6 @@ class MainActivity : AppCompatActivity() {
     }
   }
 
-  /**
-   * Routes assistant/app-action intents into ViewModel state without recreating the activity.
-   */
   private fun handleLaunchIntent(
     viewModel: MainViewModel,
     intent: Intent?,
