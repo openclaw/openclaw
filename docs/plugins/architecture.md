@@ -294,6 +294,9 @@ system-temporary instance and reports a warning. Normal disposal still removes
 that instance; automatic cleanup does not scan unrelated system-temporary roots.
 There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
+If its payload directory is removed while the instance still holds custody, the
+next capture recreates that directory under the same lease. This does not restore
+previously deleted captured files or recreate a missing coordinator directory.
 
 Older `openclaw-plugin-build-*` directories in the system temporary directory
 have no coordinator proving whether their producer is still alive. Doctor reports
