@@ -534,7 +534,10 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
       api: model.api,
       contextTokenBudget: model.contextTokens ?? model.contextWindow,
       trace,
-      contentCapture: resolveDiagnosticModelContentCapturePolicy(approved.config),
+      contentCapture: resolveDiagnosticModelContentCapturePolicy(
+        approved.config,
+        target.sessionKey,
+      ),
       nextCallId: () => `${request.runId}:${request.turnId}:worker-model:${(modelCallSeq += 1)}`,
     });
     let usageRecorded = false;

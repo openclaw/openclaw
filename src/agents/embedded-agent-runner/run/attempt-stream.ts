@@ -441,7 +441,7 @@ export function installEmbeddedAttemptStreamGuards(
       ? { contextWindowReferenceTokens: attempt.contextWindowInfo.referenceTokens }
       : {}),
     trace: input.diagnostics.runTrace,
-    contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
+    contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config, attempt.sessionKey),
     nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
     onSucceeded: contextGuards.recordCacheTouch,

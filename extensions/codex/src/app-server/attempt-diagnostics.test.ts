@@ -1,6 +1,15 @@
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  resolveDiagnosticModelContentCapturePolicy,
+  waitForDiagnosticEventsDrained,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 // Codex tests cover attempt diagnostics plugin behavior.
-import { describe, expect, it } from "vitest";
-import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  buildCodexPluginThreadConfigEligibilityLogData,
+  createCodexModelCallDiagnosticEmitter,
+} from "./attempt-diagnostics.js";
 import { resolveCodexPluginsPolicy } from "./config.js";
 import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 
@@ -88,3 +97,45 @@ describe("Codex app-server attempt diagnostics", () => {
     expect(serialized).not.toContain("/tmp/codex-home");
   });
 });
+
+it.each(["agent:main:dashboard:incognito-codex", "agent:main:main"])(
+  "admits model capture by canonical session identity: %s",
+  async (sessionKey) => {
+    resetDiagnosticEventsForTest();
+    const events = vi.fn();
+    const stop = onInternalDiagnosticEvent(events);
+    const buildInputMessages = vi.fn(() => [{ role: "user", content: "PRIVATE_INPUT" }]);
+    const buildSystemPrompt = vi.fn(() => "PRIVATE_SYSTEM");
+    try {
+      const emitter = createCodexModelCallDiagnosticEmitter({
+        baseFields: {
+          sessionKey,
+          runId: "run-1",
+          callId: "call-1",
+          provider: "openai",
+          model: "gpt-5",
+        },
+        capture: resolveDiagnosticModelContentCapturePolicy(
+          { diagnostics: { otel: { enabled: true, captureContent: true } } },
+          sessionKey,
+        ),
+        tools: [],
+        buildInputMessages,
+        buildSystemPrompt,
+      });
+      emitter.emitStarted();
+      emitter.emitCompleted({ assistantTexts: ["PRIVATE_OUTPUT"] });
+      await waitForDiagnosticEventsDrained();
+      expect(events).toHaveBeenCalledTimes(2);
+      if (sessionKey.includes("incognito-")) {
+        expect(buildInputMessages).not.toHaveBeenCalled();
+      } else {
+        expect(buildInputMessages).toHaveBeenCalledTimes(2);
+      }
+      expect(buildSystemPrompt).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      resetDiagnosticEventsForTest();
+    }
+  },
+);

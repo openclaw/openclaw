@@ -310,7 +310,10 @@ export function wrapToolWithBeforeToolCallHook(
     ...options,
     emitDiagnostics: options.emitDiagnostics !== false,
   };
-  const toolContentPolicy = resolveDiagnosticModelContentCapturePolicy(ctx?.config);
+  const toolContentPolicy = resolveDiagnosticModelContentCapturePolicy(
+    ctx?.config,
+    ctx?.sessionKey,
+  );
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate, ...executionArgs: unknown[]) => {

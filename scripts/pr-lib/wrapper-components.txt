@@ -600,6 +600,8 @@ src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
+src/infra/diagnostic-content-admission.ts
+src/infra/diagnostic-content-types.ts
 src/infra/diagnostic-event-listener-presence.ts
 src/infra/diagnostic-event-snapshot.ts
 src/infra/diagnostic-events.ts

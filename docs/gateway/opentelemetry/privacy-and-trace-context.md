@@ -90,3 +90,9 @@ External harness tool calls (Codex, Claude CLI) emit
 `tool.execution.*` spans without content payloads. Captured content travels on a
 trusted, listener-only channel and is never placed on the public diagnostic event
 bus.
+
+Incognito sessions omit model messages, tool inputs and outputs, tool definitions,
+and private diagnostic failure text even when `captureContent` is enabled. This
+filter runs before optional content capture and diagnostic queue delivery.
+Lifecycle metrics, status, and skill accounting remain available. It does not
+control a native harness process's own telemetry or user-requested artifacts.

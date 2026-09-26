@@ -1,5 +1,5 @@
 // Covers diagnostic model-content capture policy.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveDiagnosticModelContentCapturePolicy } from "./diagnostic-llm-content.js";
 
 describe("resolveDiagnosticModelContentCapturePolicy", () => {
@@ -80,3 +80,30 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
     });
   });
 });
+
+it.each(["dashboard", "subagent", "internal-session-effects"])(
+  "disables all capture for Incognito %s before reading optional config",
+  (kind) => {
+    const diagnostics = vi.fn(() => ({ otel: { enabled: true, captureContent: true } }));
+    const config = {
+      get diagnostics() {
+        return diagnostics();
+      },
+    };
+    expect(
+      resolveDiagnosticModelContentCapturePolicy(config, `agent:main:${kind}:incognito-test`),
+    ).toEqual({
+      inputMessages: false,
+      outputMessages: false,
+      toolInputs: false,
+      toolOutputs: false,
+      systemPrompt: false,
+      toolDefinitions: false,
+      anyModelContent: false,
+    });
+    expect(diagnostics).not.toHaveBeenCalled();
+    expect(
+      resolveDiagnosticModelContentCapturePolicy(config, "agent:main:main").anyModelContent,
+    ).toBe(true);
+  },
+);
