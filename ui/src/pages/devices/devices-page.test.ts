@@ -770,13 +770,16 @@ describe("DevicesPage gateway lifecycle", () => {
     await staleLoad;
     expect(page.pageState.nodes).toEqual([]);
     expect(page.pageState.nodesLoading).toBe(true);
+    expect(page.pageState.nodesLoaded).toBe(false);
 
     second.resolve({ nodes: [{ id: "new" }] });
     await currentLoad;
     expect(page.pageState.nodes).toEqual([{ id: "new" }]);
     expect(page.pageState.nodesLoading).toBe(false);
+    expect(page.pageState.nodesLoaded).toBe(true);
 
     applyGatewaySnapshot(page, gatewaySnapshot(client, false));
+    expect(page.pageState.nodesLoaded).toBe(false);
   });
 
   it("retires an in-flight load when its gateway provider changes without a client change", async () => {
@@ -804,11 +807,13 @@ describe("DevicesPage gateway lifecycle", () => {
     await staleLoad;
     expect(page.pageState.nodes).toEqual([]);
     expect(page.pageState.nodesLoading).toBe(true);
+    expect(page.pageState.nodesLoaded).toBe(false);
 
     second.resolve({ nodes: [{ id: "new" }] });
     await currentLoad;
     expect(page.pageState.nodes).toEqual([{ id: "new" }]);
     expect(page.pageState.nodesLoading).toBe(false);
+    expect(page.pageState.nodesLoaded).toBe(true);
 
     applyGatewaySnapshot(page, gatewaySnapshot(client, false));
   });

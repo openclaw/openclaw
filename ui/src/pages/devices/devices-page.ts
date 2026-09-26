@@ -355,7 +355,7 @@ class DevicesPage extends OpenClawLightDomElement {
     if (!pageState.connected || !pageState.client || !this.routeDataInitialized) {
       return;
     }
-    if (!pageState.nodes.length && !pageState.nodesLoading) {
+    if (!pageState.nodesLoaded && !pageState.nodesLoading) {
       this.refreshNodeInventory();
     }
     if (this.canManagePairing && !pageState.devicesList && !pageState.devicesLoading) {

@@ -76,6 +76,7 @@ type QueuedRefresh = "none" | "quiet" | "visible";
 
 type NodesState = NodesRequestState & {
   nodesLoading: boolean;
+  nodesLoaded: boolean;
   nodesQueuedRefresh: QueuedRefresh;
   nodes: Array<Record<string, unknown>>;
   lastError: string | null;
@@ -110,6 +111,7 @@ export function createInitialDevicesState(
     connected: snapshot.connected ?? false,
     requestGeneration: 0,
     nodesLoading: false,
+    nodesLoaded: false,
     nodesQueuedRefresh: "none",
     nodes: [],
     lastError: null,
@@ -157,6 +159,7 @@ export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
     const res = await client.request<{ nodes?: NodeListNode[] }>("node.list", {});
     if (isCurrentNodesRequest(state, client, generation)) {
       state.nodes = Array.isArray(res.nodes) ? res.nodes : [];
+      state.nodesLoaded = true;
     }
   } catch (err) {
     if (!opts?.quiet && isCurrentNodesRequest(state, client, generation)) {
