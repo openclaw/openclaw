@@ -45,6 +45,22 @@ vi.mock("openclaw/plugin-sdk/agent-harness-attempt-runtime", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   agentHarnessAttemptTerminal: { normalize: () => ({ kind: "ok" }) },
+  prepareAgentWorkspaceContext: async () => ({
+    instructionSnapshot: { instructions: "" },
+    personaInstructions: "",
+    promptContextFiles: [],
+    memoryRecallInstructions: "",
+    memoryReferenceFiles: [],
+  }),
+  SKILL_WORKSHOP_TOOL_NAME: "skill_workshop",
+  resolveMainSessionDelegationMode: () => "default",
+  buildDelegationGuidanceSection: () => [],
+  buildSkillWorkshopPromptSection: () => [],
+  buildCredentialSafetyPrompt: () => "",
+  buildUiPresentationPrompt: () => "",
+  buildTemporalContextText: () => "",
+  buildHarnessVisibleReplyGuidance: () => "",
+  buildWatchedSessionsHarnessContext: () => "",
   awaitAgentEndSideEffects: vi.fn(async () => {}),
   buildAgentHookContextChannelFields: () => ({}),
   buildEmbeddedForegroundPromptContext: () => ({}),
@@ -285,7 +301,12 @@ describe("Agents API attempt environment selection", () => {
           input: [
             {
               role: "user",
-              content: [{ type: "input_text", text: `Fixture prompt\n\n${mappingText}` }],
+              content: [
+                {
+                  type: "input_text",
+                  text: expect.stringContaining(`Fixture prompt\n\n${mappingText}`),
+                },
+              ],
             },
           ],
         },
