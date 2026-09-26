@@ -40,13 +40,14 @@ import {
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 const warn = vi.hoisted(() => vi.fn());
+const info = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
   return {
     ...actual,
     createSubsystemLogger: (name: string) => {
       const logger = actual.createSubsystemLogger(name);
-      return name === "sessions/history-eviction" ? { ...logger, warn } : logger;
+      return name === "sessions/history-eviction" ? { ...logger, warn, info } : logger;
     },
   };
 });
@@ -119,6 +120,69 @@ it("admits a queued foreground write before draining all vacuum batches", async 
   } finally {
     writes.unsubscribe(observe);
     await foreground;
+  }
+});
+
+it("prunes archives when readers prevent WAL truncation but all frames are checkpointed", async () => {
+  state = await createOpenClawTestState({
+    prefix: "wal-budget-checkpointed-",
+    layout: "state-only",
+    scenario: "minimal",
+  });
+  const options = { agentId: "main", env: state.env };
+  const database = openOpenClawAgentDatabase(options);
+  ensureSessionTranscriptArchiveSchema(database.db);
+  database.db.exec("PRAGMA wal_autocheckpoint=0");
+  fs.mkdirSync(state.sessionsDir(), { recursive: true });
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+  const write = database.db.prepare(
+    "INSERT OR REPLACE INTO cache_entries(scope,key,blob,updated_at) VALUES ('wal-proof','traffic',?,?)",
+  );
+  // Settle schema and initial allocation before measuring steady-state traffic.
+  write.run(Buffer.from("committed-init"), -1);
+  expect(database.walMaintenance.checkpoint()).toBe(true);
+  warn.mockClear();
+  info.mockClear();
+  try {
+    for (let tick = 0; tick < 3; tick++) {
+      if (reader.isTransaction) {
+        reader.exec("ROLLBACK");
+      }
+      write.run(Buffer.from(`committed-${tick}`), tick);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get();
+      const file = path.join(
+        state.sessionsDir(),
+        `traffic-${tick}.jsonl.deleted.2020-01-01T00-00-00.000Z`,
+      );
+      fs.writeFileSync(file, Buffer.alloc(256 * 1024, tick));
+      const before = await measureSessionPhysicalDiskUsage(storePath);
+      const result = await enforceSqliteSessionHistoryDiskBudget({
+        ...options,
+        storePath,
+        mode: "enforce",
+        maintenance: {
+          maxDiskBytes: before.totalBytes - 128 * 1024,
+          highWaterBytes: before.totalBytes - 128 * 1024,
+        },
+      });
+      expect(result?.deferredReason).toBeUndefined();
+      expect(result?.removedFiles).toBe(1);
+      expect(result?.freedBytes).toBeGreaterThanOrEqual(256 * 1024);
+      expect(fs.existsSync(file)).toBe(false);
+      expect(
+        reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get()?.blob,
+      ).toEqual(new Uint8Array(Buffer.from(`committed-${tick}`)));
+    }
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledTimes(3);
+    expect(info).toHaveBeenLastCalledWith(
+      "session history disk budget cleanup completed",
+      expect.objectContaining({ removedFiles: 1, removedEntries: 0 }),
+    );
+  } finally {
+    reader.close();
   }
 });
 
@@ -254,7 +318,7 @@ it.each(["transaction", "iterator"] as const)(
       expect(diagnostics).toEqual([
         expect.objectContaining({
           completed: false,
-          checkpointCalls: 1,
+          checkpointCalls: 2,
           checkpointIncomplete: 1,
           walBytesBefore: before.databaseWalBytes,
           walBytesAfter: before.databaseWalBytes,

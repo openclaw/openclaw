@@ -406,7 +406,7 @@ it.each([false, true])(
       expect(performance.now() - startedAt).toBeLessThan(1_000);
       expect(reader.isTransaction).toBe(true);
       expect(freePages()).toBe(before);
-      expect(blocked).toMatchObject({ checkpointCalls: 1, checkpointIncomplete: 1 });
+      expect(blocked).toMatchObject({ checkpointCalls: 2, checkpointIncomplete: 1 });
       expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
       reader.exec("ROLLBACK");
       for (let remaining = freePages(); remaining > 0; remaining = freePages()) {
