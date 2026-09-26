@@ -638,8 +638,18 @@ function* projectSessionPatchSteps(
           workspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
         }).length === 0
       ) {
+        const harnessSetupHint =
+          harnessSelection.runtime === "codex"
+            ? [
+                "If `plugins.allow` is configured, add `codex` to that list.",
+                "If `plugins.deny` includes `codex`, remove only `codex` from that list.",
+                "Install `@openclaw/codex` with `openclaw plugins install @openclaw/codex` if needed.",
+                "Then enable it with `openclaw plugins enable codex`.",
+                "Restart the Gateway and try again.",
+              ].join(" ")
+            : `Install and enable a plugin that provides the "${harnessSelection.runtime}" harness, then restart the Gateway and try again.`;
         return invalid(
-          `Model ${selection.provider}/${selection.model} requires agent harness "${harnessSelection.runtime}", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.`,
+          `Model ${selection.provider}/${selection.model} requires the "${harnessSelection.runtime}" agent harness, but no enabled plugin provides it. ${harnessSetupHint} The model change was not applied.`,
         );
       }
       applyModelOverrideWithAuthProfileCompatibility({
