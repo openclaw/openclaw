@@ -7,12 +7,9 @@ import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/age
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig, type ResolvedCliBackend } from "../agents/cli-backends.js";
 import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
-<<<<<<< HEAD
 import type { EmbeddedAgentRunResult } from "../agents/embedded-agent.js";
-=======
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../agents/prepared-model-runtime.types.js";
->>>>>>> d1b5087405b (fix(system-agent): use the verified inference generation)
 import { SessionManager } from "../agents/sessions/index.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -407,29 +404,6 @@ async function runSystemAgentTurnWithDeps(
       delete params.session.cliSession;
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
-<<<<<<< HEAD
-      result = await runEmbedded({
-        ...shared,
-        lane: CommandLane.SystemAgentInference,
-        preparedRunAdmission,
-        memoryPromptAgentId: params.memoryPromptAgentId ?? plan.agentId,
-        extraSystemPrompt: systemPrompt,
-        toolsAllow: ["openclaw"],
-        // The helper cannot read workspace skills; skip their discovery and environment setup.
-        toolExecutionAllow: ["openclaw"],
-        systemAgentTool,
-        disableMessageTool: true,
-        provider: plan.provider,
-        model: plan.model,
-        agentDir: plan.agentDir,
-        agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride,
-        sandboxSessionKey: policySessionKey,
-        ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
-        ...(plan.authProfileId
-          ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
-          : {}),
-      });
-=======
       // The inference owner's generation preserves its projected policy without borrowing the caller's.
       result = (await runOutsidePreparedModelRuntimePluginGenerationScope(() =>
         runEmbedded({
@@ -455,7 +429,6 @@ async function runSystemAgentTurnWithDeps(
             : {}),
         }),
       )) as EmbeddedRunResult;
->>>>>>> d1b5087405b (fix(system-agent): use the verified inference generation)
     }
     // Failed runs can retain partial text; it must not publish a reply or a tool directive.
     const terminalError = extractAgentRunTerminalError(result);
