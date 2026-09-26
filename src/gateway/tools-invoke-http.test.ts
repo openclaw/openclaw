@@ -488,7 +488,9 @@ const setMainAllowedTools = (params: {
 describe("POST /tools/invoke", () => {
   it("invokes a warm managed MCP tool through Gateway policy and hooks", async () => {
     const name = "icecouncil__icecouncil_status";
-    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "contained" }] }));
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "contained" }],
+    }));
     const dispose = vi.fn(async () => {});
     const mcpTool = {
       name,

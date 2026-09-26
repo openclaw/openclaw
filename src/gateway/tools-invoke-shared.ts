@@ -4,13 +4,13 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import {
   buildBundleMcpToolsFromCatalog,
   materializeBundleMcpToolsForRun,
   peekSessionMcpRuntime,
   resolveSessionMcpConfigSummary,
 } from "../agents/agent-bundle-mcp-tools.js";
+import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
