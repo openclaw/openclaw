@@ -611,57 +611,62 @@ describe("codex conversation binding", () => {
       }
       const notifications = new Set<(notification: unknown) => void>();
       let nextThread = 0;
+      const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+        if (method === "thread/read" && failure !== "none" && failure !== "no rollout") {
+          throw new CodexAppServerRpcError(
+            {
+              code: -32_600,
+              message: `${failure}: ${String(params.threadId)}`,
+            },
+            method,
+          );
+        }
+        if (method === "thread/resume" && failure === "no rollout") {
+          throw new CodexAppServerRpcError(
+            {
+              code: -32_600,
+              message: `no rollout found for thread id ${String(params.threadId)}`,
+            },
+            method,
+          );
+        }
+        if (method === "thread/read" || method === "thread/resume") {
+          return conversationThreadStartResult(String(params.threadId));
+        }
+        if (method === "thread/start") {
+          return conversationThreadStartResult(`recovered-${++nextThread}`);
+        }
+        if (method === "thread/unsubscribe") {
+          return { status: "notLoaded" };
+        }
+        if (method === "turn/start") {
+          const turnId = `turn-${String(params.threadId)}`;
+          for (const notify of notifications) {
+            notify({
+              method: "turn/completed",
+              params: {
+                threadId: params.threadId,
+                turn: {
+                  id: turnId,
+                  status: "completed",
+                  items: [
+                    {
+                      type: "agentMessage",
+                      id: "answer",
+                      text: `reply:${String(params.threadId)}`,
+                    },
+                  ],
+                },
+              },
+            });
+          }
+          return { turn: { id: turnId } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
       const client = {
         getInstanceId: () => "after-restart",
-        request: vi.fn(async (method: string, params: Record<string, unknown>) => {
-          if (method === "thread/read" && failure !== "none" && failure !== "no rollout") {
-            throw new CodexAppServerRpcError(
-              {
-                code: -32_600,
-                message: `${failure}: ${params.threadId}`,
-              },
-              method,
-            );
-          }
-          if (method === "thread/resume" && failure === "no rollout") {
-            throw new CodexAppServerRpcError(
-              {
-                code: -32_600,
-                message: `no rollout found for thread id ${params.threadId}`,
-              },
-              method,
-            );
-          }
-          if (method === "thread/read" || method === "thread/resume") {
-            return conversationThreadStartResult(String(params.threadId));
-          }
-          if (method === "thread/start") {
-            return conversationThreadStartResult(`recovered-${++nextThread}`);
-          }
-          if (method === "thread/unsubscribe") {
-            return { status: "notLoaded" };
-          }
-          if (method === "turn/start") {
-            const turnId = `turn-${params.threadId}`;
-            for (const notify of notifications) {
-              notify({
-                method: "turn/completed",
-                params: {
-                  threadId: params.threadId,
-                  turn: {
-                    id: turnId,
-                    status: "completed",
-                    items: [
-                      { type: "agentMessage", id: "answer", text: `reply:${params.threadId}` },
-                    ],
-                  },
-                },
-              });
-            }
-            return { turn: { id: turnId } };
-          }
-          throw new Error(`unexpected method: ${method}`);
-        }),
+        request,
         addNotificationHandler: (handler: (notification: unknown) => void) => {
           notifications.add(handler);
           return () => notifications.delete(handler);
@@ -701,7 +706,19 @@ describe("codex conversation binding", () => {
           reply: { text: `reply:${binding?.threadId}` },
         });
       }
-      const calls = vi.mocked(client.request).mock.calls;
+      const calls = request.mock.calls;
+      if (stored && failure === "thread not loaded") {
+        for (const topic of [101, 202]) {
+          const readIndex = calls.findIndex(
+            ([method, params]) => method === "thread/read" && params.threadId === `old-${topic}`,
+          );
+          const replacementIndex = calls.findIndex(
+            ([method], index) => index > readIndex && method === "thread/start",
+          );
+          expect(readIndex).toBeGreaterThanOrEqual(0);
+          expect(replacementIndex).toBeGreaterThan(readIndex);
+        }
+      }
       expect(calls.filter(([method]) => method === "thread/start")).toHaveLength(
         failure === "none" ? 0 : 2,
       );
