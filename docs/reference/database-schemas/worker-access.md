@@ -364,6 +364,14 @@ Synchronous operator inspection uses the same selected-row reader. An unavailabl
 schema refuses the read rather than reporting missing backing sessions. Canonical
 admission, malformed-row handling, retention, and update behavior are unchanged.
 
+Cron task reconciliation reads durable outcomes and applies recovery or loss in
+the shared-state worker. The final recovery check and lost-task write share one
+transaction, including after a recovery hook yields. The host rechecks the
+selected task and live cron job at transaction and commit admission; committed
+rows use the existing task and linked-flow publication owners. Synchronous
+operator inspection and the deprecated external task SDK retain their existing
+contracts. This changes no schema, retention policy, or update step.
+
 Cron retention discovery uses a separate, single-worker maintenance lane within the
 same session database lifecycle owner. Foreground history and exact-entry reads
 keep their own queue while full-store validation runs. Both lanes retain the same

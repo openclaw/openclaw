@@ -412,8 +412,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
       // +5: approved meeting participation contract: four types and one callable (#152327).
       // +2: shared workspace context preparation and bounded instruction snapshots.
+      // +1: Gateway-verified legacy webhook endpoint attribution.
       // Six async capture counterparts and four types consumed by bundled plugins.
-      4589,
+      4590,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -576,8 +577,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
       // +1: approved runMeetingParticipationWithBrowser callable (#152327).
       // +2: shared workspace context preparation and bounded instruction snapshots.
+      // +1: Gateway-verified legacy webhook endpoint attribution.
       // Async capture initialization, HTTP/WS events, finalization, store, and reader.
-      2693,
+      2694,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

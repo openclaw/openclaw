@@ -248,13 +248,29 @@ describe("Git candidate activation", () => {
     "does not stop or build an already-current %s checkout",
     async (channel) => {
       await git(remote, "tag", "v2026.9.1");
-      const result = await update({ channel });
-      expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
+      const result = await update({ channel, sourceRuntimePrepared: true });
+      expect(result).toMatchObject({
+        status: "skipped",
+        reason: "already-current",
+        sourceRuntimePrepared: true,
+      });
       expect(stopped).toBe(false);
       expect(events).toEqual([]);
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
     },
   );
+
+  it("carries admitted runtime repair through an already-current result", async () => {
+    const result = await update({ sourceRuntimePrepared: false });
+    expect(result).toMatchObject({
+      status: "skipped",
+      reason: "already-current",
+      sourceRuntimePrepared: false,
+    });
+    expect(events).toEqual([]);
+    expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    await expectRuntime(root, beforeSha);
+  });
 
   it.each([
     { channel: "dev", recorded: true },
