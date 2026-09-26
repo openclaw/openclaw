@@ -120,10 +120,9 @@ describe("probeGateway auth integration", () => {
 
   it("keeps detail RPCs available for local probes with cached origin-scoped device auth", async () => {
     const token = requireGatewayToken();
-    const url = `ws://127.0.0.1:${gatewayHarness.port}`;
     await seedCachedOperatorToken(["operator.read"]);
     const result = await probeGateway({
-      url,
+      url: `ws://127.0.0.1:${gatewayHarness.port}`,
       auth: { token },
       timeoutMs: 10_000,
     });
