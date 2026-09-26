@@ -1,5 +1,3 @@
-// Wizard gateway methods manage interactive setup wizard sessions and route
-// start/next/status/cancel RPCs through the wizard runtime.
 import { randomUUID } from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -23,14 +21,13 @@ import {
 } from "../../wizard/session.js";
 import { canAccessWizardSession } from "../server-wizard-sessions.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayClient } from "./client-types.js";
 import {
   createAdmittedWizardSession,
   respondSetupAdmissionBusy,
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams, defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 export type SetupWizardRunner = (
   opts: OnboardOptions,
@@ -86,28 +83,30 @@ function sanitizeWizardResultForClient<T extends { step?: WizardStep }>(result: 
   return result.step ? { ...result, step: sanitizeWizardStepForClient(result.step) } : result;
 }
 
-/** Resolves a live wizard session or sends the public not-found error. */
-function findWizardSessionOrRespond(params: {
-  context: GatewayRequestContext;
-  respond: RespondFn;
-  sessionId: string;
-  client: GatewayClient | null;
-}): WizardSession | null {
-  const session = params.context.wizardSessions.get(params.sessionId);
-  if (!session || !canAccessWizardSession(session, params.client)) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found", {
-        details: { code: GatewayErrorDetailCodes.WIZARD_NOT_FOUND },
-      }),
-    );
-    return null;
-  }
-  return session;
+function wizardSessionHandler<T extends { sessionId: string }>(
+  method: string,
+  validate: Validator<T>,
+  run: (
+    options: Omit<GatewayRequestHandlerOptions, "params"> & { params: T },
+    session: WizardSession,
+  ) => Promise<void>,
+) {
+  return defineValidatedGatewayHandler(method, validate, (options) => {
+    const session = options.context.wizardSessions.get(options.params.sessionId);
+    if (!session || !canAccessWizardSession(session, options.client)) {
+      options.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found", {
+          details: { code: GatewayErrorDetailCodes.WIZARD_NOT_FOUND },
+        }),
+      );
+      return;
+    }
+    return run(options, session);
+  });
 }
 
-/** Gateway handlers for the interactive setup wizard session lifecycle. */
 export const wizardHandlers: GatewayRequestHandlers = {
   "wizard.start": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
@@ -162,86 +161,77 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
   },
-  "wizard.next": async ({ params, respond, context, client }) => {
-    if (!assertValidParams(params, validateWizardNextParams, "wizard.next", respond)) {
-      return;
-    }
-    const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId, client });
-    if (!session) {
-      return;
-    }
-    const answer = params.answer as { stepId?: string; value?: unknown } | undefined;
-    if (answer) {
-      if (session.getStatus() !== "running") {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not running"));
-        return;
-      }
-      try {
-        const validationError = await session.answer(answer.stepId ?? "", answer.value);
-        if (validationError) {
-          respond(
-            true,
-            {
-              ...sanitizeWizardResultForClient(await session.next()),
-              error: validationError,
-            },
-            undefined,
-          );
+  "wizard.next": wizardSessionHandler(
+    "wizard.next",
+    validateWizardNextParams,
+    async ({ params, respond, context }, session) => {
+      const { sessionId } = params;
+      const answer = params.answer;
+      if (answer) {
+        if (session.getStatus() !== "running") {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not running"));
           return;
         }
-      } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        try {
+          const validationError = await session.answer(answer.stepId ?? "", answer.value);
+          if (validationError) {
+            respond(
+              true,
+              {
+                ...sanitizeWizardResultForClient(await session.next()),
+                error: validationError,
+              },
+              undefined,
+            );
+            return;
+          }
+        } catch (err) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+          return;
+        }
+      }
+      const result = await session.next();
+      if (result.done) {
+        // Keep terminal response ordering identical to wizard.start.
+        await whenAdmittedWizardSessionSettled(session);
+        context.purgeWizardSession(sessionId);
+      }
+      respond(true, sanitizeWizardResultForClient(result), undefined);
+    },
+  ),
+  "wizard.cancel": wizardSessionHandler(
+    "wizard.cancel",
+    validateWizardCancelParams,
+    async ({ params, respond, context }, session) => {
+      const { sessionId } = params;
+      if (params.closeInput) {
+        session.close(new Error("The setup window was closed."));
+        await whenAdmittedWizardSessionSettled(session);
+        const status = readWizardStatus(session);
+        context.purgeWizardSession(sessionId);
+        respond(true, status, undefined);
         return;
       }
-    }
-    const result = await session.next();
-    if (result.done) {
-      // Keep terminal response ordering identical to wizard.start.
-      await whenAdmittedWizardSessionSettled(session);
-      context.purgeWizardSession(sessionId);
-    }
-    respond(true, sanitizeWizardResultForClient(result), undefined);
-  },
-  "wizard.cancel": async ({ params, respond, context, client }) => {
-    if (!assertValidParams(params, validateWizardCancelParams, "wizard.cancel", respond)) {
-      return;
-    }
-    const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId, client });
-    if (!session) {
-      return;
-    }
-    if (params.closeInput) {
-      session.close(new Error("The setup window was closed."));
-      await whenAdmittedWizardSessionSettled(session);
+      const cancelled = session.cancel();
       const status = readWizardStatus(session);
+      if (cancelled || status.status !== "running") {
+        const purge = () => context.purgeWizardSession(sessionId);
+        void whenAdmittedWizardSessionSettled(session).then(purge, purge);
+      }
+      respond(true, status, undefined);
+    },
+  ),
+  "wizard.status": wizardSessionHandler(
+    "wizard.status",
+    validateWizardStatusParams,
+    async ({ params, respond, context }, session) => {
+      const { sessionId } = params;
+      const status = readWizardStatus(session);
+      if (status.status !== "running") {
+        await whenAdmittedWizardSessionSettled(session);
+      }
       context.purgeWizardSession(sessionId);
       respond(true, status, undefined);
-      return;
-    }
-    const cancelled = session.cancel();
-    const status = readWizardStatus(session);
-    if (cancelled || status.status !== "running") {
-      const purge = () => context.purgeWizardSession(sessionId);
-      void whenAdmittedWizardSessionSettled(session).then(purge, purge);
-    }
-    respond(true, status, undefined);
-  },
-  "wizard.status": async ({ params, respond, context, client }) => {
-    if (!assertValidParams(params, validateWizardStatusParams, "wizard.status", respond)) {
-      return;
-    }
-    const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId, client });
-    if (!session) {
-      return;
-    }
-    const status = readWizardStatus(session);
-    if (status.status !== "running") {
-      await whenAdmittedWizardSessionSettled(session);
-    }
-    context.purgeWizardSession(sessionId);
-    respond(true, status, undefined);
-  },
+    },
+  ),
 };

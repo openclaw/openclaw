@@ -279,8 +279,8 @@ export function createPersonalGitHubPublicationCoordinator(
           return execution.updateHead(facts.headCommit);
         },
         complete: (_row, result) => execution.complete(result),
-        recordEffect: (effect, observed) => execution.recordEffect(effect, observed),
-        interrupt: () => execution.interrupt(),
+        recordEffect: execution.recordEffect,
+        interrupt: execution.interrupt,
       });
     } catch (error) {
       try {

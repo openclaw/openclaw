@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { stableStringify } from "@openclaw/normalization-core";
+import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import {
   loadedCronStoreFromRows,
@@ -76,6 +77,23 @@ type CronStandingGrantRecord = CronStandingGrantMintSpec & {
   lastUsedAtMs: number | null;
   useCount: number;
 };
+
+function projectCronStandingGrant(
+  row: Selectable<StandingGrantDatabase[typeof STANDING_GRANT_TABLE]>,
+): CronStandingGrantRecord {
+  return {
+    grantId: row.grant_id,
+    mintedByApprovalId: row.minted_by_approval_id,
+    agentId: row.agent_id,
+    cronJobId: row.cron_job_id,
+    jobConfigRevision: row.job_config_revision,
+    operationBinding: row.operation_binding,
+    createdAtMs: row.created_at_ms,
+    expiresAtMs: row.expires_at_ms,
+    lastUsedAtMs: row.last_used_at_ms,
+    useCount: row.use_count,
+  };
+}
 
 export type ConsumeCronStandingGrantResult =
   | { outcome: "consumed"; grant: CronStandingGrantRecord }
@@ -382,18 +400,7 @@ function lookupCronStandingGrant(
     if (!opts.recordUse) {
       return {
         outcome: "consumed",
-        grant: {
-          grantId: grant.grant_id,
-          mintedByApprovalId: grant.minted_by_approval_id,
-          agentId: grant.agent_id,
-          cronJobId: grant.cron_job_id,
-          jobConfigRevision: grant.job_config_revision,
-          operationBinding: grant.operation_binding,
-          createdAtMs: grant.created_at_ms,
-          expiresAtMs: grant.expires_at_ms,
-          lastUsedAtMs: grant.last_used_at_ms,
-          useCount: grant.use_count,
-        },
+        grant: projectCronStandingGrant(grant),
       };
     }
     const nextUseCount = grant.use_count + 1;
@@ -412,14 +419,7 @@ function lookupCronStandingGrant(
     return {
       outcome: "consumed",
       grant: {
-        grantId: grant.grant_id,
-        mintedByApprovalId: grant.minted_by_approval_id,
-        agentId: grant.agent_id,
-        cronJobId: grant.cron_job_id,
-        jobConfigRevision: grant.job_config_revision,
-        operationBinding: grant.operation_binding,
-        createdAtMs: grant.created_at_ms,
-        expiresAtMs: grant.expires_at_ms,
+        ...projectCronStandingGrant(grant),
         lastUsedAtMs: nowMs,
         useCount: nextUseCount,
       },
@@ -464,16 +464,7 @@ export function listCronStandingGrants(
         .limit(limit),
     ).rows;
     return rows.map((row) => ({
-      grantId: row.grant_id,
-      mintedByApprovalId: row.minted_by_approval_id,
-      agentId: row.agent_id,
-      cronJobId: row.cron_job_id,
-      jobConfigRevision: row.job_config_revision,
-      operationBinding: row.operation_binding,
-      createdAtMs: row.created_at_ms,
-      expiresAtMs: row.expires_at_ms,
-      lastUsedAtMs: row.last_used_at_ms,
-      useCount: row.use_count,
+      ...projectCronStandingGrant(row),
       cronJobName: row.cron_job_name ?? null,
       revokedAtMs: row.revoked_at_ms,
       revokedBy: row.revoked_by,
@@ -525,16 +516,7 @@ export function revokeCronStandingGrant(params: {
     return {
       outcome: "revoked",
       grant: {
-        grantId: grant.grant_id,
-        mintedByApprovalId: grant.minted_by_approval_id,
-        agentId: grant.agent_id,
-        cronJobId: grant.cron_job_id,
-        jobConfigRevision: grant.job_config_revision,
-        operationBinding: grant.operation_binding,
-        createdAtMs: grant.created_at_ms,
-        expiresAtMs: grant.expires_at_ms,
-        lastUsedAtMs: grant.last_used_at_ms,
-        useCount: grant.use_count,
+        ...projectCronStandingGrant(grant),
         cronJobName: null,
         revokedAtMs: nowMs,
         revokedBy: params.revokedBy,
