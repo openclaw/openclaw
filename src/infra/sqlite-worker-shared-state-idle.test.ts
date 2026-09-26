@@ -40,11 +40,13 @@ vi.mock("node:diagnostics_channel", async (importOriginal) => {
 vi.mock("./runtime-worker-url.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./runtime-worker-url.js")>();
   const { runtimeProcessEntrypoints } = await import("./runtime-process-entrypoints.js");
+  const { storageProcessTestEntrypoints } =
+    await import("./storage-process-runtime.test-support.js");
   return {
     ...actual,
     resolveRuntimeWorkerUrl: (params: Parameters<typeof actual.resolveRuntimeWorkerUrl>[0]) =>
       params.sourceWorkerName === runtimeProcessEntrypoints.sharedStateStore.sourceWorkerName
-        ? new URL("./sqlite-worker-shared-state-idle-fixture.test-support.ts", import.meta.url)
+        ? actual.resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.sharedStateIdleFixture)
         : actual.resolveRuntimeWorkerUrl(params),
   };
 });

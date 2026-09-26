@@ -1171,53 +1171,107 @@ describe("openclaw test instance", () => {
     await expectPathMissing(instance.state.root);
   });
 
-  it("orders a new start after an intervening stop instead of joining the earlier start", async () => {
+  it("orders a new start after an intervening stop instead of joining the earlier start", async ({
+    signal,
+  }) => {
     const control = await createGatewayControl();
     const { instance } = await createFakeGateway("held-ready,ready", 1_000, 1_500, control);
-    const firstStart = trackOperation(instance.startGateway());
-    await Promise.race([control.reached, firstStart]);
-    const stopped = trackOperation(instance.stopGateway());
-    const secondStart = trackOperation(instance.startGateway());
+    // This case owns start/stop ordering, independently of native bootstrap speed.
+    signal.throwIfAborted();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const restoreClock = () => clock.mockRestore();
+    signal.addEventListener("abort", restoreClock, { once: true });
+    let firstStart: Promise<void> | undefined;
+    let stopped: Promise<void> | undefined;
+    let secondStart: Promise<void> | undefined;
+    try {
+      firstStart = trackOperation(instance.startGateway());
+      await Promise.race([control.reached, firstStart]);
+      stopped = trackOperation(instance.stopGateway());
+      secondStart = trackOperation(instance.startGateway());
 
-    await control.release();
-    await Promise.allSettled([firstStart]);
-    await stopped;
-    await secondStart;
+      await control.release();
+      await Promise.allSettled([firstStart]);
+      await stopped;
+      await secondStart;
 
-    expect(control.launches).toHaveLength(2);
-    expect(control.launches[1]).not.toBe(control.launches[0]);
-    expect(isProcessAlive(control.launches[0]!)).toBe(false);
-    expect(instance.child?.pid).toBe(
-      (process.platform === "win32" ? control.parents : control.launches)[1],
-    );
-    const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`);
-    expect(await response.json()).toEqual({ ready: true });
+      expect(control.launches).toHaveLength(2);
+      expect(control.launches[1]).not.toBe(control.launches[0]);
+      expect(isProcessAlive(control.launches[0]!)).toBe(false);
+      expect(instance.child?.pid).toBe(
+        (process.platform === "win32" ? control.parents : control.launches)[1],
+      );
+      const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`);
+      expect(await response.json()).toEqual({ ready: true });
+    } finally {
+      restoreClock();
+      signal.removeEventListener("abort", restoreClock);
+      control.unblock();
+      await Promise.allSettled([firstStart, stopped, secondStart]);
+    }
   });
 
-  it("starts a ready replacement after a real readiness deadline expires", async () => {
+  it("starts a ready replacement after a real readiness deadline expires", async ({ signal }) => {
     const control = await createGatewayControl();
     const { instance } = await createFakeGateway("never-ready,ready", 1_000, 1_500, control);
     let firstOwnerPid: number | undefined;
     control.observers.onLaunch = () => {
       firstOwnerPid = instance.child?.pid;
     };
-    const error = await trackOperation(instance.startGateway()).catch(
-      (failure: unknown) => failure,
-    );
+    // Charge the unchanged real deadline only after the child proves it is running but unready.
+    signal.throwIfAborted();
+    const now = Date.now.bind(Date);
+    const fixtureTime = now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(fixtureTime);
+    const restoreClock = () => clock.mockRestore();
+    signal.addEventListener("abort", restoreClock, { once: true });
+    let readinessStartedAt: number | undefined;
+    const nativeFetch = globalThis.fetch;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+      const response = await nativeFetch(...args);
+      if (
+        args[0] === `http://127.0.0.1:${instance.port}/readyz` &&
+        readinessStartedAt === undefined
+      ) {
+        const json = response.json.bind(response);
+        vi.spyOn(response, "json").mockImplementation(async () => {
+          const result: unknown = await json();
+          expect(response.status).toBe(200);
+          expect(result).toEqual({ ready: false });
+          const startedAt = now();
+          readinessStartedAt = startedAt;
+          clock.mockImplementation(() => fixtureTime + now() - startedAt);
+          return result;
+        });
+      }
+      return response;
+    });
+    let error: unknown;
+    try {
+      error = await trackOperation(instance.startGateway()).catch((failure: unknown) => failure);
+    } finally {
+      restoreClock();
+      signal.removeEventListener("abort", restoreClock);
+      fetchSpy.mockRestore();
+    }
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("timeout waiting for gateway readiness");
+    expect(readinessStartedAt).toBeTypeOf("number");
     const firstPid = control.launches[0];
     expect(firstPid).toBeTypeOf("number");
     expect(firstOwnerPid).toBeTypeOf("number");
-    expect(readReadinessReceipt(error)).toMatchObject({
+    const receipt = readReadinessReceipt(error);
+    expect(receipt).toMatchObject({
       child: { pid: firstOwnerPid, exitCode: null, signalCode: null },
+      lastFailedResponse: { phase: "complete", status: 200, ready: false },
     });
+    expect(receipt.elapsedMs).toBeGreaterThanOrEqual(1_000);
     // Assert automatic failure cleanup before a replacement start can reap the owner.
     expect(instance.child).toBeUndefined();
     expect(isProcessAlive(firstPid as number)).toBe(false);
     await expect(fs.stat(instance.state.root)).resolves.toBeDefined();
 
-    await trackOperation(instance.startGateway());
+    await startGatewayForPortLifecycle(instance, signal);
     const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`);
     expect(await response.json()).toEqual({ ready: true });
     expect(control.launches).toHaveLength(2);

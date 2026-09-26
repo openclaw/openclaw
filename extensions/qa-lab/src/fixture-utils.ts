@@ -1,7 +1,7 @@
-// Qa Lab plugin module provides reusable fixture utilities.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type QaFixtureFetchJsonOptions = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
@@ -181,11 +181,8 @@ export function outputText(response: unknown): string {
         return [];
       }
       return item.content.flatMap((piece) => {
-        if (!piece || typeof piece !== "object") {
-          return [];
-        }
-        const record = piece as { text?: unknown };
-        return typeof record.text === "string" ? [record.text] : [];
+        const text = readStringField(asOptionalObjectRecord(piece), "text");
+        return text === undefined ? [] : [text];
       });
     })
     .join("\n");
@@ -199,13 +196,7 @@ function readContentText(content: unknown): string {
     return "";
   }
   return content
-    .map((item) => {
-      if (!item || typeof item !== "object") {
-        return "";
-      }
-      const record = item as { type?: unknown; text?: unknown };
-      return typeof record.text === "string" ? record.text : "";
-    })
+    .map((item) => readStringField(asOptionalObjectRecord(item), "text") ?? "")
     .join("\n");
 }
 
@@ -266,18 +257,11 @@ function createCounts(needles: Record<string, string>): Record<string, number> {
 }
 
 function recordRole(record: unknown): string | undefined {
-  if (!record || typeof record !== "object") {
-    return undefined;
-  }
-  const candidate = record as { message?: unknown; role?: unknown };
-  if (typeof candidate.role === "string") {
-    return candidate.role;
-  }
-  if (!candidate.message || typeof candidate.message !== "object") {
-    return undefined;
-  }
-  const message = candidate.message as { role?: unknown };
-  return typeof message.role === "string" ? message.role : undefined;
+  const candidate = asOptionalObjectRecord(record);
+  return (
+    readStringField(candidate, "role") ??
+    readStringField(asOptionalObjectRecord(candidate?.message), "role")
+  );
 }
 
 function collectStringLeaves(value: unknown, output: string[]) {
@@ -330,7 +314,7 @@ async function visitSessionLogEvents(
 ): Promise<void> {
   const files = await fs.readdir(sessionsDir, { recursive: true }).catch(() => []);
   for (const file of files) {
-    if (typeof file !== "string" || !file.endsWith(".jsonl")) {
+    if (!file.endsWith(".jsonl")) {
       continue;
     }
     const text = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");

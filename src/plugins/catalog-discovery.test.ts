@@ -1,7 +1,11 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { PluginDiscoveryEntrySchema } from "../../packages/gateway-protocol/src/schema/plugins.js";
-import { joinClawHubPluginCatalog, resolvePluginDiscoveryIdentity } from "./catalog-discovery.js";
+import {
+  joinClawHubPluginCatalog,
+  joinLocalPluginDetail,
+  resolvePluginDiscoveryIdentity,
+} from "./catalog-discovery.js";
 
 const remote = {
   packageName: "@alice/memory-plus",
@@ -160,7 +164,8 @@ describe("plugin discovery identity and local join", () => {
       catalog: {
         packageName: bundledOnly.packageName,
         categories: ["tools", "web"],
-        official: false,
+        official: true,
+        author: "openclaw",
         publishedToClawHub: false,
       },
       local: {
@@ -174,6 +179,73 @@ describe("plugin discovery identity and local join", () => {
       identity: "calendar-local",
     });
   });
+
+  it.each([
+    ["bundled", "@openclaw/calendar-local"],
+    ["official", "@acme/calendar-local"],
+    ["global", "@openclaw/calendar-local"],
+    ["workspace", "@openclaw/calendar-local"],
+  ])(
+    "derives %s attribution from Gateway provenance, never package name %s",
+    (origin, packageName) => {
+      const plugin = {
+        id: "calendar-local",
+        name: "Calendar Local",
+        packageName,
+        origin,
+        installed: true,
+        enabled: true,
+        state: "enabled" as const,
+      };
+      const local = { plugins: [plugin], diagnostics: [], mutationAllowed: true };
+      const [item] = joinClawHubPluginCatalog({ remote: [], local, intent: "all" });
+      const official = origin === "bundled";
+      expect(item?.catalog.official).toBe(official);
+      expect(item?.catalog.author).toBe(official ? "openclaw" : undefined);
+      expect(item?.catalog.publishedToClawHub).not.toBe(true);
+      expect(joinLocalPluginDetail({ plugin, local }).detail.author).toEqual(
+        official ? { handle: "openclaw", displayName: "OpenClaw", official: true } : undefined,
+      );
+    },
+  );
+
+  it.each([
+    ["all", undefined, true],
+    ["official", undefined, true],
+    ["bundled", undefined, true],
+    ["featured", undefined, false],
+    ["trending", undefined, false],
+    ["updated", undefined, false],
+    ["official", "page-two", false],
+  ] as const)(
+    "keeps local additions scoped to %s intent and cursor %s",
+    (intent, cursor, visible) => {
+      const items = joinClawHubPluginCatalog({
+        remote: [],
+        local: {
+          plugins: [
+            {
+              id: "calendar-local",
+              name: "Calendar Local",
+              origin: "bundled",
+              installed: true,
+              enabled: true,
+              state: "enabled",
+            },
+          ],
+          diagnostics: [],
+          mutationAllowed: true,
+        },
+        intent,
+        includeBundledOnly: intent === "bundled" || intent === "official",
+        cursor,
+      });
+      expect(items).toHaveLength(visible ? 1 : 0);
+      if (visible) {
+        expect(items[0]?.catalog).toMatchObject({ official: true, author: "openclaw" });
+      }
+    },
+  );
 
   it("uses the local catalog counterpart to exclude published bundled plugins", () => {
     const expedia = {

@@ -10,6 +10,7 @@ import {
   type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
 import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import type { SqliteIndexListRow } from "./sqlite-schema-contract-assembly.js";
 import {
   collectSqliteNamedIndexContract,
   getCanonicalSqliteNamedIndexContracts,
@@ -20,12 +21,6 @@ import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 const SQLITE_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
-
-type SqliteIndexListRow = {
-  name: string;
-  origin: string;
-  unique: number;
-};
 
 type RepairCanonicalSqliteIndexesOptions = {
   /**
@@ -111,7 +106,7 @@ export function repairCanonicalSqliteIndexes(
       tableIndexes.push(index);
       indexesByTable.set(index.tableName, tableIndexes);
       const actual = collectSqliteNamedIndexContract(db, index.name);
-      if (!isEqual(actual, index.fingerprint)) {
+      if (JSON.stringify(actual) !== JSON.stringify(index.fingerprint)) {
         repairIndexes.add(index);
       }
     }
@@ -135,7 +130,7 @@ export function repairCanonicalSqliteIndexes(
       // Build the canonical constraint first. If existing rows conflict, the
       // wrong same-name index remains in place and the whole repair rolls back.
       try {
-        db.exec(createIndexSql(index, probeName, true));
+        db.exec(createIndexSql(index, probeName));
       } catch (error) {
         if (options.allowMissingColumns && isMissingColumnError(error)) {
           repairIndexes.delete(index);
@@ -144,7 +139,7 @@ export function repairCanonicalSqliteIndexes(
         throw error;
       }
       db.exec(`DROP INDEX IF EXISTS main.${index.name};`);
-      db.exec(createIndexSql(index, index.name, true));
+      db.exec(createIndexSql(index, index.name));
       db.exec(`DROP INDEX main.${probeName};`);
     }
     if (repairIndexes.size === 0) {
@@ -280,14 +275,10 @@ function assertNoUnexpectedUniqueIndexes(
   }
 }
 
-function createIndexSql(
-  index: CanonicalSqliteNamedIndexContract,
-  name: string,
-  qualifyMain: boolean,
-): string {
+function createIndexSql(index: CanonicalSqliteNamedIndexContract, name: string): string {
   assertSqliteIdentifier(name);
   const create = index.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX";
-  return `${create} ${qualifyMain ? `main.${name}` : name} ${index.definition};`;
+  return `${create} main.${name} ${index.definition};`;
 }
 
 function findUnusedProbeIndexName(db: DatabaseSync, canonicalName: string): string {
@@ -316,8 +307,4 @@ function isMissingColumnError(error: unknown): boolean {
     (error as NodeJS.ErrnoException).code === "ERR_SQLITE_ERROR" &&
     /^no such column:/iu.test(error.message)
   );
-}
-
-function isEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
 }

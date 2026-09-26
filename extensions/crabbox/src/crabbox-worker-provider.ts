@@ -75,8 +75,6 @@ import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.
 import type { CrabboxState } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
-export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
-
 // Local pack creation, two seed commands, upload, and runtime installation precede capture.
 const CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS =
   4 * CRABBOX_SETUP_TIMEOUT_MS + CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS;

@@ -310,7 +310,7 @@ export async function readSessionEntryInWorker(
               if (!grant()) {
                 throw new Error("Session read authority expired");
               }
-            }),
+            }, binding.attachment),
           });
         },
       } satisfies AgentDatabaseRequestExecutionSource;

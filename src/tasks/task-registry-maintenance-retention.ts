@@ -40,7 +40,7 @@ export async function applyTaskRegistryMaintenanceRetention(
   let committed: TaskRetentionResult | undefined;
   let nativeOwner: SqliteWorkerNativeSettlementOwner | undefined;
   let outcomeKnown = true;
-  let flowEffectsHandled = false;
+  let flowEffectsSettled = false;
   try {
     await ensureTaskRegistryReadyAsync(context);
     assertCurrent();
@@ -69,15 +69,22 @@ export async function applyTaskRegistryMaintenanceRetention(
         taskRowsWritten: () => committed !== undefined && committed.kind !== "unchanged",
         beforeObservers: async (assertPublicationCurrent) => {
           if (committed?.kind === "stamped") {
-            await finishTaskMutation(context, store, flowStore, selected.taskId, {
-              operation: "update",
-              assertCurrent: () => {
-                assertPublicationCurrent();
-                assertStores();
+            flowEffectsSettled = await finishTaskMutation(
+              context,
+              store,
+              flowStore,
+              selected.taskId,
+              {
+                operation: "update",
+                assertCurrent: () => {
+                  assertPublicationCurrent();
+                  assertStores();
+                },
               },
-            });
+            );
+          } else {
+            flowEffectsSettled = true;
           }
-          flowEffectsHandled = true;
         },
       },
       async (beginRecovery) => {
@@ -130,7 +137,7 @@ export async function applyTaskRegistryMaintenanceRetention(
     taskRegistryLog.warn("Failed to apply task retention", { taskId: selected.taskId, error });
     return undefined;
   } finally {
-    if (!flowEffectsHandled && committed?.kind === "stamped") {
+    if (!flowEffectsSettled && committed?.kind === "stamped") {
       retainTaskMutationFlowEffects(context, store, flowStore, committed.task, "update");
     }
   }

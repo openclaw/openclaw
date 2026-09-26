@@ -495,10 +495,17 @@ it("preserves acknowledged cleanup and repairs its flow after a snapshot failure
   expect(f.commands.filter((command) => command === "tasks.settleUnstarted")).toHaveLength(1);
 });
 
-it.each(["current", "retired task store", "retired flow store"] as const)(
-  "retains a cleanup stamp's flow after a postcommit failure with %s",
-  async (owner) => {
-    const f = await fixture();
+it.each([
+  ["flow sync", "current"],
+  ["flow sync", "retired task store"],
+  ["flow sync", "retired flow store"],
+  ["managed cancellation", "current"],
+  ["managed cancellation", "retired task store"],
+  ["managed cancellation", "retired flow store"],
+] as const)(
+  "retains a cleanup stamp's flow after a postcommit %s failure with %s",
+  async (failure, owner) => {
+    const f = await fixture(failure === "managed cancellation" ? "managed" : "task_mirrored");
     const created = await f.create();
     if (!created) {
       throw new Error("Expected a created task");
@@ -512,15 +519,30 @@ it.each(["current", "retired task store", "retired flow store"] as const)(
     delete terminal.cleanupAfter;
     f.store.upsertTaskWithDeliveryState({ task: terminal });
     publishTaskRecordAfterAtomicStore(terminal);
-    const sync = vi
-      .spyOn(f.store, "syncLiveTaskFlowAsync")
-      .mockRejectedValueOnce(new Error("Synthetic postcommit flow failure"));
+    const sync = vi.spyOn(f.store, "syncLiveTaskFlowAsync");
+    if (failure === "flow sync") {
+      sync.mockRejectedValueOnce(new Error("Synthetic postcommit flow failure"));
+    } else {
+      f.flows.upsertFlow({
+        ...flow,
+        syncMode: "managed",
+        controllerId: "proof",
+        status: "running",
+        cancelRequestedAt: Date.now(),
+      });
+      f.beforeFinalize.mockImplementationOnce(() => {
+        throw new Error("Synthetic managed cancellation write failure");
+      });
+    }
 
     expect(await runTaskRegistryMaintenance()).toMatchObject({ cleanupStamped: 1, pruned: 0 });
     const committed = f.store.loadSnapshot();
     expect(committed.tasks.get(terminal.taskId)?.cleanupAfter).toBeTypeOf("number");
     expect(f.flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe("running");
     expect(sync).toHaveBeenCalledOnce();
+    if (failure === "managed cancellation") {
+      expect(f.beforeFinalize).toHaveBeenCalledOnce();
+    }
     // A later sweep skips the durable stamp, so only the retained flow owner can finish it.
     expect(await runTaskRegistryMaintenance()).toMatchObject({ cleanupStamped: 0, pruned: 0 });
     expect(sync).toHaveBeenCalledOnce();
@@ -538,8 +560,15 @@ it.each(["current", "retired task store", "retired flow store"] as const)(
     await drainRetry(1);
     expect(sync).toHaveBeenCalledTimes(owner === "current" ? 2 : 1);
     expect(f.flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe(
-      owner === "current" ? "succeeded" : "running",
+      owner === "current"
+        ? failure === "managed cancellation"
+          ? "cancelled"
+          : "succeeded"
+        : "running",
     );
+    if (failure === "managed cancellation") {
+      expect(f.beforeFinalize).toHaveBeenCalledTimes(owner === "current" ? 2 : 1);
+    }
     expect(f.store.loadSnapshot()).toEqual(committed);
     expect(f.commands.filter((command) => command === "tasks.applyRetention")).toHaveLength(1);
     expect(replacementTasks.loadSnapshot().tasks.size).toBe(0);

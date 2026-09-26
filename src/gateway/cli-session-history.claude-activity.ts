@@ -1,6 +1,7 @@
 import { parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";
 import {
+  decodeClaudeCliProjectEntry,
   parseClaudeCliHistoryEntry,
   resolveClaudeCliPromptTextCandidates,
   resolveClaudeCliTimestampMs,
@@ -63,7 +64,7 @@ export function classifyClaudeCliHistoryLine(params: {
 }): ClaudeCliHistoryLineClassification {
   let entry: ClaudeCliProjectEntry;
   try {
-    entry = JSON.parse(params.line) as ClaudeCliProjectEntry;
+    entry = decodeClaudeCliProjectEntry(params.line);
   } catch {
     return { humanTurn: false };
   }

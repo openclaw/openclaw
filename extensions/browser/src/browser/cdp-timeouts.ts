@@ -45,10 +45,6 @@ export function usesFastLoopbackCdpProbeClass(params: {
   return params.profileIsLoopback && params.attachOnly !== true;
 }
 
-function normalizeTimeoutMs(value: number | undefined): number | undefined {
-  return clampTimerTimeoutMs(value);
-}
-
 function maxTimerTimeoutMs(...values: number[]): number {
   return values.reduce((max, value) => Math.max(max, resolveTimerTimeoutMs(value, 1)), 1);
 }
@@ -61,7 +57,7 @@ export function resolveCdpReachabilityTimeouts(params: {
   remoteHttpTimeoutMs: number;
   remoteHandshakeTimeoutMs: number;
 }): { httpTimeoutMs: number; wsTimeoutMs: number } {
-  const normalized = normalizeTimeoutMs(params.timeoutMs);
+  const normalized = clampTimerTimeoutMs(params.timeoutMs);
   const remoteHttpTimeoutMs = resolveTimerTimeoutMs(
     params.remoteHttpTimeoutMs,
     CDP_HTTP_REQUEST_TIMEOUT_MS,

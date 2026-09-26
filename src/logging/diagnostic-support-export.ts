@@ -1,4 +1,3 @@
-// Diagnostic support export helpers write support bundles to disk.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -83,11 +82,9 @@ type DiagnosticSupportExportManifest = {
   };
 };
 
-type DiagnosticSupportExportFile = DiagnosticSupportBundleFile;
-
 type DiagnosticSupportExportArtifact = {
   manifest: DiagnosticSupportExportManifest;
-  files: DiagnosticSupportExportFile[];
+  files: DiagnosticSupportBundleFile[];
 };
 
 export type WriteDiagnosticSupportExportResult = {
@@ -182,7 +179,7 @@ type SupportSnapshotStatus =
 
 type CollectedSupportSnapshot = {
   summary: SupportSnapshotStatus;
-  file?: DiagnosticSupportExportFile;
+  file?: DiagnosticSupportBundleFile;
 };
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {
@@ -734,7 +731,7 @@ async function buildDiagnosticSupportExport(
     status: statusSnapshot.summary,
     health: healthSnapshot.summary,
   };
-  const files: DiagnosticSupportExportFile[] = [
+  const files: DiagnosticSupportBundleFile[] = [
     jsonSupportBundleFile("diagnostics.json", diagnostics),
     jsonSupportBundleFile("config/shape.json", config.shape),
     jsonSupportBundleFile("config/sanitized.json", config.sanitized ?? null),

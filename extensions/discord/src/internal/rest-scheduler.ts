@@ -213,16 +213,8 @@ export class RestScheduler<TData> {
         requestPriorities.map((lane) => [lane, this.getOldestQueuedAge(lane)]),
       ),
       activeWorkers: this.activeWorkers,
-      maxConcurrentWorkers: this.maxConcurrentWorkers,
+      maxConcurrentWorkers: this.options.maxConcurrency,
     };
-  }
-
-  private get maxConcurrentWorkers(): number {
-    return this.options.maxConcurrency;
-  }
-
-  private get maxRateLimitRetries(): number {
-    return this.options.maxRateLimitRetries;
   }
 
   private getBucket(key: string): BucketState<TData> {
@@ -397,7 +389,7 @@ export class RestScheduler<TData> {
 
   private drainQueues(): void {
     let nextDelayMs = Number.POSITIVE_INFINITY;
-    while (this.activeWorkers < this.maxConcurrentWorkers) {
+    while (this.activeWorkers < this.options.maxConcurrency) {
       const next = this.takeNextQueuedRequest();
       if (!next.queued) {
         if (next.waitMs !== undefined) {
@@ -534,7 +526,7 @@ export class RestScheduler<TData> {
   private requeueRateLimitedRequest(queued: ScheduledRequest<TData>): boolean {
     if (
       queued.generation !== this.queueGeneration ||
-      queued.retryCount >= this.maxRateLimitRetries
+      queued.retryCount >= this.options.maxRateLimitRetries
     ) {
       return false;
     }

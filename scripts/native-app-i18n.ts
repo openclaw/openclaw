@@ -1824,7 +1824,7 @@ async function main() {
       await apple.verifyAppleAppI18n();
     } else {
       await android.checkAndroidAppI18n({ reportObsolete });
-      await apple.checkAppleAppI18n();
+      await apple.checkAppleAppI18n({ reportObsolete });
     }
   }
   if (parsed.command === "sync" && parsed.write && !parsed.locale) {

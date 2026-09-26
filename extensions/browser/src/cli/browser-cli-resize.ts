@@ -2,10 +2,10 @@
  * Shared Browser CLI resize runner used by resize and set viewport commands.
  */
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "../browser/act-policy.js";
 import { runBrowserCliRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
-import { danger, defaultRuntime } from "./core-api.js";
 
 /** Parses a bounded viewport dimension for both Browser resize commands. */
 export function parseBrowserViewportDimension(value: unknown, label: string): number | undefined {

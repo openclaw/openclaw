@@ -8,10 +8,8 @@ import { isSessionArchiveArtifactName } from "../config/sessions/artifacts.js";
 import { listSqliteTargetCandidatePathsInDirectory } from "../config/sessions/session-sqlite-target-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createAgentDatabaseDeletionClassifier } from "../state/agent-deletion-discovery.js";
-import {
-  readAgentDatabaseDeletionSnapshot,
-  type AgentDeletionJournalDisposition,
-} from "../state/agent-deletion-journal.read.js";
+import { readAgentDatabaseDeletionSnapshot } from "../state/agent-deletion-journal.read.js";
+import type { AgentDeletionJournalDisposition } from "../state/agent-deletion-journal.types.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   createOpenClawAgentDatabasePathMatcher,

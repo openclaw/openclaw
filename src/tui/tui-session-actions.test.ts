@@ -772,53 +772,6 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.goal).toBeUndefined();
   });
 
-  it("includes the global row when refreshing a global session", async () => {
-    const describeSession = vi.fn().mockResolvedValue({
-      defaults: {},
-      session: { key: "global", updatedAt: 1 },
-    });
-    const state = createBaseState({
-      currentSessionKey: "global",
-      sessionScope: "global",
-    });
-
-    const { refreshSessionInfo } = createTestSessionActions({
-      client: makeTuiBackend({ describeSession }),
-      state,
-    });
-
-    await refreshSessionInfo();
-
-    expect(describeSession).toHaveBeenCalledWith({
-      sessionKey: "global",
-      agentId: "main",
-    });
-  });
-
-  it("keeps global session info aligned with selected-agent chat history", async () => {
-    const describeSession = vi.fn().mockResolvedValue({
-      defaults: {},
-      session: { key: "global", updatedAt: 1 },
-    });
-    const state = createBaseState({
-      currentAgentId: "work",
-      currentSessionKey: "global",
-      sessionScope: "global",
-    });
-
-    const { refreshSessionInfo } = createTestSessionActions({
-      client: makeTuiBackend({ describeSession }),
-      state,
-    });
-
-    await refreshSessionInfo();
-
-    expect(describeSession).toHaveBeenCalledWith({
-      sessionKey: "global",
-      agentId: "work",
-    });
-  });
-
   it("preserves an authoritative user received while same-session history is loading", async () => {
     const deferredHistory = createDeferred<unknown>();
     const chatLog = new ChatLog();

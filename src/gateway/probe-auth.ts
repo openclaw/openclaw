@@ -14,6 +14,7 @@ import {
   type ExplicitGatewayAuth,
   type GatewayCredentialPrecedence,
   isGatewaySecretRefUnavailableError,
+  resolveExplicitGatewayAuth,
   resolveGatewayProbeCredentialsFromConfig,
 } from "./credentials.js";
 import { getTrustedProxyPasswordRedactionWarning } from "./known-weak-gateway-secrets.js";
@@ -86,15 +87,6 @@ export function resolveGatewayProbeCredentialConfig(params: {
   };
 }
 
-function resolveExplicitProbeAuth(explicitAuth?: ExplicitGatewayAuth): {
-  token?: string;
-  password?: string;
-} {
-  const token = normalizeOptionalString(explicitAuth?.token);
-  const password = normalizeOptionalString(explicitAuth?.password);
-  return { token, password };
-}
-
 function hasExplicitProbeAuth(auth: { token?: string; password?: string }): boolean {
   return Boolean(auth.token || auth.password);
 }
@@ -130,7 +122,7 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(
   warningCode?: "SECRET_REF_REDACTED_VALUE";
 }> {
   const policy = buildGatewayProbeCredentialPolicy(params);
-  const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
+  const explicitAuth = resolveExplicitGatewayAuth(params.explicitAuth);
   if (
     (params.mode === "remote" || policy.activeLocalRef) &&
     !hasExplicitProbeAuth(explicitAuth) &&
@@ -187,7 +179,7 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(
   warning?: string;
   warningCode?: "SECRET_REF_REDACTED_VALUE";
 }> {
-  const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
+  const explicitAuth = resolveExplicitGatewayAuth(params.explicitAuth);
   if (hasExplicitProbeAuth(explicitAuth)) {
     return {
       auth: explicitAuth,
@@ -238,7 +230,7 @@ export function resolveGatewayProbeAuthSafe(params: {
   auth: { token?: string; password?: string };
   warning?: string;
 } {
-  const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
+  const explicitAuth = resolveExplicitGatewayAuth(params.explicitAuth);
   if (hasExplicitProbeAuth(explicitAuth)) {
     return {
       auth: explicitAuth,

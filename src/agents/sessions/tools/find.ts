@@ -11,6 +11,7 @@ import { spawnCommand } from "../../../process/exec.js";
  */
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { textResult } from "../../tools/tool-results.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { appendBoundedTextTail, formatStderrTail, normalizePositiveLimit } from "./limits.js";
@@ -57,12 +58,6 @@ export interface FindOperations {
     options: { ignore: string[]; limit: number },
   ) => Promise<string[]> | string[];
 }
-
-const defaultFindOperations: FindOperations = {
-  exists: existsSync,
-  // This is a placeholder. Actual fd execution happens in execute() when no custom glob is provided.
-  glob: () => [],
-};
 
 export interface FindToolOptions {
   /** Custom operations for find. Default: local filesystem plus fd */
@@ -114,10 +109,7 @@ function buildFindResult(params: {
   searchPath: string;
   effectiveLimit: number;
   limitNotice: string;
-}): {
-  content: Array<{ type: "text"; text: string }>;
-  details: FindToolDetails;
-} {
+}) {
   const resultLimitReached = params.paths.length > params.effectiveLimit;
   const rawOutput = params.paths
     .slice(0, params.effectiveLimit)
@@ -147,10 +139,7 @@ function buildFindResult(params: {
   if (notices.length > 0) {
     details.content += `\n\n[${notices.join(". ")}]`;
   }
-  return {
-    content: [{ type: "text", text: details.content }],
-    details,
-  };
+  return textResult(details.content, details);
 }
 
 export function createFindToolDefinition(
@@ -208,11 +197,9 @@ export function createFindToolDefinition(
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             // One extra candidate distinguishes an exact-size result from a truncated one.
             const observationLimit = effectiveLimit + 1;
-            const ops = customOps ?? defaultFindOperations;
-
             // If custom operations provide glob(), use that instead of fd.
             if (customOps?.glob) {
-              if (!(await ops.exists(searchPath))) {
+              if (!(await customOps.exists(searchPath))) {
                 settle(() => reject(new Error(`Path not found: ${searchPath}`)));
                 return;
               }
@@ -220,7 +207,7 @@ export function createFindToolDefinition(
                 settle(() => reject(new Error("Operation aborted")));
                 return;
               }
-              const results = await ops.glob(pattern, searchPath, {
+              const results = await customOps.glob(pattern, searchPath, {
                 ignore: ["**/node_modules/**", "**/.git/**"],
                 limit: observationLimit,
               });
@@ -230,10 +217,11 @@ export function createFindToolDefinition(
               }
               if (results.length === 0) {
                 settle(() =>
-                  resolve({
-                    content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: { content: "No files found matching pattern" },
-                  }),
+                  resolve(
+                    textResult("No files found matching pattern", {
+                      content: "No files found matching pattern",
+                    }),
+                  ),
                 );
                 return;
               }
@@ -360,10 +348,11 @@ export function createFindToolDefinition(
               }
               if (!output) {
                 settle(() =>
-                  resolve({
-                    content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: { content: "No files found matching pattern" },
-                  }),
+                  resolve(
+                    textResult("No files found matching pattern", {
+                      content: "No files found matching pattern",
+                    }),
+                  ),
                 );
                 return;
               }

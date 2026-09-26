@@ -72,12 +72,6 @@ export type QaSuiteSummaryJsonParams = {
   runtimePair?: [RuntimeId, RuntimeId];
 };
 
-/**
- * Strongly-typed shape of `qa-suite-summary.json`. The GPT-5.6 Luna parity gate
- * (agentic-parity-report.ts, #64441) and any future parity wrapper can
- * import this type instead of re-declaring the shape, so changes to the
- * summary schema propagate through to every consumer at type-check time.
- */
 export type QaSuiteGatewayRssSample = NonNullable<
   NonNullable<QaSuiteSummaryJson["metrics"]>["gatewayProcessRssSamples"]
 >[number];
@@ -87,13 +81,6 @@ export type QaSuiteGatewayHeapSnapshot = NonNullable<
 >[number];
 
 /**
- * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.6 Luna
- * parity gate (agentic-parity-report.ts, #64441) and any future parity
- * runner can assert-and-trust the provider/model that produced a given
- * summary instead of blindly accepting the caller's candidateLabel /
- * baselineLabel. Without the `run` block, a maintainer who swaps candidate
- * and baseline summary paths could silently produce a mislabeled verdict.
- *
  * `scenarioIds` is only recorded when the caller passed a non-empty array
  * (an explicit scenario selection). A missing or empty array means "no
  * filter, full lane-selected catalog", which the summary encodes as `null`

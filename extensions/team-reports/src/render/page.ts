@@ -1,6 +1,7 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PeriodDescriptor, Person, ReportDocument, SummaryDocument } from "../types.js";
 import { REPORT_SCRIPT } from "./script.js";
-import { escapeHtml, safeExternalUrl } from "./shared.js";
+import { safeExternalUrl } from "./shared.js";
 import { REPORT_STYLES } from "./styles.js";
 
 export type PageContext = {

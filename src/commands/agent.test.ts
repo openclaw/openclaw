@@ -390,7 +390,8 @@ async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
 }
 
 function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalog>): void {
-  vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(entries);
+  // Startup ranking and turn selection share the captured manifest snapshot.
+  vi.mocked(loadManifestModelCatalog).mockReturnValue(entries);
   vi.mocked(readPreparedModelCatalog).mockResolvedValueOnce(entries);
 }
 
@@ -845,16 +846,15 @@ describe("agentCommand", () => {
         {
           message: "inspect this repo",
           sessionKey,
+          workspaceDir: worktree.path,
           allowModelOverride: false,
         },
         runtime,
       );
 
-      expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({
-          executionWorkspaceDir: canonicalWorkspace,
-        }),
-      );
+      const skillRoots = vi.mocked(resolveReusableWorkspaceSkillSnapshot).mock.calls.at(-1)?.[0];
+      expect(skillRoots?.workspaceDir).toBe(path.join(home, "openclaw"));
+      expect(skillRoots?.executionWorkspaceDir).toBe(canonicalWorkspace);
     });
   });
 

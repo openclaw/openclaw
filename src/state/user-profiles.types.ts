@@ -61,7 +61,7 @@ export type UserChannelIdentityWorkerOperations = {
   "userProfiles.channelIdentity.change": {
     input:
       | { action: "link" | "unlink"; profileId: string; identity: UserChannelIdentity }
-      | { action: "policy"; policy: UserChannelAuthorizationPolicy }
+      | { action: "policy"; policy: UserChannelAuthorizationPolicy; configuredOwnersHash?: string }
       | {
           action: "authorize";
           profileId: string;

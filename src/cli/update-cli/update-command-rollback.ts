@@ -16,7 +16,7 @@ import {
   verifyGatewayServiceDefinitionBackup,
 } from "../../daemon/service-definition-backup.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import {
@@ -48,7 +48,7 @@ import {
   createWindowsTaskAutoStartGuard,
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service-maintenance.js";
-import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
+import { readGatewayServiceStateForUpdate } from "./update-command-service-plan.js";
 import { compensateOriginalManagedService } from "./update-command-service-recovery.js";
 import {
   maybeRestartService,
@@ -495,13 +495,11 @@ export async function rollbackFailedUpdate(params: {
     // A failed candidate does not authorize its restart. The previous package's
     // pre-activation verification authorizes restarting this schema-neutral restoration.
     const nodeRunner = before?.serviceNodeRunner ?? params.nodeRunner;
-    const state = await readGatewayServiceState(resolveGatewayService(), {
-      env: recoveryEnv,
-      requireEffective: true,
-      requireLoadedCommand: true,
-      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-      timeoutMs: params.timeoutMs,
-    });
+    const state = await readGatewayServiceStateForUpdate(
+      resolveGatewayService(),
+      recoveryEnv,
+      params.timeoutMs,
+    );
     let verdict = await revalidateManagedGatewayServiceAfterUpdate({
       state,
       root: serviceRoot,

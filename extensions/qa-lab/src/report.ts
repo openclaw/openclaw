@@ -4,10 +4,7 @@ export type QaReportCheck = {
   details?: string;
 };
 
-export type QaReportScenario = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
+export type QaReportScenario = QaReportCheck & {
   steps?: QaReportCheck[];
 };
 
@@ -109,4 +106,8 @@ export function renderQaMarkdownReport(params: {
 
   lines.push("");
   return lines.join("\n");
+}
+
+export function escapeTableCell(value: string): string {
+  return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
 }

@@ -1,5 +1,6 @@
 // Shared validation, auth-surface, and config-load helpers for Gateway startup.
 import { isDeepStrictEqual } from "node:util";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import {
   formatInvalidConfigRecoveryHint,
   formatPluginPackagingRuntimeOutputRecoveryHint,
@@ -32,16 +33,12 @@ import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
-import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
+import { mergeGatewayAuthConfig, resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.types.js";
 import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
-import {
-  ensureGatewayStartupAuth,
-  mergeGatewayAuthConfig,
-  mergeGatewayTailscaleConfig,
-} from "./startup-auth.js";
+import { ensureGatewayStartupAuth, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
 export type GatewayStartupLog = {
   info: (message: string) => void;
@@ -98,6 +95,7 @@ function withRuntimeConfig(
 /** Load and validate the config snapshot, applying runtime-only plugin auto-enable changes. */
 export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
+  ambientEnvTriggers: AmbientEnvTriggerPolicy;
   log: GatewayStartupLog;
   measure?: GatewayStartupConfigMeasure;
   initialSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
@@ -129,6 +127,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
         applyPluginAutoEnable({
           config: configSnapshot.sourceConfig,
           env: process.env,
+          ambientEnvTriggers: params.ambientEnvTriggers,
           ...(pluginMetadataSnapshot?.manifestRegistry
             ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
             : {}),

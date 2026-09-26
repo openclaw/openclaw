@@ -55,11 +55,11 @@ describe("node worker bundle transfer service", () => {
 
     const admission = service.authorize({
       token: prepared.token,
-      bundleHash: prepared.input.build.bundleHash,
+      artifactKey: prepared.input.build.bundleHash,
     });
     expect(admission).toBeDefined();
     expect(
-      service.authorize({ token: prepared.token, bundleHash: prepared.input.build.bundleHash }),
+      service.authorize({ token: prepared.token, artifactKey: prepared.input.build.bundleHash }),
     ).toBeUndefined();
     const file = await service.openFile(admission!);
     try {
@@ -100,11 +100,11 @@ describe("node worker bundle transfer service", () => {
     });
 
     expect(
-      service.authorize({ token: prepared.token, bundleHash: "c".repeat(64) }),
+      service.authorize({ token: prepared.token, artifactKey: "c".repeat(64) }),
     ).toBeUndefined();
     owner.abort();
     expect(
-      service.authorize({ token: prepared.token, bundleHash: prepared.input.build.bundleHash }),
+      service.authorize({ token: prepared.token, artifactKey: prepared.input.build.bundleHash }),
     ).toBeUndefined();
   });
 });

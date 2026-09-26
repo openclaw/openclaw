@@ -242,6 +242,12 @@ fields and adds optional `activeRun` and `lastRun` records. While a run is activ
 the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 `updatedAtMs`. Reconnect and read the row to recover changes missed during restart.
 
+The Gateway's `update.status` reports current automatic-update policy and any live
+campaign independently of checkout discovery. Installation details can arrive
+later; reading status does not start scheduling or clear an active campaign. If
+the update channel cannot be resolved, `schedule` remains absent rather than
+claiming the scheduler is idle.
+
 When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source
 database and its sidecar files. The Gateway's `update.status` reads its two run

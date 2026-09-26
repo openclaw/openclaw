@@ -7,7 +7,6 @@ import {
 } from "./ci-workflow.test-support.js";
 
 const auxiliaryNames = [
-  "docs",
   "node-runtime-conformance",
   "plugin-init-scaffold-validation",
   "sandbox-common-smoke",
@@ -46,9 +45,11 @@ describe("hourly main CI admission", () => {
         }
       }
     }
-    for (const name of auxiliaryNames) {
+    for (const name of [...auxiliaryNames, "docs"]) {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
-      const entry = Object.values(workflow.jobs)[0] as { if: string };
+      const entry = Object.entries(workflow.jobs).find(([id]) => id !== "scope")![1] as {
+        if: string;
+      };
       expect(evaluate(entry.if, context), name).toBe(admitted);
     }
   });
@@ -85,7 +86,9 @@ describe("hourly main CI admission", () => {
       expect(workflow.on.schedule).toHaveLength(1);
       const cron = workflow.on.schedule[0].cron.split(" ");
       expect(cron).toHaveLength(5);
-      expect(cron.slice(1)).toEqual(["*", "*", "*", "*"]);
+      expect(cron.slice(1)).toEqual(
+        name === "sandbox-common-smoke" ? ["5", "*", "*", "*"] : ["*", "*", "*", "*"],
+      );
       const entry = Object.values(workflow.jobs)[0] as { if: string };
       expect(evaluate(entry.if, context), name).toBe(true);
       expect(evaluate(entry.if, { ...context, repository: "fork/openclaw" }), name).toBe(false);
@@ -189,7 +192,7 @@ describe("hourly main CI admission", () => {
     const hourlyGroup = evaluate(ci.concurrency.group, child);
     expect(hourlyGroup).not.toBe(full);
     expect(hourlyGroup).not.toBe(push);
-    expect(evaluate(ci.concurrency.group, { ...child, runId: 999 })).toBe(hourlyGroup);
+    expect(evaluate(ci.concurrency.group, { ...child, runId: 999 })).not.toBe(hourlyGroup);
     expect(evaluate(ci.concurrency["cancel-in-progress"], child)).toBe(false);
     expect(evaluate(ci.concurrency["cancel-in-progress"], { ...common, eventName: "push" })).toBe(
       false,
@@ -212,6 +215,43 @@ describe("hourly main CI admission", () => {
           );
         expect(render("push"), name).not.toBe(render("schedule"));
         expect(render("push"), name).not.toBe(render("workflow_dispatch"));
+      }
+    }
+  });
+
+  it("serializes only scheduled iOS proof while admitting overlapping hourly runs", () => {
+    const scheduled = {
+      ...base,
+      eventName: "schedule",
+      workflow: "CI",
+      runId: 123,
+      matrix: { phase: "tests" },
+    } as const;
+    const next = { ...scheduled, runId: 124 };
+    const ios = ci.jobs["ios-build"];
+    expect(evaluate(ci.concurrency.group, scheduled)).not.toBe(
+      evaluate(ci.concurrency.group, next),
+    );
+    expect(evaluate(ios.concurrency.group, scheduled)).toBe(evaluate(ios.concurrency.group, next));
+    expect(ios.concurrency["cancel-in-progress"]).toBe(false);
+    // GitHub's default single pending slot replaces pending work, never the active proof.
+    expect(ios.concurrency.queue ?? "single").toBe("single");
+    const hourly = evaluate(ios.concurrency.group, scheduled);
+    for (const eventName of ["workflow_dispatch", "pull_request", "push"] as const) {
+      for (const releaseGate of [false, true]) {
+        const groups = [123, 124].flatMap((runId) =>
+          ["tests", "release", "smoke"].map((phase) =>
+            evaluate(ios.concurrency.group, {
+              ...scheduled,
+              eventName,
+              releaseGate,
+              runId,
+              matrix: { phase },
+            }),
+          ),
+        );
+        expect(new Set(groups).size).toBe(groups.length);
+        expect(groups).not.toContain(hourly);
       }
     }
   });

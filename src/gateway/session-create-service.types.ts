@@ -159,6 +159,11 @@ export type CreateGatewaySessionParams = {
   activeParentFork?: { requesterSessionKey: string; assertCurrent: () => void };
   /** Live spawn-owned selection; public model inputs remain raw. */
   preparedModelSelection?: { ref: ModelRef; assertCurrent: () => void };
+  /** Effective host-prepared spawn mode, bound to the live requester until commit. */
+  preparedPermissionSelection?: {
+    mode: NonNullable<SessionEntry["permissionMode"]>;
+    assertCurrent: () => void;
+  };
   /**
    * Controls whether a distinct child terminates its parent. Omission preserves
    * the legacy rollover; callers use `false` for a parallel child.

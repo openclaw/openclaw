@@ -259,7 +259,7 @@ describe("Telegram durable ingress coalescing", () => {
   ) {
     const telegramTransport = options.telegramTransport ?? createBotApiTransport();
     const abortController = new AbortController();
-    const bot = createTelegramBot({
+    const bot = await createTelegramBot({
       token: "tok",
       botInfo: telegramBotInfoForTest,
       config: cfg,

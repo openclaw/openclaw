@@ -44,7 +44,7 @@ async function resolveXaiSpeechSynthesisRequest(
   };
 }
 
-export function buildXaiSpeechProvider(): SpeechProviderPlugin {
+export function buildXaiSpeechProvider() {
   return {
     ...createXaiSpeechProviderMetadata(),
     listVoices: async (req) => {
@@ -83,7 +83,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
       const params = await resolveXaiSpeechSynthesisRequest(req, "pcm");
       return { audioBuffer: await xaiTTS(params), outputFormat: "pcm", sampleRate: 24000 };
     },
-  };
+  } satisfies SpeechProviderPlugin;
 }
 
 // Resolve an xAI bearer for `/v1/tts`:

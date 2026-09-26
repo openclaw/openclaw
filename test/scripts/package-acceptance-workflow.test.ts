@@ -14842,7 +14842,10 @@ promote_windows_release_assets
     expect(clawHubInputs?.release_publish_run_attempt).toBeDefined();
     expect(clawHubInputs?.release_publish_full_ref).toBeDefined();
     expect(clawHubInputs?.release_publish_workflow_sha).toBeDefined();
-    expect(clawHubApproval.environment).toBe("clawhub-plugin-release");
+    // The parent's attested approval receipt lets the child skip its own gate.
+    expect(clawHubApproval.environment).toBe(
+      "${{ needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' && 'clawhub-plugin-release' || '' }}",
+    );
     expect(clawHubPublish.needs).toContain("approve_plugins_clawhub_release");
 
     const bootstrapWorkflow = ".github/workflows/plugin-clawhub-new.yml";
@@ -14946,7 +14949,10 @@ promote_windows_release_assets
     expect(
       readWorkflow(PLUGIN_CLAWHUB_RELEASE_WORKFLOW).jobs?.verify_published_clawhub_package,
     ).toBeUndefined();
-    expect(clawHubApproval.environment).toBe("clawhub-plugin-release");
+    // The parent's attested approval receipt lets the child skip its own gate.
+    expect(clawHubApproval.environment).toBe(
+      "${{ needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' && 'clawhub-plugin-release' || '' }}",
+    );
     expect(clawHubPublish.needs).toEqual([
       "preview_plugins_clawhub",
       "pack_plugins_clawhub_artifacts",

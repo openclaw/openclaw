@@ -110,6 +110,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   runtime?: RuntimeEnv;
   json?: boolean;
   postCoreSchemaRepair?: UpdateDoctorWriteAuthority["postCoreSchemaRepair"];
+  onVerifiedBackup?: (snapshots: readonly BackupSqliteSnapshotFact[]) => void;
 }): Promise<DoctorDatabasePreflight | undefined> {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
     return undefined;
@@ -254,6 +255,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       (options.runtime ?? defaultRuntime).log(
         `Verified agent-schema recovery backup retained at ${backup.archivePath}.`,
       );
+      options.onVerifiedBackup?.(requiredSnapshots);
       return schemas;
     }
     // 2026.9.2 invokes this Doctor before discarding its package rollback.

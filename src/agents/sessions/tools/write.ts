@@ -17,7 +17,7 @@ import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-ex
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { textResult } from "../../tools/common.js";
+import { textResult } from "../../tools/tool-results.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
 import {
@@ -296,7 +296,7 @@ async function readOriginalWriteState(
   if (stat.size !== Buffer.byteLength(content, "utf8")) {
     return { state: "different", beforeStat: stat };
   }
-  if (!ops.readFile || stat.size > WRITE_PRECHECK_READ_LIMIT_BYTES) {
+  if (stat.size > WRITE_PRECHECK_READ_LIMIT_BYTES) {
     return { state: "unknown", beforeStat: stat };
   }
 
@@ -359,8 +359,7 @@ async function resolveWriteDetails(params: {
     beforeText === undefined &&
     !params.precheck.readAttempted &&
     beforeStat?.type === "file" &&
-    beforeStat.size <= WRITE_PRECHECK_READ_LIMIT_BYTES &&
-    params.ops.readFile
+    beforeStat.size <= WRITE_PRECHECK_READ_LIMIT_BYTES
   ) {
     const originalContent = await params.ops.readFile(params.absolutePath).catch(() => undefined);
     const candidate = Buffer.isBuffer(originalContent)
@@ -422,7 +421,7 @@ async function didWriteMetadataChange(
   beforeStat: PersistedFileStat | null | undefined,
   ops: WriteOperations,
 ): Promise<boolean> {
-  if (!beforeStat || !ops.statFile) {
+  if (!beforeStat) {
     return false;
   }
   const afterStat = await ops.statFile(absolutePath).catch(() => null);

@@ -8,6 +8,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
+  normalizeOptionalString,
   readNonBlankString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -15,13 +16,7 @@ import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import type { InteractionTargetOptions } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import {
-  readBody,
-  resolveProfileContext,
-  resolveTargetIdFromBody,
-  resolveTargetIdFromQuery,
-  withPlaywrightRouteContext,
-} from "./agent.shared.js";
+import { readBody, resolveProfileContext, withPlaywrightRouteContext } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readOptionalRouteFiniteNumber, readRouteFiniteNumber } from "./route-numeric.js";
 import type { BrowserRequest, BrowserRouteRegistrar } from "./types.js";
@@ -140,7 +135,7 @@ export function registerBrowserAgentStorageRoutes(
   ) => {
     app.post(path, async (req, res) => {
       const body = readBody(req);
-      const targetId = resolveTargetIdFromBody(body);
+      const targetId = normalizeOptionalString(body.targetId);
       let run: Mutation;
       try {
         run = prepare(body, req.params);
@@ -186,7 +181,7 @@ export function registerBrowserAgentStorageRoutes(
   };
 
   app.get("/cookies", async (req, res) => {
-    const targetId = resolveTargetIdFromQuery(req.query);
+    const targetId = normalizeOptionalString(req.query.targetId);
     await withPlaywrightRouteContext({
       req,
       res,
@@ -245,7 +240,7 @@ export function registerBrowserAgentStorageRoutes(
     if (!kind) {
       return jsonError(res, 400, "kind must be local|session");
     }
-    const targetId = resolveTargetIdFromQuery(req.query);
+    const targetId = normalizeOptionalString(req.query.targetId);
     const key = readNonBlankString(
       readStringValue(req.query.key) ?? toStringOrEmpty(req.query.key),
     );

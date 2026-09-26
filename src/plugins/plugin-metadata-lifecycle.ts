@@ -31,6 +31,7 @@ const pluginMetadataProcessMemoClears = new Map<() => void, "process" | "operati
 type GatewayMetadataOwner = {
   cache?: PluginCache;
   phase: "booting" | "active" | "closing";
+  prelude?: Promise<void>;
   closing?: Promise<PluginHostCleanupResult>;
   retirements: Set<{
     cache: PluginCache;
@@ -49,7 +50,7 @@ function hasClosingGateway(): boolean {
 }
 
 /** The kernel owns bootstrap acquisition, published inventory, and unfinished retirement. */
-export function retainGatewayPluginMetadata() {
+export function retainGatewayPluginMetadata(onAllGatewaysClosing?: () => Promise<void>) {
   const bootstrapCache = getPluginCache();
   if (hasClosingGateway() || bootstrapCache.retirement) {
     throw new Error(
@@ -142,8 +143,20 @@ export function retainGatewayPluginMetadata() {
       ...(deferredPluginIds.length ? { deferredPluginIds } : {}),
     };
   };
-  const beginClose = () => {
+  const beginClose = (): void | Promise<void> => {
+    if (!gatewayMetadataOwners.has(owner)) {
+      return;
+    }
     owner.phase = "closing";
+    if (!owner.prelude && [...gatewayMetadataOwners].every((entry) => entry.phase === "closing")) {
+      const prelude = Promise.resolve().then(onAllGatewaysClosing);
+      // Overlapping closes share one stop, including when the final bootstrap fails.
+      for (const entry of gatewayMetadataOwners) {
+        entry.prelude = prelude;
+      }
+      void prelude.catch(() => {});
+    }
+    return owner.prelude;
   };
   return {
     // Fence admission before teardown can fail, without retiring a live sibling's inventory.
@@ -189,7 +202,7 @@ export function retainGatewayPluginMetadata() {
       onFinal?: (retire: () => Promise<PluginHostCleanupResult>) => void | Promise<void>,
       retireRegistry?: () => Promise<void | PluginHostCleanupResult>,
     ): Promise<PluginHostCleanupResult> {
-      beginClose();
+      const prelude = beginClose();
       if (owner.closing) {
         return owner.closing;
       }
@@ -225,6 +238,7 @@ export function retainGatewayPluginMetadata() {
         }));
       owner.closing = Promise.resolve().then(async () => {
         try {
+          await prelude;
           // Keep the final cache bound until model publication has joined through onFinal.
           if (final) {
             await onFinal?.(retire);

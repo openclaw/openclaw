@@ -135,7 +135,10 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, "agent tool result middleware must be a function");
       return;
     }
-    const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
+    const declared = normalizeAgentToolResultMiddlewareRuntimeIds(
+      record.contracts?.agentToolResultMiddleware,
+    );
+    const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options, declared);
     const matcher = normalizePluginToolMatcher(options?.matcher);
     if (runtimes.length === 0) {
       reportRegistrationError(
@@ -144,9 +147,6 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    const declared = normalizeAgentToolResultMiddlewareRuntimeIds(
-      record.contracts?.agentToolResultMiddleware,
-    );
     const missing = runtimes.filter((runtime) => !declared.includes(runtime));
     if (missing.length > 0) {
       reportRegistrationError(
