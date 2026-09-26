@@ -22,8 +22,12 @@ import {
 } from "openclaw/plugin-sdk/video-generation";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-const { resolveApiKeyForProviderMock, postJsonRequestMock, fetchWithTimeoutMock } =
-  getProviderHttpMocks();
+const {
+  resolveApiKeyForProviderMock,
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
+} = getProviderHttpMocks();
 
 let qwenVideoGenerationProvider: typeof import("./video-generation-provider.js").qwenVideoGenerationProvider;
 
