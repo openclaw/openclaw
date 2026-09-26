@@ -19,6 +19,8 @@ import {
   getTaskById,
   hasActiveTaskForChildSessionKey,
   listTaskRecordPage,
+  listTaskRecordsForOwnerTree,
+  listTasksForFlowId,
   listTasksForRelatedSessionKey,
 } from "./task-registry-query.js";
 import { createTaskRecord, linkTaskToFlowById } from "./task-registry-record-api.js";
@@ -29,6 +31,7 @@ import {
 } from "./task-registry-state.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
 import { upsertTaskWithDeliveryStateToSqlite } from "./task-registry.store.sqlite.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -370,3 +373,97 @@ it("preserves run membership across rejected retention and enclosing update roll
   expect(findTaskByRunId("run-shared")?.taskId).toBe(first.taskId);
   expect(store.loadSnapshot()).toEqual(before);
 });
+
+it.each(["native update", "atomic publication"] as const)(
+  "indexes published owner, session and flow keys after reentrant activity publication during %s",
+  (writer) => {
+    const flowHost = createTask({
+      ownerKey: "agent:main:flow-host-owner",
+      requesterSessionKey: "agent:main:flow-host-requester",
+      childSessionKey: "agent:main:flow-host-child",
+      notifyPolicy: "silent",
+    });
+    const observerFlow = createTaskFlowForTask({ task: flowHost });
+    if (!observerFlow) {
+      throw new Error("observer flow creation failed");
+    }
+    expect(
+      linkTaskToFlowById({ taskId: flowHost.taskId, flowId: observerFlow.flowId }),
+    ).not.toBeNull();
+    const task = createTask({ runId: "run-session-index", notifyPolicy: "silent" });
+    const ownFlow = createTaskFlowForTask({ task });
+    if (!ownFlow) {
+      throw new Error("task flow creation failed");
+    }
+    expect(linkTaskToFlowById({ taskId: task.taskId, flowId: ownFlow.flowId })).not.toBeNull();
+    const linked = expectDefined(getTaskById(task.taskId), "linked task");
+    const completed = { ...linked, status: "succeeded" as const, endedAt: Date.now() };
+    const store = getTaskRegistryStore();
+    let reentered = false;
+    recordTaskActivityEvent(linked, {
+      runId: linked.runId!,
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Synthetic pending activity" },
+    });
+    configureTaskRegistryRuntime({
+      observers: {
+        onEvent(event) {
+          if (
+            !reentered &&
+            event.kind === "upserted" &&
+            event.task.taskId === task.taskId &&
+            event.task.status === "running"
+          ) {
+            reentered = true;
+            updateTask(task.taskId, {
+              ownerKey: "agent:main:observer-owner",
+              childSessionKey: "agent:main:observer-child",
+              parentFlowId: observerFlow.flowId,
+            });
+            if (writer === "atomic publication") {
+              // The outer publisher resumes with this last committed record after the observer.
+              store.upsertTaskWithDeliveryState({ task: completed });
+            }
+          }
+        },
+      },
+    });
+    if (writer === "native update") {
+      expect(
+        updateTask(task.taskId, { status: "succeeded", endedAt: completed.endedAt }),
+      ).not.toBeNull();
+    } else {
+      store.upsertTaskWithDeliveryState({ task: completed });
+      publishTaskRecordAfterAtomicStore(completed);
+    }
+    expect(reentered).toBe(true);
+    expect(getTaskById(task.taskId)).toMatchObject({
+      ownerKey: linked.ownerKey,
+      childSessionKey: linked.childSessionKey,
+      parentFlowId: ownFlow.flowId,
+      status: "succeeded",
+    });
+    const taskIdsFor = (records: TaskRecord[]) => records.map((record) => record.taskId);
+    expect({
+      ownerTree: taskIdsFor(listTaskRecordsForOwnerTree(new Set([linked.ownerKey!]))),
+      observerOwnerTree: taskIdsFor(
+        listTaskRecordsForOwnerTree(new Set(["agent:main:observer-owner"])),
+      ),
+      relatedSession: taskIdsFor(listTasksForRelatedSessionKey(linked.childSessionKey!)),
+      observerRelatedSession: taskIdsFor(
+        listTasksForRelatedSessionKey("agent:main:observer-child"),
+      ),
+      ownFlow: taskIdsFor(listTasksForFlowId(ownFlow.flowId)),
+      observerFlow: taskIdsFor(listTasksForFlowId(observerFlow.flowId)),
+    }).toEqual({
+      ownerTree: [task.taskId],
+      observerOwnerTree: [],
+      relatedSession: [task.taskId],
+      observerRelatedSession: [],
+      ownFlow: [task.taskId],
+      observerFlow: [flowHost.taskId],
+    });
+  },
+);

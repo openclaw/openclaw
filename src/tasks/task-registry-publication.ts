@@ -36,12 +36,14 @@ export function publishTaskRecordAfterAtomicStore(
   if (becomesTerminal) {
     flushTaskActivity(next.taskId);
   }
-  if (current) {
-    deleteOwnerKeyIndex(next.taskId, current);
-    deleteParentFlowIdIndex(next.taskId, current);
-    deleteRelatedSessionKeyIndex(next.taskId, current);
-  }
+  // Flushing activity lets observers replace the row after `current` was read, so the
+  // derived indexes are maintained from the row actually being replaced.
   const indexedCurrent = tasks.get(next.taskId);
+  if (indexedCurrent) {
+    deleteOwnerKeyIndex(next.taskId, indexedCurrent);
+    deleteParentFlowIdIndex(next.taskId, indexedCurrent);
+    deleteRelatedSessionKeyIndex(next.taskId, indexedCurrent);
+  }
   tasks.set(next.taskId, next);
   recordTaskRegistryProjectionWrite("task", next.taskId);
   bumpTaskRegistryRevision();

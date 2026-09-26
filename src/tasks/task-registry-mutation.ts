@@ -120,15 +120,18 @@ export function publishTaskRecordUpdate(
   const published = persisted ? next : current;
   const becomesTerminal =
     !isTerminalTaskStatus(current.status) && isTerminalTaskStatus(next.status);
-  const sessionIndexChanged =
-    normalizeOptionalString(current.requesterSessionKey) !==
-      normalizeOptionalString(next.requesterSessionKey) ||
-    normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
-    normalizeOptionalString(current.childSessionKey) !==
-      normalizeOptionalString(next.childSessionKey);
-  const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
   if (persisted) {
     const indexedCurrent = tasks.get(taskId);
+    // Activity observers run inside this publisher's own flush window and can replace the
+    // row after the caller read `current`, so every derived index is maintained from the
+    // row actually being replaced.
+    const replaced = indexedCurrent ?? current;
+    const sessionIndexChanged =
+      normalizeOptionalString(replaced.requesterSessionKey) !==
+        normalizeOptionalString(next.requesterSessionKey) ||
+      normalizeOptionalString(replaced.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
+      normalizeOptionalString(replaced.childSessionKey) !==
+        normalizeOptionalString(next.childSessionKey);
     tasks.set(taskId, next);
     recordTaskRegistryProjectionWrite("task", taskId);
     bumpTaskRegistryRevision();
@@ -137,13 +140,13 @@ export function publishTaskRecordUpdate(
     }
     updateRunIdIndex(indexedCurrent, next);
     if (sessionIndexChanged) {
-      deleteOwnerKeyIndex(taskId, current);
+      deleteOwnerKeyIndex(taskId, replaced);
       addOwnerKeyIndex(taskId, next);
-      deleteRelatedSessionKeyIndex(taskId, current);
+      deleteRelatedSessionKeyIndex(taskId, replaced);
       addRelatedSessionKeyIndex(taskId, next);
     }
-    if (parentFlowIndexChanged) {
-      deleteParentFlowIdIndex(taskId, current);
+    if (replaced.parentFlowId?.trim() !== next.parentFlowId?.trim()) {
+      deleteParentFlowIdIndex(taskId, replaced);
       addParentFlowIdIndex(taskId, next);
     }
   }
