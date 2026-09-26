@@ -903,6 +903,21 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       options.allowFrozenTargetScenarioOmissions,
       options.frozenTarget,
     );
+    const requestedBaselines = parseUpgradeSurvivorBaselineSpecs(upgradeSurvivorBaselines);
+    if (
+      poolLanes.some(
+        (lane) => lane.name === "published-upgrade-survivor" || lane.name === "update-migration",
+      ) &&
+      parseUpgradeSurvivorScenarios(upgradeSurvivorScenarios).includes("missing-load-path") &&
+      requestedBaselines.length > 0 &&
+      requestedBaselines.every(
+        (baseline) => !supportsUpgradeSurvivorScenarioAtBaseline("missing-load-path", baseline),
+      )
+    ) {
+      throw new Error(
+        `missing-load-path has no compatible published baseline in ${upgradeSurvivorBaselines}: the installed updater must admit invalid config before candidate staging.`,
+      );
+    }
     for (const laneName of expansion.omittedLaneNames) {
       omittedUnsupportedLaneNames.add(laneName);
     }
@@ -953,6 +968,7 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
             if (!survivorBaseLane) {
               return [expandedLane];
             }
+            // Exact-row reruns retain the original matrix only to reconstruct the catalog.
             const targetExpansion = expandUpgradeSurvivorBaselineLanes(
               [survivorBaseLane],
               upgradeSurvivorBaselines,

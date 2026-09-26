@@ -287,14 +287,26 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
       throw storeChanged();
     }
   };
-  let registry = await registryRead.read().catch((error: unknown) => {
-    if (!(error instanceof AgentDatabaseRegistryChangedError)) {
-      throw error;
+  const readRegistry = async (assertCallerCurrent?: () => void) => {
+    for (let attempt = 0; ; attempt++) {
+      assertCallerCurrent?.();
+      assertSourceCurrent();
+      try {
+        const current = await registryRead.read();
+        assertCallerCurrent?.();
+        assertSourceCurrent();
+        current.assertCurrent();
+        return current;
+      } catch (error) {
+        // One registration can invalidate at both admission and settlement.
+        // Refresh only metadata, retaining the original source and state custody.
+        if (!(error instanceof AgentDatabaseRegistryChangedError) || attempt >= 2) {
+          throw error;
+        }
+      }
     }
-    // Only initial discovery repeats; retain the original source and state admission.
-    assertSourceCurrent();
-    return registryRead.read();
-  });
+  };
+  let registry = await readRegistry();
   const original = registry.result;
   const assertCurrent = () => {
     assertSourceCurrent();
@@ -345,7 +357,7 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
           throw error;
         }
       }
-      const current = await registryRead.read();
+      const current = await readRegistry(assertCallerCurrent);
       assertCallerCurrent();
       assertSourceCurrent();
       current.assertCurrent();

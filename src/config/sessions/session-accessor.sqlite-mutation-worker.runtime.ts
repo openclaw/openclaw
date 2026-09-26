@@ -416,9 +416,8 @@ export async function runReclamationWorkerPort(
               request.type === "reclaim" &&
               !pooledTask &&
               error instanceof SqliteReclamationRequestRefusedError &&
-              claim?.isCurrent() &&
-              retainedDatabase?.isOpen &&
-              !retainedDatabase.isTransaction
+              ((!claim && !retainedDatabase) ||
+                (claim?.isCurrent() && retainedDatabase?.isOpen && !retainedDatabase.isTransaction))
             ) {
               markSqliteReclamationSettled(commitGate);
               return {

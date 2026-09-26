@@ -92,7 +92,7 @@ filenames in authored links, such as `[Read inventory](inventory.csv)`, and code
 spans also open the file preview. Plain-text and inline-code file detection stays
 conservative to avoid turning prose into links.
 
-While composing text with an input method in model search, Enter, Escape, and arrow keys stay with the input method. They do not select a model, clear the search, or move the highlighted model until composition finishes.
+While composing text with an input method in model search, Enter, Escape, and arrow keys stay with the input method. They do not select a model, clear the search, or move the highlighted model until composition finishes. Open tooltips also leave Escape to the input method.
 
 When authentication status is available, each provider heading in the chat model picker says how that provider is signed in: **API** for an API key (or an explicitly selected API-key account), the plan name for a provider with one subscription, and **Subscription** for a provider with several. With several subscriptions, the heading adds the email of an explicitly selected account when the Gateway supplies it, and the **Account** rows show each account's email; automatic selection shows no account identity. Hover a truncated heading to read the full text.
 

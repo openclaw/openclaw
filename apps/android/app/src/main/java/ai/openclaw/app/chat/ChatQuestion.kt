@@ -26,30 +26,13 @@ data class ChatQuestionPrompt(
   internal val promptOwner: Any = Any(),
 ) {
   fun status(nowMs: Long = System.currentTimeMillis()): ChatQuestionStatus =
-    if (recoveryUnavailable) {
-      ChatQuestionStatus.Unavailable
-    } else {
-      when (record.status) {
-        "answered" -> {
-          if (answeredLocally) ChatQuestionStatus.Answered else ChatQuestionStatus.AnsweredElsewhere
-        }
-
-        "cancelled" -> {
-          ChatQuestionStatus.Cancelled
-        }
-
-        "expired" -> {
-          ChatQuestionStatus.Expired
-        }
-
-        else -> {
-          when {
-            nowMs >= record.expiresAtMs -> ChatQuestionStatus.Expired
-            submitting -> ChatQuestionStatus.Submitting
-            else -> ChatQuestionStatus.Pending
-          }
-        }
-      }
+    when {
+      recoveryUnavailable -> ChatQuestionStatus.Unavailable
+      record.status == "answered" -> if (answeredLocally) ChatQuestionStatus.Answered else ChatQuestionStatus.AnsweredElsewhere
+      record.status == "cancelled" -> ChatQuestionStatus.Cancelled
+      record.status == "expired" || nowMs >= record.expiresAtMs -> ChatQuestionStatus.Expired
+      submitting -> ChatQuestionStatus.Submitting
+      else -> ChatQuestionStatus.Pending
     }
 }
 

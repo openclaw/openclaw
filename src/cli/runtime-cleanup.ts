@@ -1,3 +1,4 @@
+import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 
 // Match Gateway's harness/MCP shutdown grace; local-provider TERM/KILL already
@@ -109,6 +110,7 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         await closeActiveMemorySearchManagersCore();
       }
     },
+    "proxy-capture": finalizeActiveDebugProxyCaptures,
     "agent-databases": async () => {
       const { hasOpenClawAgentDatabaseAsyncResources } =
         await import("../state/openclaw-agent-db-resources.js");

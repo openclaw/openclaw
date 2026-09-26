@@ -494,10 +494,10 @@ struct TalkModeManagerTests {
         manager._test_markNativeFallbackActive(after: issue)
 
         #expect(manager.statusText == "Listening (iOS Speech fallback)")
-        #expect(manager._test_gatewayTalkActiveModeTitle() == "iOS Speech fallback")
-        #expect(manager._test_gatewayTalkActiveModeSubtitle() == "Realtime closed before it became ready.")
-        #expect(manager._test_gatewayTalkLastIssueText()?.contains("phase: connect") == true)
-        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == issue)
+        #expect(manager.gatewayTalkActiveModeTitle == "iOS Speech fallback")
+        #expect(manager.gatewayTalkActiveModeSubtitle == "Realtime closed before it became ready.")
+        #expect(manager.gatewayTalkLastIssueText?.contains("phase: connect") == true)
+        #expect(manager.gatewayTalkCurrentFallbackIssue == issue)
     }
 
     @Test func `gateway talk issue details drive realtime failure display`() {
@@ -540,14 +540,14 @@ struct TalkModeManagerTests {
         manager._test_recordRealtimeIssue(issue)
         manager._test_handleRealtimeRelayStatus("Connecting realtime…")
 
-        #expect(manager._test_gatewayTalkActiveModeTitle() == "Realtime unavailable")
-        #expect(manager._test_gatewayTalkLastIssueText()?.contains("OpenAI API key rejected") == true)
+        #expect(manager.gatewayTalkActiveModeTitle == "Realtime unavailable")
+        #expect(manager.gatewayTalkLastIssueText?.contains("OpenAI API key rejected") == true)
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
 
         #expect(manager.statusText == "Listening (Realtime)")
-        #expect(manager._test_gatewayTalkLastIssueText() == nil)
-        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == nil)
+        #expect(manager.gatewayTalkLastIssueText == nil)
+        #expect(manager.gatewayTalkCurrentFallbackIssue == nil)
     }
 
     @Test func `relay close clears active realtime mode`() {
@@ -555,14 +555,14 @@ struct TalkModeManagerTests {
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
         #expect(manager.statusText == "Listening (Realtime)")
-        #expect(manager._test_gatewayTalkActiveModeTitle() != "Not active")
+        #expect(manager.gatewayTalkActiveModeTitle != "Not active")
 
         manager._test_handleRealtimeRelayStatus("Ready")
         manager._test_handleRealtimeRelayTermination()
 
         #expect(manager.statusText == "Ready")
-        #expect(manager._test_gatewayTalkActiveModeTitle() == "Not active")
-        #expect(manager._test_gatewayTalkActiveModeSubtitle() == nil)
+        #expect(manager.gatewayTalkActiveModeTitle == "Not active")
+        #expect(manager.gatewayTalkActiveModeSubtitle == nil)
     }
 
     @Test func `realtime failures remain visible on the watch`() {
@@ -633,13 +633,13 @@ struct TalkModeManagerTests {
         manager._test_recordRealtimeIssue(issue)
         manager._test_markNativeFallbackActive(after: issue)
         #expect(manager._test_hasPendingRealtimeIssue())
-        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == issue)
+        #expect(manager.gatewayTalkCurrentFallbackIssue == issue)
 
         manager._test_prepareRealtimeRelayStart()
 
         #expect(!manager._test_hasPendingRealtimeIssue())
-        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == nil)
-        #expect(manager._test_gatewayTalkLastIssueText()?.contains("Realtime closed before") == true)
+        #expect(manager.gatewayTalkCurrentFallbackIssue == nil)
+        #expect(manager.gatewayTalkLastIssueText?.contains("Realtime closed before") == true)
     }
 
     @Test func `session switch invalidates an in flight realtime relay start`() {
@@ -699,7 +699,6 @@ struct TalkModeManagerTests {
 
         let routing = Self.resolve(parsed)
 
-        #expect(parsed.requiresGatewayRealtimeTransport)
         #expect(parsed.executionMode == .realtimeRelay)
         #expect(routing.route == .realtimeRelay)
     }

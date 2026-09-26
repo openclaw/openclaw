@@ -57,7 +57,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: mocks.spawn,
 }));
 
-vi.mock("./doctor-lint.js", () => ({
+vi.mock("./doctor-lint-runner.js", () => ({
   collectDoctorFindings: mocks.collectDoctorFindings,
 }));
 

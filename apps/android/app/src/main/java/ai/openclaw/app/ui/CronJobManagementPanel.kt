@@ -332,12 +332,7 @@ private fun CronEditorPanel(
           onSave(edit)
         },
         modifier = Modifier.fillMaxWidth(),
-        enabled =
-          enabled &&
-            draft.isDirty &&
-            !draft.hasIncomingConflict &&
-            !draft.savePending &&
-            !draft.saveSucceeded,
+        enabled = enabled && draft.isDirty && !draft.hasIncomingConflict,
         icon = Icons.Default.Save,
       )
       if (draft.requiresResolution) {
