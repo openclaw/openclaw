@@ -14,6 +14,7 @@ import {
   isEquivalentTaskRecord,
   listTasksFromIndex,
 } from "./task-registry-records.js";
+import type { TaskRegistryStore } from "./task-registry.store.js";
 import type {
   TaskExecutionRestoreStore,
   TaskRegistryMutationScope,
@@ -95,6 +96,16 @@ export type TaskProgressMember = {
   progressOrigin?: SubagentRunRecord["progressOrigin"];
 };
 
+type TaskRegistryRestoreState =
+  | { status: "uninitialized"; admission?: OpenClawStateDatabaseReadAdmission }
+  | { status: "restoring" | "ready"; admission: OpenClawStateDatabaseReadAdmission }
+  | {
+      status: "failed";
+      error: Error;
+      admission: OpenClawStateDatabaseReadAdmission;
+      store: TaskRegistryStore;
+    };
+
 export type TaskProgressBatch = {
   lifecycleGeneration: string;
   requesterSessionKey: string;
@@ -142,6 +153,10 @@ type TaskRegistryProcessState = {
   taskProgressBatches: Map<string, TaskProgressBatch>;
   /** Live owners survive store reloads, but are never persisted or restored after restart. */
   runOwners: Map<string, TaskRunOwner>;
+  // Every module instance publishing into these rows must read the same store and
+  // readiness. A stale instance restoring from its own store would replace live rows.
+  store: TaskRegistryStore | null;
+  restore: TaskRegistryRestoreState;
   // Listener ownership must survive module reloads alongside the task indexes it updates.
   listener?: {
     stop: (() => void) | null;
@@ -180,6 +195,8 @@ export function getTaskRegistryProcessState(): TaskRegistryProcessState {
     taskActivityByTaskId: new Map<string, TaskActivityOverlayState>(),
     taskProgressBatches: new Map<string, TaskProgressBatch>(),
     runOwners: new Map<string, TaskRunOwner>(),
+    store: null,
+    restore: { status: "uninitialized" },
     changeListeners: new Set(),
     observers: null,
     projection: {
