@@ -57,6 +57,10 @@ import {
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
 } from "./accounts.js";
+import {
+  buildFeishuActionPresentationCard,
+  deliverableFeishuActionCard,
+} from "./action-presentation-card.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
@@ -88,10 +92,7 @@ import {
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import {
   assertFeishuCardWithinEnvelope,
-  buildFeishuPresentationCard,
-  feishuCardWithinTableLimit,
   FEISHU_PRESENTATION_CAPABILITIES,
-  isFeishuCardWithinEnvelope,
   resolveFeishuRichReply,
 } from "./presentation-card.js";
 import {
@@ -1229,20 +1230,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (textCard && !presentation) {
               assertFeishuCardWithinEnvelope(textCard, "Feishu native card");
             }
-            const generatedCard = presentation
-              ? buildFeishuPresentationCard({
-                  presentation,
-                  fallbackText: textCard
-                    ? undefined
-                    : resolveLegacyInteractiveTextFallback({ text, interactive }),
-                })
-              : undefined;
-            const presentationCard =
-              generatedCard &&
-              feishuCardWithinTableLimit(generatedCard) &&
-              isFeishuCardWithinEnvelope(generatedCard)
-                ? generatedCard
-                : undefined;
+            const generatedCard = buildFeishuActionPresentationCard({
+              presentation,
+              cfg: ctx.cfg,
+              accountId: ctx.accountId ?? undefined,
+              fallbackText: textCard
+                ? undefined
+                : resolveLegacyInteractiveTextFallback({ text, interactive }),
+            });
+            const presentationCard = deliverableFeishuActionCard(generatedCard);
             const presentationFellBack = Boolean(generatedCard && !presentationCard);
             const card = presentation ? presentationCard : textCard;
             if (card && mediaUrl) {
@@ -1734,6 +1730,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       setupContract: feishuSetupContract,
       setupWizard: feishuSetupWizard,
       messaging: {
+        defaultMarkdownTableMode: "block",
         targetPrefixes: ["feishu", "lark"],
         normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
         inferTargetChatType: ({ to }) =>
@@ -1883,6 +1880,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           unavailableMessage: "Feishu payload sending is not available.",
         },
         sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },
+        // The adapter implements this entry so the whole reply arrives before this
+        // channel converts it. Core reads it from the registered surface, so leaving
+        // it out of the forwarded set keeps core cutting the text first and the
+        // implementation unreachable.
+        sendFormattedText: { resolve: (runtime) => runtime.feishuOutbound.sendFormattedText },
         sendMedia: { resolve: (runtime) => runtime.feishuOutbound.sendMedia },
       }),
     },

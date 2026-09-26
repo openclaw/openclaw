@@ -48,6 +48,7 @@ describe("createRuntimeOutboundDelegates", () => {
       renderPresentation: undefined,
       sendPayload: undefined,
       sendText: undefined,
+      sendFormattedText: undefined,
       sendMedia: undefined,
       sendPoll: undefined,
     });

@@ -3,6 +3,7 @@ import {
   ContextVisibilityModeSchema,
   DmPolicySchema,
   GroupPolicySchema,
+  MarkdownConfigSchema,
   ReplyToModeSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
@@ -105,10 +106,28 @@ const DmConfigSchema = z
   .strict()
   .optional();
 
-const MarkdownConfigSchema = z
-  .object({
-    mode: z.enum(["native", "escape", "strip"]).optional(),
-    tableMode: z.enum(["native", "ascii", "simple"]).optional(),
+/**
+ * @deprecated Use markdown.tables instead.
+ *
+ * Feishu-only markdown mode that predates the shared table option. The runtime
+ * never read it. It stays accepted so existing configs keep loading.
+ */
+const LegacyMarkdownModeSchema = z.enum(["native", "escape", "strip"]).optional();
+
+/**
+ * @deprecated Use markdown.tables instead.
+ *
+ * Feishu-only table mode that predates the shared table option. The runtime
+ * never read it. It stays accepted so existing configs keep loading.
+ */
+const LegacyMarkdownTableModeSchema = z.enum(["native", "ascii", "simple"]).optional();
+
+// The shared markdown schema is strict, so widen it locally to keep the two
+// deprecated keys accepted alongside `tables` at channel and account scope.
+const FeishuMarkdownConfigSchema = MarkdownConfigSchema.unwrap()
+  .extend({
+    mode: LegacyMarkdownModeSchema,
+    tableMode: LegacyMarkdownTableModeSchema,
   })
   .strict()
   .optional();
@@ -241,7 +260,7 @@ const FeishuSharedConfigShape = {
     .or(z.literal(false))
     .optional(),
   capabilities: z.array(z.string()).optional(),
-  markdown: MarkdownConfigSchema,
+  markdown: FeishuMarkdownConfigSchema,
   configWrites: z.boolean().optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
   replyToMode: ReplyToModeSchema.optional(),

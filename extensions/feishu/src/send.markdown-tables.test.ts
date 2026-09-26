@@ -1,0 +1,149 @@
+// Feishu tests cover per-account markdown table mode on the send and edit paths.
+import {
+  createEmptyPluginRegistry,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
+
+const createFeishuClientMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./client.js", () => ({
+  createFeishuClient: createFeishuClientMock,
+}));
+
+let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
+let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
+
+const tableMarkdown = "| Name | Role |\n| --- | --- |\n| Ada | Lead |";
+const tableBullets = "**Ada**  \n• Role: Lead";
+// Root credentials make the implicit default account configured, so the real
+// account resolver runs and defaultAccount selection is exercised as shipped.
+const cfg: ClawdbotConfig = {
+  channels: {
+    feishu: {
+      appId: "cli_a1",
+      appSecret: "local-test-placeholder", // pragma: allowlist secret
+      markdown: { tables: "bullets" },
+      accounts: { work: { markdown: { tables: "off" } } },
+    },
+  },
+};
+const defaultAccountCfg: ClawdbotConfig = {
+  channels: {
+    feishu: {
+      appId: "cli_a1",
+      appSecret: "local-test-placeholder", // pragma: allowlist secret
+      defaultAccount: "work",
+      markdown: { tables: "off" },
+      accounts: { work: { markdown: { tables: "bullets" } } },
+    },
+  },
+};
+
+function postText(request: unknown): string {
+  const content = (request as { data?: { content?: string } } | undefined)?.data?.content;
+  return JSON.parse(content ?? "null").zh_cn.content[0][0].text;
+}
+
+describe("feishu markdown table mode per account", () => {
+  const create = vi.fn();
+  const update = vi.fn();
+
+  beforeAll(async () => {
+    // The shared resolver reads config only for a registered channel id, and this
+    // harness does not load the runtime setup, so register a minimal feishu plugin.
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "feishu", source: "test", plugin: { id: "feishu", meta: { id: "feishu" } } },
+      ]),
+    );
+    ({ editMessageFeishu, sendMessageFeishu } = await import("./send.js"));
+  });
+
+  afterAll(() => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    create.mockResolvedValue({ code: 0, data: { message_id: "om_table" } });
+    update.mockResolvedValue({ code: 0 });
+    createFeishuClientMock.mockReturnValue({ im: { message: { create, reply: vi.fn(), update } } });
+  });
+
+  it("sends the named account's table mode and keeps the channel mode without an account", async () => {
+    await sendMessageFeishu({ cfg, to: "oc_send", text: tableMarkdown, accountId: "work" });
+    await sendMessageFeishu({ cfg, to: "oc_send", text: tableMarkdown });
+
+    expect(postText(create.mock.calls[0]?.[0])).toBe(tableMarkdown);
+    expect(postText(create.mock.calls[1]?.[0])).toBe(tableBullets);
+  });
+
+  it("edits rich posts with the named account's table mode", async () => {
+    await editMessageFeishu({ cfg, messageId: "om_edit", text: tableMarkdown, accountId: "work" });
+    await editMessageFeishu({ cfg, messageId: "om_edit", text: tableMarkdown });
+
+    expect(postText(update.mock.calls[0]?.[0])).toBe(tableMarkdown);
+    expect(postText(update.mock.calls[1]?.[0])).toBe(tableBullets);
+  });
+
+  // An edit is one message and cannot fan out, so a conversion that pads the text past
+  // the 30 KB envelope would fail the edit outright rather than deliver less of it.
+  it("edits with the authored table when the conversion leaves the post envelope", async () => {
+    const codeCfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_a1",
+          appSecret: "local-test-placeholder", // pragma: allowlist secret
+          markdown: { tables: "off" },
+          accounts: { work: { markdown: { tables: "code" } } },
+        },
+      },
+    };
+    const rows = Array.from({ length: 70 }, (_entry, index) => `| row${index} | d |`);
+    const padded = [
+      "| name | detail |",
+      "| --- | --- |",
+      ...rows,
+      `| wide | ${"w".repeat(600)} |`,
+    ].join("\n");
+    // The case only means anything while the authored edit fits the envelope and every
+    // cell padded out to the widest one does not.
+    expect(Buffer.byteLength(padded, "utf8")).toBeLessThan(30 * 1024);
+    expect(Buffer.byteLength(convertMarkdownTables(padded, "code"), "utf8")).toBeGreaterThan(
+      30 * 1024,
+    );
+
+    await editMessageFeishu({
+      cfg: codeCfg,
+      messageId: "om_edit",
+      text: padded,
+      accountId: "work",
+    });
+    // A table the conversion keeps inside the envelope still arrives converted.
+    await editMessageFeishu({
+      cfg: codeCfg,
+      messageId: "om_edit",
+      text: tableMarkdown,
+      accountId: "work",
+    });
+
+    expect(postText(update.mock.calls[0]?.[0])).toBe(padded);
+    expect(postText(update.mock.calls[1]?.[0])).toBe(convertMarkdownTables(tableMarkdown, "code"));
+  });
+
+  it("follows defaultAccount when the account id is omitted", async () => {
+    await sendMessageFeishu({ cfg: defaultAccountCfg, to: "oc_send", text: tableMarkdown });
+    await editMessageFeishu({ cfg: defaultAccountCfg, messageId: "om_edit", text: tableMarkdown });
+
+    expect(postText(create.mock.calls[0]?.[0])).toBe(tableBullets);
+    expect(postText(update.mock.calls[0]?.[0])).toBe(tableBullets);
+  });
+});

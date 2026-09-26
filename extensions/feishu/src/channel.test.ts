@@ -1,6 +1,12 @@
 // Feishu tests cover channel plugin behavior.
+import {
+  createEmptyPluginRegistry,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { feishuPlugin } from "./channel.js";
 import { FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER } from "./outbound.js";
@@ -358,14 +364,24 @@ describe("feishuPlugin actions", () => {
 
   const actionContext = { cfg, accountId: undefined };
 
+  // Table modes read the channel default from the plugin meta, and the harness
+  // does not load the runtime setup, so register the real plugin for every test.
   beforeEach(() => {
     vi.clearAllMocks();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "feishu", source: "test", plugin: feishuPlugin }]),
+    );
     createFeishuClientMock.mockReturnValue({ tag: "client" });
     getChatInfoMock.mockResolvedValue({
       chat_id: "oc_group_1",
       chat_mode: "group",
       chat_type: "private",
     });
+  });
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("advertises the expanded Feishu action surface", () => {
@@ -1125,44 +1141,6 @@ describe("feishuPlugin actions", () => {
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("falls back to text delivery when presentation text exceeds the card table limit", async () => {
-    feishuOutboundSendPayloadMock.mockResolvedValueOnce({
-      channel: "feishu",
-      messageId: "om_fallback",
-      chatId: "oc_group_1",
-    });
-    const sixTables = Array.from(
-      { length: 6 },
-      (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
-    ).join("\n\n");
-
-    const result = await feishuPlugin.actions?.handleAction?.({
-      action: "send",
-      params: {
-        to: "chat:oc_group_1",
-        message: sixTables,
-        presentation: {
-          title: "Status",
-          blocks: [{ type: "text", text: "Build completed" }],
-        },
-      },
-      ...actionContext,
-      toolContext: {},
-    } as never);
-
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(feishuOutboundSendPayloadMock).toHaveBeenCalledTimes(1);
-    const payloadArgs = requireRecord(
-      mockCallArg(feishuOutboundSendPayloadMock, 0, 0, "feishuOutbound.sendPayload"),
-      "sendPayload args",
-    );
-    expect(payloadArgs.to).toBe("chat:oc_group_1");
-    expect(payloadArgs.text).toBe(sixTables);
-    const details = resultDetails(result);
-    expect(details.ok).toBe(true);
-    expect(details.messageId).toBe("om_fallback");
   });
 
   it("hides prefixed native-card JSON in oversized presentation fallbacks", async () => {

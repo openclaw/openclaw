@@ -174,6 +174,7 @@ describe("getMessageFeishu", () => {
     expect(mockResolveMarkdownTableMode).toHaveBeenCalledWith({
       cfg: {},
       channel: "feishu",
+      accountId: "default",
     });
     expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
     expectTextReceipt(result, "om_send");
