@@ -203,7 +203,10 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     shouldRecoverCorrupt?: (claim: ChannelIngressQueueCorruptClaim) => boolean | Promise<boolean>;
   }): Promise<number>;
   prune(options?: ChannelIngressQueuePruneOptions): Promise<number>;
-  /** Core queues support identity resets; optional for existing plugin-supplied queue inputs. */
+  /**
+   * Delete all rows after callers stop the account's producers and drain.
+   * Optional for existing plugin-supplied queue inputs; core queues implement it.
+   */
   purge?(): Promise<number>;
 };
 
