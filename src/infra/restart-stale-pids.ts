@@ -10,6 +10,7 @@ import { readUnixProcessGroupMembers, signalProcessTree } from "../process/kill-
 import {
   collectProcessAncestorPids,
   getFileLockProcessStartTime,
+  isPidAlive,
   isPidDefinitelyDead,
   MAX_ANCESTOR_WALK_DEPTH,
 } from "../shared/pid-alive.js";
@@ -483,7 +484,7 @@ function terminateStaleProcessesSync(pids: number[], canSignal: () => boolean): 
   }
   sleepSync(STALE_SIGTERM_WAIT_MS);
   for (const pid of killed) {
-    if (isProcessAlive(pid)) {
+    if (isPidAlive(pid)) {
       if (!canSignal()) {
         break;
       }
@@ -529,12 +530,12 @@ function terminateStaleProcessesWindows(pids: number[], canSignal: () => boolean
       windowsHide: true,
     });
     const gracefulFailed = graceful.error != null || (graceful.status ?? 0) !== 0;
-    if (!gracefulFailed && !isProcessAlive(pid)) {
+    if (!gracefulFailed && !isPidAlive(pid)) {
       killed.push(pid);
       continue;
     }
     sleepSync(STALE_SIGTERM_WAIT_MS);
-    if (!isProcessAlive(pid)) {
+    if (!isPidAlive(pid)) {
       killed.push(pid);
       continue;
     }
@@ -550,20 +551,11 @@ function terminateStaleProcessesWindows(pids: number[], canSignal: () => boolean
       continue;
     }
     sleepSync(STALE_SIGKILL_WAIT_MS);
-    if (!isProcessAlive(pid)) {
+    if (!isPidAlive(pid)) {
       killed.push(pid);
     }
   }
   return killed;
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
 }
 
 /** Wait for a free port, a permanent inspection failure, or the wall-clock deadline. */

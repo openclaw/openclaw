@@ -227,9 +227,25 @@ function normalizeGraceMs(value?: number): number {
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+    if (code !== "EPERM") {
+      return false;
+    }
+  }
+  // Negative targets represent process groups, not procfs process entries.
+  if (pid < 0 || process.platform !== "linux") {
     return true;
+  }
+  try {
+    const status = readFileSync(`/proc/${pid}/status`, "utf8");
+    const stateMatch = status.match(/^State:\s+(\S)/m);
+    // A zombie leader can retain live worker threads. Only a fully exited,
+    // single-thread process is dead for escalation purposes.
+    return !(stateMatch?.[1] === "Z" && /^Threads:[ \t]+1[ \t]*$/m.test(status));
   } catch {
-    return false;
+    return true;
   }
 }
 
