@@ -442,7 +442,9 @@ class GatewaySessionReconnectTest {
           onConnected = { connections.trySend(Unit).getOrThrow() },
           onEvent = { event, payload -> events.trySend(event to payload).getOrThrow() },
         )
+
       suspend fun nextEvent(): Pair<String, String?> = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { events.receive() }
+
       fun send(
         event: String,
         payload: String,
@@ -458,10 +460,28 @@ class GatewaySessionReconnectTest {
         nextEvent()
         send("chat", """{"runId":"run","sessionKey":"main","state":"delta","deltaText":" world"}""")
         val chat = json.parseToJsonElement(checkNotNull(nextEvent().second)).jsonObject
-        assertEquals("Hello world", chat.getValue("message").jsonObject.getValue("content").jsonArray.first().jsonObject.getValue("text").jsonPrimitive.content)
+        assertEquals(
+          "Hello world",
+          chat
+            .getValue("message")
+            .jsonObject
+            .getValue("content")
+            .jsonArray
+            .first()
+            .jsonObject
+            .getValue("text")
+            .jsonPrimitive.content,
+        )
         send("agent", """{"runId":"run","sessionKey":"main","stream":"assistant","data":{"delta":" tail"}}""")
         val agent = json.parseToJsonElement(checkNotNull(nextEvent().second)).jsonObject
-        assertEquals("Item tail", agent.getValue("data").jsonObject.getValue("text").jsonPrimitive.content)
+        assertEquals(
+          "Item tail",
+          agent
+            .getValue("data")
+            .jsonObject
+            .getValue("text")
+            .jsonPrimitive.content,
+        )
 
         harness.session.reconnect()
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connections.receive() }
@@ -470,7 +490,18 @@ class GatewaySessionReconnectTest {
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connections.receive() }
         send("chat", """{"runId":"run","sessionKey":"main","state":"delta","deltaText":"ignored","message":{"role":"assistant","content":[{"type":"text","text":"New baseline"}]}}""")
         val reattached = json.parseToJsonElement(checkNotNull(nextEvent().second)).jsonObject
-        assertEquals("New baseline", reattached.getValue("message").jsonObject.getValue("content").jsonArray.first().jsonObject.getValue("text").jsonPrimitive.content)
+        assertEquals(
+          "New baseline",
+          reattached
+            .getValue("message")
+            .jsonObject
+            .getValue("content")
+            .jsonArray
+            .first()
+            .jsonObject
+            .getValue("text")
+            .jsonPrimitive.content,
+        )
       } finally {
         shutdownReconnectHarness(harness, server)
       }

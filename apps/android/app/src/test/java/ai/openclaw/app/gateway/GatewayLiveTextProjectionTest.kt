@@ -26,8 +26,25 @@ class GatewayLiveTextProjectionTest {
     assertEquals("Hello  world\n", text(latest))
     val message = latest.getValue("message").jsonObject
     assertEquals(JsonPrimitive(123), message["timestamp"])
-    assertEquals(baseline.getValue("message").jsonObject.getValue("content").jsonArray.drop(1), message.getValue("content").jsonArray.drop(1))
-    assertEquals("[]", message.getValue("content").jsonArray.first().jsonObject.getValue("annotations").toString())
+    assertEquals(
+      baseline
+        .getValue("message")
+        .jsonObject
+        .getValue("content")
+        .jsonArray
+        .drop(1),
+      message.getValue("content").jsonArray.drop(1),
+    )
+    assertEquals(
+      "[]",
+      message
+        .getValue("content")
+        .jsonArray
+        .first()
+        .jsonObject
+        .getValue("annotations")
+        .toString(),
+    )
 
     // The local consumer may miss all previous updates, including a coalesced wire append.
     val coalesced = "x".repeat(3_000) + "latest tail"
@@ -44,7 +61,18 @@ class GatewayLiveTextProjectionTest {
     projection.project("chat", chat(""""message":{"role":"assistant","content":[{"type":"text","text":"old"},{"type":"image","url":"image.png"}]},"deltaText":"old""""))
     val replaced = checkNotNull(projection.project("chat", chat(""""deltaText":"","replace":true""")))
     assertEquals("", text(replaced))
-    assertEquals("image", replaced.getValue("message").jsonObject.getValue("content").jsonArray.last().jsonObject.getValue("type").jsonPrimitive.content)
+    assertEquals(
+      "image",
+      replaced
+        .getValue("message")
+        .jsonObject
+        .getValue("content")
+        .jsonArray
+        .last()
+        .jsonObject
+        .getValue("type")
+        .jsonPrimitive.content,
+    )
     assertEquals("new", text(checkNotNull(projection.project("chat", chat(""""deltaText":"new"""")))))
     val fresh = GatewayLiveTextProjection()
     assertEquals("", text(checkNotNull(fresh.project("chat", chat(""""deltaText":"","replace":true""")))))
@@ -108,9 +136,23 @@ class GatewayLiveTextProjectionTest {
 
   private fun agent(fields: String): JsonObject = parse("""{"runId":"run","sessionKey":"session","stream":"assistant","data":{$fields}}""")
 
-  private fun text(payload: JsonObject): String = payload.getValue("message").jsonObject.getValue("content").jsonArray.first().jsonObject.getValue("text").jsonPrimitive.content
+  private fun text(payload: JsonObject): String =
+    payload
+      .getValue("message")
+      .jsonObject
+      .getValue("content")
+      .jsonArray
+      .first()
+      .jsonObject
+      .getValue("text")
+      .jsonPrimitive.content
 
-  private fun assistantText(payload: JsonObject): String = payload.getValue("data").jsonObject.getValue("text").jsonPrimitive.content
+  private fun assistantText(payload: JsonObject): String =
+    payload
+      .getValue("data")
+      .jsonObject
+      .getValue("text")
+      .jsonPrimitive.content
 
   private fun parse(value: String): JsonObject = Json.parseToJsonElement(value).jsonObject
 }

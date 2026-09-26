@@ -66,8 +66,17 @@ class MicCaptureManagerTest {
       }
       manager.handleGatewayEvent("chat", chatFinalPayload("run-1", ""))
       runCurrent()
-      assertEquals("", manager.conversation.value.last().text)
-      assertFalse(manager.conversation.value.last().isStreaming)
+      assertEquals(
+        "",
+        manager.conversation.value
+          .last()
+          .text,
+      )
+      assertFalse(
+        manager.conversation.value
+          .last()
+          .isStreaming,
+      )
       assertFalse(manager.isSending.value)
     }
 
