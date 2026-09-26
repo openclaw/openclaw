@@ -1,4 +1,5 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -65,8 +66,8 @@ describe("Feishu webhook route configuration", () => {
         "/hook-shutdown-response",
       );
       const abort = new AbortController();
-      const invoked = Promise.withResolvers<void>();
-      const releaseDispatch = Promise.withResolvers<void>();
+      const invoked = createDeferred<void>();
+      const releaseDispatch = createDeferred<void>();
       const peers: { abort: AbortController; monitor: Promise<void> }[] = [];
       const startPeer = (accountId: string, encryptKey: string, startMonitor = monitorWebhook) => {
         const peerAbort = new AbortController();
@@ -169,8 +170,8 @@ describe("Feishu webhook route configuration", () => {
     const accountId = "identity-handoff";
     const account = createFeishuWebhookTestAccount(accountId, "/hook-identity-handoff");
     const abort = new AbortController();
-    const invoked = Promise.withResolvers<void>();
-    const releaseDispatch = Promise.withResolvers<void>();
+    const invoked = createDeferred<void>();
+    const releaseDispatch = createDeferred<void>();
     setFeishuBotIdentityState(accountId, { botOpenId: "ou_initial", botName: "Initial" });
     const monitor = monitorWebhook({
       account,
