@@ -577,7 +577,7 @@ describe("Plugin SDK API baseline", () => {
     expect(fixtureError).not.toContain("return this.status");
   });
 
-  it.each(["source project creation", "declaration diagnostics"])(
+  it.each(["source project creation", "declaration emission"])(
     "rejects source changes after %s while accepting linked external types",
     async (timing) => {
       const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-mutation-");
@@ -639,7 +639,7 @@ describe("Plugin SDK API baseline", () => {
         .join("/");
       const createProject = nativeTypeScript.createNativeTypeScriptProject;
       const create = vi.spyOn(nativeTypeScript, "createNativeTypeScriptProject");
-      const diagnose = vi.spyOn(Program.prototype, "getDeclarationDiagnostics");
+      const emit = vi.spyOn(Program.prototype, "emitToString");
       if (timing === "source project creation") {
         create.mockImplementationOnce(function intercept(options) {
           const native = createProject(options);
@@ -652,13 +652,14 @@ describe("Plugin SDK API baseline", () => {
           return native;
         });
       } else {
-        diagnose.mockImplementationOnce(async function (this: Program, ...args) {
-          diagnose.mockRestore();
-          const result = await this.getDeclarationDiagnostics(...args);
+        emit.mockImplementationOnce(async function (this: Program, ...args) {
+          emit.mockRestore();
+          const result = await this.emitToString(...args);
           expect(
             (await this.getSourceFileNames()).some((file) => path.resolve(file) === entry),
           ).toBe(true);
-          expect(result).toEqual([]);
+          expect(result.emitSkipped).toBe(false);
+          expect(result.diagnostics).toEqual([]);
           changeSource();
           return result;
         });
@@ -667,7 +668,7 @@ describe("Plugin SDK API baseline", () => {
         await expect(render()).rejects.toThrow(/Boundary .*changed during compilation/u);
       } finally {
         create.mockRestore();
-        diagnose.mockRestore();
+        emit.mockRestore();
       }
       expect(changed).toBe(true);
       expect(fs.readFileSync(entry, "utf8")).toBe(source("changed"));
