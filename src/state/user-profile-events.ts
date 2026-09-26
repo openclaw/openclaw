@@ -8,6 +8,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
+import { captureUserProfileAuthorityFreshness } from "./user-profile-authority-freshness.js";
 import type { UserProfileMutationChanges } from "./user-profile-mutation.js";
 import type { UserProfileEmailBinding, UserProfilesDatabase } from "./user-profiles.types.js";
 
@@ -199,11 +200,12 @@ export function fenceUserProfileMutationAuthority(
   };
 }
 
-/** A read is qualified once; retained assertions inspect only owner-held memory. */
-export async function captureUserProfileAuthorityRead(
+/** Local mutation custody and foreign-commit freshness qualify retained authority together. */
+export async function captureUserProfileAuthorityRead<T = unknown>(
   admission: OpenClawStateDatabaseReadAdmission,
   subject?: string,
   dependency: "authority" | "identity" = "authority",
+  select?: (db: DatabaseSync) => T,
 ) {
   observeAuthorityLifecycle();
   const store = authorityStore(admission.identity);
@@ -230,6 +232,7 @@ export async function captureUserProfileAuthorityRead(
     dependency === "identity" ? store.identityRevision : store.revision;
   const profileRevisions = dependency === "identity" ? store.profileIdentities : store.profiles;
   const revision = currentRevision();
+  const freshness = select && captureUserProfileAuthorityFreshness(admission, select);
   return {
     /** Current-fact readers tolerate settled changes, but never borrow an unknown mutation. */
     assertSettled(this: void, profileIds: string | readonly string[]): void {
@@ -253,12 +256,14 @@ export async function captureUserProfileAuthorityRead(
     bind(
       profileIds: string | readonly string[],
       boundSubject = subject,
+      matches?: (facts: T) => boolean,
     ): (() => boolean) | undefined {
       admission.assertCurrent();
       if (
         changes.authorityStores.get(admission.identity.key) !== store ||
         currentRevision() !== revision ||
-        !subjectIsSettled()
+        !subjectIsSettled() ||
+        (freshness && (!matches || !freshness.matches(matches)))
       ) {
         return undefined;
       }
@@ -293,7 +298,8 @@ export async function captureUserProfileAuthorityRead(
             ) &&
             (boundSubject === undefined ||
               store.channelIdentities.get(boundSubject) === identity) &&
-            subjectIsSettled(boundKey)
+            subjectIsSettled(boundKey) &&
+            (!freshness || freshness.isCurrent())
           );
         } catch {
           return false;

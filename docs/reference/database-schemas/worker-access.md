@@ -509,8 +509,12 @@ HTTP/WebSocket sign-in acquisition use that writer and the existing read worker.
 Worker commit receipts publish affected profile, alias, and display facts through
 the profile owner; warm sign-in ensures avoid unnecessary write transactions.
 Channel ingress prepares exact identity and role facts in the read worker, then
-retains the profile owner's physical-store and mutation revisions. Final owner
-checks read those revisions and current configuration without querying SQLite.
+retains the profile owner's physical-store and mutation revisions. Synchronous
+authority checks also probe `PRAGMA data_version` on an independent, admitted
+read-only connection. Foreign commits trigger a comparison of the selected
+identity, role, aliases, or channel policy; unrelated changes preserve authority.
+Preparation compares the worker's returned facts with that owner before binding
+them, and observed revocation remains final even if the stored facts are restored.
 Relevant identity or role mutations revoke prior authority before publication;
 closing or replacing the store invalidates its retained authority. Display caches
 and discovery snapshots do not grant permission.

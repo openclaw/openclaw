@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
@@ -13,6 +15,7 @@ import {
   resolveUserChannelAuthorizationPolicy,
   configuredCommandOwnerPolicyFingerprint,
   readConfiguredCommandOwnerPolicy,
+  resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import {
   captureUserProfileAuthorityRead,
@@ -20,6 +23,7 @@ import {
   fenceUserProfileMutationAuthority,
   publishUserProfileAliasChange,
 } from "./user-profile-events.js";
+import { readUserProfileAuthorityFingerprint } from "./user-profile-identity.read.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   UserChannelIdentity,
@@ -178,7 +182,12 @@ export async function prepareConfiguredCommandOwnerAuthority(
     return undefined;
   }
   const context = captureAuthorityContext(options);
-  const read = await captureUserProfileAuthorityRead(context.admission, "operator.channelPolicy");
+  const read = await captureUserProfileAuthorityRead(
+    context.admission,
+    "operator.channelPolicy",
+    "authority",
+    (db) => readConfigMachineStateRowInDatabase(db, "operator.channelPolicy")?.value_json,
+  );
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "operator.channelPolicy" },
@@ -195,7 +204,7 @@ export async function prepareConfiguredCommandOwnerAuthority(
   if (!recoveryReference) {
     return undefined;
   }
-  const isCurrent = read.bind([]);
+  const isCurrent = read.bind([], undefined, (value) => value === reply.row?.value_json);
   if (!isCurrent) {
     throw new Error("Configured command owner policy changed during preparation");
   }
@@ -225,7 +234,15 @@ export async function prepareUserChannelIdentityAuthority(
       : userChannelIdentitySubject(capturedIdentity);
   const context = captureAuthorityContext(options);
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const read = await captureUserProfileAuthorityRead(context.admission, subject);
+    const read = await captureUserProfileAuthorityRead(
+      context.admission,
+      subject,
+      "authority",
+      (db) => ({
+        linked: resolveUserChannelIdentityInDatabase(db, capturedIdentity),
+        policy: readConfigMachineStateRowInDatabase(db, "operator.channelPolicy")?.value_json,
+      }),
+    );
     const reply = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
       {
@@ -246,6 +263,7 @@ export async function prepareUserChannelIdentityAuthority(
     const isCurrent = read.bind(
       reply.linked.profileId,
       reply.linked.authorization?.subject ?? subject,
+      (facts) => isDeepStrictEqual(facts.linked, reply.linked),
     );
     if (isCurrent) {
       return { linked: reply.linked, isCurrent };
@@ -276,7 +294,12 @@ async function prepareUserProfileAuthority(
 ) {
   const context = captureAuthorityContext(options);
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const read = await captureUserProfileAuthorityRead(context.admission, undefined, dependency);
+    const read = await captureUserProfileAuthorityRead(
+      context.admission,
+      undefined,
+      dependency,
+      (db) => readUserProfileAuthorityFingerprint(db, profileId, dependency),
+    );
     const reply = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
       {
@@ -294,7 +317,17 @@ async function prepareUserProfileAuthority(
     if (!reply.profile) {
       return undefined;
     }
-    const isCurrent = read.bind([profileId, reply.profile.profileId]);
+    const profile = reply.profile;
+    const isCurrent = read.bind(
+      [profileId, profile.profileId],
+      undefined,
+      (facts) =>
+        facts?.profileId === profile.profileId &&
+        (dependency === "identity" ||
+          ("role" in facts &&
+            facts.role === profile.role &&
+            isDeepStrictEqual(facts.aliases, new Set(profile.aliases)))),
+    );
     if (isCurrent) {
       return { ...reply.profile, isCurrent };
     }
