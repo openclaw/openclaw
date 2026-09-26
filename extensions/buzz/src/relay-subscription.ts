@@ -2,6 +2,57 @@ import type { Event, Filter, Relay } from "nostr-tools";
 
 type BuzzRelaySubscriptionParams = Omit<Parameters<Relay["prepareSubscription"]>[1], "abort">;
 
+// NIP-01 gives CLOSED a machine-readable prefix. `rate-limited:` is the one the
+// relay uses to refuse a request it invites the client to repeat, and Buzz appends
+// its own hint: "rate-limited: quota exceeded; retry in 2s".
+const BUZZ_RELAY_RATE_LIMITED_PREFIX = "rate-limited:";
+const BUZZ_RELAY_RETRY_HINT = /retry in (\d+(?:\.\d+)?)\s*(ms|s|m)\b/i;
+const BUZZ_RELAY_RETRY_HINT_UNIT_MS: Record<string, number> = {
+  ms: 1,
+  s: 1_000,
+  m: 60_000,
+};
+const BUZZ_RELAY_RATE_LIMIT_DEFAULT_RETRY_MS = 2_000;
+// Retrying before the relay's own window clears only spends the retry budget, so honor
+// the hint. The ceiling guards against a malformed hint parking catch-up for hours;
+// callers wait on an abortable timer, so closing the bus never waits this long.
+const BUZZ_RELAY_RATE_LIMIT_MAX_RETRY_MS = 5 * 60_000;
+
+/** A relay CLOSED frame for one subscription. The connection itself stays up. */
+class BuzzRelaySubscriptionClosedError extends Error {
+  readonly reason: string;
+
+  constructor(message: string, reason: string) {
+    super(message);
+    this.name = "BuzzRelaySubscriptionClosedError";
+    this.reason = reason;
+  }
+}
+
+/**
+ * How long a rate-limited close asks the caller to wait, or undefined when the close
+ * is not retryable. A relay that names its own delay is asking for the request again,
+ * not reporting a broken connection.
+ */
+export function resolveBuzzRelayRetryDelayMs(error: unknown): number | undefined {
+  if (!(error instanceof BuzzRelaySubscriptionClosedError)) {
+    return undefined;
+  }
+  const reason = error.reason.trim().toLowerCase();
+  if (!reason.startsWith(BUZZ_RELAY_RATE_LIMITED_PREFIX)) {
+    return undefined;
+  }
+  const hint = BUZZ_RELAY_RETRY_HINT.exec(reason);
+  if (!hint?.[1] || !hint[2]) {
+    return BUZZ_RELAY_RATE_LIMIT_DEFAULT_RETRY_MS;
+  }
+  const delayMs = Number(hint[1]) * (BUZZ_RELAY_RETRY_HINT_UNIT_MS[hint[2]] ?? 1_000);
+  if (!Number.isFinite(delayMs) || delayMs <= 0) {
+    return BUZZ_RELAY_RATE_LIMIT_DEFAULT_RETRY_MS;
+  }
+  return Math.min(delayMs, BUZZ_RELAY_RATE_LIMIT_MAX_RETRY_MS);
+}
+
 type BuzzRelaySnapshotParams<TResult> = {
   relay: Relay;
   filters: Filter[];
@@ -108,7 +159,7 @@ export async function queryBuzzRelaySnapshot<TResult>(
         },
         onclose: (reason) => {
           if (reason !== params.closeReason) {
-            finish(new Error(params.closeMessage(reason)));
+            finish(new BuzzRelaySubscriptionClosedError(params.closeMessage(reason), reason));
           }
         },
       });
