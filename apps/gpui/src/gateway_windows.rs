@@ -12,6 +12,12 @@ use crate::gateway::{
     profiles::{GatewayProfile, ProfileStore},
 };
 
+/// `OPENCLAW_GPUI_BACKGROUND=1` opens and reuses windows without activating the
+/// app, so UI automation (Peekaboo background input) never steals focus.
+fn activates() -> bool {
+    std::env::var_os("OPENCLAW_GPUI_BACKGROUND").as_deref() != Some(std::ffi::OsStr::new("1"))
+}
+
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = openclaw, no_json)]
 pub struct OpenGateway {
@@ -190,10 +196,16 @@ pub fn open_profile(profile: GatewayProfile, cx: &mut App) {
         .get(&profile.id)
         .copied()
         && handle
-            .update(cx, |_, window, _| window.activate_window())
+            .update(cx, |_, window, _| {
+                if activates() {
+                    window.activate_window();
+                }
+            })
             .is_ok()
     {
-        cx.activate(true);
+        if activates() {
+            cx.activate(true);
+        }
         return;
     }
     let config = config::for_profile(&profile);
@@ -214,6 +226,7 @@ pub fn open(
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(720.), px(480.))),
             app_id: Some("org.openclaw.gpui".into()),
+            focus: activates(),
             ..TitleBar::window_options()
         },
         |window, cx| {
@@ -230,7 +243,9 @@ pub fn open(
                     .insert(id.clone(), handle.into());
                 focus(Some(&id), cx);
             }
-            cx.activate(true);
+            if activates() {
+                cx.activate(true);
+            }
         }
         Err(error) => log::error!("Could not open Gateway window: {error}"),
     }
@@ -239,10 +254,16 @@ pub fn open(
 pub fn manage(cx: &mut App) {
     if let Some(handle) = cx.global::<GatewayWindows>().manager
         && handle
-            .update(cx, |_, window, _| window.activate_window())
+            .update(cx, |_, window, _| {
+                if activates() {
+                    window.activate_window();
+                }
+            })
             .is_ok()
     {
-        cx.activate(true);
+        if activates() {
+            cx.activate(true);
+        }
         return;
     }
     let bounds = Bounds::centered(None, size(px(880.), px(700.)), cx);
@@ -250,6 +271,7 @@ pub fn manage(cx: &mut App) {
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(780.), px(620.))),
+            focus: activates(),
             ..TitleBar::window_options()
         },
         |window, cx| {
@@ -262,7 +284,9 @@ pub fn manage(cx: &mut App) {
         Ok(handle) => {
             cx.global_mut::<GatewayWindows>().manager = Some(handle.into());
             focus(None, cx);
-            cx.activate(true);
+            if activates() {
+                cx.activate(true);
+            }
         }
         Err(error) => log::error!("Could not open Manage Gateways: {error}"),
     }
