@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import { applyAgentBindings, removeAgentBindings } from "./agents.bindings.js";
 import { applyAgentConfig, buildAgentSummaries, pruneAgentConfig } from "./agents.config.js";
@@ -283,7 +284,7 @@ describe("agents helpers", () => {
         ],
       },
       tools: {
-        agentToAgent: { enabled: true, allow: ["work", "home"] },
+        agentToAgent: { enabled: true, allow: ["WORK", "home"] },
       },
       talk: { agentId: "work", provider: "test-provider" },
     };
@@ -319,6 +320,23 @@ describe("agents helpers", () => {
       "agents.defaults.systemAgent.agentId",
       "talk.agentId",
     ]);
+    // Complete, sorted surface used for adopted-agent removal blocking: every reference kind the
+    // fixture exercises, including per-entry/defaults allowAgents, owner refs, broadcast and hooks.
+    expect(result.removedReferences).toEqual([
+      "agents.defaults.heartbeat.agentId",
+      "agents.defaults.subagents.allowAgents[0]",
+      "agents.defaults.systemAgent.agentId",
+      "agents.entries.home.subagents.allowAgents[0]",
+      "bindings[0]",
+      "broadcast.peer-1[0]",
+      "broadcast.peer-2[0]",
+      "broadcast.slack:C0123.agents[0]",
+      "broadcast.telegram:-100123.agents[0]",
+      "hooks.allowedAgentIds[1]",
+      "hooks.mappings[0]",
+      "talk.agentId",
+      "tools.agentToAgent.allow[0]",
+    ]);
   });
 
   it("pruneAgentConfig pins a survivor's workspace before the roster becomes sole", () => {
@@ -333,8 +351,64 @@ describe("agents helpers", () => {
     const result = pruneAgentConfig(cfg, "ops");
 
     expect(result.config.agents?.entries).toEqual({
-      research: { workspace: "/srv/fleet/research" },
+      research: { workspace: path.resolve("/srv/fleet/research") },
     });
+    // Roster-collapse pins are not references to the removed agent.
+    expect(result.removedReferences).toEqual([]);
+    expect(result.removedConfig).toEqual(["agents.ownership"]);
+    expect(result.insertedConfig).toEqual([
+      { path: "agents.defaults.authInheritance.agentId", value: "main" },
+      {
+        path: "agents.entries.research.workspace",
+        value: path.resolve("/srv/fleet/research"),
+      },
+    ]);
+  });
+
+  it("reports ownership materialized while a surviving roster remains multi-agent", () => {
+    const result = pruneAgentConfig(
+      {
+        agents: { entries: { ops: {}, research: {}, writer: {} } },
+      },
+      "ops",
+    );
+
+    expect(result.config.agents?.ownership).toBe("explicit");
+    expect(result.removedConfig).toEqual([]);
+    expect(result.insertedConfig).toContainEqual({
+      path: "agents.ownership",
+      value: "explicit",
+    });
+  });
+
+  it("reports ownership materialized when a migrated legacy roster collapses to one agent", () => {
+    const migrated = migratePersistedImplicitMainRoster({
+      agents: { entries: { main: { default: true }, worker: {} } },
+    }).config as OpenClawConfig;
+
+    const result = pruneAgentConfig(migrated, "worker");
+
+    expect(result.config.agents?.ownership).toBe("explicit");
+    expect(result.insertedConfig).toContainEqual({
+      path: "agents.ownership",
+      value: "explicit",
+    });
+  });
+
+  it("pruneAgentConfig pins the removed sole agent as a fixed session-store owner", () => {
+    const result = pruneAgentConfig(
+      {
+        session: { store: "/srv/shared-sessions.sqlite" },
+        agents: { entries: { ops: {} } },
+      },
+      "ops",
+    );
+
+    expect(result.config.agents?.defaults?.sessionStore?.agentId).toBe("ops");
+    expect(result.removedConfig).toEqual([]);
+    expect(result.insertedConfig).toEqual([
+      { path: "agents.defaults.sessionStore.agentId", value: "ops" },
+    ]);
   });
 
   it("removes ambient heartbeat policy when its owner leaves a surviving fleet", () => {

@@ -1,10 +1,12 @@
 // Creates Claw-owned bootstrap and supporting files inside the new agent workspace.
 import { createHash } from "node:crypto";
+import syncFs from "node:fs";
 import { realpath } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { Selectable } from "kysely";
+import { publishBootstrapFile } from "../agents/workspace-bootstrap-publish.js";
 import { root as fsSafeRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
 import {
   compileSqliteQueryBindings,
@@ -23,6 +25,11 @@ import {
 import { clawContainedRelativePath } from "./path-containment.js";
 import { parseClawMarkdown } from "./reader.js";
 import type { ClawAddPlan, ClawAddPlanAction, ClawDiagnostic } from "./types.js";
+import {
+  CLAW_ADOPTED_WORKSPACE_MARKER_PATH,
+  planAdoptsWorkspace,
+  prepareClawWorkspaceFilePublication,
+} from "./workspace-origin.js";
 
 export const CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION =
   "openclaw.clawWorkspaceFileRecord.v1" as const;
@@ -116,6 +123,31 @@ function diagnostic(action: ClawAddPlanAction, code: string, message: string): C
 
 function contentDigest(content: Uint8Array): string {
   return `sha256:${createHash("sha256").update(content).digest("hex")}`;
+}
+
+function readOpenedWorkspaceFile(fd: number, size: bigint, label: string): Buffer {
+  if (size > BigInt(MAX_CLAW_WORKSPACE_FILE_BYTES)) {
+    throw new FsSafeError(
+      "too-large",
+      `Claw-owned workspace destination ${JSON.stringify(label)} exceeds the ${MAX_CLAW_WORKSPACE_FILE_BYTES}-byte limit.`,
+    );
+  }
+  const content = Buffer.alloc(Number(size));
+  let offset = 0;
+  while (offset < content.length) {
+    const bytesRead = syncFs.readSync(fd, content, offset, content.length - offset, offset);
+    if (bytesRead === 0) {
+      break;
+    }
+    offset += bytesRead;
+  }
+  const grew = syncFs.readSync(fd, Buffer.alloc(1), 0, 1, offset) !== 0;
+  if (offset !== content.length || grew) {
+    throw new Error(
+      `Claw-owned workspace destination ${JSON.stringify(label)} changed during inspection.`,
+    );
+  }
+  return content;
 }
 
 export async function readClawWorkspaceActionSource(params: {
@@ -291,6 +323,7 @@ export function readClawWorkspaceFiles(
         "=",
         parameter((value) => value),
       )
+      .where("target_path", "<>", CLAW_ADOPTED_WORKSPACE_MARKER_PATH)
       .orderBy("target_path"),
   );
   const rows =
@@ -307,12 +340,21 @@ export function readAllClawWorkspaceFiles(
   if (!tableExists(db, "claw_workspace_files")) {
     return [];
   }
-  const compiled = selectWorkspaceFiles(db).orderBy("agent_id").orderBy("target_path").compile();
+  const { compiled, bind } = compileSqliteQueryBindings<string, WorkspaceFileRow>((parameter) =>
+    selectWorkspaceFiles(db)
+      .where(
+        "target_path",
+        "<>",
+        parameter((value) => value),
+      )
+      .orderBy("agent_id")
+      .orderBy("target_path"),
+  );
   const rows =
     db /* sqlite-allow-raw: preserve native orphan inventory errors without a write transaction. */
       .prepare(compiled.sql)
       // SAFETY: The canonical table and shared explicit projection provide this generated row shape.
-      .all() as WorkspaceFileRow[];
+      .all(...bind(CLAW_ADOPTED_WORKSPACE_MARKER_PATH)) as WorkspaceFileRow[];
   // Orphan inventory reports the stored version; per-agent inventory uses the current constant.
   return rows.map((row) =>
     rowToWorkspaceFile(row, row.schema_version as PersistedClawWorkspaceFile["schemaVersion"]),
@@ -342,6 +384,7 @@ export async function createClawWorkspaceFiles(
   });
   const createdFiles: PersistedClawWorkspaceFile[] = [];
   const nowMs = options.nowMs ?? Date.now();
+  const adoptedWorkspace = planAdoptsWorkspace(plan);
 
   for (const action of actions) {
     try {
@@ -417,8 +460,40 @@ export async function createClawWorkspaceFiles(
           createdFiles,
         );
       }
+      const publication = prepareClawWorkspaceFilePublication(plan, expectedRecord.path, options);
       if (await workspace.exists(targetRelative)) {
         if (!existingRecord || existingRecord.status === "failed") {
+          if (action.action === "adopt") {
+            const adoptedTarget = await workspace.read(targetRelative, {
+              hardlinks: "reject",
+              maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
+              symlinks: "reject",
+            });
+            if (contentDigest(adoptedTarget.buffer) !== expectedRecord.contentDigest) {
+              throw new ClawWorkspaceWriteError(
+                [
+                  diagnostic(
+                    action,
+                    "workspace_file_conflict",
+                    `Adoptable workspace destination ${JSON.stringify(targetRelative)} changed after planning; adoption never overwrites existing files.`,
+                  ),
+                ],
+                createdFiles,
+              );
+            }
+            const adoptedRecord = existingRecord ?? expectedRecord;
+            if (existingRecord) {
+              const previousStatus = existingRecord.status;
+              existingRecord.status = "complete";
+              existingRecord.updatedAtMs = nowMs;
+              updateWorkspaceFileStatus(existingRecord, [previousStatus], options);
+            } else {
+              adoptedRecord.status = "complete";
+              persistWorkspaceFile(adoptedRecord, options);
+            }
+            createdFiles.push(adoptedRecord);
+            continue;
+          }
           throw new ClawWorkspaceWriteError(
             [
               diagnostic(
@@ -430,18 +505,53 @@ export async function createClawWorkspaceFiles(
             createdFiles,
           );
         }
-        const existingTarget = await workspace.read(targetRelative, {
+        const openedTarget = await workspace.open(targetRelative, {
           hardlinks: "reject",
-          maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
           symlinks: "reject",
         });
-        if (contentDigest(existingTarget.buffer) !== expectedRecord.contentDigest) {
+        let existingDigest: string;
+        let existingIdentity: syncFs.BigIntStats;
+        try {
+          const before = syncFs.fstatSync(openedTarget.handle.fd, { bigint: true });
+          existingDigest = contentDigest(
+            readOpenedWorkspaceFile(openedTarget.handle.fd, before.size, targetRelative),
+          );
+          existingIdentity = syncFs.fstatSync(openedTarget.handle.fd, { bigint: true });
+          if (
+            before.size !== existingIdentity.size ||
+            before.mtimeNs !== existingIdentity.mtimeNs ||
+            before.ctimeNs !== existingIdentity.ctimeNs
+          ) {
+            throw new Error(
+              `Claw-owned workspace destination ${JSON.stringify(targetRelative)} changed during inspection.`,
+            );
+          }
+        } finally {
+          await openedTarget[Symbol.asyncDispose]();
+        }
+        if (existingDigest !== expectedRecord.contentDigest) {
           throw new ClawWorkspaceWriteError(
             [
               diagnostic(
                 action,
                 "workspace_file_drift",
                 `Claw-owned workspace destination ${JSON.stringify(targetRelative)} no longer matches its recorded content.`,
+              ),
+            ],
+            createdFiles,
+          );
+        }
+        if (
+          adoptedWorkspace &&
+          action.action !== "adopt" &&
+          !publication?.ownsExisting(existingIdentity)
+        ) {
+          throw new ClawWorkspaceWriteError(
+            [
+              diagnostic(
+                action,
+                "workspace_file_ownership_conflict",
+                `Workspace destination ${JSON.stringify(targetRelative)} matches the recorded content but lacks this install's publication receipt.`,
               ),
             ],
             createdFiles,
@@ -454,6 +564,18 @@ export async function createClawWorkspaceFiles(
         createdFiles.push(existingRecord);
         continue;
       }
+      if (action.action === "adopt") {
+        throw new ClawWorkspaceWriteError(
+          [
+            diagnostic(
+              action,
+              "workspace_file_conflict",
+              `Adoptable workspace destination ${JSON.stringify(targetRelative)} disappeared after planning; adoption never writes missing files.`,
+            ),
+          ],
+          createdFiles,
+        );
+      }
       const record = existingRecord ?? expectedRecord;
       if (existingRecord) {
         const previousStatus = record.status;
@@ -464,10 +586,26 @@ export async function createClawWorkspaceFiles(
         persistWorkspaceFile(record, options);
       }
       try {
-        await workspace.write(targetRelative, resolvedSource.content, {
-          mkdir: true,
-          overwrite: false,
-        });
+        const targetParent = dirname(record.path);
+        if (targetParent !== ".") {
+          await workspace.mkdir(targetParent, {
+            assertBeforeMutation: publication?.assertCurrent,
+          });
+        }
+        const created = await publishBootstrapFile(
+          targetPath,
+          resolvedSource.content,
+          publication?.assertCurrent,
+          publication?.beforePublish,
+          0o600,
+          publication?.afterPublish,
+          workspace.rootReal,
+        );
+        if (!created) {
+          throw new Error(
+            `Workspace destination ${JSON.stringify(targetRelative)} appeared during publication.`,
+          );
+        }
         record.status = "complete";
         updateWorkspaceFileStatus(record, ["pending"], options);
         createdFiles.push(record);

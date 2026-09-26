@@ -23,6 +23,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { persistClawInstallRecord } from "./provenance.js";
 import { makeProvenancePlan, stateEnv } from "./provenance.test-helpers.js";
+import { resolveClawToolPolicyConsent } from "./tool-policy-runtime.js";
 import type { ClawOpenClawProfile } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -222,6 +223,191 @@ describe("Claw tool policy consent provenance", () => {
       }),
     ).toThrow("Cannot verify the installed tool authority");
   });
+
+  it("honors adopted v3 tool profile consent after verifying the agent config digest", async () => {
+    const root = tempDirs.make("openclaw-adopted-claw-tool-consent-");
+    const env = stateEnv(root);
+    const workspace = join(root, "workspace-worker");
+    mkdirSync(workspace);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const adoptedAgent = {
+      id: "worker",
+      workspace,
+      tools: { profile: "full" as const, allow: ["read"] },
+    };
+    const { plan } = await makeProvenancePlan(
+      root,
+      { schemaVersion: 1, agent: { id: "worker" } },
+      {
+        workspace,
+        adoptExistingAgent: true,
+        existingAgents: [adoptedAgent],
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { profile: "full", allow: ["read"] } },
+        },
+      },
+    );
+    const record = persistClawInstallRecord(plan, { env });
+    const config = { agents: { list: [plan.agent.config] } };
+    setRuntimeConfigSnapshot(config);
+
+    const capabilityProfile = resolveConversationCapabilityProfile({
+      agentId: "worker",
+      config,
+    });
+    const policies = resolveConversationToolPolicies({ capabilityProfile });
+    const filtered = applyToolPolicyPipeline({
+      tools: [{ name: "read" }, { name: "exec" }],
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: buildConversationToolPolicyPipelineSteps({
+        capabilityProfile,
+        policies,
+        includeRuntimeToolPolicy: true,
+      }),
+    });
+
+    expect(record.schemaVersion).toBe("openclaw.clawInstallRecord.v3");
+    expect(filtered.map((tool) => tool.name)).toEqual(["read"]);
+
+    const driftedConfig = {
+      agents: {
+        list: [
+          {
+            ...plan.agent.config,
+            tools: { profile: "full" as const, allow: ["read", "exec"] },
+          },
+        ],
+      },
+    };
+    setRuntimeConfigSnapshot(driftedConfig);
+    expect(() =>
+      resolveConversationCapabilityProfile({ agentId: "worker", config: driftedConfig }),
+    ).toThrow("Cannot verify the installed tool authority");
+  });
+
+  it("honors adopted consent for a mixed-case roster key and still rejects its drift", async () => {
+    const root = tempDirs.make("openclaw-adopted-mixedcase-claw-tool-consent-");
+    const env = stateEnv(root);
+    const workspace = join(root, "workspace-worker");
+    mkdirSync(workspace);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const adoptedAgent = {
+      id: "worker",
+      workspace,
+      tools: { profile: "full" as const, allow: ["read"] },
+    };
+    const { plan } = await makeProvenancePlan(
+      root,
+      { schemaVersion: 1, agent: { id: "worker" } },
+      {
+        workspace,
+        adoptExistingAgent: true,
+        existingAgents: [adoptedAgent],
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { profile: "full", allow: ["read"] } },
+        },
+      },
+    );
+    persistClawInstallRecord(plan, { env });
+    const { id: _canonicalId, ...configWithoutId } = plan.agent.config;
+    const config = { agents: { entries: { WORKER: configWithoutId } } };
+    setRuntimeConfigSnapshot(config);
+
+    expect(
+      resolveClawToolPolicyConsent({
+        agentTools: config.agents.entries.WORKER.tools,
+        agentId: "WORKER",
+        profile: "full",
+        ownsProfile: true,
+        hasAgentAllowlist: true,
+      }),
+    ).toEqual({ frozen: true });
+
+    const capabilityProfile = resolveConversationCapabilityProfile({
+      agentId: "WORKER",
+      config,
+    });
+    const policies = resolveConversationToolPolicies({ capabilityProfile });
+    const filtered = applyToolPolicyPipeline({
+      tools: [{ name: "read" }, { name: "exec" }],
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: buildConversationToolPolicyPipelineSteps({
+        capabilityProfile,
+        policies,
+        includeRuntimeToolPolicy: true,
+      }),
+    });
+    expect(filtered.map((tool) => tool.name)).toEqual(["read"]);
+
+    const driftedConfig = {
+      agents: {
+        entries: {
+          WORKER: {
+            ...configWithoutId,
+            tools: { profile: "full" as const, allow: ["read", "exec"] },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(driftedConfig);
+    expect(() =>
+      resolveConversationCapabilityProfile({ agentId: "WORKER", config: driftedConfig }),
+    ).toThrow("Cannot verify the installed tool authority");
+  });
+
+  it.each([
+    ["pending", "pending"],
+    ["failed", "workspace_ready"],
+  ] as const)(
+    "does not freeze tool consent for a %s unclaimed adoption",
+    async (_phase, status) => {
+      const root = tempDirs.make(`openclaw-unclaimed-${status}-tool-consent-`);
+      const env = stateEnv(root);
+      const workspace = join(root, "workspace-worker");
+      mkdirSync(workspace);
+      vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+      const adoptedAgent = {
+        id: "worker",
+        workspace,
+        tools: { profile: "full" as const, allow: ["read"] },
+      };
+      const { plan } = await makeProvenancePlan(
+        root,
+        { schemaVersion: 1, agent: { id: "worker" } },
+        {
+          workspace,
+          adoptExistingAgent: true,
+          existingAgents: [adoptedAgent],
+          openClawProfile: {
+            schemaVersion: 1,
+            agent: { tools: { profile: "full", allow: ["read"] } },
+          },
+        },
+      );
+      const record = persistClawInstallRecord(plan, { env, status });
+      const config = { agents: { list: [plan.agent.config] } };
+      setRuntimeConfigSnapshot(config);
+
+      expect(record).toMatchObject({
+        schemaVersion: "openclaw.clawInstallRecord.v3",
+        agentClaimed: false,
+        status,
+      });
+      expect(
+        resolveClawToolPolicyConsent({
+          agentTools: plan.agent.config.tools,
+          agentId: "worker",
+          profile: "full",
+          ownsProfile: true,
+          hasAgentAllowlist: true,
+        }),
+      ).toEqual({ frozen: false });
+    },
+  );
 
   it("fails closed after a host upgrade leaves legacy profile provenance", async () => {
     const root = tempDirs.make("openclaw-claw-tool-consent-");

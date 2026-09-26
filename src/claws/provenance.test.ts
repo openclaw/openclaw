@@ -6,13 +6,15 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
+import { ClawAddMutationError } from "./add-errors.js";
+import { applyClawAddPlan } from "./add.js";
 import { ClawCronInstallError } from "./cron.js";
 import { replaceClawPackageRefExpected } from "./package-update-provenance.js";
 import { ClawPackageInstallError } from "./packages.js";
 import {
   clawInstallRecordMatchesPlan,
   persistClawInstallRecord,
+  persistClawInstallRecordWithDisposition,
   persistClawPackageRef,
   readClawInstallRecord,
   readClawPackageRefs,
@@ -169,22 +171,23 @@ describe("Claw root install provenance", () => {
 
   it("resumes a matching non-complete install record without inserting again", async () => {
     const { root, plan } = await makePlan();
-    const first = persistClawInstallRecord(plan, {
+    const first = persistClawInstallRecordWithDisposition(plan, {
       env: stateEnv(root),
       status: "pending",
       nowMs: 1,
     });
 
-    const resumed = persistClawInstallRecord(plan, {
+    const resumed = persistClawInstallRecordWithDisposition(plan, {
       env: stateEnv(root),
       status: "pending",
       nowMs: 2,
     });
 
-    expect(resumed).toEqual(first);
-    expect(clawInstallRecordMatchesPlan(first, { ...plan, planIntegrity: "sha256:changed" })).toBe(
-      false,
-    );
+    expect(first.created).toBe(true);
+    expect(resumed).toEqual({ record: first.record, created: false });
+    expect(
+      clawInstallRecordMatchesPlan(first.record, { ...plan, planIntegrity: "sha256:changed" }),
+    ).toBe(false);
     expect(readClawInstallRecord("worker", { env: stateEnv(root) })).toMatchObject({
       agentId: "worker",
       status: "pending",
@@ -686,23 +689,6 @@ describe("applyClawAddPlan", () => {
     });
     expect(readInstallRow("worker", root)?.status).toBe("partial");
     expect(installPackages).not.toHaveBeenCalled();
-  });
-
-  it("records parent-directory creation failures before workspace mutation", async () => {
-    const root = tempDirs.make("openclaw-claw-add-");
-    const blockedParent = join(root, "blocked-parent");
-    await writeFile(blockedParent, "not a directory", "utf8");
-    const { plan } = await makePlan(undefined, {
-      workspace: join(blockedParent, "workspace-worker"),
-    });
-
-    await expect(
-      applyClawAddPlan(plan, {
-        consentPlanIntegrity: plan.planIntegrity,
-        env: stateEnv(root),
-      }),
-    ).rejects.toMatchObject({ code: "workspace_parent_failed" });
-    expect(readInstallRow("worker", root)).toBeUndefined();
   });
 
   it("removes a new workspace when its durable phase cannot be recorded", async () => {

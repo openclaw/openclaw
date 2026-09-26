@@ -3,7 +3,7 @@ import { mkdir, realpath, rm } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { stringify as stringifyYaml } from "yaml";
-import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { prepareLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
@@ -13,6 +13,7 @@ import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isAvatarDataUrl, isAvatarHttpUrl } from "../shared/avatar-policy.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveCanonicalClawAgent } from "./agent-adoption-apply.js";
 import { readClawStatus } from "./lifecycle-state.js";
 import type { PackageRemovalDeps } from "./package-remove.js";
 import { readClawManifestFile } from "./reader.js";
@@ -54,7 +55,7 @@ type ClawExportResult = {
   filesWritten: string[];
 };
 
-const DRIFTED_BOOTSTRAP_STATES = new Set<string>(["modified", "unsafe", "unknown"]);
+const DRIFTED_BOOTSTRAP_STATES = new Set<string>(["modified", "unsafe", "unknown", "unowned"]);
 
 export class ClawExportError extends Error {
   constructor(
@@ -348,7 +349,7 @@ export async function exportClawAgent(
       `Installed Claw agent ${JSON.stringify(agentId)} is in ${JSON.stringify(record.install.status)} state; finish or repair it before export.`,
     );
   }
-  const agent = listAgentEntries(options.config).find((candidate) => candidate.id === agentId);
+  const agent = resolveCanonicalClawAgent(options.config, agentId);
   if (!agent) {
     throw new ClawExportError(
       "agent_missing",

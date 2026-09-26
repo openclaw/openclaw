@@ -7,7 +7,10 @@ import { commitPluginInstallRecordsWithConfig } from "../plugins/install-record-
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { installClawPackages } from "./packages.js";
 import { packageInstallPlan } from "./packages.test-support.js";
@@ -20,8 +23,13 @@ vi.mock("../plugins/management-mutations.js", () => ({
   installManagedPlugin: installOwner.install,
 }));
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+const dirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
+});
 const integrity = `sha256:${"a".repeat(64)}`;
 
 describe("Claw committed plugin requirement handoff", () => {

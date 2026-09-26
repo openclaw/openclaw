@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
-import { listAgentEntries } from "../agents/agent-scope.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { OpenClawStateLeaseError } from "../state/openclaw-state-lease.js";
+import { withClawAgentMutationLease } from "./add-apply-lease.js";
+import { preserveAdoptedAgentDefault } from "./adopted-agent-update.js";
+import { resolveCanonicalClawAgent, resolveClawAgentRosterKey } from "./agent-adoption-apply.js";
 import { clawTargetPackages } from "./application-provenance.js";
 import {
   applyClawCronUpdate,
@@ -38,6 +41,7 @@ import {
   type ClawOpenClawProfile,
   type ClawSourceIdentity,
 } from "./types.js";
+import { replaceClawUpdateAgent } from "./update-agent-config.js";
 import { buildClawUpdatePlan, type ClawUpdateAction, type ClawUpdatePlan } from "./update-plan.js";
 import { collectClawRollbackFailures } from "./update-rollback.js";
 import {
@@ -49,6 +53,32 @@ import {
 export const CLAW_UPDATE_RESULT_SCHEMA_VERSION = "openclaw.clawUpdateResult.v1" as const;
 
 type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
+
+type ClawUpdateApplyOptions = OpenClawStateDatabaseOptions & {
+  config: OpenClawConfig;
+  sourceMcpServers: Record<string, Record<string, unknown>>;
+  consentPlanIntegrity: string | undefined;
+  packagePreflight?: ClawAddPlanContext["packagePreflight"];
+  runtime?: RuntimeEnv;
+  reloadPlugins?: PluginInstallBatchReload;
+  commitConfig?: ConfigCommit;
+  rebuildPlan?: typeof buildClawUpdatePlan;
+  buildAddPlan?: typeof buildClawAddPlan;
+  readInstall?: typeof readClawInstallRecord;
+  persistInstall?: typeof updateClawInstallRecord;
+  applyWorkspace?: typeof applyClawWorkspaceUpdate;
+  applyMcp?: typeof applyClawMcpUpdate;
+  applyCron?: typeof applyClawCronUpdate;
+  applyPackage?: typeof applyClawPackageUpdate;
+  cronGateway?: ClawCronGateway;
+  signal?: AbortSignal;
+  /** Internal live authority installed by the agent lifecycle mutation lease. */
+  assertAgentMutationLeaseOwned?: () => void;
+};
+
+function assertAgentMutationLeaseOwned(options: ClawUpdateApplyOptions): void {
+  options.assertAgentMutationLeaseOwned?.();
+}
 
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
@@ -114,24 +144,7 @@ export async function applyClawUpdatePlan(
     targetOpenClawProfile?: ClawOpenClawProfile;
     targetSource: ClawSourceIdentity;
   },
-  options: OpenClawStateDatabaseOptions & {
-    config: OpenClawConfig;
-    sourceMcpServers: Record<string, Record<string, unknown>>;
-    consentPlanIntegrity: string | undefined;
-    packagePreflight?: ClawAddPlanContext["packagePreflight"];
-    runtime?: RuntimeEnv;
-    reloadPlugins?: PluginInstallBatchReload;
-    commitConfig?: ConfigCommit;
-    rebuildPlan?: typeof buildClawUpdatePlan;
-    buildAddPlan?: typeof buildClawAddPlan;
-    readInstall?: typeof readClawInstallRecord;
-    persistInstall?: typeof updateClawInstallRecord;
-    applyWorkspace?: typeof applyClawWorkspaceUpdate;
-    applyMcp?: typeof applyClawMcpUpdate;
-    applyCron?: typeof applyClawCronUpdate;
-    applyPackage?: typeof applyClawPackageUpdate;
-    cronGateway?: ClawCronGateway;
-  },
+  options: ClawUpdateApplyOptions,
 ): Promise<ClawUpdateResult> {
   if (options.consentPlanIntegrity !== plan.planIntegrity) {
     throw new ClawUpdateMutationError(
@@ -146,6 +159,34 @@ export async function applyClawUpdatePlan(
     );
   }
 
+  try {
+    return await withClawAgentMutationLease(plan.agentId, options, async (lease) =>
+      applyClawUpdatePlanOwned(plan, params, {
+        ...options,
+        signal: lease.signal,
+        assertAgentMutationLeaseOwned: lease.assertOwned,
+      }),
+    );
+  } catch (error) {
+    if (error instanceof OpenClawStateLeaseError) {
+      throw new ClawUpdateMutationError("update_lease_failed", error.message, { cause: error });
+    }
+    throw error;
+  }
+}
+
+async function applyClawUpdatePlanOwned(
+  plan: ClawUpdatePlan,
+  params: {
+    targetManifest: ClawManifest;
+    targetClawMarkdownBody?: Buffer;
+    targetOpenClawProfile?: ClawOpenClawProfile;
+    targetSource: ClawSourceIdentity;
+  },
+  options: ClawUpdateApplyOptions,
+): Promise<ClawUpdateResult> {
+  assertAgentMutationLeaseOwned(options);
+
   const rebuildPlan = options.rebuildPlan ?? buildClawUpdatePlan;
   const fresh = await rebuildPlan({
     agentId: plan.agentId,
@@ -158,6 +199,7 @@ export async function applyClawUpdatePlan(
     stateOptions: options,
     packagePreflight: options.packagePreflight,
   });
+  assertAgentMutationLeaseOwned(options);
   if (
     fresh.planIntegrity !== plan.planIntegrity ||
     stableStringify(comparablePlan(fresh)) !== stableStringify(comparablePlan(plan))
@@ -197,6 +239,7 @@ export async function applyClawUpdatePlan(
     message: string,
     errorOptions?: ErrorOptions,
   ): ClawUpdateMutationError => {
+    assertAgentMutationLeaseOwned(options);
     try {
       updateClawInstallRecordStatus(fresh.agentId, "partial", options);
     } catch {
@@ -204,7 +247,12 @@ export async function applyClawUpdatePlan(
     }
     return new ClawUpdateMutationError("update_partial", message, errorOptions);
   };
-  const targetAddPlan = await buildAddPlan({
+  const guardedRollback = (rollback: () => void | Promise<void>) => async () => {
+    assertAgentMutationLeaseOwned(options);
+    await rollback();
+    assertAgentMutationLeaseOwned(options);
+  };
+  const rawTargetAddPlan = await buildAddPlan({
     manifest: params.targetManifest,
     clawMarkdownBody: params.targetClawMarkdownBody,
     includePackageBootstrap: false,
@@ -214,6 +262,7 @@ export async function applyClawUpdatePlan(
       agentId: fresh.agentId,
       workspace: currentInstall.workspace,
       packagePreflight: async (pkg, workspace) => {
+        assertAgentMutationLeaseOwned(options);
         const preflight = options.packagePreflight
           ? await options.packagePreflight(pkg, workspace)
           : {
@@ -221,6 +270,7 @@ export async function applyClawUpdatePlan(
               code: "package_install_unavailable",
               message: "Package preflight is unavailable.",
             };
+        assertAgentMutationLeaseOwned(options);
         const action = fresh.actions.find(
           (candidate) => candidate.kind === "package" && candidate.id === `${pkg.kind}:${pkg.ref}`,
         );
@@ -244,7 +294,20 @@ export async function applyClawUpdatePlan(
       },
     },
   });
+  assertAgentMutationLeaseOwned(options);
   const unchangedPaths = unchangedPackagePaths(fresh, params.targetManifest);
+  const liveAgent = resolveCanonicalClawAgent(options.config, fresh.agentId);
+  const targetAddPlan = preserveAdoptedAgentDefault({
+    plan: rawTargetAddPlan,
+    install: currentInstall,
+    liveAgent,
+  });
+  if (!targetAddPlan) {
+    throw new ClawUpdateMutationError(
+      "agent_changed",
+      "The adopted agent changed before update materialization.",
+    );
+  }
   if (
     targetAddPlan.blockers.some(
       (blocker) =>
@@ -270,6 +333,13 @@ export async function applyClawUpdatePlan(
         `Package ${JSON.stringify(action.id)} is no longer present; build a new dry-run plan.`,
       );
     }
+  }
+  const agentAction = fresh.actions.find((action) => action.kind === "agent");
+  if (agentAction && agentAction.desiredDigest !== digest(targetAddPlan.agent.config)) {
+    throw new ClawUpdateMutationError(
+      "update_changed",
+      "The materialized agent configuration changed after update planning.",
+    );
   }
   const targetPackages = clawTargetPackages(params.targetManifest, params.targetOpenClawProfile);
   for (const action of fresh.actions.filter(
@@ -322,13 +392,16 @@ export async function applyClawUpdatePlan(
     actions: ClawUpdateAction[],
     runtimeBatch?: ClawPluginRuntimeOptions["runtimeBatch"],
   ): Promise<ClawPackageUpdateExecution> => {
+    assertAgentMutationLeaseOwned(options);
     if (actions.length === 0) {
       return { appliedIds: [], rollback: async () => undefined };
     }
-    return await applyPackage({ ...fresh, actions }, targetAddPlan, {
+    const execution = await applyPackage({ ...fresh, actions }, targetAddPlan, {
       ...options,
       runtimeBatch,
     });
+    assertAgentMutationLeaseOwned(options);
+    return execution;
   };
   const resumedRequirements =
     currentInstall.status === "complete"
@@ -354,6 +427,7 @@ export async function applyClawUpdatePlan(
 
   let requirementExecution: ClawPackageUpdateExecution;
   try {
+    assertAgentMutationLeaseOwned(options);
     requirementExecution =
       requirementActions.length || resumedRequirements.length
         ? await runClawPluginBatch(
@@ -378,7 +452,9 @@ export async function applyClawUpdatePlan(
               ),
           )
         : await applyPackageActions(requirementActions);
+    assertAgentMutationLeaseOwned(options);
   } catch (error) {
+    assertAgentMutationLeaseOwned(options);
     if (error instanceof ClawPackageUpdateError && error.partial) {
       throw partialMutation(error.message, { cause: error });
     }
@@ -401,8 +477,11 @@ export async function applyClawUpdatePlan(
   const applyWorkspace = options.applyWorkspace ?? applyClawWorkspaceUpdate;
   let workspaceExecution: ClawWorkspaceUpdateExecution;
   try {
+    assertAgentMutationLeaseOwned(options);
     workspaceExecution = await applyWorkspace(fresh, targetAddPlan, options);
+    assertAgentMutationLeaseOwned(options);
   } catch (error) {
+    assertAgentMutationLeaseOwned(options);
     if (error instanceof ClawWorkspaceUpdateError && error.partial) {
       throw partialMutation(error.message);
     }
@@ -413,11 +492,14 @@ export async function applyClawUpdatePlan(
   const applyMcp = options.applyMcp ?? applyClawMcpUpdate;
   let mcpExecution: ClawMcpUpdateExecution;
   try {
+    assertAgentMutationLeaseOwned(options);
     mcpExecution = await applyMcp(fresh, params.targetManifest, options);
+    assertAgentMutationLeaseOwned(options);
   } catch (error) {
+    assertAgentMutationLeaseOwned(options);
     const partial = error instanceof ClawMcpUpdateError && error.partial;
     try {
-      await workspaceExecution.rollback();
+      await guardedRollback(() => workspaceExecution.rollback())();
     } catch (rollbackError) {
       throw partialMutation(
         `${coerceErrorMessage(error)}; workspace rollback failed: ${coerceErrorMessage(rollbackError)}`,
@@ -432,12 +514,15 @@ export async function applyClawUpdatePlan(
 
   let packageExecution: ClawPackageUpdateExecution;
   try {
+    assertAgentMutationLeaseOwned(options);
     packageExecution = await applyPackageActions(remainingPackageActions);
+    assertAgentMutationLeaseOwned(options);
   } catch (error) {
+    assertAgentMutationLeaseOwned(options);
     // Keep method lookup and receiver binding inside each step.
     const rollbackFailures = await collectClawRollbackFailures([
-      ["MCP rollback failed", () => mcpExecution.rollback()],
-      ["workspace rollback failed", () => workspaceExecution.rollback()],
+      ["MCP rollback failed", guardedRollback(() => mcpExecution.rollback())],
+      ["workspace rollback failed", guardedRollback(() => workspaceExecution.rollback())],
     ]);
     if (error instanceof ClawPackageUpdateError && error.partial) {
       rollbackFailures.unshift("package artifact rollback is unavailable");
@@ -446,8 +531,7 @@ export async function applyClawUpdatePlan(
     throw new ClawUpdateMutationError("package_update_failed", coerceErrorMessage(error));
   }
 
-  const agentAction = fresh.actions.find((action) => action.kind === "agent");
-  const commit: ConfigCommit =
+  const rawCommit: ConfigCommit =
     options.commitConfig ??
     (async (transform) => {
       await transformConfigFileWithRetry({
@@ -455,35 +539,44 @@ export async function applyClawUpdatePlan(
         transform: (config) => ({ nextConfig: transform(config) }),
       });
     });
+  const commit: ConfigCommit = async (transform) => {
+    assertAgentMutationLeaseOwned(options);
+    await rawCommit((config) => {
+      assertAgentMutationLeaseOwned(options);
+      return transform(config);
+    });
+    assertAgentMutationLeaseOwned(options);
+  };
   let previousAgent: AgentConfig | undefined;
+  let previousAgentKey: string | undefined;
   let agentChanged = false;
   const rollbackAgent = async (): Promise<void> => {
     if (!agentChanged) {
       return;
     }
     await commit((config) => {
-      const current = listAgentEntries(config).find((agent) => agent.id === fresh.agentId);
+      const current = resolveCanonicalClawAgent(config, fresh.agentId);
       const targetDigest = digest(targetAddPlan.agent.config);
       const liveDigest = current ? digest(current) : undefined;
       if (liveDigest !== targetDigest) {
         throw new Error("The agent changed before rollback.");
       }
-      const nextEntries = { ...config.agents?.entries };
-      if (previousAgent) {
-        const { id: _id, ...previousEntry } = previousAgent;
-        nextEntries[fresh.agentId] = previousEntry;
-      } else {
-        delete nextEntries[fresh.agentId];
-      }
-      return { ...config, agents: { ...config.agents, entries: nextEntries } };
+      return replaceClawUpdateAgent({
+        config,
+        agentId: fresh.agentId,
+        replacement: previousAgent
+          ? { ...previousAgent, id: previousAgentKey ?? previousAgent.id }
+          : undefined,
+      });
     });
     agentChanged = false;
   };
   if (agentAction?.action === "change") {
     try {
       await commit((config) => {
-        const current = listAgentEntries(config).find((agent) => agent.id === fresh.agentId);
+        const current = resolveCanonicalClawAgent(config, fresh.agentId);
         previousAgent = current;
+        previousAgentKey = resolveClawAgentRosterKey(config, fresh.agentId);
         if (agentAction.currentDigest !== undefined) {
           if (!current) {
             throw new ClawUpdateMutationError(
@@ -499,18 +592,19 @@ export async function applyClawUpdatePlan(
             );
           }
         }
-        const nextEntries = { ...config.agents?.entries };
-        const { id: _id, ...targetEntry } = targetAddPlan.agent.config;
-        nextEntries[fresh.agentId] = targetEntry;
         agentChanged = true;
-        return { ...config, agents: { ...config.agents, entries: nextEntries } };
+        return replaceClawUpdateAgent({
+          config,
+          agentId: fresh.agentId,
+          replacement: targetAddPlan.agent.config,
+        });
       });
     } catch (error) {
       const rollbackFailures = await collectClawRollbackFailures([
-        ["agent rollback failed", () => rollbackAgent()],
-        ["package rollback incomplete", () => packageExecution.rollback()],
-        ["MCP rollback failed", () => mcpExecution.rollback()],
-        ["workspace rollback failed", () => workspaceExecution.rollback()],
+        ["agent rollback failed", guardedRollback(rollbackAgent)],
+        ["package rollback incomplete", guardedRollback(() => packageExecution.rollback())],
+        ["MCP rollback failed", guardedRollback(() => mcpExecution.rollback())],
+        ["workspace rollback failed", guardedRollback(() => workspaceExecution.rollback())],
       ]);
       throwIfUpdatePartial(error, rollbackFailures);
       if (error instanceof ClawUpdateMutationError) {
@@ -524,8 +618,11 @@ export async function applyClawUpdatePlan(
   const applyCron = options.applyCron ?? applyClawCronUpdate;
   let cronExecution: ClawCronUpdateExecution;
   try {
+    assertAgentMutationLeaseOwned(options);
     cronExecution = await applyCron(fresh, params.targetManifest, options);
+    assertAgentMutationLeaseOwned(options);
   } catch (error) {
+    assertAgentMutationLeaseOwned(options);
     if (error instanceof ClawCronUpdateError && error.partial) {
       try {
         persistInstall(targetAddPlan, {
@@ -541,10 +638,10 @@ export async function applyClawUpdatePlan(
       throw partialMutation(`${error.message}; cron gateway mutation outcome is uncertain`);
     }
     const rollbackFailures = await collectClawRollbackFailures([
-      ["agent rollback failed", () => rollbackAgent()],
-      ["package rollback incomplete", () => packageExecution.rollback()],
-      ["MCP rollback failed", () => mcpExecution.rollback()],
-      ["workspace rollback failed", () => workspaceExecution.rollback()],
+      ["agent rollback failed", guardedRollback(rollbackAgent)],
+      ["package rollback incomplete", guardedRollback(() => packageExecution.rollback())],
+      ["MCP rollback failed", guardedRollback(() => mcpExecution.rollback())],
+      ["workspace rollback failed", guardedRollback(() => workspaceExecution.rollback())],
     ]);
     throwIfUpdatePartial(error, rollbackFailures);
     throw new ClawUpdateMutationError("cron_update_failed", coerceErrorMessage(error));
@@ -552,17 +649,20 @@ export async function applyClawUpdatePlan(
 
   let installRecord: PersistedClawInstall;
   try {
+    assertAgentMutationLeaseOwned(options);
     installRecord = persistInstall(targetAddPlan, {
       ...options,
       expectedClaw: fresh.currentClaw,
     });
+    assertAgentMutationLeaseOwned(options);
   } catch (error) {
+    assertAgentMutationLeaseOwned(options);
     const rollbackFailures = await collectClawRollbackFailures([
-      ["agent rollback failed", () => rollbackAgent()],
-      ["package rollback incomplete", () => packageExecution.rollback()],
-      ["cron rollback failed", () => cronExecution.rollback()],
-      ["MCP rollback failed", () => mcpExecution.rollback()],
-      ["workspace rollback failed", () => workspaceExecution.rollback()],
+      ["agent rollback failed", guardedRollback(rollbackAgent)],
+      ["package rollback incomplete", guardedRollback(() => packageExecution.rollback())],
+      ["cron rollback failed", guardedRollback(() => cronExecution.rollback())],
+      ["MCP rollback failed", guardedRollback(() => mcpExecution.rollback())],
+      ["workspace rollback failed", guardedRollback(() => workspaceExecution.rollback())],
     ]);
     throwIfUpdatePartial(error, rollbackFailures);
     throw new ClawUpdateMutationError("provenance_update_failed", coerceErrorMessage(error));

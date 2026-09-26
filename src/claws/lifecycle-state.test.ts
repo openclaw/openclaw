@@ -13,7 +13,9 @@ import {
   listOpenClawRegisteredAgentDatabases,
   registerOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -34,10 +36,15 @@ import {
 
 let state: OpenClawTestState;
 beforeEach(async () => {
-  state = await createOpenClawTestState({ prefix: "claw-remove-config-" });
+  state = await createOpenClawTestState({
+    prefix: "claw-remove-config-",
+    layout: "state-only",
+  });
   await state.writeConfig({});
 });
 afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await state.cleanup();
 });
@@ -335,8 +342,26 @@ describe("Claw status and remove", () => {
     const current = await addFixture();
     const config: OpenClawConfig = {
       ...current.getConfig(),
+      agents: {
+        ...current.getConfig().agents,
+        defaults: {
+          subagents: { allowAgents: ["WORKER"] },
+          heartbeat: { agentId: "worker" },
+          systemAgent: { agentId: "worker" },
+        },
+        entries: {
+          ...current.getConfig().agents?.entries,
+          ops: { subagents: { allowAgents: ["worker"] } },
+        },
+      },
       bindings: [{ match: { channel: "telegram", accountId: "*" }, agentId: "worker" }],
-      tools: { agentToAgent: { allow: ["worker"] } },
+      broadcast: { "telegram:-100": { agents: ["worker"] } },
+      hooks: {
+        allowedAgentIds: ["worker"],
+        mappings: [{ id: "audit", action: "agent", agentId: "worker" }],
+      },
+      talk: { agentId: "worker" },
+      tools: { agentToAgent: { allow: ["WORKER"] } },
     } as OpenClawConfig;
 
     const plan = await buildClawRemovePlan("worker", { env: current.env, config });
@@ -344,14 +369,40 @@ describe("Claw status and remove", () => {
     expect(plan.actions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "agent", target: 'agents.entries["worker"]' }),
-        expect.objectContaining({ kind: "configBinding", target: "bindings[agentId=worker]" }),
-        expect.objectContaining({ kind: "agentAllow", target: "tools.agentToAgent.allow[worker]" }),
+        expect.objectContaining({
+          kind: "configBinding",
+          action: "remove",
+          blocked: false,
+          target: "bindings[agentId=worker]",
+        }),
+        expect.objectContaining({
+          kind: "agentAllow",
+          action: "remove",
+          blocked: false,
+          target: "tools.agentToAgent.allow[worker]",
+        }),
         expect.objectContaining({ kind: "workspace", action: "trash" }),
         expect.objectContaining({ kind: "agentState", action: "trash" }),
         expect.objectContaining({ kind: "sessionIndex", action: "delete" }),
         expect.objectContaining({ kind: "sessionTranscripts", action: "trash" }),
       ]),
     );
+    expect(
+      plan.actions
+        .filter((action) => action.kind === "configReference")
+        .map((action) => action.target)
+        .toSorted(),
+    ).toEqual([
+      "agents.defaults.heartbeat",
+      "agents.defaults.subagents.allowAgents[0]",
+      "agents.defaults.systemAgent.agentId",
+      "agents.entries.ops.subagents.allowAgents[0]",
+      "agents.ownership",
+      "broadcast.telegram:-100.agents[0]",
+      "hooks.allowedAgentIds[0]",
+      "hooks.mappings[0]",
+      "talk.agentId",
+    ]);
   });
 
   it("refuses changed bindings and retains the cleanup fence", async () => {

@@ -6,7 +6,14 @@ import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstra
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { withTempHomeConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  captureStateDatabaseCoordinatorRuntime,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { applyClawAddPlan } from "./add.js";
 import { seedClawPackageBootstrap } from "./bootstrap.js";
@@ -21,9 +28,23 @@ import {
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
+});
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+async function withBootstrapTempHomeConfig<T>(
+  config: OpenClawConfig,
+  fn: (params: { home: string; configPath: string }) => Promise<T>,
+): Promise<T> {
+  const coordinatorRuntime = captureStateDatabaseCoordinatorRuntime();
+  return withTempHomeConfig(config, (params) =>
+    withStateDatabaseCoordinatorRuntimeDirectory(coordinatorRuntime, () => fn(params)),
+  );
+}
 
 async function createPackage(bootstrap = "# First run\n\nAsk which repositories matter.\n") {
   const root = tempDirs.make("openclaw-claw-bootstrap-");
@@ -79,7 +100,7 @@ function removeBootstrap(
   config: OpenClawConfig,
   env: { OPENCLAW_STATE_DIR: string },
 ) {
-  return withTempHomeConfig(config, async ({ configPath }) => {
+  return withBootstrapTempHomeConfig(config, async ({ configPath }) => {
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
     setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
     return applyClawRemovePlan(plan, {
@@ -346,6 +367,45 @@ describe("package-root BOOTSTRAP.md", () => {
     expect(readClawInstallRecord("bootstrap-worker", { env })?.bootstrap).toEqual(
       initial.bootstrap,
     );
+  });
+
+  it("removes an unchanged pending bootstrap with the Claw", async () => {
+    const root = await createPackage();
+    const read = await readClawManifestFile(root);
+    if (!read.ok || !read.packageBootstrap) {
+      throw new Error("expected package bootstrap");
+    }
+    const workspace = join(root, "workspace");
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    const addPlan = await buildClawAddPlan({
+      manifest: read.manifest,
+      packageBootstrap: read.packageBootstrap,
+      source: read.source,
+      context: { workspace },
+    });
+    let config: OpenClawConfig = {};
+    await applyClawAddPlan(addPlan, {
+      env,
+      consentPlanIntegrity: addPlan.planIntegrity,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    const removePlan = await buildClawRemovePlan("bootstrap-worker", { env, config });
+    expect(removePlan.actions).toContainEqual(
+      expect.objectContaining({ kind: "bootstrap", action: "delete", blocked: false }),
+    );
+    expect(removePlan.actions).toContainEqual(
+      expect.objectContaining({ kind: "workspace", action: "trash" }),
+    );
+    const removed = await removeBootstrap(removePlan, config, env);
+
+    expect(removed).toMatchObject({
+      status: "complete",
+      bootstrap: { path: "BOOTSTRAP.md", action: "deleted" },
+    });
+    await expect(readFile(join(workspace, "BOOTSTRAP.md"), "utf8")).rejects.toThrow();
   });
 
   it("removes an unchanged large pending bootstrap within the native size limit", async () => {

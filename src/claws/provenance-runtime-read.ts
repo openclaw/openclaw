@@ -17,6 +17,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { decodeClawAgentOwnership } from "./provenance-agent-origin.js";
 import {
   readClawInstallSchemaVersionRows,
   type ClawInstallSchemaVersionRow,
@@ -28,6 +29,7 @@ type ClawInstallSchemaVersionRead =
       kind: "ok";
       schemaVersion: ReturnType<typeof parseClawInstallRecordSchemaVersion>;
       agentConfigDigest: string;
+      agentClaimed: boolean;
     }
   | { kind: "error"; error: unknown };
 
@@ -70,10 +72,12 @@ function decodeSchemaVersions(
   const schemaVersions = new Map<string, ClawInstallSchemaVersionRead>();
   for (const row of rows) {
     try {
+      const ownership = decodeClawAgentOwnership(row.schemaVersion, row.agentOwnershipPayloadJson);
       schemaVersions.set(row.agentId, {
         kind: "ok",
-        schemaVersion: parseClawInstallRecordSchemaVersion(row.schemaVersion),
+        schemaVersion: ownership.schemaVersion,
         agentConfigDigest: row.agentConfigDigest,
+        agentClaimed: ownership.claimed,
       });
     } catch (error) {
       schemaVersions.set(row.agentId, { kind: "error", error });
@@ -342,13 +346,19 @@ export function cacheClawInstallSchemaVersion(
   agentId: string,
   schemaVersion: ReturnType<typeof parseClawInstallRecordSchemaVersion>,
   agentConfigDigest: string,
+  agentClaimed: boolean,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   const snapshot = snapshotsByPath.get(resolveSnapshotPath(options));
   if (snapshot?.kind !== "ready") {
     return;
   }
-  snapshot.schemaVersions.set(agentId, { kind: "ok", schemaVersion, agentConfigDigest });
+  snapshot.schemaVersions.set(agentId, {
+    kind: "ok",
+    schemaVersion,
+    agentConfigDigest,
+    agentClaimed,
+  });
   snapshotsByPath.set(resolveSnapshotPath(options), { ...snapshot });
   notifySnapshotListeners();
 }

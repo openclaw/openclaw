@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { stableStringify } from "@openclaw/normalization-core";
 import {
+  AgentSharedStoreOwnerError,
   assertAgentSessionStoreDeletionSafe,
   prepareAgentDeleteDatabases,
 } from "../agents/agent-delete-databases.js";
@@ -9,15 +10,21 @@ import {
   withAgentDeletion,
   type AgentDeletionOperation,
 } from "../agents/agent-lifecycle-registry.js";
-import { listAgentEntries } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { listAgentEntries, pruneAgentConfig } from "../commands/agents.config.js";
 import { getRuntimeConfig } from "../config/config.js";
+import {
+  inheritLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "../config/legacy.default-agent-owner.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   AgentConfigPreconditionError,
   deleteAgentConfigEntry,
 } from "../gateway/server-methods/agents-config-mutations.js";
 import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { readAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import type {
   OpenClawStateDatabase,
@@ -27,6 +34,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { canonicalizeClawAgent, resolveCanonicalClawAgent } from "./agent-adoption-apply.js";
 import { digestClawAgentConfig } from "./agent-config-digest.js";
 import { deletionEffects, type ClawCleanupTargets } from "./lifecycle-delete-support.js";
 import {
@@ -40,11 +48,13 @@ type ClawAgentConfigRemovalParams = {
   expectedDigest: string;
   expectedInstall?: PersistedClawInstall | null;
   expectedRemovalSurfaceDigest: string;
-  expectedState: "present" | "missing";
+  expectedState: "present" | "missing" | "modified";
   fallbackWorkspace: string;
   config?: OpenClawConfig;
   stateDatabase?: OpenClawStateDatabaseOptions;
   onModified: () => Error;
+  retainAgentConfig?: boolean;
+  retainHistoricalAgentState?: boolean;
   quiesceMonitors?: (operationId: string) => Promise<void>;
   drainMonitors?: (operationId: string) => Promise<void>;
 };
@@ -58,17 +68,64 @@ type ClawAgentConfigRemovalResult = {
 
 export { digestClawAgentConfig } from "./agent-config-digest.js";
 
+export function clawAgentSessionStoreRemovalBlocker(
+  config: OpenClawConfig,
+  agentId: string,
+  options: OpenClawStateDatabaseOptions,
+): { code: "shared_session_store_owner"; message: string } | undefined {
+  try {
+    assertAgentSessionStoreDeletionSafe(config, agentId, options);
+  } catch (error) {
+    if (!(error instanceof AgentSharedStoreOwnerError)) {
+      throw error;
+    }
+    return { code: "shared_session_store_owner", message: error.message };
+  }
+  return undefined;
+}
+
 export function digestClawAgentRemovalSurface(config: OpenClawConfig, agentId: string): string {
   const normalizedId = normalizeAgentId(agentId);
+  const legacyOwner = tryGetLegacyDefaultAgentId(config);
+  const pruned = pruneAgentConfig(config, agentId);
+  const survivorWorkspaces = Object.fromEntries(
+    listAgentEntries(pruned.config)
+      .map((entry) => {
+        const id = normalizeAgentId(entry.id);
+        // Resolve the retained legacy owner against the pre-collapse topology. The writer later
+        // pins that semantic workspace while canonicalizing the roster, so authored/runtime
+        // spellings hash identically without hiding explicit-main workspace changes.
+        const workspaceConfig = legacyOwner === id ? config : pruned.config;
+        return [id, resolveAgentWorkspaceDir(workspaceConfig, id)] as const;
+      })
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
   const surface = {
     bindings: (config.bindings ?? []).filter(
       (binding) => normalizeAgentId(binding.agentId) === normalizedId,
     ),
-    agentToAgentAllow: (config.tools?.agentToAgent?.allow ?? []).filter(
-      (entry) => entry === normalizedId,
-    ),
+    agentToAgentAllow: (config.tools?.agentToAgent?.allow ?? []).filter((entry) => {
+      const normalized = normalizeAgentIdStrict(entry);
+      return normalized.ok && normalized.value === normalizedId;
+    }),
+    // Cover every config path deleteAgentConfigEntry would prune so a reference added after
+    // planning is rejected instead of silently deleting operator-owned routing or policy.
+    removedReferences: pruned.removedReferenceValues,
+    // Bind the resulting topology, not whether each value was authored or materialized by the
+    // config reader. Legacy-roster migration can insert the same values between preview and write.
+    topologyAfter: {
+      ownership: pruned.config.agents?.ownership ?? null,
+      authInheritanceAgentId: pruned.config.agents?.defaults?.authInheritance?.agentId ?? null,
+      sessionStoreAgentId: pruned.config.agents?.defaults?.sessionStore?.agentId ?? null,
+      survivorWorkspaces,
+    },
   };
   return `sha256:${createHash("sha256").update(stableStringify(surface)).digest("hex")}`;
+}
+
+function projectConfigMutationView(config: OpenClawConfig): OpenClawConfig {
+  const clonedConfig = inheritLegacyDefaultAgentId(config, structuredClone(config));
+  return migratePersistedImplicitMainRoster(clonedConfig).config as OpenClawConfig;
 }
 
 async function commitClawAgentConfigRemoval(
@@ -85,10 +142,19 @@ async function commitClawAgentConfigRemoval(
       fallbackWorkspace: params.fallbackWorkspace,
       validateConfig: (config) => {
         assertCurrent();
-        assertAgentSessionStoreDeletionSafe(config, params.agentId, params.stateDatabase);
+        if (!params.retainHistoricalAgentState) {
+          assertAgentSessionStoreDeletionSafe(config, params.agentId, params.stateDatabase);
+        }
+        const actualRemovalSurface = digestClawAgentRemovalSurface(config, params.agentId);
+        // The config writer may canonicalize legacy/default roster shape while loading the same
+        // consented config. Accept only that exact projection, never arbitrary live drift.
+        const writerSurface = digestClawAgentRemovalSurface(
+          projectConfigMutationView(configBeforeDelete),
+          params.agentId,
+        );
         if (
-          digestClawAgentRemovalSurface(config, params.agentId) !==
-          params.expectedRemovalSurfaceDigest
+          actualRemovalSurface !== params.expectedRemovalSurfaceDigest &&
+          actualRemovalSurface !== writerSurface
         ) {
           throw params.onModified();
         }
@@ -97,7 +163,10 @@ async function commitClawAgentConfigRemoval(
         if (params.expectedState === "missing") {
           throw params.onModified();
         }
-        if (digestClawAgentConfig(agent) !== params.expectedDigest) {
+        const actualAgentDigest = digestClawAgentConfig(
+          canonicalizeClawAgent(agent, params.agentId),
+        );
+        if (actualAgentDigest !== params.expectedDigest) {
           throw params.onModified();
         }
       },
@@ -123,7 +192,7 @@ async function commitClawAgentConfigRemoval(
       throw error;
     }
     const latestConfig = getRuntimeConfig();
-    if (listAgentEntries(latestConfig).some((agent) => agent.id === params.agentId)) {
+    if (resolveCanonicalClawAgent(latestConfig, params.agentId)) {
       throw params.onModified();
     }
     const effects = deletionEffects(
@@ -169,12 +238,15 @@ export async function withClawAgentConfigRemoval<T>(
     params.agentId,
     async (begin) => {
       const config = params.config ?? getRuntimeConfig();
-      assertAgentSessionStoreDeletionSafe(config, params.agentId, stateOptions);
+      if (!params.retainAgentConfig && !params.retainHistoricalAgentState) {
+        assertAgentSessionStoreDeletionSafe(config, params.agentId, stateOptions);
+      }
       const effects = deletionEffects(
         config,
         params.agentId,
         params.fallbackWorkspace,
         stateOptions.env,
+        params.retainAgentConfig,
       );
       const matchesInstall = (database: OpenClawStateDatabase) =>
         expectedInstall === undefined ||
@@ -194,12 +266,13 @@ export async function withClawAgentConfigRemoval<T>(
           agentDir: effects.agentDir,
           sessionsDir: effects.sessionsDir,
           // Selective cleanup may retain modified or untracked workspace entries.
-          deleteFiles: previousJournal?.deleteFiles ?? false,
+          deleteFiles: params.retainAgentConfig ? false : (previousJournal?.deleteFiles ?? false),
         });
         return { existingJournal: previousJournal, deletion: claimedDeletion };
       }, stateOptions);
       let committed = false;
       let monitorEffectsStarted = false;
+      let fenceReleased = false;
       const assertCurrent = (database?: OpenClawStateDatabase) => {
         const check = (current: OpenClawStateDatabase) => {
           deletion.assertCurrent(current);
@@ -222,19 +295,35 @@ export async function withClawAgentConfigRemoval<T>(
           await params.quiesceMonitors(deletion.entry.operationId);
         }
         assertCurrent();
-        await prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, stateOptions);
+        if (!params.retainAgentConfig && !params.retainHistoricalAgentState) {
+          await prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, stateOptions);
+        }
         assertCurrent();
         return await apply(async () => {
           assertCurrent();
-          const result = await withAgentExecApprovalsRemoved(
-            params.agentId,
-            async () =>
-              commitClawAgentConfigRemoval(
-                { ...params, config, stateDatabase: stateOptions },
-                assertCurrent,
-              ),
-            stateOptions,
-          );
+          const commitConfigRemoval = () =>
+            commitClawAgentConfigRemoval(
+              { ...params, config, stateDatabase: stateOptions },
+              assertCurrent,
+            );
+          const result = params.retainAgentConfig
+            ? {
+                agentRemoved: false,
+                cleanupTargets: {
+                  workspaceDir: effects.workspace,
+                  agentDir: effects.agentDir,
+                  sessionsDir: effects.sessionsDir,
+                },
+                configBeforeDelete: config,
+                nextConfig: config,
+              }
+            : params.retainHistoricalAgentState
+              ? await commitConfigRemoval()
+              : await withAgentExecApprovalsRemoved(
+                  params.agentId,
+                  commitConfigRemoval,
+                  stateOptions,
+                );
           committed = true;
           assertCurrent();
           return {
@@ -247,12 +336,20 @@ export async function withClawAgentConfigRemoval<T>(
               assertCurrent();
             },
             runDatabaseCleanup: deletion.runDatabaseCleanup,
-            completeDeletion: deletion.completeInTransaction,
+            completeDeletion: params.retainAgentConfig
+              ? (database) => {
+                  deletion.releaseInTransaction(database);
+                  fenceReleased = true;
+                }
+              : deletion.completeInTransaction,
           };
         }, assertCurrent);
       } finally {
+        if (params.retainAgentConfig && !fenceReleased) {
+          deletion.rollback();
+        }
         // Pre-config partial results release only this attempt's fence; committed cleanup retains it.
-        if (!committed && !monitorEffectsStarted && !existingJournal) {
+        if (!params.retainAgentConfig && !committed && !monitorEffectsStarted && !existingJournal) {
           deletion.rollback();
         }
         if (expectedInstall) {

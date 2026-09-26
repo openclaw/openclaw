@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import fs, { lstat, mkdir, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +15,20 @@ import { ClawProjectError, createClawProject, validateClawProject } from "./proj
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const GOLDEN_ARTIFACT_INTEGRITY =
   "sha256:10b8890c5e5b062c94ff79b1d424859c6a5572548535eec6e31ee0c6d7c08a3b";
+
+// `CLAW.md` and `claw.md` only coexist on a case-sensitive filesystem. On a case-insensitive
+// volume the second write replaces the manifest instead of adding a colliding source, so the
+// collision under test cannot be constructed and the case must be skipped, not asserted.
+const caseSensitiveFilesystem = (() => {
+  // openclaw-temp-dir: allow probes the host filesystem before per-test hooks exist
+  const probe = mkdtempSync(join(tmpdir(), "openclaw-claw-case-probe-"));
+  try {
+    writeFileSync(join(probe, "case-probe"), "");
+    return !existsSync(join(probe, "CASE-PROBE"));
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
 
 async function writeRichProject(root: string): Promise<void> {
   await mkdir(join(root, "workspace"), { recursive: true });
@@ -371,26 +387,29 @@ describe("Claw projects", () => {
     },
   );
 
-  it("dereferences only a confined CLAW.md symlink into the artifact", async () => {
-    const project = tempDirs.make("openclaw-claw-manifest-link-");
-    const output = join(tempDirs.make("openclaw-claw-manifest-link-output-"), "linked.tgz");
-    const unpacked = tempDirs.make("openclaw-claw-manifest-link-unpacked-");
-    await writeRichProject(project);
-    await mkdir(join(project, "manifest"));
-    await rename(join(project, "CLAW.md"), join(project, "manifest", "source.md"));
-    await symlink("manifest/source.md", join(project, "CLAW.md"), "file");
+  it.skipIf(process.platform === "win32")(
+    "dereferences only a confined CLAW.md symlink into the artifact",
+    async () => {
+      const project = tempDirs.make("openclaw-claw-manifest-link-");
+      const output = join(tempDirs.make("openclaw-claw-manifest-link-output-"), "linked.tgz");
+      const unpacked = tempDirs.make("openclaw-claw-manifest-link-unpacked-");
+      await writeRichProject(project);
+      await mkdir(join(project, "manifest"));
+      await rename(join(project, "CLAW.md"), join(project, "manifest", "source.md"));
+      await symlink("manifest/source.md", join(project, "CLAW.md"), "file");
 
-    await expect(validateClawProject(project)).resolves.toMatchObject({ ok: true });
-    await buildClawProject(project, output);
-    await tar.x({ cwd: unpacked, file: output, strict: true });
+      await expect(validateClawProject(project)).resolves.toMatchObject({ ok: true });
+      await buildClawProject(project, output);
+      await tar.x({ cwd: unpacked, file: output, strict: true });
 
-    expect((await lstat(join(unpacked, "package", "CLAW.md"))).isFile()).toBe(true);
-    expect(await readFile(join(unpacked, "package", "CLAW.md"), "utf8")).toContain(
-      "You are the demo Claw.",
-    );
-  });
+      expect((await lstat(join(unpacked, "package", "CLAW.md"))).isFile()).toBe(true);
+      expect(await readFile(join(unpacked, "package", "CLAW.md"), "utf8")).toContain(
+        "You are the demo Claw.",
+      );
+    },
+  );
 
-  it.each([".git/CLAW.md", "node_modules/example/CLAW.md"])(
+  it.skipIf(process.platform === "win32").each([".git/CLAW.md", "node_modules/example/CLAW.md"])(
     "rejects a CLAW.md symlink into excluded tree %s",
     async (targetPath) => {
       const project = tempDirs.make("openclaw-claw-manifest-excluded-link-");
@@ -406,18 +425,21 @@ describe("Claw projects", () => {
     },
   );
 
-  it("rejects a CLAW.md symlink that escapes the project", async () => {
-    const project = tempDirs.make("openclaw-claw-manifest-escape-");
-    const outside = tempDirs.make("openclaw-claw-manifest-outside-");
-    await writeRichProject(project);
-    await rename(join(project, "CLAW.md"), join(outside, "CLAW.md"));
-    await symlink(join(outside, "CLAW.md"), join(project, "CLAW.md"), "file");
+  it.skipIf(process.platform === "win32")(
+    "rejects a CLAW.md symlink that escapes the project",
+    async () => {
+      const project = tempDirs.make("openclaw-claw-manifest-escape-");
+      const outside = tempDirs.make("openclaw-claw-manifest-outside-");
+      await writeRichProject(project);
+      await rename(join(project, "CLAW.md"), join(outside, "CLAW.md"));
+      await symlink(join(outside, "CLAW.md"), join(project, "CLAW.md"), "file");
 
-    await expect(validateClawProject(project)).resolves.toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "project_not_found" })],
-    });
-  });
+      await expect(validateClawProject(project)).resolves.toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ code: "project_not_found" })],
+      });
+    },
+  );
 
   it.each([".git/config", "workspace/node_modules/example/secret.md"])(
     "rejects an explicitly selected source from %s",
@@ -467,7 +489,7 @@ describe("Claw projects", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.runIf(process.platform !== "win32" && caseSensitiveFilesystem)(
     "rejects a workspace source that portably collides with CLAW.md",
     async () => {
       const project = tempDirs.make("openclaw-claw-manifest-case-collision-");

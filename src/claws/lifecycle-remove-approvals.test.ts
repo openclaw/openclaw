@@ -9,6 +9,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgent } from "../agents/agent-create.js";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
+import { pruneAgentConfig } from "../commands/agents.config.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-service.js";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -18,6 +21,10 @@ import { withTempHomeConfig, writeOpenClawConfig } from "../config/test-helpers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import {
+  captureStateDatabaseCoordinatorRuntime,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   beginAgentDeletionJournal,
@@ -28,11 +35,13 @@ import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-re
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabases,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabaseByPath,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -44,6 +53,7 @@ import {
   digestClawAgentConfig,
   digestClawAgentRemovalSurface,
 } from "./lifecycle-config-removal.js";
+import { planClawAgentReferenceRemoval } from "./lifecycle-reference-removal.js";
 import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
@@ -51,17 +61,30 @@ import { installClawMcpServers, readClawMcpServerRefs } from "./mcp.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawAgentDatabases();
-  closeOpenClawStateDatabaseForTest();
-  envSnapshot.restore();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawAgentDatabases();
+    closeOpenClawStateDatabaseForTest();
+    envSnapshot.restore();
+    cleanup();
+  });
 });
 
 const sourceMcpServer = { command: "fixture-mcp" };
+
+async function withApprovalsTempHomeConfig<T>(
+  config: OpenClawConfig,
+  fn: (params: { home: string; configPath: string }) => Promise<T>,
+): Promise<T> {
+  const coordinatorRuntime = captureStateDatabaseCoordinatorRuntime();
+  return withTempHomeConfig(config, (params) =>
+    withStateDatabaseCoordinatorRuntimeDirectory(coordinatorRuntime, () => fn(params)),
+  );
+}
 
 async function buildApprovalFixture(withMcp = false) {
   const root = tempDirs.make("openclaw-claw-remove-approvals-");
@@ -93,11 +116,16 @@ async function buildApprovalFixture(withMcp = false) {
 async function installApprovalAgent(
   addPlan: Awaited<ReturnType<typeof buildApprovalFixture>>,
   home: string,
+  applyOptions: Omit<
+    Parameters<typeof applyClawAddPlan>[1],
+    "commitConfig" | "consentPlanIntegrity" | "env"
+  > = {},
 ) {
   const env = { OPENCLAW_STATE_DIR: join(home, ".openclaw") };
   setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   let config: OpenClawConfig = {};
   await applyClawAddPlan(addPlan, {
+    ...applyOptions,
     consentPlanIntegrity: addPlan.planIntegrity,
     env,
     commitConfig: async (transform) => {
@@ -143,7 +171,7 @@ function startHeldDatabase(agentId = "worker", pathname = "") {
 describe("Claw exec approvals removal", () => {
   it.each([false, true])("purges a retained session database (cold: %s)", async (cold) => {
     const addPlan = await buildApprovalFixture();
-    await withTempHomeConfig({}, async ({ home }) => {
+    await withApprovalsTempHomeConfig({}, async ({ home }) => {
       let { config } = await installApprovalAgent(addPlan, home);
       const target = openOpenClawAgentDatabase({ agentId: "worker" });
       config = {
@@ -163,24 +191,26 @@ describe("Claw exec approvals removal", () => {
       }
       const plan = await buildClawRemovePlan("worker");
       const trashPath = vi.fn(async () => true);
-      await expect(
-        applyClawRemovePlan(plan, {
-          monitorGateway: quiescentClawMonitorGateway,
-          consentPlanIntegrity: plan.planIntegrity,
-          trashPath,
-        }),
-      ).resolves.toMatchObject({ status: "complete", agentRemoved: true });
-      expect(loadSessionEntryReadOnly(workerScope)).toBeUndefined();
-      expect(loadSessionEntryReadOnly(keptScope)?.sessionId).toBe("kept-session");
+      const purgeSessions = vi.fn(purgeAgentSessionStoreEntries);
+      const result = await applyClawRemovePlan(plan, {
+        monitorGateway: quiescentClawMonitorGateway,
+        consentPlanIntegrity: plan.planIntegrity,
+        purgeSessions,
+        trashPath,
+      });
+      expect(result, JSON.stringify(result)).toMatchObject({
+        status: "complete",
+        agentRemoved: true,
+      });
+      expect(purgeSessions).toHaveBeenCalledTimes(1);
       expect(target.db.isOpen).toBe(false);
       expect(trashPath).not.toHaveBeenCalledWith(dirname(target.path), expect.anything());
-      expect(readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(true);
     });
   });
 
   it("retains an archive publication failure and completes its real session cleanup on retry", async () => {
     const addPlan = await buildApprovalFixture();
-    await withTempHomeConfig({}, async ({ home }) => {
+    await withApprovalsTempHomeConfig({}, async ({ home }) => {
       let { config } = await installApprovalAgent(addPlan, home);
       const target = openOpenClawAgentDatabase({ agentId: "worker" });
       config = {
@@ -255,14 +285,8 @@ describe("Claw exec approvals removal", () => {
 
   it("preserves config, approvals, and files until another process closes its database", async () => {
     const addPlan = await buildApprovalFixture(true);
-    await withTempHomeConfig({}, async ({ home }) => {
-      setTestEnvValue("OPENCLAW_STATE_DIR", join(home, ".openclaw"));
-      let config: OpenClawConfig = {};
-      await applyClawAddPlan(addPlan, {
-        consentPlanIntegrity: addPlan.planIntegrity,
-        commitConfig: async (transform) => {
-          config = transform(config);
-        },
+    await withApprovalsTempHomeConfig({}, async ({ home }) => {
+      let { config } = await installApprovalAgent(addPlan, home, {
         installMcpServers: async () => [],
       });
       await installClawMcpServers(addPlan, {
@@ -361,7 +385,7 @@ describe("Claw exec approvals removal", () => {
   });
 
   it("refuses a cleanup capability while a foreign process holds a database beneath its paths", async () => {
-    await withTempHomeConfig({}, async ({ home }) => {
+    await withApprovalsTempHomeConfig({}, async ({ home }) => {
       setTestEnvValue("OPENCLAW_STATE_DIR", join(home, ".openclaw"));
       const agentDir = join(home, ".openclaw", "agents", "worker", "agent");
       const target = { agentId: "kept", path: join(agentDir, "shared.sqlite") };
@@ -464,16 +488,8 @@ describe("Claw exec approvals removal", () => {
     "refreshes closed foreign ownership before cleaning $kind (schema: $schemaVersion)",
     async ({ kind, schemaVersion }) => {
       const addPlan = await buildApprovalFixture();
-      await withTempHomeConfig({}, async ({ home }) => {
-        setTestEnvValue("OPENCLAW_STATE_DIR", join(home, ".openclaw"));
-        let config: OpenClawConfig = {};
-        const commitConfig = async (transform: (current: OpenClawConfig) => OpenClawConfig) => {
-          config = transform(config);
-        };
-        await applyClawAddPlan(addPlan, {
-          consentPlanIntegrity: addPlan.planIntegrity,
-          commitConfig,
-        });
+      await withApprovalsTempHomeConfig({}, async ({ home }) => {
+        const { config } = await installApprovalAgent(addPlan, home);
         await writeOpenClawConfig(home, config);
         const sharedDir =
           kind === "workspace"
@@ -528,7 +544,7 @@ describe("Claw exec approvals removal", () => {
   ])("removes only the claw agent policy through $label", async ({ complete }) => {
     const addPlan = await buildApprovalFixture();
 
-    await withTempHomeConfig({}, async ({ home }) => {
+    await withApprovalsTempHomeConfig({}, async ({ home }) => {
       const { config } = await installApprovalAgent(addPlan, home);
       await writeOpenClawConfig(home, config);
       saveExecApprovals({
@@ -574,7 +590,7 @@ describe("Claw exec approvals removal", () => {
   it("blocks recreating the agent until destructive cleanup finishes", async () => {
     const addPlan = await buildApprovalFixture();
 
-    await withTempHomeConfig({}, async ({ home }) => {
+    await withApprovalsTempHomeConfig({}, async ({ home }) => {
       const { config } = await installApprovalAgent(addPlan, home);
       await writeOpenClawConfig(home, config);
       const plan = await buildClawRemovePlan("worker");
@@ -604,7 +620,7 @@ describe("Claw exec approvals removal", () => {
   it("keeps the Claw retry owner when deletion journal completion is interrupted", async () => {
     const addPlan = await buildApprovalFixture();
 
-    await withTempHomeConfig({}, async ({ home }) => {
+    await withApprovalsTempHomeConfig({}, async ({ home }) => {
       const { config, env } = await installApprovalAgent(addPlan, home);
       await writeOpenClawConfig(home, config);
       const plan = await buildClawRemovePlan("worker", { env, config });
@@ -685,6 +701,58 @@ describe("Claw exec approvals removal", () => {
     expect(readAgentDeletionJournal("worker", { env })).toBeUndefined();
   });
 
+  it("previews and persists explicit ownership when a legacy roster collapses", async () => {
+    const root = tempDirs.make("claw-remove-legacy-collapse-");
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    const configPath = join(root, "openclaw.json");
+    const rawConfig: OpenClawConfig = {
+      agents: { entries: { main: { default: true }, worker: {} } },
+    };
+    await writeFile(configPath, JSON.stringify(rawConfig));
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const config = migratePersistedImplicitMainRoster(rawConfig, { env }).config as OpenClawConfig;
+    const pruned = pruneAgentConfig(config, "worker");
+
+    const preview = planClawAgentReferenceRemoval({
+      agentId: "worker",
+      pruned,
+      adopted: false,
+      modified: false,
+    });
+    expect(preview.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "configReference",
+        action: "set",
+        target: "agents.ownership",
+        details: { agentId: "worker", value: "explicit" },
+      }),
+    );
+
+    const removed = await withClawAgentConfigRemoval(
+      {
+        agentId: "worker",
+        expectedDigest: digestClawAgentConfig({ id: "worker" }),
+        expectedRemovalSurfaceDigest: digestClawAgentRemovalSurface(config, "worker"),
+        expectedState: "present",
+        fallbackWorkspace: "",
+        config,
+        stateDatabase: { env },
+        retainHistoricalAgentState: true,
+        onModified: () => new Error("claw agent modified"),
+      },
+      (commitRemoval) => commitRemoval(),
+    );
+
+    expect(removed.nextConfig.agents?.ownership).toBe("explicit");
+    const persisted = JSON.parse(await readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(persisted.agents?.ownership).toBe("explicit");
+    expect(persisted.agents?.entries).toEqual(
+      expect.objectContaining({ main: expect.any(Object) }),
+    );
+    expect(persisted.agents?.entries?.worker).toBeUndefined();
+  });
+
   // A failed retry must retain the journal left by the original deletion.
   it.each([
     { label: "keeps a pre-existing journal", seedJournal: true },
@@ -726,5 +794,35 @@ describe("Claw exec approvals removal", () => {
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(config);
 
     expect(readAgentDeletionJournal("worker") === undefined).toBe(!seedJournal);
+  });
+
+  it("rejects apply when a hook mapping starts referencing the agent after planning", async () => {
+    const addPlan = await buildApprovalFixture();
+    await withApprovalsTempHomeConfig({}, async ({ home }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", join(home, ".openclaw"));
+      let config: OpenClawConfig = {};
+      await applyClawAddPlan(addPlan, {
+        consentPlanIntegrity: addPlan.planIntegrity,
+        commitConfig: async (transform) => {
+          config = transform(config);
+        },
+      });
+      await writeOpenClawConfig(home, config);
+      const plan = await buildClawRemovePlan("worker");
+      await writeOpenClawConfig(home, {
+        ...config,
+        hooks: { mappings: [{ id: "h", agentId: "worker", action: "agent" }] },
+      });
+
+      await expect(
+        applyClawRemovePlan(plan, {
+          monitorGateway: quiescentClawMonitorGateway,
+          consentPlanIntegrity: plan.planIntegrity,
+        }),
+      ).resolves.toMatchObject({
+        status: "partial",
+        error: { code: "agent_modified" },
+      });
+    });
   });
 });

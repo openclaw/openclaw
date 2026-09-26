@@ -2,11 +2,16 @@ import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
-import { DEFAULT_BOOTSTRAP_FILENAME, seedWorkspaceBootstrap } from "../agents/workspace.js";
+import {
+  DEFAULT_BOOTSTRAP_FILENAME,
+  seedWorkspaceBootstrap,
+  WorkspaceBootstrapSeedConflictError,
+} from "../agents/workspace.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { clawContainedRelativePath } from "./path-containment.js";
 import type { ClawAddPlan } from "./types.js";
+import { prepareClawBootstrapPublication } from "./workspace-origin.js";
 
 export class ClawBootstrapWriteError extends Error {
   constructor(
@@ -27,6 +32,8 @@ export async function seedClawPackageBootstrap(
   options: {
     nowMs?: number;
     seedBootstrap?: typeof seedWorkspaceBootstrap;
+    existingFile?: "claim" | "conflict";
+    publication?: ReturnType<typeof prepareClawBootstrapPublication>;
   } & OpenClawStateDatabaseOptions = {},
 ): Promise<"seeded" | "already-seeded" | "consumed" | undefined> {
   const actions = plan.actions.filter((action) => action.kind === "bootstrap");
@@ -47,6 +54,8 @@ export async function seedClawPackageBootstrap(
     );
   }
 
+  // Capture this install before source I/O can yield to a replacement of the same plan.
+  const publication = options.publication ?? prepareClawBootstrapPublication(plan, options);
   const packageRoot = await realpath(resolve(plan.claw.packageRoot));
   const sourcePath = resolve(action.source);
   const sourceRelative = clawContainedRelativePath(packageRoot, sourcePath);
@@ -77,10 +86,19 @@ export async function seedClawPackageBootstrap(
     );
   }
 
-  return (options.seedBootstrap ?? seedWorkspaceBootstrap)({
-    dir: plan.agent.workspace,
-    content: read.buffer,
-    ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
-    stateOptions: options,
-  });
+  try {
+    return await (options.seedBootstrap ?? seedWorkspaceBootstrap)({
+      dir: plan.agent.workspace,
+      content: read.buffer,
+      ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
+      ...(options.existingFile ? { existingFile: options.existingFile } : {}),
+      stateOptions: options,
+      ...(publication ? { ...publication, existingFile: "conflict" as const } : {}),
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceBootstrapSeedConflictError) {
+      throw new ClawBootstrapWriteError("bootstrap_conflict", error.message);
+    }
+    throw error;
+  }
 }

@@ -1,13 +1,20 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { parseClawManifest } from "./schema.js";
 import { buildClawUpdatePlan } from "./update-plan.js";
 import { createUpdatePlanFixture, targetSource } from "./update-plan.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
+});
 
 describe("buildClawUpdatePlan readiness", () => {
   it("projects and integrity-binds plugin setup prerequisites", async () => {

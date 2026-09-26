@@ -176,6 +176,7 @@ describe("ensureSandboxWorkspace", () => {
         ),
       ).rejects.toThrow(/filesystem does not support atomic bootstrap publication/u);
       await expect(fs.readFile(agentsPath, "utf8")).rejects.toThrow("no such file");
+      expect(await fs.readdir(sandbox)).toEqual([]);
     } finally {
       linkSpy.mockRestore();
     }

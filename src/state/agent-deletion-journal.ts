@@ -590,24 +590,30 @@ export function removeAgentDeletionJournal(
   operationId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): boolean {
-  const id = normalizeAgentId(agentId);
   let removed = false;
   runOpenClawStateWriteTransaction((database) => {
-    assertAgentDeletionJournalAvailable(database.db);
-    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .deleteFrom("agent_deletion_journal")
-        .where("agent_id", "=", id)
-        .where("operation_id", "=", operationId),
-    );
-    removed = Number(result.numAffectedRows ?? 0) > 0;
-    if (removed) {
-      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
-    }
+    removed = removeAgentDeletionJournalInDatabase(database, agentId, operationId);
   }, options);
   return removed;
+}
+
+/** Release an unfinished deletion fence inside a caller-owned shared-state transaction. */
+export function removeAgentDeletionJournalInDatabase(
+  database: OpenClawStateDatabase,
+  agentId: string,
+  operationId: string,
+): boolean {
+  const id = normalizeAgentId(agentId);
+  assertAgentDeletionJournalAvailable(database.db);
+  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+  const result = executeSqliteQuerySync(
+    database.db,
+    db
+      .deleteFrom("agent_deletion_journal")
+      .where("agent_id", "=", id)
+      .where("operation_id", "=", operationId),
+  );
+  return Number(result.numAffectedRows ?? 0) > 0;
 }
 
 export function claimCompletedAgentDeletionJournal(

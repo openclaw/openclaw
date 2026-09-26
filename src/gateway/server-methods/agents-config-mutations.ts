@@ -10,6 +10,7 @@ import {
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
 import { mutateConfigFileWithRetry } from "../../config/config.js";
+import { inheritLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { IdentityConfig } from "../../config/types.base.js";
@@ -170,13 +171,18 @@ export async function deleteAgentConfigEntry(params: {
       assertConfigPathForWrite: params.assertCurrent,
       ...(params.allowConfigSizeDrop ? { allowConfigSizeDrop: true } : {}),
     },
-    mutate: (draft) => {
+    mutate: (draft, context) => {
+      // structuredClone drops the WeakMap-backed legacy-owner provenance. Preserve it so preview,
+      // validation, pruning, and write preparation resolve the same canonical topology.
+      inheritLegacyDefaultAgentId(context.snapshot.config, draft);
       params.validateConfig?.(draft);
       const configured = isConfiguredAgent(draft, params.agentId);
       if (!configured && !params.allowMissing) {
         throw new AgentConfigPreconditionError(`agent "${params.agentId}" not found`);
       }
-      const agent = listAgentEntries(draft).find((candidate) => candidate.id === params.agentId);
+      const entries = listAgentEntries(draft);
+      const agentIndex = findAgentEntryIndex(entries, params.agentId);
+      const agent = agentIndex >= 0 ? entries[agentIndex] : undefined;
       if (agent) {
         params.validate?.(agent);
       }

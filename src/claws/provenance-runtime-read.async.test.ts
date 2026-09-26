@@ -38,6 +38,7 @@ const row = {
   agentId: "worker",
   schemaVersion: CLAW_INSTALL_RECORD_SCHEMA_VERSION,
   agentConfigDigest: "original",
+  agentOwnershipPayloadJson: "[]",
 };
 
 beforeEach(() => {
@@ -50,7 +51,7 @@ describe("asynchronous Claw consent preparation", () => {
   it("hands off one task's facts without replacing newer host facts or retaining the scope", async () => {
     (await prepareClawInstallSchemaVersions(options)).publish();
     const facts = structuredClone(captureClawInstallSchemaVersionFacts(options));
-    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
+    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", true, options);
     const current = readCachedClawInstallSchemaVersions(options);
     worker.read.mockClear();
     let readAfterScope = () => readCachedClawInstallSchemaVersions(options);
@@ -64,7 +65,12 @@ describe("asynchronous Claw consent preparation", () => {
           schemaVersions: new Map([
             [
               "worker",
-              { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest: "original" },
+              {
+                kind: "ok",
+                schemaVersion: row.schemaVersion,
+                agentConfigDigest: "original",
+                agentClaimed: true,
+              },
             ],
           ]),
         });
@@ -129,7 +135,15 @@ describe("asynchronous Claw consent preparation", () => {
     expect(readCachedClawInstallSchemaVersions(options)).toEqual({
       kind: "ready",
       schemaVersions: new Map([
-        ["worker", { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest: "original" }],
+        [
+          "worker",
+          {
+            kind: "ok",
+            schemaVersion: row.schemaVersion,
+            agentConfigDigest: "original",
+            agentClaimed: true,
+          },
+        ],
       ]),
     });
   });
@@ -140,7 +154,7 @@ describe("asynchronous Claw consent preparation", () => {
       (await prepareClawInstallSchemaVersions(options)).publish();
       const stale = await prepareClawInstallSchemaVersions(options);
       if (mutation === "update") {
-        cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
+        cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", true, options);
       } else {
         deleteCachedClawInstallSchemaVersion("worker", options);
       }
@@ -156,7 +170,12 @@ describe("asynchronous Claw consent preparation", () => {
             ? new Map([
                 [
                   "worker",
-                  { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest: "newer" },
+                  {
+                    kind: "ok",
+                    schemaVersion: row.schemaVersion,
+                    agentConfigDigest: "newer",
+                    agentClaimed: true,
+                  },
                 ],
               ])
             : new Map(),
@@ -186,7 +205,7 @@ describe("asynchronous Claw consent preparation", () => {
     (await prepareClawInstallSchemaVersions(options)).publish();
     worker.read.mockRejectedValueOnce(new Error("Read failed"));
     const failed = await prepareClawInstallSchemaVersions(options);
-    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
+    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", true, options);
     const current = readCachedClawInstallSchemaVersions(options);
 
     failed.publish();
