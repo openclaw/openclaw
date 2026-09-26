@@ -7,6 +7,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
 import { findMarkdownImageSpans } from "../../packages/markdown-core/src/image-spans.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
@@ -372,6 +373,10 @@ export async function selectSessionArtifacts(
       captureReadWindow: true,
       expectedReadWindow: query.readWindow,
     });
+    // Image cursors also address positions within a message; that contract requires restarting.
+    if (page.windowReset) {
+      throw new SessionTranscriptProjectionUnavailableError(scope.sessionId, "window-changed");
+    }
     const artifacts: ArtifactSummary[] = [];
     let next: { beforeSeq: number; imageOffset: number } | undefined;
     for (const message of page.messages.toReversed()) {

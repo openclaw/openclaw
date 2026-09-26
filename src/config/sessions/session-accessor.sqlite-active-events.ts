@@ -62,6 +62,7 @@ export type SessionTranscriptMessageEventPage = {
   deltaCursor?: string;
   displaySource?: string;
   readWindow?: TranscriptReadWindow;
+  windowReset?: boolean;
   events: SessionTranscriptMessageEvent[];
   totalMessages: number;
 };

@@ -620,6 +620,7 @@ export async function handleChatHistoryRequest({
         pendingInputs,
         ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
         ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
+        ...(historyPage.windowReset ? { windowReset: true } : {}),
         ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
         ...(hasMore ? { nextOffset: candidateNextOffset } : {}),
         ...(hasMore !== undefined ? { hasMore } : {}),

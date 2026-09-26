@@ -83,7 +83,7 @@ export class SessionHistorySseState {
   private readonly target: SessionHistoryTranscriptTarget;
   private readonly maxChars: number;
   private readonly limit: number | undefined;
-  private readonly cursor: string | undefined;
+  private cursor: string | undefined;
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
   private turnBoundaryPending: boolean;
@@ -100,8 +100,8 @@ export class SessionHistorySseState {
     this.target = params.target;
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
-    this.cursor = params.cursor;
     const snapshot = params.snapshot;
+    this.cursor = snapshot.history.windowReset ? undefined : params.cursor;
     this.sentHistory = snapshot.history;
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
@@ -255,6 +255,9 @@ export class SessionHistorySseState {
       limit: this.limit,
       cursor: this.cursor,
     });
+    if (snapshot.history.windowReset) {
+      this.cursor = undefined;
+    }
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
     this.assistantErrorPending = snapshot.assistantErrorPending;

@@ -28,7 +28,7 @@ import {
   resolveHistoricalHistoryEvent,
 } from "./session-accessor.sqlite-history-interval.js";
 import {
-  assertHistoryReadWindow,
+  resolveHistoryReadWindowChange,
   captureHistoryReadWindow,
   resolveHistoryMessageSequence,
   resolveVisibleHistoryProjection,
@@ -335,7 +335,12 @@ function readRecentHistoryInSnapshot(
   options: TranscriptRecentReadLimits & TranscriptReadWindowOptions,
   remember?: (page: SessionTranscriptMessageEventPage, bytes: number) => void,
 ): SessionTranscriptMessageEventPage {
-  assertHistoryReadWindow(projection, history, options.expectedReadWindow);
+  const windowChange = resolveHistoryReadWindowChange(
+    projection,
+    history,
+    options.expectedReadWindow,
+  );
+  const captureReadWindow = options.captureReadWindow || windowChange;
   const generation = projection.generation;
   const deltaCursor = generation
     ? createTranscriptRawDeltaCursor({
@@ -360,7 +365,8 @@ function readRecentHistoryInSnapshot(
       events: [],
       displaySource: history.displaySource,
       totalMessages: history.total,
-      ...(options.captureReadWindow ? { readWindow: captureHistoryReadWindow(history, []) } : {}),
+      ...(captureReadWindow ? { readWindow: captureHistoryReadWindow(history, []) } : {}),
+      ...(windowChange ? { windowReset: true } : {}),
     };
   }
   const maxBytes = Math.max(
@@ -382,7 +388,8 @@ function readRecentHistoryInSnapshot(
     events,
     displaySource: history.displaySource,
     totalMessages: history.total,
-    ...(options.captureReadWindow ? { readWindow: captureHistoryReadWindow(history, events) } : {}),
+    ...(captureReadWindow ? { readWindow: captureHistoryReadWindow(history, events) } : {}),
+    ...(windowChange ? { windowReset: true } : {}),
   };
   remember?.(page, bytes);
   return page;
@@ -446,7 +453,7 @@ export function readRecentSessionTranscriptHistoryEventsFromProjection(
 
 export function readSessionTranscriptHistoryEventPageFromProjection(
   projection: CurrentTranscriptProjection,
-  options: {
+  inputOptions: {
     maxMessages: number;
     offset: number;
     beforeSeq?: number;
@@ -454,16 +461,40 @@ export function readSessionTranscriptHistoryEventPageFromProjection(
     recentAtHead?: TranscriptRecentReadLimits;
   } & TranscriptReadWindowOptions,
 ): SessionTranscriptMessageEventPage {
+  let options = inputOptions;
   const history = resolveVisibleHistoryProjection(projection);
+  const windowChange = resolveHistoryReadWindowChange(
+    projection,
+    history,
+    options.expectedReadWindow,
+  );
+  if (windowChange) {
+    const anchor = options.expectedReadWindow?.anchor;
+    options = {
+      ...options,
+      captureReadWindow: true,
+      expectedReadWindow: undefined,
+      ...(windowChange.anchorSeq !== undefined && anchor
+        ? {
+            beforeSeq:
+              options.beforeSeq === undefined
+                ? undefined
+                : options.beforeSeq + windowChange.anchorSeq - anchor.seq,
+          }
+        : { beforeSeq: undefined, offset: 0 }),
+    };
+  }
   const endExclusive = resolveTranscriptPageEnd(history.total, options);
   if (options.recentAtHead && endExclusive === history.total) {
-    return readRecentHistoryInSnapshot(projection, history, {
-      ...options.recentAtHead,
-      captureReadWindow: options.captureReadWindow,
-      expectedReadWindow: options.expectedReadWindow,
-    });
+    return {
+      ...readRecentHistoryInSnapshot(projection, history, {
+        ...options.recentAtHead,
+        captureReadWindow: options.captureReadWindow,
+        expectedReadWindow: options.expectedReadWindow,
+      }),
+      ...(windowChange ? { windowReset: true } : {}),
+    };
   }
-  assertHistoryReadWindow(projection, history, options.expectedReadWindow);
   const maxMessages = Math.max(
     0,
     Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
@@ -503,6 +534,7 @@ export function readSessionTranscriptHistoryEventPageFromProjection(
       : {}),
     ...(omittedOversized ? { omittedOversized: true } : {}),
     ...(options.captureReadWindow ? { readWindow: captureHistoryReadWindow(history, events) } : {}),
+    ...(windowChange ? { windowReset: true } : {}),
   };
 }
 
@@ -583,8 +615,25 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
   options: TranscriptAnchorPageOptions,
 ): SessionTranscriptMessageAnchorPage {
   const history = resolveVisibleHistoryProjection(projection);
-  assertHistoryReadWindow(projection, history, options.expectedReadWindow);
+  const windowChange = resolveHistoryReadWindowChange(
+    projection,
+    history,
+    options.expectedReadWindow,
+  );
   const anchor = resolveHistoryEventById(projection, options.messageId, history);
+  if (windowChange && (!anchor || "historical" in anchor)) {
+    return {
+      ...readSessionTranscriptHistoryEventPageFromProjection(projection, {
+        offset: 0,
+        maxMessages: options.maxMessages,
+        captureReadWindow: true,
+      }),
+      windowReset: true,
+      found: true,
+      hasOverreadContext: false,
+      offset: 0,
+    };
+  }
   if (!anchor || "historical" in anchor) {
     // Explicit anchors reopen the closed reset interval that still contains the
     // active-path row. Unanchored history and current-display lookup stay
@@ -607,8 +656,12 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
     );
   }
   const range = resolveHistoryAnchorPageRange(history.total, anchor.seq - 1, options);
+  const events = readVisibleHistoryRange(projection, range.readStart, range.endExclusive, history);
   return {
-    events: readVisibleHistoryRange(projection, range.readStart, range.endExclusive, history),
+    events,
+    ...(windowChange
+      ? { windowReset: true, readWindow: captureHistoryReadWindow(history, events) }
+      : {}),
     found: true,
     hasOverreadContext: range.hasOverreadContext,
     offset: range.offset,

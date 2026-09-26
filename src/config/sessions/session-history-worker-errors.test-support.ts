@@ -175,6 +175,10 @@ export const typedFailures = [
     reply: { kind: "projection", sessionId: "projected-session" },
   },
   {
+    error: new SessionTranscriptProjectionUnavailableError("changed-session", "window-changed"),
+    reply: { kind: "projection", sessionId: "changed-session", reason: "window-changed" },
+  },
+  {
     error: new SessionTranscriptReadFenceError("fence failed"),
     reply: { kind: "fence", message: "fence failed" },
   },

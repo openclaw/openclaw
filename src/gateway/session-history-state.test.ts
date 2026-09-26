@@ -9,6 +9,7 @@ import type {
   SessionHistoryReadParams,
   SessionHistorySnapshot,
 } from "../config/sessions/session-history-types.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
   assistantTextMessage,
   textContent,
@@ -18,6 +19,7 @@ import { SessionHistorySseState } from "./session-history-state.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
 type StateOptions = Pick<SessionHistoryReadParams, "maxChars" | "limit" | "cursor"> &
+  Pick<SessionHistorySnapshot["history"], "windowReset"> &
   Partial<
     Pick<
       SessionHistorySnapshot,
@@ -35,7 +37,7 @@ function newState(
     limit: options.limit,
     cursor: options.cursor,
     snapshot: {
-      history: { items: messages, messages, hasMore: false },
+      history: { items: messages, messages, hasMore: false, windowReset: options.windowReset },
       rawTranscriptSeq: options.rawTranscriptSeq ?? messages.at(-1)?.["__openclaw"]?.seq ?? 0,
       turnBoundaryPending: options.turnBoundaryPending ?? false,
       assistantErrorPending: options.assistantErrorPending ?? false,
@@ -283,31 +285,39 @@ describe("SessionHistorySseState", () => {
   });
 
   test.each([
-    { name: "latest page", cursor: undefined, expectedSeq: 8 },
-    { name: "older cursor page", cursor: "8", expectedSeq: 7 },
+    { name: "latest page", cursor: undefined, expectedSeq: 8, reset: undefined },
+    { name: "older cursor page", cursor: "8", expectedSeq: 7, reset: undefined },
+    { name: "initial reset", cursor: "8", expectedSeq: 8, reset: "initial" },
+    { name: "reset during refresh", cursor: "8", expectedSeq: 8, reset: "refresh" },
   ])(
     "refreshes limited SSE history from bounded async reads ($name)",
-    async ({ cursor, expectedSeq }) => {
+    async ({ cursor, expectedSeq, reset }) => {
       const fullReadSpy = vi
         .spyOn(sessionTranscriptReaders, "readSessionMessagesWithSourceAsync")
         .mockResolvedValue({ messages: [] });
       const tailReadSpy = vi
         .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
-        .mockResolvedValueOnce({
+        .mockResolvedValue({
           messages: [assistantTextMessage("tail two", expectedSeq)],
           totalMessages: 8,
         });
       const pageReadSpy = vi
         .spyOn(sessionTranscriptReaders, "readSessionMessagesPageWithStatsAsync")
-        .mockResolvedValueOnce({
+        .mockResolvedValue({
           messages: [assistantTextMessage("tail two", expectedSeq)],
           totalMessages: 8,
         });
+      if (reset === "refresh") {
+        pageReadSpy.mockRejectedValueOnce(
+          new SessionTranscriptProjectionUnavailableError("sess-main", "window-changed"),
+        );
+      }
       try {
         const state = newState([assistantTextMessage("tail one", 7)], {
           rawTranscriptSeq: 7,
           limit: 1,
           cursor,
+          windowReset: reset === "initial",
         });
 
         expect(state.snapshot().messages[0]?.["__openclaw"]?.seq).toBe(7);
@@ -316,8 +326,17 @@ describe("SessionHistorySseState", () => {
         expect(refreshed.hasMore).toBe(true);
         expect(refreshed.nextCursor).toBe(String(expectedSeq));
         expect(refreshed.messages[0]?.["__openclaw"]?.seq).toBe(expectedSeq);
-        expect(tailReadSpy).toHaveBeenCalledTimes(cursor ? 0 : 1);
-        expect(pageReadSpy).toHaveBeenCalledTimes(cursor ? 1 : 0);
+        expect(tailReadSpy).toHaveBeenCalledTimes(!cursor || reset ? 1 : 0);
+        expect(pageReadSpy).toHaveBeenCalledTimes(cursor && reset !== "initial" ? 1 : 0);
+        if (reset) {
+          tailReadSpy.mockResolvedValueOnce({
+            messages: [assistantTextMessage("next tail", 9)],
+            totalMessages: 9,
+          });
+          expect((await state.refreshAsync()).messages).toEqual([
+            assistantTextMessage("next tail", 9),
+          ]);
+        }
         expect(fullReadSpy).not.toHaveBeenCalled();
       } finally {
         fullReadSpy.mockRestore();

@@ -13,7 +13,9 @@ import type {
   SessionHistoryReadParams,
   SessionHistorySnapshot,
 } from "../config/sessions/session-history-types.js";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import {
@@ -312,7 +314,7 @@ describe("session history snapshot reads", () => {
       changedIds: ["M2", "M3", "M4", "M5", "M6", "R2"],
       stableMessageId: "M5",
     },
-  ])("rejects cursor continuation across $name", async (fixture) => {
+  ])("recovers cursor continuation across $name", async (fixture) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const target = {
         agentId: "main",
@@ -341,6 +343,14 @@ describe("session history snapshot reads", () => {
 
           await appendTranscriptEvent(target, fixture.change);
           await waitForSessionTranscriptProjection(target);
+          if (fixture.change.type === "leaf") {
+            // Complete the branch fixture before testing continuity; a pending projection
+            // would let a broad rejection assertion pass without reaching the stale window.
+            const { db } = openOpenClawAgentDatabase({ agentId: target.agentId, env: state.env });
+            runSqliteImmediateTransactionSync(db, () =>
+              reconcileSessionTranscriptIndexInTransaction(db, target.sessionId),
+            );
+          }
           const changed = await readPage(target, { offset: 0, maxMessages: 10 });
           expect(changed.messages).toMatchObject(
             fixture.changedIds.map((id) => ({ __openclaw: { id } })),
@@ -365,9 +375,14 @@ describe("session history snapshot reads", () => {
           cursor: fixture.cursor,
         };
 
-        await expect(readSnapshot(history).then((snapshot) => snapshot.history)).rejects.toThrow(
-          SessionTranscriptProjectionUnavailableError,
-        );
+        const recovered = (await readSnapshot(history)).history;
+        expect(recovered.windowReset).toBe(true);
+        expect(recovered.messages.length).toBeGreaterThan(0);
+        expect(
+          recovered.messages
+            .map(readChatHistoryMessageId)
+            .every((id) => fixture.changedIds.includes(id!)),
+        ).toBe(true);
       } finally {
         pageReadSpy.mockRestore();
       }
