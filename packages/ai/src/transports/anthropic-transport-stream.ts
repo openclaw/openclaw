@@ -24,10 +24,7 @@ import {
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
 } from "../providers/anthropic-model-contract.js";
-import {
-  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  ANTHROPIC_SERVER_SIDE_FALLBACKS,
-} from "../providers/anthropic-server-fallback.js";
+import { ANTHROPIC_SERVER_SIDE_FALLBACKS } from "../providers/anthropic-server-fallback.js";
 import { applyAnthropicThinkingBindingControls } from "../providers/anthropic-thinking-replay.js";
 import {
   normalizeAnthropicToolCallId,
@@ -50,7 +47,7 @@ import {
   buildAnthropicSystemBlocks,
   applyAnthropicContextManagementToRequest,
   isDirectAnthropicModel,
-  resolveAnthropicContextManagementBetaHeader,
+  resolveAnthropicRequestBetaHeader,
   resolveAnthropicCacheOptions,
 } from "./anthropic-payload-policy.js";
 import { consumeAnthropicStream, type AnthropicStreamBlock } from "./anthropic-stream-reducer.js";
@@ -462,9 +459,6 @@ function createAnthropicTransportClient(params: {
       claudeCodeVersion: identity.version,
     };
   }
-  if (useAnthropicServerSideFallback(model)) {
-    betaFeatures.push(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
-  }
   const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: false });
   const defaultHeaders = mergeTransportHeaders(
     {
@@ -633,10 +627,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           params = nextParams as Record<string, unknown>;
         }
         applyClaudeRequestContract(params, model);
-        const betaHeader = resolveAnthropicContextManagementBetaHeader(
-          params,
-          directApiKeyBetaHeader,
-        );
+        const betaHeader = resolveAnthropicRequestBetaHeader(params, directApiKeyBetaHeader);
         const bindingHeaders =
           applyAnthropicThinkingBindingControls(params, betaHeader) ??
           (betaHeader ? { "anthropic-beta": betaHeader } : undefined);

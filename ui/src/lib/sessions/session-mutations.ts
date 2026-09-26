@@ -251,6 +251,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
       pendingConversation,
       options.expectedSessionId,
     );
+    const managesThinkingClaim = Object.hasOwn(patchParams, "thinkingLevel");
+    let resumeThinkingClaim = managesThinkingClaim
+      ? host.suspendThink(normalizedKey, options.agentId)
+      : undefined;
     // Claim settings before queued dispatch so the newest choice remains visible.
     const thinkingPatchToken =
       pendingTarget && patchParams.thinkingLevel !== undefined
@@ -368,6 +372,14 @@ export function createSessionMutations(host: SessionMutationsHost) {
     };
     const settleOptimisticPatch = (completed: boolean) => {
       settleModelOverride(completed);
+      if (managesThinkingClaim) {
+        if (completed) {
+          host.clearThink(normalizedKey, options.agentId);
+        } else {
+          resumeThinkingClaim?.();
+        }
+        resumeThinkingClaim = undefined;
+      }
       if (pendingTarget) {
         for (const [owner, token] of [
           [optimisticPins, pinPatchToken],
@@ -439,9 +451,6 @@ export function createSessionMutations(host: SessionMutationsHost) {
             fields,
           });
         }
-      }
-      if (Object.hasOwn(patchParams, "thinkingLevel")) {
-        host.clearThink(normalizedKey, options.agentId);
       }
       if (permissionProjection) {
         const confirmation = permissionProjection.confirm({

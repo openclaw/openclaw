@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assertPreservedPluginActivation,
@@ -39,6 +39,80 @@ const candidateInventory = () => ({
 });
 
 describe("sole-plugin upgrade acceptance", () => {
+  it("authors the isolated baseline with the existing explicit survivor model route", () => {
+    const root = tempDirs.make("openclaw-policy-route-");
+    const source = join(root, "source");
+    const artifacts = join(root, "artifacts");
+    const prefix = join(root, "npm-prefix");
+    const packageRoot = join(prefix, "lib/node_modules/openclaw");
+    const configPath = join(root, "openclaw.json");
+    for (const directory of [source, artifacts, packageRoot, join(prefix, "bin")]) {
+      mkdirSync(directory, { recursive: true });
+    }
+    const provider = {
+      baseUrl: "http://127.0.0.1:18888/v1",
+      api: "openai-completions",
+      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      models: [{ id: "gpt-5.6-luna" }],
+    };
+    writeFileSync(
+      join(source, "legacy-operator-webhooks.json"),
+      JSON.stringify({
+        seeded: true,
+        baselineVersion: "2026.9.2",
+        entry: { enabled: true },
+        hooks,
+        model: "survivor/gpt-5.6-luna",
+        provider,
+      }),
+    );
+    writeFileSync(join(packageRoot, "package.json"), '{"name":"openclaw","version":"2026.9.2"}');
+    writeFileSync(configPath, "{}");
+    writeFileSync(
+      join(packageRoot, "openclaw.mjs"),
+      `#!${process.execPath}
+import fs from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "config" && args[1] === "set") {
+  const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH));
+  config[args[2]] = JSON.parse(args[3]);
+  fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
+} else if (args[0] === "config" && args[1] === "validate") {
+  console.log(JSON.stringify({ valid: true, warnings: [] }));
+} else {
+  throw new Error("unexpected fixture command");
+}
+`,
+      { mode: 0o755 },
+    );
+    symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", join(prefix, "bin/openclaw"));
+    const result = spawnSync(
+      process.execPath,
+      [
+        "scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.mjs",
+        "seed",
+        source,
+        "2026.9.2",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${join(prefix, "bin")}${delimiter}${process.env.PATH ?? ""}`,
+          npm_config_prefix: prefix,
+          OPENCLAW_STATE_DIR: root,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
+        },
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const authored = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(authored.models.providers.survivor).toEqual(provider);
+    expect(authored.agents.defaults.model.primary).toBe("survivor/gpt-5.6-luna");
+    expect(authored.plugins.allow).toEqual(["webhooks"]);
+  });
+
   it("isolates inherited Discord discovery from policy authoring and Gateway startup", () => {
     const root = tempDirs.make("openclaw-policy-env-");
     const artifacts = join(root, "artifacts");
@@ -122,8 +196,16 @@ printf 'main-preserved\\n'
   );
 
   it("preserves allowed channel and slot policy without opening the allowlist", () => {
-    expect(() => assertSolePluginPolicy(policy(), specimen, baseline)).not.toThrow();
     const config = policy();
+    for (const allow of [["telegram"], ["memory-core"], ["memory-core", "telegram"]]) {
+      expect(() =>
+        assertSolePluginPolicy(
+          { ...config, plugins: { ...config.plugins, allow } },
+          specimen,
+          baseline,
+        ),
+      ).not.toThrow();
+    }
     expect(() =>
       assertSolePluginPolicy(
         { ...config, plugins: { ...config.plugins, enabled: false } },
@@ -131,14 +213,14 @@ printf 'main-preserved\\n'
         baseline,
       ),
     ).toThrow("disabled permitted channel or slot plugins");
-    for (const allow of [[], ["memory-core"], ["memory-core", "telegram", "unrelated"]]) {
+    for (const allow of [[], ["memory-core", "telegram", "unrelated"]]) {
       expect(() =>
         assertSolePluginPolicy(
           { ...config, plugins: { ...config.plugins, allow } },
           specimen,
           baseline,
         ),
-      ).toThrow("changed the effective plugin allowlist");
+      ).toThrow("restrictive plugin allowlist");
     }
   });
 
@@ -195,6 +277,23 @@ printf 'main-preserved\\n'
     expect(() => readEnabledPolicyPlugins({ plugins: [] })).toThrow(
       "omitted or duplicated installed plugin",
     );
+    expect(() =>
+      assertPreservedPluginActivation(candidateInventory(), { ...baseline, enabledPlugins: [] }),
+    ).toThrow("widened or lost plugin activation");
+    for (const id of ["memory-core", "telegram", "device-pair"]) {
+      const changed = candidateInventory();
+      const plugin = changed.plugins.find((entry) => entry.id === id)!;
+      plugin.enabled = !plugin.enabled;
+      expect(() => assertPreservedPluginActivation(changed, baseline)).toThrow(
+        "wrong activation policy",
+      );
+    }
+    expect(() =>
+      assertPreservedPluginActivation(candidateInventory(), {
+        ...baseline,
+        enabledPlugins: [...baseline.enabledPlugins, "missing-survivor"],
+      }),
+    ).toThrow("widened or lost plugin activation");
     const widened = candidateInventory();
     widened.plugins.push({
       id: "unrelated",

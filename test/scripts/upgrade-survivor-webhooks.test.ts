@@ -94,6 +94,15 @@ afterEach(() => {
 describe("legacy operator Webhooks retirement acceptance", () => {
   it("authors the published specimen and refuses retained ids or lost ordinary hooks", () => {
     seedLegacyOperatorState();
+    const specimen = JSON.parse(
+      readFileSync(path.join(root, "legacy-operator-webhooks.json"), "utf8"),
+    );
+    expect(specimen.model).toBe("survivor/gpt-5.6-luna");
+    expect(specimen.provider).toMatchObject({
+      baseUrl: "http://127.0.0.1:18888/v1",
+      api: "openai-completions",
+      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+    });
     expect(() => assertLegacyOperatorConfig("baseline")).not.toThrow();
     expect(config().plugins?.entries?.webhooks).toMatchObject({
       enabled: true,

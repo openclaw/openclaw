@@ -1,6 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactToolPayloadText } from "../logging/redact.js";
-import type { SessionCompanionThread } from "./session-companion-state.js";
+import {
+  selectSessionCompanionReferenceItems,
+  type SessionCompanionThread,
+} from "./session-companion-state.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 
 const ANSWER_MAX_CHARS = 1200;
@@ -77,18 +80,8 @@ export function selectDeltaNotes(
   const candidates = snapshot.notes
     .filter((note) => note.sequence > afterSequence)
     .toSorted((left, right) => left.sequence - right.sequence);
-  const selected: Array<{ sequence: number; text: string }> = [];
-  let bytes = 2;
-  for (const note of candidates.toReversed()) {
-    const noteBytes = Buffer.byteLength(JSON.stringify(note), "utf8") + 1;
-    if (bytes + noteBytes > DELTA_MAX_BYTES) {
-      break;
-    }
-    selected.unshift(note);
-    bytes += noteBytes;
-  }
   return {
-    notes: selected,
+    notes: selectSessionCompanionReferenceItems(candidates.toReversed(), DELTA_MAX_BYTES),
     lastSequence: candidates.at(-1)?.sequence ?? afterSequence,
   };
 }

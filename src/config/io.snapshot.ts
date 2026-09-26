@@ -497,12 +497,15 @@ export async function prepareConfigRecoveryFromContext(
         retryable: false,
       });
     }
-    const previewContext = createConfigIoContext({
-      ...context.options,
-      configPath: context.configPath,
-      env: cloneEnvWithPlatformSemantics(context.deps.env),
-      observe: false,
-    });
+    const previewContext = createConfigIoContext(
+      {
+        ...context.options,
+        configPath: context.configPath,
+        env: cloneEnvWithPlatformSemantics(context.deps.env),
+        observe: false,
+      },
+      context.transformRecoveryCandidate,
+    );
     const plan = await prepareSuspiciousConfigRead({
       deps: previewContext.deps,
       configPath: context.configPath,

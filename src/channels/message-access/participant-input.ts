@@ -62,6 +62,7 @@ export function bindChannelParticipantInput(params: {
     return;
   }
   bindCommandOwnerAuthority(params.context, {
+    recoveryReference: authority.recoveryReference,
     isCurrent: () =>
       params.owner.isLive() &&
       params.owner.resolveGatewayContext?.() === gateway &&

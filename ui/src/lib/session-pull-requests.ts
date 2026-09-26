@@ -86,6 +86,7 @@ function readChangedSessions(
 
 function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotStore {
   const watchedByOwner = new Map<object, { keys: Set<string>; foreground: boolean }>();
+  let orderedWatchedKeys: string[] | undefined;
   const loadTokens = new WeakMap<object, object>();
   const snapshots = new Map<string, ControlUiSessionPullRequestSnapshot>();
   const listeners = new Set<() => void>();
@@ -126,19 +127,23 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   };
 
   const watchedKeys = (): string[] => {
+    if (orderedWatchedKeys) {
+      return orderedWatchedKeys;
+    }
     const keys = new Map<string, boolean>();
     for (const watched of watchedByOwner.values()) {
       for (const key of watched.keys) {
         keys.set(key, (keys.get(key) ?? false) || watched.foreground);
       }
     }
-    return [...keys]
+    orderedWatchedKeys = [...keys]
       .toSorted(
         ([leftKey, leftForeground], [rightKey, rightForeground]) =>
           Number(rightForeground) - Number(leftForeground) || leftKey.localeCompare(rightKey),
       )
       .slice(0, CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS)
       .map(([key]) => key);
+    return orderedWatchedKeys;
   };
 
   const pruneUnwatched = () => {
@@ -443,6 +448,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     } else {
       watchedByOwner.set(owner, { keys: next, foreground: options.foreground === true });
     }
+    orderedWatchedKeys = undefined;
     retry.reset();
     pruneUnwatched();
     if (isActive()) {

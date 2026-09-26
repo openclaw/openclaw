@@ -23,6 +23,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
 import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
@@ -228,6 +229,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
           if (committed.identity) {
             publishCommittedSessionIdentity(
               captured.agentId,
+              readOpenClawAgentDatabaseIdentity(database).identity,
               committed.identity.previous,
               committed.identity.current,
             );

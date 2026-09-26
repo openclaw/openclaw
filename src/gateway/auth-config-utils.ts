@@ -34,15 +34,11 @@ export function hasConfiguredGatewayAuthSecretInput(
 }
 
 /** Decide whether a token/password secret ref can be active for the configured auth mode. */
-function shouldResolveGatewayAuthSecretRef(params: {
-  mode?: GatewayAuthConfig["mode"];
-  path: GatewayAuthSecretInputPath;
-  hasPasswordOverride: boolean;
-  hasTokenOverride: boolean;
-  hasPasswordFallback: boolean;
-  hasTokenFallback: boolean;
-}): boolean {
-  const isTokenPath = params.path === "gateway.auth.token";
+function shouldResolveGatewayAuthSecretRef(
+  params: GatewayAuthSecretRefResolutionParams,
+  path: GatewayAuthSecretInputPath,
+): boolean {
+  const isTokenPath = path === "gateway.auth.token";
   const hasPathOverride = isTokenPath ? params.hasTokenOverride : params.hasPasswordOverride;
   if (hasPathOverride) {
     return false;
@@ -66,42 +62,15 @@ function shouldResolveGatewayAuthSecretRef(params: {
     : !(params.hasTokenOverride || params.hasTokenFallback);
 }
 
-function shouldResolveGatewayTokenSecretRef(
-  params: Omit<GatewayAuthSecretRefResolutionParams, "cfg" | "env">,
+function hasActiveExecGatewayAuthSecretRef(
+  params: GatewayAuthSecretRefResolutionParams,
+  path: GatewayAuthSecretInputPath,
 ): boolean {
-  return shouldResolveGatewayAuthSecretRef({
-    mode: params.mode,
-    path: "gateway.auth.token",
-    hasPasswordOverride: params.hasPasswordOverride,
-    hasTokenOverride: params.hasTokenOverride,
-    hasPasswordFallback: params.hasPasswordFallback,
-    hasTokenFallback: params.hasTokenFallback,
-  });
-}
-
-function shouldResolveGatewayPasswordSecretRef(
-  params: Omit<GatewayAuthSecretRefResolutionParams, "cfg" | "env">,
-): boolean {
-  return shouldResolveGatewayAuthSecretRef({
-    mode: params.mode,
-    path: "gateway.auth.password",
-    hasPasswordOverride: params.hasPasswordOverride,
-    hasTokenOverride: params.hasTokenOverride,
-    hasPasswordFallback: params.hasPasswordFallback,
-    hasTokenFallback: params.hasTokenFallback,
-  });
-}
-
-function hasActiveExecGatewayAuthSecretRef(params: {
-  cfg: OpenClawConfig;
-  path: GatewayAuthSecretInputPath;
-  shouldResolve: boolean;
-}): boolean {
-  if (!params.shouldResolve) {
+  if (!shouldResolveGatewayAuthSecretRef(params, path)) {
     return false;
   }
   const { ref } = resolveSecretInputRef({
-    value: readGatewaySecretInputValue(params.cfg, params.path),
+    value: readGatewaySecretInputValue(params.cfg, path),
     defaults: params.cfg.secrets?.defaults,
   });
   return ref?.source === "exec";
@@ -112,33 +81,23 @@ export function canMaterializeGatewayAuthSecretRefsWithoutExec(
   params: GatewayAuthSecretRefResolutionParams,
 ): boolean {
   return !(
-    hasActiveExecGatewayAuthSecretRef({
-      cfg: params.cfg,
-      path: "gateway.auth.token",
-      shouldResolve: shouldResolveGatewayTokenSecretRef(params),
-    }) ||
-    hasActiveExecGatewayAuthSecretRef({
-      cfg: params.cfg,
-      path: "gateway.auth.password",
-      shouldResolve: shouldResolveGatewayPasswordSecretRef(params),
-    })
+    hasActiveExecGatewayAuthSecretRef(params, "gateway.auth.token") ||
+    hasActiveExecGatewayAuthSecretRef(params, "gateway.auth.password")
   );
 }
 
-async function resolveGatewayAuthSecretRefValue(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  path: GatewayAuthSecretInputPath;
-  shouldResolve: boolean;
-}): Promise<string | undefined> {
-  if (!params.shouldResolve) {
+async function resolveGatewayAuthSecretRefValue(
+  params: GatewayAuthSecretRefResolutionParams,
+  path: GatewayAuthSecretInputPath,
+): Promise<string | undefined> {
+  if (!shouldResolveGatewayAuthSecretRef(params, path)) {
     return undefined;
   }
   const value = await resolveRequiredConfiguredSecretRefInputString({
     config: params.cfg,
     env: params.env,
-    value: readGatewaySecretInputValue(params.cfg, params.path),
-    path: params.path,
+    value: readGatewaySecretInputValue(params.cfg, path),
+    path,
   });
   if (!value) {
     return undefined;
@@ -150,85 +109,51 @@ async function resolveGatewayAuthSecretRefValue(params: {
 export async function resolveGatewayTokenSecretRefValue(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<string | undefined> {
-  return resolveGatewayAuthSecretRefValue({
-    cfg: params.cfg,
-    env: params.env,
-    path: "gateway.auth.token",
-    shouldResolve: shouldResolveGatewayTokenSecretRef(params),
-  });
+  return resolveGatewayAuthSecretRefValue(params, "gateway.auth.token");
 }
 
 /** Resolve the Gateway auth password ref only when password auth can use it. */
 export async function resolveGatewayPasswordSecretRefValue(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<string | undefined> {
-  return resolveGatewayAuthSecretRefValue({
-    cfg: params.cfg,
-    env: params.env,
-    path: "gateway.auth.password",
-    shouldResolve: shouldResolveGatewayPasswordSecretRef(params),
-  });
+  return resolveGatewayAuthSecretRefValue(params, "gateway.auth.password");
 }
 
-async function resolveGatewayAuthSecretRef(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  path: GatewayAuthSecretInputPath;
-  shouldResolve: boolean;
-}): Promise<OpenClawConfig> {
-  const value = await resolveGatewayAuthSecretRefValue(params);
+async function resolveGatewayAuthSecretRef(
+  params: GatewayAuthSecretRefResolutionParams,
+  path: GatewayAuthSecretInputPath,
+): Promise<OpenClawConfig> {
+  const cfg = params.cfg;
+  const value = await resolveGatewayAuthSecretRefValue(params, path);
   if (!value) {
-    return params.cfg;
+    return cfg;
   }
   // Mutate a clone so startup validation can materialize secrets without
   // altering the caller's raw config object.
-  const nextConfig = structuredClone(params.cfg);
+  const nextConfig = structuredClone(cfg);
   nextConfig.gateway ??= {};
   nextConfig.gateway.auth ??= {};
   assignResolvedGatewaySecretInput({
     config: nextConfig,
-    path: params.path,
+    path,
     value,
   });
   return nextConfig;
-}
-
-async function resolveGatewayPasswordSecretRef(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  mode?: GatewayAuthConfig["mode"];
-  hasPasswordOverride: boolean;
-  hasTokenOverride: boolean;
-  hasPasswordFallback: boolean;
-  hasTokenFallback: boolean;
-}): Promise<OpenClawConfig> {
-  return resolveGatewayAuthSecretRef({
-    cfg: params.cfg,
-    env: params.env,
-    path: "gateway.auth.password",
-    shouldResolve: shouldResolveGatewayPasswordSecretRef(params),
-  });
 }
 
 /** Materialize active local Gateway auth secret refs on a cloned config. */
 export async function materializeGatewayAuthSecretRefs(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<OpenClawConfig> {
-  const cfgWithToken = await resolveGatewayAuthSecretRef({
-    cfg: params.cfg,
-    env: params.env,
-    path: "gateway.auth.token",
-    shouldResolve: shouldResolveGatewayTokenSecretRef(params),
-  });
-  return await resolveGatewayPasswordSecretRef({
-    cfg: cfgWithToken,
-    env: params.env,
-    mode: params.mode,
-    hasPasswordOverride: params.hasPasswordOverride,
-    hasTokenOverride: params.hasTokenOverride,
-    hasPasswordFallback: params.hasPasswordFallback,
-    hasTokenFallback:
-      params.hasTokenFallback ||
-      hasConfiguredGatewayAuthSecretInput(cfgWithToken, "gateway.auth.token"),
-  });
+  const cfgWithToken = await resolveGatewayAuthSecretRef(params, "gateway.auth.token");
+  return await resolveGatewayAuthSecretRef(
+    {
+      ...params,
+      cfg: cfgWithToken,
+      hasTokenFallback:
+        params.hasTokenFallback ||
+        hasConfiguredGatewayAuthSecretInput(cfgWithToken, "gateway.auth.token"),
+    },
+    "gateway.auth.password",
+  );
 }

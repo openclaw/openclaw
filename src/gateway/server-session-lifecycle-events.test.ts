@@ -76,6 +76,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const query = { key: "agent:main:late-successor", agentId: "main" };
     const original = { ...query, entry: { sessionId: "original", lifecycleRevision: "first" } };
     let current = scenario.captured ? original : undefined;
+    let generation = 0;
     const snapshot = vi.fn(() => ({
       row: current ? { ...current.entry, key: query.key, kind: "direct" } : null,
     }));
@@ -89,6 +90,10 @@ describe("createLifecycleEventBroadcastHandler", () => {
         return { kind: "complete", value: consume(projection) };
       }) satisfies SessionRowProjection["withPreparedExactRows"],
       isCurrent: (record: typeof original) => record === current,
+      observeGeneration: (() => {
+        const observed = generation;
+        return { isCurrent: () => generation === observed, dispose() {} };
+      }) satisfies SessionRowProjection["observeGeneration"],
       snapshot,
     } as unknown as SessionRowProjection;
     const broadcastToConnIds = vi.fn();
@@ -103,6 +108,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       expect(broadcastToConnIds).not.toHaveBeenCalled();
     }
     if (!scenario.captured) {
+      generation += 1;
       current = { ...query, entry: { sessionId: "successor", lifecycleRevision: "next" } };
     }
     prepared.resolve();

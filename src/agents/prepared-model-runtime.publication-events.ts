@@ -124,11 +124,13 @@ export function createCatalogAttemptReporter(
       pendingProviders[kind] = providers;
     },
     withRefreshStatus: (catalog) => {
-      const nativeFailed = Object.values(catalog.nativeProviderOutcomes ?? {}).some((outcomes) =>
-        outcomes.some((outcome) => outcome.status !== "ready"),
-      );
+      const nativeOutcomes = Object.values(catalog.nativeProviderOutcomes ?? {}).flat();
+      // Auth rejection leaves inventory incomplete without making its refresh fail.
       // Provider renewal does not retry a failed native inventory.
-      if (attempt.failedProviders.native.size > 0 || nativeFailed) {
+      if (
+        attempt.failedProviders.native.size > 0 ||
+        nativeOutcomes.some((outcome) => outcome.status !== "ready")
+      ) {
         catalog.authoritative = false;
       }
       Object.defineProperty(catalog, "pendingProviders", {
@@ -150,8 +152,8 @@ export function createCatalogAttemptReporter(
         configurable: true,
         get: () =>
           hasFailedProviders() ||
-          nativeFailed ||
-          catalog.providerOutcomes?.some((outcome) => outcome.status !== "ready") ||
+          nativeOutcomes.some((outcome) => outcome.status === "unavailable") ||
+          catalog.providerOutcomes?.some((outcome) => outcome.status === "unavailable") ||
           undefined,
       });
       return catalog;

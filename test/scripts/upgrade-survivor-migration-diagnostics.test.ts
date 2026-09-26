@@ -181,6 +181,9 @@ it.each([
   { candidateVersion: "2026.9.5" },
   { activePlugins: ["device-pair"] },
   { candidateEnabledPlugins: ["memory-core", "telegram", "unrelated"] },
+  { candidateEnabledPlugins: ["telegram"] },
+  { baselineEnabledPlugins: [] },
+  { hookUnauthorizedStatus: 200 },
   { hooksSha256: "invalid" },
   { ordinaryHooksPreserved: false },
 ])("rejects inconsistent sole-policy success receipts: %j", (patch) => {

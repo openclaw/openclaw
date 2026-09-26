@@ -1,10 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { listSessionGroups, normalizeGroupNames } from "./session-groups.js";
+import { listSessionGroups } from "./session-groups.js";
 import {
   isApprovalSessionTargetMethod,
   sessionMutationTargetFields,
@@ -76,7 +77,7 @@ function resolveSessionGroupsPutMutationTargets(
   if (!Array.isArray(names)) {
     return undefined;
   }
-  const requested = new Set(normalizeGroupNames(names.filter((name) => typeof name === "string")));
+  const requested = new Set(normalizeUniqueTrimmedStringList(names));
   const dropped = listSessionGroups()
     .map((group) => group.name)
     .filter((name) => !requested.has(name));

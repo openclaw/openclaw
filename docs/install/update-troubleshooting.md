@@ -340,6 +340,19 @@ Older releases can reject enable, uninstall, and reinstall while trying to copy
 that same missing capture. Restart the Gateway through its service owner before
 retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
 
+### Database snapshots under continuous writes
+
+Older updaters can report that a database "did not stabilize after 10" attempts
+while the Gateway keeps writing. Current update schema inspection and rehearsal
+use a consistent SQLite online backup. Rehearsal progress records copied pages,
+bytes, and elapsed time in the update ledger.
+
+This cannot retrofit the installed 2026.9.5 driver. For that hop, stop the service
+through its service owner, run `openclaw update` from a separate terminal, then
+start the service. On a Linux user service, stop it with
+`systemctl --user stop openclaw-gateway.service`. If service shutdown itself
+hangs, treat that as a separate shutdown problem; do not start a second updater.
+
 ### Snapshot parse errors from 2026.9.5 and 2026.9.6
 
 An update started from 2026.9.5 or 2026.9.6 can stop with a message such as

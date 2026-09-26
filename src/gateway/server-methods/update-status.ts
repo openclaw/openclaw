@@ -20,10 +20,11 @@ import {
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
 import { toPublicUpdateRun } from "../../infra/update-run-record.js";
+import { getUpdateEffectiveChannel } from "../../infra/update-startup.js";
 import {
-  getUpdateEffectiveChannel,
+  getGatewayUpdateSchedule,
   refreshGatewayUpdateStatus,
-} from "../../infra/update-startup.js";
+} from "../../infra/update-status-schedule.js";
 import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
 import {
   getGatewayRestartDrainSignal,
@@ -64,24 +65,12 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       mark("checkout");
       const config = context?.getRuntimeConfig?.();
-      const configChannel = normalizeUpdateChannel(config?.update?.channel);
       if (params.refreshCheckout === true && config) {
         try {
           await refreshGatewayUpdateStatus(config);
         } catch (err) {
           context?.logGateway?.warn(
             `update.status checkout refresh failed: ${formatErrorMessage(err)}`,
-          );
-        }
-      }
-      mark("identity");
-      let effectiveChannel = configChannel ?? normalizeUpdateChannel(getUpdateSchedule()?.channel);
-      if (!effectiveChannel) {
-        try {
-          effectiveChannel = await getUpdateEffectiveChannel();
-        } catch (err) {
-          context?.logGateway?.warn(
-            `update.status install identity failed: ${formatErrorMessage(err)}`,
           );
         }
       }
@@ -108,7 +97,28 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
                 return undefined;
               });
       gatewayUpdateCampaign.reconcileRun(campaignRun);
-      const schedule = getUpdateSchedule();
+      mark("identity");
+      let currentConfig = context?.getRuntimeConfig?.() ?? config;
+      let effectiveChannel =
+        normalizeUpdateChannel(currentConfig?.update?.channel) ??
+        (currentConfig ? undefined : normalizeUpdateChannel(getUpdateSchedule()?.channel));
+      if (!effectiveChannel) {
+        try {
+          effectiveChannel = await getUpdateEffectiveChannel();
+        } catch (err) {
+          context?.logGateway?.warn(
+            `update.status install identity failed: ${formatErrorMessage(err)}`,
+          );
+        }
+        currentConfig = context?.getRuntimeConfig?.() ?? currentConfig;
+        effectiveChannel =
+          normalizeUpdateChannel(currentConfig?.update?.channel) ?? effectiveChannel;
+      }
+      const schedule = currentConfig
+        ? effectiveChannel
+          ? getGatewayUpdateSchedule(currentConfig, effectiveChannel)
+          : undefined
+        : getUpdateSchedule();
       mark("response");
       const result = {
         sentinel,

@@ -55,10 +55,6 @@ export { pageTargetInfo } from "./pw-session-page-target.js";
 
 type CdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
 
-function resolveCdpConnectRetryDelayMs(attempt: number): number {
-  return 250 + attempt * 250;
-}
-
 export function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
 }
@@ -549,9 +545,8 @@ export async function connectBrowser(
         if (errMsg.includes("rate limit")) {
           break;
         }
-        const delay = resolveCdpConnectRetryDelayMs(attempt);
         await new Promise((r) => {
-          setTimeout(r, delay);
+          setTimeout(r, 250 + attempt * 250);
         });
       }
     }
@@ -572,9 +567,7 @@ export async function connectBrowser(
 }
 
 export async function getAllPages(browser: Browser): Promise<Page[]> {
-  const contexts = browser.contexts();
-  const pages = contexts.flatMap((c) => c.pages());
-  return pages;
+  return browser.contexts().flatMap((context) => context.pages());
 }
 
 async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] }): Promise<{

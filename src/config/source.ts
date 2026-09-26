@@ -46,7 +46,7 @@ export function createConfigSource(opts: {
   let stopped = false;
   let observation: ConfigSourceObservation = { revision: 0, writerRevision: 0 };
   let acceptedRevision = 0;
-  const observe = (write?: RuntimeConfigWriteNotification) => {
+  const observe = (write?: RuntimeConfigWriteNotification, notify = true) => {
     if (stopped) {
       return;
     }
@@ -57,7 +57,9 @@ export function createConfigSource(opts: {
       writerRevision: write ? revision : observation.writerRevision,
       ...(write ? { write, snapshot: Promise.resolve(write.snapshot) } : {}),
     };
-    opts.onObserved(observation);
+    if (notify) {
+      opts.onObserved(observation);
+    }
     // A notification cannot consume an external edit still awaiting source admission.
     if (reconcileFile) {
       observe();

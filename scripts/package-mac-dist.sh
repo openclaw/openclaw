@@ -10,6 +10,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/mac-signing-identity.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 RECOVERY_DIR="$ROOT_DIR/dist/macos-notarization-recovery"
 RECOVERY_HELPER="$ROOT_DIR/scripts/lib/mac-notarization-recovery.py"
@@ -197,6 +198,13 @@ if [[ "$RESUME_NOTARIZATION" == "1" ]]; then
     /usr/bin/codesign --verify --strict -R="anchor apple generic and certificate leaf[subject.OU] = \"${EXPECTED_DEVELOPER_TEAM_ID}\"" "$APP"
   fi
 else
+  # A smoke request must be deterministic even on a host with release certificates.
+  # Preserve explicit identities so the signed-app notarization guard still applies.
+  if [[ "${SKIP_NOTARIZE:-0}" == "1" && "${ALLOW_ADHOC_SIGNING:-0}" == "1" && -z "${SIGN_IDENTITY:-}" ]]; then
+    SIGN_IDENTITY="-"
+  fi
+  SIGN_IDENTITY="$(resolve_mac_signing_identity)"
+  export SIGN_IDENTITY
   "$ROOT_DIR/scripts/package-mac-app.sh"
 fi
 if [[ ! -d "$APP" ]]; then

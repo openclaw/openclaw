@@ -8,13 +8,13 @@ describe("Anthropic OAuth client identity", () => {
   registerParityHostLifecycle();
 
   it.each<{ name: string; headers?: Record<string, string>; expected: string }>([
-    { name: "missing CLI", headers: undefined, expected: "2.1.278" },
-    { name: "older CLI", headers: { "user-agent": "claude-cli/2.1.234" }, expected: "2.1.278" },
+    { name: "missing CLI", headers: undefined, expected: "2.1.280" },
+    { name: "older CLI", headers: { "user-agent": "claude-cli/2.1.234" }, expected: "2.1.280" },
     { name: "newer CLI", headers: { "User-Agent": "claude-cli/3.0.0" }, expected: "3.0.0" },
     {
       name: "prerelease",
       headers: { "user-agent": "claude-cli/3.0.0-beta.1" },
-      expected: "2.1.278",
+      expected: "2.1.280",
     },
   ])("uses one floor-bounded identity for $name", async ({ headers, expected }) => {
     for (const implementation of ["provider", "transport"] as const) {

@@ -49,6 +49,10 @@ function seedSolePluginPolicy(sourceArtifacts, baselineVersion) {
   assert.equal(specimen.seeded, true, "sole-plugin policy requires the baseline Webhooks specimen");
   assert.equal(specimen.baselineVersion, baselineVersion);
   assert.equal(installedVersion(), baselineVersion, "policy author is not the published baseline");
+  assert(
+    specimen.model?.startsWith("survivor/") && specimen.provider,
+    "missing survivor mock route",
+  );
   const expected = {
     gateway: {
       mode: "local",
@@ -60,7 +64,13 @@ function seedSolePluginPolicy(sourceArtifacts, baselineVersion) {
         token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
       },
     },
-    agents: { defaults: { workspace: path.join(process.env.OPENCLAW_STATE_DIR, "workspace") } },
+    models: { providers: { survivor: specimen.provider } },
+    agents: {
+      defaults: {
+        workspace: path.join(process.env.OPENCLAW_STATE_DIR, "workspace"),
+        model: { primary: specimen.model },
+      },
+    },
     plugins: {
       allow: ["webhooks"],
       deny: ["webhooks", "device-pair"],
@@ -81,6 +91,8 @@ function seedSolePluginPolicy(sourceArtifacts, baselineVersion) {
   );
   assert.deepEqual(authored.hooks, expected.hooks);
   assert.deepEqual(authored.channels, expected.channels);
+  assert.deepEqual(authored.models, expected.models);
+  assert.equal(authored.agents?.defaults?.model?.primary, specimen.model);
   cli(["config", "validate", "--json"], "baseline-validation");
   writeJson(artifact("specimen.json"), {
     baselineVersion,
@@ -96,10 +108,14 @@ export function assertSolePluginPolicy(config, specimen, baseline) {
     false,
     "retirement disabled permitted channel or slot plugins",
   );
-  assert.deepEqual(
-    config.plugins?.allow?.toSorted(),
-    baseline.enabledPlugins,
-    "retirement changed the effective plugin allowlist",
+  // Selected slots and configured bundled channels can bypass this list; the
+  // Gateway inventory comparison below owns equality of effective eligibility.
+  const allow = config.plugins?.allow;
+  assert(
+    Array.isArray(allow) &&
+      allow.length > 0 &&
+      allow.every((id) => baseline.enabledPlugins.includes(id)),
+    "retirement widened or removed the restrictive plugin allowlist",
   );
   assert.equal(config.plugins?.entries?.webhooks, undefined, "retired plugin entry remains");
   assert(!config.plugins?.allow?.includes("webhooks"), "retired allow reference remains");

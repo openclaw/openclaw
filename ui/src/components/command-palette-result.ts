@@ -44,13 +44,11 @@ export function renderCommandPaletteResult(
             ${owner?.id ? html`<span class="cmd-palette__owner">${renderSessionOwnerAvatar({ ...owner, id: owner.id })}</span>` : nothing}
           </span>`
         : pluginId
-          ? renderArtTile(
-              pluginId,
-              item.label,
-              pluginIconUrls[pluginId],
-              () => onPluginIconError?.(pluginId),
-              "cmd-palette__plugin-icon",
-            )
+          ? renderArtTile(pluginId, item.label, {
+              iconUrl: pluginIconUrls[pluginId],
+              onIconError: () => onPluginIconError?.(pluginId),
+              className: "cmd-palette__plugin-icon",
+            })
           : html`<span class="nav-item__icon" aria-hidden="true">${icons[item.icon]}</span>`
     }
     <span class="cmd-palette__item-copy">

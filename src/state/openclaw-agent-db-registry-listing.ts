@@ -35,11 +35,6 @@ type AgentDatabaseRegistryMemo = {
   entries?: readonly OpenClawRegisteredAgentDatabase[];
 };
 
-export class AgentDatabaseRegistryChangedError extends Error {
-  constructor() {
-    super("Agent database registry changed during discovery; retry the read.");
-  }
-}
 // A plugin may first open a hot-created agent; its registration must invalidate
 // native discovery even when subsequent callers reuse the shared connection.
 const registry = resolveGlobalSingleton<{ memo?: AgentDatabaseRegistryMemo }>(
@@ -195,6 +190,13 @@ function hasUnavailableMissingSqlitePath(pathname: string): boolean {
 type AgentDatabaseRegistryListOptions = OpenClawStateDatabaseOptions & {
   includeIncompatibleSchemaVersions?: boolean;
 };
+
+export class AgentDatabaseRegistryChangedError extends Error {
+  constructor() {
+    super("Agent database registry changed during discovery; retry the read.");
+    this.name = "AgentDatabaseRegistryChangedError";
+  }
+}
 
 export function readRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions,

@@ -4936,6 +4936,22 @@
     "target": "ONNX 插件参考"
   },
   {
+    "source": "Telnyx",
+    "target": "Telnyx"
+  },
+  {
+    "source": "Telnyx plugin",
+    "target": "Telnyx 插件"
+  },
+  {
+    "source": "telnyx",
+    "target": "telnyx"
+  },
+  {
+    "source": "Telnyx (AI inference)",
+    "target": "Telnyx（AI 推理）"
+  },
+  {
     "source": "Deploy a team server",
     "target": "部署团队服务器"
   }

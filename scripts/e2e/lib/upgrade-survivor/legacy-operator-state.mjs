@@ -212,6 +212,8 @@ function seedLegacyOperatorWebhooks(set) {
     seeded: true,
     entry,
     hooks,
+    model: config.agents.defaults.model.primary,
+    provider: config.models.providers.survivor,
   });
 }
 

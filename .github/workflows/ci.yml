@@ -7445,7 +7445,7 @@ jobs:
       # Downstream write-capable consumers inspect this step in the exact run
       # attempt. A green workflow with skipped full CI is not validation evidence.
       - name: Confirm validated workflow revision
-        if: success() && needs.preflight.outputs.checkout_revision == github.sha && (github.event_name != 'workflow_dispatch' || (!inputs.release_gate && inputs.target_ref == '' && inputs.release_scope == 'full' && inputs.include_android))
+        if: success() && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.checkout_revision == github.sha && (github.event_name != 'workflow_dispatch' || (!inputs.release_gate && inputs.target_ref == '' && inputs.release_scope == 'full' && inputs.include_android))
         run: echo "Full CI validated the immutable workflow revision."
   seal_release_child_evidence:
     name: Seal full release child evidence

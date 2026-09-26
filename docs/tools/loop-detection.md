@@ -84,6 +84,12 @@ progress. When a run id is available, history is evaluated only within that run,
 so scheduled heartbeat cycles and fresh runs do not inherit stale loop counts
 from earlier runs.
 
+Successful `progress_card` calls are compared using the saved Markdown and plan,
+not their write revision or receipt wording. Saved revisions and delivered receipts
+are unchanged, so a requested refresh still receives a newer saved revision even
+when the card content is unchanged. Errors and results without the tool’s private
+semantic outcome keep full outcome comparison.
+
 Outcome comparisons also ignore fresh external-content wrapper nonces, including
 wrapped errors and JSON results. Delivered security markers remain unchanged;
 payload text, status, timestamps, and durations still distinguish network results.

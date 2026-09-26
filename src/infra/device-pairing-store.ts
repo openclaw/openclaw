@@ -2,6 +2,7 @@
 // Immediate transactions preserve last-writer-wins semantics across Gateway and CLI processes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import type { Selectable } from "kysely";
 import {
   resolvePairingSetupAccess,
   type PairingSetupAccess,
@@ -253,6 +254,20 @@ function fromSetupCompletionDeliveryStateColumn(
   value: string,
 ): DevicePairSetupCompletionRecord["deliveryState"] {
   return value === "confirmed" ? "confirmed" : "uncertain";
+}
+
+function fromSetupCompletionRow(
+  row: Selectable<OpenClawStateKyselyDatabase["device_pair_setup_completions"]>,
+): DevicePairSetupCompletionRecord {
+  return {
+    setupId: row.setup_id,
+    deviceId: row.device_id,
+    ...optional("deviceName", row.device_name),
+    access: fromSetupCompletionAccessColumn(row.access),
+    completedAtMs: row.completed_at_ms,
+    deliveryState: fromSetupCompletionDeliveryStateColumn(row.delivery_state),
+    retainUntilMs: row.retain_until_ms,
+  };
 }
 
 function fromPairedRow(row: DevicePairingPaired): PairedDevice {
@@ -669,15 +684,7 @@ export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
         .where("setup_id", "=", setupId)
         .where("device_id", "=", deviceId),
     );
-    return {
-      setupId: row.setup_id,
-      deviceId: row.device_id,
-      ...optional("deviceName", row.device_name),
-      access: fromSetupCompletionAccessColumn(row.access),
-      completedAtMs: row.completed_at_ms,
-      deliveryState: fromSetupCompletionDeliveryStateColumn(row.delivery_state),
-      retainUntilMs: row.retain_until_ms,
-    };
+    return fromSetupCompletionRow(row);
   }, resolveDevicePairingStateDbOptions(params.baseDir));
 }
 
@@ -727,17 +734,7 @@ export function loadDevicePairSetupCompletionRecord(
           .selectAll()
           .where("setup_id", "=", setupId),
       );
-      return row
-        ? {
-            setupId: row.setup_id,
-            deviceId: row.device_id,
-            ...optional("deviceName", row.device_name),
-            access: fromSetupCompletionAccessColumn(row.access),
-            completedAtMs: row.completed_at_ms,
-            deliveryState: fromSetupCompletionDeliveryStateColumn(row.delivery_state),
-            retainUntilMs: row.retain_until_ms,
-          }
-        : null;
+      return row ? fromSetupCompletionRow(row) : null;
     },
     { ...databaseOptions, database },
   );

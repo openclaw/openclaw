@@ -12,7 +12,11 @@ export const chromiumEngine: BrowserEngineAdapter = {
   canReconnectForSafeReads: true,
   supportsRequest: () => true,
   capabilities(profile) {
-    const driverCapabilities = {
+    const usesChromeMcp = profile.driver === "existing-session";
+    const usesExtension = profile.driver === "extension";
+    const isRemote = !usesChromeMcp && !usesExtension && !profile.cdpIsLoopback;
+    const localManaged = !usesChromeMcp && !usesExtension && !isRemote;
+    return {
       supportsBatchActions: profile.driver !== "existing-session",
       supportsDownloads: profile.driver !== "existing-session",
       supportsPdf: profile.driver !== "existing-session",
@@ -30,68 +34,23 @@ export const chromiumEngine: BrowserEngineAdapter = {
       supportsMultipleTabs: true,
       supportsNativeSnapshots: true,
       requiresCompleteTargetEnumeration: profile.driver === "extension",
-    };
-    if (profile.driver === "existing-session") {
-      return {
-        ...driverCapabilities,
-        mode: "local-existing-session",
-        isRemote: false,
-        browserFilesystemLocal: false,
-        usesChromeMcp: true,
-        usesPersistentPlaywright: false,
-        supportsPerTabWs: false,
-        supportsJsonTabEndpoints: false,
-        supportsReset: false,
-        supportsManagedTabLimit: false,
-      };
-    }
-
-    // Extension relay profiles drive the user's signed-in browser through the
-    // paired Chrome extension. Ops run over persistent Playwright exactly like
-    // remote CDP, but the endpoint is the loopback relay server.
-    if (profile.driver === "extension") {
-      return {
-        ...driverCapabilities,
-        mode: "local-extension",
-        isRemote: false,
-        browserFilesystemLocal: true,
-        usesChromeMcp: false,
-        usesPersistentPlaywright: true,
-        supportsPerTabWs: false,
-        supportsJsonTabEndpoints: false,
-        supportsReset: false,
-        supportsManagedTabLimit: false,
-      };
-    }
-
-    if (!profile.cdpIsLoopback) {
-      return {
-        ...driverCapabilities,
-        mode: "remote-cdp",
-        isRemote: true,
-        browserFilesystemLocal: false,
-        usesChromeMcp: false,
-        usesPersistentPlaywright: true,
-        supportsPerTabWs: false,
-        supportsJsonTabEndpoints: false,
-        supportsReset: false,
-        supportsManagedTabLimit: false,
-      };
-    }
-
-    return {
-      ...driverCapabilities,
-      mode: "local-managed",
-      isRemote: false,
+      mode: usesChromeMcp
+        ? "local-existing-session"
+        : usesExtension
+          ? "local-extension"
+          : isRemote
+            ? "remote-cdp"
+            : "local-managed",
+      isRemote,
       // A loopback attach-only endpoint can terminate in Docker or a tunnel.
       // Only an OpenClaw-owned browser is known to share this filesystem.
-      browserFilesystemLocal: !profile.attachOnly,
-      usesChromeMcp: false,
-      usesPersistentPlaywright: false,
-      supportsPerTabWs: true,
-      supportsJsonTabEndpoints: true,
-      supportsReset: true,
-      supportsManagedTabLimit: true,
+      browserFilesystemLocal: usesExtension || (localManaged && !profile.attachOnly),
+      usesChromeMcp,
+      usesPersistentPlaywright: usesExtension || isRemote,
+      supportsPerTabWs: localManaged,
+      supportsJsonTabEndpoints: localManaged,
+      supportsReset: localManaged,
+      supportsManagedTabLimit: localManaged,
     };
   },
 };

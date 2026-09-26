@@ -53,6 +53,9 @@ export const runtimeProcessEntrypoints = {
   sessionManagerMetadata: runtimeProcessEntrypoint(
     "agents/sessions/session-manager-metadata.worker",
   ),
+  sessionTranscriptProjectionPublication: runtimeProcessEntrypoint(
+    "config/sessions/session-transcript-projection-publication.worker",
+  ),
   sessionTranscriptReports: runtimeProcessEntrypoint(
     "config/sessions/session-accessor.sqlite-transcript-reports.worker",
   ),

@@ -201,6 +201,19 @@ export async function writeMatrixQaCliOutputArtifacts(params: {
   return { stderrPath, stdoutPath };
 }
 
+export async function runMatrixQaSetupCliJson(
+  cli: {
+    rootDir: string;
+    run: (args: string[], timeoutMs?: number, stdin?: string) => Promise<MatrixQaCliRunResult>;
+  },
+  label: string,
+  ...args: Parameters<typeof cli.run>
+) {
+  const result = await cli.run(...args);
+  const artifacts = await writeMatrixQaCliOutputArtifacts({ label, result, rootDir: cli.rootDir });
+  return { artifacts, payload: parseMatrixQaCliJson(result), result };
+}
+
 export function assertMatrixQaCliSasMatches(params: {
   cliSas: ReturnType<typeof parseMatrixQaCliSasText>;
   owner: MatrixVerificationSummary;

@@ -6,6 +6,8 @@ import {
   SLACK_QA_REACTION_VERIFY_TIMEOUT_MS,
   SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
   SLACK_QA_LOG_TAIL_TIMEOUT_MS,
+  type SlackQaApprovalScenarioRun,
+  type SlackQaCodexApprovalScenarioRun,
   type SlackQaScenarioImplementation,
   type SlackQaScenarioContext,
 } from "./slack-live.contracts.js";
@@ -423,69 +425,54 @@ export const slackQaReactionGlyphNativeScenario: SlackQaScenarioImplementation =
   },
 };
 
-export const slackQaApprovalExecNativeScenario: SlackQaScenarioImplementation = {
-  configOverrides: {
-    approvals: {
-      exec: true,
-      target: "channel",
+function createSlackApprovalScenario(
+  marker: string,
+  run: Omit<SlackQaApprovalScenarioRun, "token"> | Omit<SlackQaCodexApprovalScenarioRun, "token">,
+): SlackQaScenarioImplementation {
+  return {
+    configOverrides: {
+      approvals: {
+        exec: true,
+        ...(run.approvalKind === "plugin" ? { plugin: true } : {}),
+        target: "channel",
+      },
+      ...(run.kind === "codex-approval" ? { codexApproval: true } : {}),
     },
-  },
-  buildRun: () => ({
-    approvalKind: "exec",
-    decision: "allow-once",
-    kind: "approval",
-    token: `SLACK_QA_EXEC_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
-  }),
-};
+    buildRun: () => ({
+      ...run,
+      token: `SLACK_QA_${marker}_${randomUUID().slice(0, 8).toUpperCase()}`,
+    }),
+  };
+}
 
-export const slackQaApprovalPluginNativeScenario: SlackQaScenarioImplementation = {
-  configOverrides: {
-    approvals: {
-      exec: true,
-      plugin: true,
-      target: "channel",
-    },
-  },
-  buildRun: () => ({
-    approvalKind: "plugin",
-    decision: "allow-once",
-    kind: "approval",
-    token: `SLACK_QA_PLUGIN_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
-  }),
-};
+export const slackQaApprovalExecNativeScenario = createSlackApprovalScenario("EXEC_APPROVAL", {
+  approvalKind: "exec",
+  decision: "allow-once",
+  kind: "approval",
+});
 
-export const slackQaCodexApprovalExecNativeScenario: SlackQaScenarioImplementation = {
-  configOverrides: {
-    approvals: {
-      exec: true,
-      plugin: true,
-      target: "channel",
-    },
-    codexApproval: true,
-  },
-  buildRun: () => ({
+export const slackQaApprovalPluginNativeScenario = createSlackApprovalScenario("PLUGIN_APPROVAL", {
+  approvalKind: "plugin",
+  decision: "allow-once",
+  kind: "approval",
+});
+
+export const slackQaCodexApprovalExecNativeScenario = createSlackApprovalScenario(
+  "CODEX_EXEC_APPROVAL",
+  {
     approvalKind: "plugin",
     appServerMethod: "item/commandExecution/requestApproval",
     decision: "allow-once",
     kind: "codex-approval",
-    token: `SLACK_QA_CODEX_EXEC_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
-  }),
-};
-
-export const slackQaCodexApprovalPluginNativeScenario: SlackQaScenarioImplementation = {
-  configOverrides: {
-    approvals: {
-      exec: true,
-      plugin: true,
-      target: "channel",
-    },
-    codexApproval: true,
   },
-  buildRun: () => ({
+);
+
+export const slackQaCodexApprovalPluginNativeScenario = createSlackApprovalScenario(
+  "CODEX_FILE_APPROVAL",
+  {
     approvalKind: "plugin",
     appServerMethod: "item/fileChange/requestApproval",
     decision: "allow-once",
     kind: "codex-approval",
-    token: `SLACK_QA_CODEX_FILE_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
-  }),
-};
+  },
+);

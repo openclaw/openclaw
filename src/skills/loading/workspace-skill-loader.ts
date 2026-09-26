@@ -542,7 +542,7 @@ export async function resolveWorkspaceSkillPromptEntries(
     const skillEntries = sources.entries;
     const probe = await prepareSkillBinaryProbe(
       skillEntries,
-      opts,
+      { ...opts, skillFilter },
       preparation.assertCurrent,
       sources.runtime,
     );
@@ -614,7 +614,7 @@ export async function prepareWorkspaceSkills(
     }
     const probe = await prepareSkillBinaryProbe(
       entries,
-      opts,
+      { ...opts, skillFilter: effectiveSkillFilter },
       preparation.assertCurrent,
       sources.runtime,
     );

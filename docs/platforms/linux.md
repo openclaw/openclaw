@@ -532,6 +532,12 @@ For eligible Linux child spawns, OpenClaw wraps the command in a short
 `1000`, then `exec`s the real command. This is unprivileged: a process may
 always raise its own OOM score.
 
+The small spawn broker and service-child anchor avoid this extra shell exec:
+they temporarily raise their own score around the native spawn, then restore it.
+The child inherits `1000` before it can execute or fork descendants. If the
+helper cannot adjust its score, it uses the shim. Direct launches and PTYs
+keep the shim so the Gateway's own score never needs to change.
+
 Covered child process surfaces:
 
 - Supervisor-managed command children

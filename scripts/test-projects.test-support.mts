@@ -48,6 +48,7 @@ import {
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
+import { isSharedVitestExcludedPath } from "../test/vitest/vitest.pattern-file.ts";
 import {
   isPluginSdkLightTarget,
   pluginSdkLightTestFiles,
@@ -478,6 +479,7 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
 const FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT = 6;
+const FULL_SUITE_INFRA_TEST_TARGET_CHUNK_SIZE = 64;
 const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
 const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const FULL_SUITE_UNIT_SRC_TEST_TARGET_CHUNK_SIZE = 150;
@@ -1116,6 +1118,21 @@ function listAgentsCoreFullSuiteTestTargets(cwd: string) {
     .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
     .map((entry) => `src/agents/${entry.name}`)
     .filter((file) => !isolatedTests.has(file))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function listInfraFullSuiteTestTargets(cwd: string) {
+  const infraDir = path.join(cwd, "src/infra");
+  return uniqueOrdered([
+    ...(fs.existsSync(infraDir) ? listRepoFilesRecursive(infraDir, cwd) : []),
+    ...databaseWorkerCoreTestFiles.filter((file) => fs.existsSync(path.join(cwd, file))),
+  ])
+    .filter(
+      (file) =>
+        file.endsWith(".test.ts") &&
+        !isSharedVitestExcludedPath(file) &&
+        classifyTarget(file, cwd) === "infra",
+    )
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -2496,6 +2513,11 @@ function isVitestConfigPathLikeTarget(relative: string) {
 
 function isVitestConfigFileTarget(relative: string) {
   return RUNNABLE_VITEST_CONFIG_TARGETS.has(relative);
+}
+
+/** Config identities do not require test discovery or CI shard construction. */
+export function listRunnableVitestConfigTargets(): string[] {
+  return [...RUNNABLE_VITEST_CONFIG_TARGETS];
 }
 
 function isVitestConfigTargetForKind(kind: string, targetArg: string, cwd: string) {
@@ -4971,6 +4993,13 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
           const targets = listUnitSrcFullSuiteTestTargets(cwd);
           const chunkCount = Math.ceil(targets.length / FULL_SUITE_UNIT_SRC_TEST_TARGET_CHUNK_SIZE);
           chunks = splitTargetChunks(targets, chunkCount);
+        } else if (config === INFRA_VITEST_CONFIG) {
+          // Isolated infra files can share the scheduler without sharing fork state.
+          const targets = listInfraFullSuiteTestTargets(cwd);
+          chunks = splitTargetChunks(
+            targets,
+            Math.ceil(targets.length / FULL_SUITE_INFRA_TEST_TARGET_CHUNK_SIZE),
+          );
         } else if (config === TOOLING_VITEST_CONFIG) {
           // Tooling tests spawn package managers and native helpers. Keep native
           // process lifetime short enough that unrelated files cannot crash together.
