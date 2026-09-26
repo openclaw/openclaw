@@ -283,12 +283,16 @@ describe("preflightCronModelProvider", () => {
     expect(request.auditContext).toBe("cron-model-provider-preflight");
   });
 
-  it.each([false, true])("reprobes after a client timeout (nested: %s)", async (nested) => {
+  it.each([false, true])("retries on client timeout then reprobes after short cache TTL (nested: %s)", async (nested) => {
+    vi.useFakeTimers();
     const timeout = new DOMException("request timed out", "TimeoutError");
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(
-      nested ? new TypeError("fetch failed", { cause: timeout }) : timeout,
-    );
-    mockReachableResponse();
+    const wrappedTimeout = nested ? new TypeError("fetch failed", { cause: timeout }) : timeout;
+    // Retry loop: all PREFLIGHT_RETRY_COUNT+1 attempts timeout, then second preflight call succeeds.
+    fetchWithSsrFGuardMock
+      .mockRejectedValueOnce(wrappedTimeout) // attempt 1
+      .mockRejectedValueOnce(wrappedTimeout) // attempt 2 (retry 1)
+      .mockRejectedValueOnce(wrappedTimeout) // attempt 3 (retry 2)
+      .mockResolvedValueOnce(mockReachableResponse()); // second preflight call (short TTL re-probe)
     const cfg = {
       models: {
         providers: {
@@ -301,21 +305,55 @@ describe("preflightCronModelProvider", () => {
       },
     };
 
-    const first = await preflightCronModelProvider({
+    const firstPromise = preflightCronModelProvider({
       cfg,
       provider: "vllm",
       model: "first",
       nowMs: 1000,
     });
+    // Advance past retry delays (2 x PREFLIGHT_RETRY_DELAY_MS = 800ms)
+    await vi.advanceTimersByTimeAsync(1000);
+    const first = await firstPromise;
+
+    // Short TTL (PREFLIGHT_TIMEOUT_CACHE_TTL_MS = 30s); nowMs=31000 is past it → fresh probe.
     const next = await preflightCronModelProvider({
       cfg,
       provider: "vllm",
       model: "next",
-      nowMs: 2000,
+      nowMs: 31_001,
     });
 
+    vi.useRealTimers();
     expect(first.status).toBe("unavailable");
     expect(next).toEqual({ status: "available" });
+    // All three retry attempts were made before caching the failure.
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not retry on hard connect errors (non-timeout)", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            api: "openai-completions" as const,
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    const result = await preflightCronModelProvider({
+      cfg,
+      provider: "vllm",
+      model: "first",
+      nowMs: 1000,
+    });
+
+    expect(result.status).toBe("unavailable");
+    // Only one attempt — hard errors are not retried.
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
   });
 
   it("reports a nested guarded-fetch deadline separately from endpoint failures", async () => {

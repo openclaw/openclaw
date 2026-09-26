@@ -10,7 +10,14 @@ import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
+/** Shorter TTL for client-side timeout failures: a gateway event-loop stall can
+ * cause the deadline to fire even when the provider is healthy.  Cache these
+ * for only 30 s so the next scheduled run gets a fresh probe instead of being
+ * skipped for the full 5-minute window. */
+const PREFLIGHT_TIMEOUT_CACHE_TTL_MS = 30_000;
 const PREFLIGHT_TIMEOUT_MS = 2_500;
+const PREFLIGHT_RETRY_COUNT = 2;
+const PREFLIGHT_RETRY_DELAY_MS = 400;
 const MAX_PREFLIGHT_ERROR_CAUSE_DEPTH = 8;
 const MAX_PREFLIGHT_ERROR_CHARS = 1_000;
 
@@ -37,6 +44,10 @@ type EndpointPreflightResult =
 
 type CachedEndpointPreflightResult = {
   checkedAtMs: number;
+  /** True when the cached failure was a pure client-side timeout (vs a connect
+   * error or an HTTP error from the provider).  Timeout entries expire sooner
+   * so that a transient gateway event-loop stall does not skip runs for 5 min. */
+  isTimeout?: boolean;
   result: EndpointPreflightResult;
 };
 
@@ -174,7 +185,7 @@ function buildUnavailableResult(params: {
   };
 }
 
-async function probeLocalProviderEndpoint(params: {
+async function probeLocalProviderEndpointOnce(params: {
   api: PreflightApi;
   baseUrl: string;
 }): Promise<void> {
@@ -200,6 +211,37 @@ async function probeLocalProviderEndpoint(params: {
   }
 }
 
+/** Probes the endpoint up to PREFLIGHT_RETRY_COUNT+1 times.
+ *
+ * A single client-side TimeoutError can be caused by a momentary gateway
+ * event-loop stall rather than an unreachable provider.  One immediate retry
+ * confirms the failure before caching it so a transient stall does not skip
+ * every cron run scheduled in the next 5 minutes.
+ */
+async function probeLocalProviderEndpoint(params: {
+  api: PreflightApi;
+  baseUrl: string;
+}): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= PREFLIGHT_RETRY_COUNT; attempt++) {
+    if (attempt > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, PREFLIGHT_RETRY_DELAY_MS));
+    }
+    try {
+      await probeLocalProviderEndpointOnce(params);
+      return;
+    } catch (error) {
+      lastError = error;
+      // Only retry on client-side timeouts; hard connect errors are not
+      // transient and retrying them wastes cron startup time.
+      if (!isPreflightTimeout(error)) {
+        break;
+      }
+    }
+  }
+  throw lastError;
+}
+
 /** Checks local model-provider reachability before a scheduled cron run starts. */
 export async function preflightCronModelProvider(params: {
   cfg: OpenClawConfig;
@@ -222,30 +264,35 @@ export async function preflightCronModelProvider(params: {
   const nowMs = params.nowMs ?? Date.now();
   const cacheKey = `${api}\0${baseUrl}`;
   const cached = preflightCache.get(cacheKey);
-  if (cached && nowMs - cached.checkedAtMs < PREFLIGHT_CACHE_TTL_MS) {
+  if (cached) {
     // Cache by endpoint, not model: this probe only verifies local server
     // reachability, while model availability is handled by the runner.
-    if (cached.result.status === "available") {
-      return { status: "available" };
+    // Timeout-caused failures use a shorter TTL so a transient gateway
+    // event-loop stall does not suppress runs for the full 5-minute window.
+    const ttlMs = cached.isTimeout ? PREFLIGHT_TIMEOUT_CACHE_TTL_MS : PREFLIGHT_CACHE_TTL_MS;
+    if (nowMs - cached.checkedAtMs < ttlMs) {
+      if (cached.result.status === "available") {
+        return { status: "available" };
+      }
+      return buildUnavailableResult({
+        provider: params.provider,
+        model: params.model,
+        baseUrl,
+        error: cached.result.error,
+      });
     }
-    return buildUnavailableResult({
-      provider: params.provider,
-      model: params.model,
-      baseUrl,
-      error: cached.result.error,
-    });
   }
 
   let result: EndpointPreflightResult;
+  let resultIsTimeout = false;
   try {
     await probeLocalProviderEndpoint({ api, baseUrl });
     result = { status: "available" };
   } catch (error) {
     result = { status: "unavailable", error };
+    resultIsTimeout = isPreflightTimeout(error);
   }
-  if (result.status === "available" || !isPreflightTimeout(result.error)) {
-    preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
-  }
+  preflightCache.set(cacheKey, { checkedAtMs: nowMs, result, isTimeout: resultIsTimeout });
   if (result.status === "available") {
     return { status: "available" };
   }
