@@ -30,6 +30,33 @@ function describeOrder(store: AuthProfileStore, provider: string, cfg: OpenClawC
   );
 }
 
+type StoredOrderDescription = {
+  order: string[];
+  source: "agent" | "shared";
+};
+
+function describeStoredOrder(
+  store: AuthProfileStore,
+  provider: string,
+  cfg: OpenClawConfig,
+): StoredOrderDescription | null {
+  const order = describeOrder(store, provider, cfg);
+  if (order.length === 0) {
+    return null;
+  }
+  const authProvider = resolveProviderIdForAuth(provider, { config: cfg });
+  const localProviderIds =
+    "runtimeLocalOrderProviderIds" in store && Array.isArray(store.runtimeLocalOrderProviderIds)
+      ? normalizeStringEntries(store.runtimeLocalOrderProviderIds)
+      : undefined;
+  const hasLocalOrder =
+    localProviderIds === undefined ||
+    localProviderIds.some(
+      (candidate) => resolveProviderIdForAuth(candidate, { config: cfg }) === authProvider,
+    );
+  return { order, source: hasLocalOrder ? "agent" : "shared" };
+}
+
 function describeOrderFallback(cfg: OpenClawConfig, provider: string): string {
   const authProvider = resolveProviderIdForAuth(provider, { config: cfg });
   const configuredOrder =
@@ -69,7 +96,7 @@ export async function modelsAuthOrderGetCommand(
   const store = ensureAuthProfileStore(agentDir, {
     externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
   });
-  const order = describeOrder(store, provider, cfg);
+  const storedOrder = describeStoredOrder(store, provider, cfg);
 
   if (opts.json) {
     writeRuntimeJson(runtime, {
@@ -77,7 +104,8 @@ export async function modelsAuthOrderGetCommand(
       agentDir,
       provider,
       authStatePath: shortenHomePath(resolveAuthStatePathForDisplay(agentDir)),
-      order: order.length > 0 ? order : null,
+      order: storedOrder?.order ?? null,
+      orderSource: storedOrder?.source ?? null,
     });
     return;
   }
@@ -86,8 +114,10 @@ export async function modelsAuthOrderGetCommand(
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth state store: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
   runtime.log(
-    order.length > 0
-      ? `Auth profile order override: ${order.join(", ")}`
+    storedOrder
+      ? storedOrder.source === "shared"
+        ? `Auth profile order override (inherited shared): ${storedOrder.order.join(", ")}`
+        : `Auth profile order override: ${storedOrder.order.join(", ")}`
       : `Auth profile order override: none (${describeOrderFallback(cfg, provider)})`,
   );
 }
@@ -112,7 +142,15 @@ export async function modelsAuthOrderClearCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log(`Auth profile order override cleared; ${describeOrderFallback(cfg, provider)}.`);
+  const effectiveStore = ensureAuthProfileStore(agentDir, {
+    externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
+  });
+  const inheritedOrder = describeStoredOrder(effectiveStore, provider, cfg);
+  runtime.log(
+    inheritedOrder?.source === "shared"
+      ? `Auth profile order override cleared; inherited shared order remains active: ${inheritedOrder.order.join(", ")}.`
+      : `Auth profile order override cleared; ${describeOrderFallback(cfg, provider)}.`,
+  );
   await refreshRunningGatewayAuthState(agentId, "update", runtime);
 }
 
