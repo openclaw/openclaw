@@ -90,4 +90,33 @@ describe("parent-object blank cwd authoring is still rejected", () => {
     expect(message).toContain("cwd");
     expect(message).toContain("blank");
   });
+
+  it("a full write without explicit path metadata rejects a newly supplied blank cwd", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "proof-151091-nopaths-"));
+    fs.writeFileSync(
+      path.join(root, "openclaw.json"),
+      JSON.stringify({
+        agents: { entries: { alpha: {} } },
+        gateway: { mode: "local", port: 18799, auth: { mode: "none" } },
+      }),
+    );
+    const ctx = makeContext(root);
+    const base = await readConfigFileSnapshotInternal(ctx, {});
+    const next = JSON.parse(JSON.stringify(base.snapshot.config));
+    next.agents.entries.alpha = { cwd: " " };
+    let threw = false;
+    let message = "";
+    try {
+      // The public writer contract allows omitting explicitSetPaths; a blank
+      // supplied in that full-config write must still be rejected, not
+      // silently migrated away by the write migration.
+      await writeConfigFileFromContext(ctx, next, {}, async () => base);
+    } catch (e) {
+      threw = true;
+      message = (e as Error).message;
+    }
+    expect(threw).toBe(true);
+    expect(message).toContain("cwd");
+    expect(message).toContain("blank");
+  });
 });

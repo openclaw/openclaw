@@ -1191,16 +1191,21 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
   const authoredEntries = indexAgentRosterForWrite(params.rootAuthoredConfig, legacyIdsByIndex);
   const runtimeEntries = indexAgentRosterForWrite(params.runtimeConfig, legacyIdsByIndex);
   const sourceEntries = indexAgentRosterForWrite(params.sourceConfig, legacyIdsByIndex);
-  const usesAuthoredList = authoredRoster?.kind === "list";
   // A list-authored config materializes agents.entries during snapshot reading,
   // which shadows the authored list when both are present on the prepared
-  // config. Prefer the list representation so an explicit list field edit
-  // (e.g. agents.list.0.cwd) stays visible through roster canonicalization
-  // instead of being discarded as an empty materialized entry.
+  // config. Prefer the representation the explicit edit actually targets: the
+  // authored list for list edits, the keyed entries for keyed-entry edits (and
+  // the authored list by default for a list-authored config). Preferring the
+  // list unconditionally would discard an explicit agents.entries.<id>.<field>
+  // edit on a list-authored config.
+  const explicitTargetsEntries = (params.explicitSetPaths ?? []).some(
+    (p) => p[0] === "agents" && p[1] === "entries",
+  );
+  const prefersList = authoredRoster?.kind === "list" && !explicitTargetsEntries;
   const readRosterEntries = (cfg: OpenClawConfig): Record<string, unknown> => {
     const agents = (cfg as { agents?: unknown }).agents;
     const list = isRecord(agents) && Array.isArray(agents.list) ? agents.list : undefined;
-    if (usesAuthoredList && list) {
+    if (prefersList && list) {
       return toAgentEntriesRecord(
         listAgentEntries({ agents: { list } } as OpenClawConfig),
       ) as Record<string, unknown>;
@@ -1209,7 +1214,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
   };
   const nextEntries = readRosterEntries(params.nextConfig);
   const explicitRoster = (() => {
-    if (usesAuthoredList) {
+    if (prefersList) {
       const valueAgents = (params.valueSource as { agents?: unknown }).agents;
       const list =
         isRecord(valueAgents) && Array.isArray(valueAgents.list) ? valueAgents.list : undefined;

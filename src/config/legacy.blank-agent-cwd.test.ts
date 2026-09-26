@@ -63,11 +63,14 @@ describe("legacy blank agent cwd migration", () => {
   it("reports list entry removals with the writer's dot-notation path", () => {
     // The write owner records explicit paths by joining segments with dots
     // (`agents.list.0.cwd`), so the migration must report (and preserve) that
-    // representation, not the bracket form `agents.list[0].cwd`.
+    // representation, not the bracket form `agents.list[0].cwd`. A non-empty
+    // explicit set (here an unrelated settings edit) triggers migration of the
+    // saved blank; without path metadata the write treats everything as
+    // authored and preserves every blank instead.
     const raw = {
       agents: { defaults: { cwd: "/tmp/default" }, list: [{ id: "alpha", cwd: " " }] },
     };
-    const migrated = migrateBlankAgentCwdForWrite(raw);
+    const migrated = migrateBlankAgentCwdForWrite(raw, new Set(["gateway.port"]));
     expect(migrated.changed).toBe(true);
     expect(migrated.changes.some((c) => c.path === "list.0")).toBe(true);
     expect(migrated.changes.some((c) => c.message.includes("agents.list.0.cwd"))).toBe(true);
