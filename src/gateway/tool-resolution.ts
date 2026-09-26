@@ -49,6 +49,7 @@ import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-t
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
@@ -449,6 +450,13 @@ export function resolveGatewayScopedTools(
   const mediatedToolFamilies = new Set(Array.from(mediatedToolNames, resolveCoreToolFactoryFamily));
   const includeMediatedBaseCodingTools = mediatedToolFamilies.has("base-coding");
   const includeMediatedShellTools = mediatedToolFamilies.has("shell");
+  // The loopback grant is minted per run, so its runId resolves the exact admitted
+  // execution. Forward the instance so exec's secret-egress guard sees the same
+  // admission the runner prepared; absent authority (settled/never admitted) stays
+  // undefined and exec keeps failing closed.
+  const admittedOperationalRunInstance = params.runId
+    ? getAgentRunContext(params.runId)?.delegatedAuthority?.operationalRunInstance
+    : undefined;
   const mediatedCodingTools =
     surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
       ? createOpenClawCodingTools({
@@ -459,6 +467,9 @@ export function resolveGatewayScopedTools(
           runSessionKey: params.sessionKey,
           sessionId: params.sessionId,
           runId: params.runId,
+          ...(admittedOperationalRunInstance
+            ? { operationalRunInstance: admittedOperationalRunInstance }
+            : {}),
           workspaceDir,
           cwd: params.cwd?.trim() || workspaceDir,
           ...params.rootedExecution,
