@@ -1,12 +1,13 @@
 // Whatsapp plugin module owns one attached inbound socket session.
-import type {
-  AnyMessageContent,
-  ConnectionState,
-  MiscMessageGenerationOptions,
-  proto,
-  ReachoutTimelockState,
-  WAMessage,
-  WASocket,
+import {
+  generateMessageIDV2,
+  type AnyMessageContent,
+  type ConnectionState,
+  type MiscMessageGenerationOptions,
+  type proto,
+  type ReachoutTimelockState,
+  type WAMessage,
+  type WASocket,
 } from "baileys";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
@@ -42,10 +43,11 @@ import {
   type WhatsAppSocketListen,
 } from "./lifecycle.js";
 import { DisconnectReason } from "./runtime-api.js";
-import type { WebListenerCloseReason } from "./types.js";
+import type { WebListenerCloseReason, WhatsAppSendRetryOptions } from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason.loggedOut;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
+const AUTO_REPLY_WINDOW_RETRYABLE_ERROR_PATTERN = /closed|reset|timed\s*out|disconnect/i;
 const BAILEYS_MESSAGE_TTL_MS = 10 * 60 * 1000;
 
 type SocketSessionOptions = {
@@ -336,7 +338,16 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     jid: string,
     content: AnyMessageContent,
     sendOptions?: MiscMessageGenerationOptions,
+    retryOptions?: WhatsAppSendRetryOptions,
   ) => {
+    // A logical send can cross socket retries. Reuse one platform identity so an
+    // ambiguous first attempt cannot become a second recipient-visible message.
+    const trackedSendOptions: MiscMessageGenerationOptions = {
+      ...sendOptions,
+      messageId: sendOptions?.messageId ?? generateMessageIDV2(sock.user?.id),
+    };
+    const reconnectWindows = retryOptions?.reconnectWindows === 3 ? 3 : 1;
+    const maxSendAttempts = sendRetryMaxAttempts * reconnectWindows;
     let lastError: unknown = new Error(RECONNECT_IN_PROGRESS_ERROR);
     for (let attempt = 1; ; attempt += 1) {
       const currentSock = getCurrentSock();
@@ -351,7 +362,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
                 trackLateAcceptedSend(timedOutJid, promise);
               },
             },
-          ).sendMessage(jid, content, sendOptions);
+          ).sendMessage(jid, content, trackedSendOptions);
           rememberOutboundMessage(jid, result);
           return result;
         } catch (error) {
@@ -370,10 +381,27 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
         throw lastError;
       }
 
-      if (attempt >= sendRetryMaxAttempts) {
+      // An empty socket during reconnect does not replace the last send error.
+      // A preceding `connection closed` still qualifies for the next window.
+
+      if (attempt >= maxSendAttempts) {
         throw lastError;
       }
-      const delayMs = computeBackoff(disconnectRetryPolicy, attempt);
+      const completedWindow = attempt % sendRetryMaxAttempts === 0;
+      if (
+        completedWindow &&
+        !AUTO_REPLY_WINDOW_RETRYABLE_ERROR_PATTERN.test(formatError(lastError))
+      ) {
+        // The removed outer wrapper did not open another window for a bare
+        // reconnect gap; retain that terminal behavior while owning one ID.
+        throw lastError;
+      }
+      // The former auto-reply wrapper allowed three socket retry windows, with
+      // short delays between them. Keep that recovery opportunity inside this
+      // single send owner so every window retains the same Baileys message ID.
+      const delayMs = completedWindow
+        ? Math.min(500 * 2 ** (attempt / sendRetryMaxAttempts - 1), 1_000)
+        : computeBackoff(disconnectRetryPolicy, attempt % sendRetryMaxAttempts);
       options.logVerbose(
         `Waiting ${delayMs}ms for WhatsApp reconnect before retrying send to ${jid}: ${formatError(lastError)}`,
       );
