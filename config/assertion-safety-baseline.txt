@@ -2913,7 +2913,7 @@ src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
 src/plugin-sdk/runtime-store-registry.ts	1
 src/plugin-sdk/runtime-store.ts	2
-src/plugin-sdk/secret-ref-runtime.ts	3
+src/plugin-sdk/secret-ref-runtime.ts	2
 src/plugin-sdk/session-store-runtime-internal.ts	1
 src/plugin-sdk/session-store-runtime.ts	5
 src/plugin-sdk/session-transcript-runtime.ts	6
