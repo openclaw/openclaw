@@ -470,7 +470,7 @@ export async function buildRunPlan(
   );
 }
 
-export function formatHelp(): string {
+function formatHelp(): string {
   return `Media live harness
 
 Usage:

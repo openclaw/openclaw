@@ -274,6 +274,7 @@ describe("worktrees cli", () => {
 
     expect(gc).toHaveBeenCalledWith({
       limits: { maxCount: 100 },
+      retryDeferred: true,
       shouldProtectOwner: expect.any(Function),
       shouldRemoveOwner: expect.any(Function),
     });

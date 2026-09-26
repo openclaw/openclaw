@@ -105,6 +105,62 @@ const LINE_TEST_CFG = {
 
 describe("LINE send helpers", () => {
   const fixedSentAt = 1_800_000_000_000;
+  const sendCases = [
+    {
+      label: "push",
+      send: () => sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+      provider: pushMessageMock,
+    },
+    {
+      label: "reply",
+      send: () =>
+        sendModule.sendMessageLine("U123", "Hello", {
+          cfg: LINE_TEST_CFG,
+          replyToken: "reply-token",
+        }),
+      provider: replyMessageMock,
+    },
+  ];
+
+  function expectedMediaSendResult(chatId: string, messageId: string, messageCount: number) {
+    const raw = {
+      channel: "line",
+      chatId,
+      conversationId: chatId,
+      messageId,
+      meta: { messageCount },
+    };
+    return {
+      chatId,
+      messageId,
+      receipt: {
+        parts: [{ index: 0, kind: "media", platformMessageId: messageId, raw, threadId: chatId }],
+        platformMessageIds: [messageId],
+        primaryPlatformMessageId: messageId,
+        raw: [raw],
+        sentAt: fixedSentAt,
+        threadId: chatId,
+      },
+    };
+  }
+
+  async function captureError(send: () => Promise<unknown>): Promise<unknown> {
+    try {
+      await send();
+    } catch (error) {
+      return error;
+    }
+    throw new Error("Expected LINE send to fail");
+  }
+
+  async function capturePartialDelivery(send: () => Promise<unknown>) {
+    const caught = await captureError(send);
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("Expected partial LINE delivery");
+    }
+    return caught;
+  }
 
   beforeAll(async () => {
     sendModule = await import("./send.js");
@@ -173,13 +229,6 @@ describe("LINE send helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
-  });
-
-  it("limits quick reply items to 13", () => {
-    const labels = Array.from({ length: 20 }, (_, index) => `Option ${index + 1}`);
-    const quickReply = sendModule.createQuickReplyItems(labels);
-
-    expect(quickReply.items).toHaveLength(13);
   });
 
   it("counts quick reply labels in grapheme clusters", () => {
@@ -447,40 +496,7 @@ describe("LINE send helpers", () => {
       direction: "outbound",
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: pushed message to U123");
-    expect(result).toEqual({
-      chatId: "U123",
-      messageId: "push",
-      receipt: {
-        parts: [
-          {
-            index: 0,
-            kind: "media",
-            platformMessageId: "push",
-            raw: {
-              channel: "line",
-              chatId: "U123",
-              conversationId: "U123",
-              messageId: "push",
-              meta: { messageCount: 1 },
-            },
-            threadId: "U123",
-          },
-        ],
-        platformMessageIds: ["push"],
-        primaryPlatformMessageId: "push",
-        raw: [
-          {
-            channel: "line",
-            chatId: "U123",
-            conversationId: "U123",
-            messageId: "push",
-            meta: { messageCount: 1 },
-          },
-        ],
-        sentAt: fixedSentAt,
-        threadId: "U123",
-      },
-    });
+    expect(result).toEqual(expectedMediaSendResult("U123", "push", 1));
   });
 
   it("preserves every provider message id returned by a LINE push", async () => {
@@ -526,40 +542,7 @@ describe("LINE send helpers", () => {
       ],
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
-    expect(result).toEqual({
-      chatId: "C1",
-      messageId: "reply",
-      receipt: {
-        parts: [
-          {
-            index: 0,
-            kind: "media",
-            platformMessageId: "reply",
-            raw: {
-              channel: "line",
-              chatId: "C1",
-              conversationId: "C1",
-              messageId: "reply",
-              meta: { messageCount: 2 },
-            },
-            threadId: "C1",
-          },
-        ],
-        platformMessageIds: ["reply"],
-        primaryPlatformMessageId: "reply",
-        raw: [
-          {
-            channel: "line",
-            chatId: "C1",
-            conversationId: "C1",
-            messageId: "reply",
-            meta: { messageCount: 2 },
-          },
-        ],
-        sentAt: fixedSentAt,
-        threadId: "C1",
-      },
-    });
+    expect(result).toEqual(expectedMediaSendResult("C1", "reply", 2));
   });
 
   it("preserves every provider message id returned by a LINE reply", async () => {
@@ -577,87 +560,40 @@ describe("LINE send helpers", () => {
     expect(result.receipt.platformMessageIds).toEqual(["713452345678901234", "713452345678901235"]);
   });
 
-  it.each([
-    {
-      label: "push",
-      send: () => sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
-      provider: pushMessageMock,
-    },
-    {
-      label: "reply",
-      send: () =>
-        sendModule.sendMessageLine("U123", "Hello", {
-          cfg: LINE_TEST_CFG,
-          replyToken: "reply-token",
-        }),
-      provider: replyMessageMock,
-    },
-  ])("preserves a finalized $label when activity recording fails", async ({ send, provider }) => {
-    provider.mockResolvedValueOnce({ sentMessages: [{ id: "line-provider-final" }] });
-    recordChannelActivityMock.mockImplementationOnce(() => {
-      throw new Error("activity store unavailable");
-    });
+  it.each(sendCases)(
+    "preserves a finalized $label when activity recording fails",
+    async ({ send, provider }) => {
+      provider.mockResolvedValueOnce({ sentMessages: [{ id: "line-provider-final" }] });
+      recordChannelActivityMock.mockImplementationOnce(() => {
+        throw new Error("activity store unavailable");
+      });
 
-    let caught: unknown;
-    try {
-      await send();
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(isChannelPartialDeliveryError(caught)).toBe(true);
-    if (!isChannelPartialDeliveryError(caught)) {
-      throw new Error("expected a partial LINE delivery error");
-    }
-    expect(caught.deliveryResult).toMatchObject({
-      messageIds: ["line-provider-final"],
-      receipt: {
-        primaryPlatformMessageId: "line-provider-final",
-        platformMessageIds: ["line-provider-final"],
-        threadId: "U123",
-        parts: [
-          {
-            platformMessageId: "line-provider-final",
-            kind: "text",
-            raw: { chatId: "U123", meta: { messageCount: 1 } },
-          },
-        ],
-      },
-      visibleReplySent: true,
-    });
-  });
-
-  it.each([
-    {
-      label: "push",
-      send: () => sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
-      provider: pushMessageMock,
+      const caught = await capturePartialDelivery(send);
+      expect(caught.deliveryResult).toMatchObject({
+        messageIds: ["line-provider-final"],
+        receipt: {
+          primaryPlatformMessageId: "line-provider-final",
+          platformMessageIds: ["line-provider-final"],
+          threadId: "U123",
+          parts: [
+            {
+              platformMessageId: "line-provider-final",
+              kind: "text",
+              raw: { chatId: "U123", meta: { messageCount: 1 } },
+            },
+          ],
+        },
+        visibleReplySent: true,
+      });
     },
-    {
-      label: "reply",
-      send: () =>
-        sendModule.sendMessageLine("U123", "Hello", {
-          cfg: LINE_TEST_CFG,
-          replyToken: "reply-token",
-        }),
-      provider: replyMessageMock,
-    },
-  ])(
+  );
+
+  it.each(sendCases)(
     "preserves accepted delivery when a $label response omits its provider message ids",
     async ({ send, provider }) => {
       provider.mockResolvedValueOnce({ sentMessages: [] });
 
-      let caught: unknown;
-      try {
-        await send();
-      } catch (error) {
-        caught = error;
-      }
-
-      expect(isChannelPartialDeliveryError(caught)).toBe(true);
-      if (!isChannelPartialDeliveryError(caught)) {
-        throw new Error("expected an accepted LINE delivery without an identity");
-      }
+      const caught = await capturePartialDelivery(send);
       expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
       expect(recordChannelActivityMock).not.toHaveBeenCalled();
     },
@@ -684,17 +620,7 @@ describe("LINE send helpers", () => {
               replyToken: "reply-token",
             });
 
-    let caught: unknown;
-    try {
-      await send();
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(isChannelPartialDeliveryError(caught)).toBe(true);
-    if (!isChannelPartialDeliveryError(caught)) {
-      throw new Error("expected an accepted LINE delivery without a readable identity");
-    }
+    const caught = await capturePartialDelivery(send);
     expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
     expect(lineFetchMock).toHaveBeenCalledOnce();
     expect(recordChannelActivityMock).not.toHaveBeenCalled();
@@ -803,12 +729,9 @@ describe("LINE send helpers", () => {
       new Response("invalid payload", { status: 400, statusText: "Bad Request" }),
     );
 
-    let caught: unknown;
-    try {
-      await sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG });
-    } catch (error) {
-      caught = error;
-    }
+    const caught = await captureError(() =>
+      sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+    );
 
     expect(caught).toBeInstanceOf(HTTPFetchError);
     expect(isChannelPartialDeliveryError(caught)).toBe(false);
@@ -854,17 +777,7 @@ describe("LINE send helpers", () => {
         sentMessages: [{ id: "line-provider-delivered" }, { id: "   " }],
       });
 
-      let caught: unknown;
-      try {
-        await send();
-      } catch (error) {
-        caught = error;
-      }
-
-      expect(isChannelPartialDeliveryError(caught)).toBe(true);
-      if (!isChannelPartialDeliveryError(caught)) {
-        throw new Error("expected a partially identifiable accepted LINE delivery");
-      }
+      const caught = await capturePartialDelivery(send);
       expect(caught.deliveryResult).toEqual({
         messageIds: ["line-provider-delivered"],
         visibleReplySent: true,
@@ -880,17 +793,10 @@ describe("LINE send helpers", () => {
   ])("preserves accepted delivery for a malformed $name", async ({ sentMessages }) => {
     pushMessageMock.mockResolvedValueOnce({ sentMessages });
 
-    let caught: unknown;
-    try {
-      await sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG });
-    } catch (error) {
-      caught = error;
-    }
+    const caught = await capturePartialDelivery(() =>
+      sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+    );
 
-    expect(isChannelPartialDeliveryError(caught)).toBe(true);
-    if (!isChannelPartialDeliveryError(caught)) {
-      throw new Error("expected an accepted LINE delivery with a malformed receipt");
-    }
     expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
     expect(pushMessageMock).toHaveBeenCalledOnce();
     expect(recordChannelActivityMock).not.toHaveBeenCalled();

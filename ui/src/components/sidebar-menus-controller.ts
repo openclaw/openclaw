@@ -459,9 +459,9 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   scheduleAgentMenuHoverOpen(trigger: HTMLElement, event: PointerEvent) {
     globalThis.clearTimeout(this.agentMenuHoverCloseTimer ?? undefined);
     this.agentMenuHoverCloseTimer = null;
+    // Pointer motion establishes intent; layout-only entry must not open the menu.
     if (
-      this.agentMenuInteractionState === "open-hover" ||
-      this.agentMenuInteractionState === "open-click" ||
+      this.agentMenuInteractionState !== "closed" ||
       event.pointerType === "touch" ||
       !globalThis.matchMedia("(hover: hover) and (pointer: fine)").matches
     ) {

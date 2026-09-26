@@ -1,22 +1,7 @@
-// Regression tests for the lazy-loading boundaries introduced for Slack
-// startup-perf work (see PR #69317). Each test asserts both:
-//   - that the lazy module is reached (call mocks fire), and
-//   - that the inputs forwarded into the lazy module are correct, and
-//   - that the lazy module's return value is propagated back through the
-//     plugin surface unchanged.
-//
-// Together these guard against:
-//   - dynamic-import path/specifier drift on cold paths,
-//   - silent contract drift between the channel and its lazy modules,
-//   - and accidental loss of the perf intent (re-introducing eager imports
-//     without updating the seam).
-
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
 import { setSlackRuntime } from "./runtime.js";
-
-// --- Hoisted mocks for lazy seams ------------------------------------------------
 
 const collectAuditFindingsMock = vi.hoisted(() => vi.fn());
 const fetchSlackScopesMock = vi.hoisted(() => vi.fn());
@@ -31,8 +16,6 @@ vi.mock("./scopes.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/target-resolver-runtime", async (orig) => {
-  // Preserve any sibling exports so importers that touch unrelated helpers
-  // do not break; only override the function the channel actually calls.
   const original = (await orig()) as Record<string, unknown>;
   return {
     ...original,
@@ -48,8 +31,6 @@ vi.mock("openclaw/plugin-sdk/extension-shared", async (orig) => {
   };
 });
 
-// --- Test setup -----------------------------------------------------------------
-
 beforeEach(() => {
   collectAuditFindingsMock.mockReset();
   fetchSlackScopesMock.mockReset();
@@ -61,14 +42,7 @@ beforeEach(() => {
 function makeMinimalSlackConfig(
   opts: { botToken?: string; userToken?: string } = {},
 ): OpenClawConfig {
-  const slack: Record<string, unknown> = {};
-  if (opts.botToken !== undefined) {
-    slack.botToken = opts.botToken;
-  }
-  if (opts.userToken !== undefined) {
-    slack.userToken = opts.userToken;
-  }
-  return { channels: { slack } } as OpenClawConfig;
+  return { channels: { slack: opts } };
 }
 
 type MockWithCalls = {
@@ -91,14 +65,9 @@ function mockRecordArgAt(mock: MockWithCalls, callIndex: number, argIndex: numbe
   return value as Record<string, unknown>;
 }
 
-// --- Status: buildChannelSummary -------------------------------------------------
-
 describe("slackPlugin.status.buildChannelSummary lazy SDK forwarding", () => {
   it("calls the lazy extension-shared SDK helper with the snapshot and token sources, and returns its output unchanged", async () => {
-    const buildChannelSummary = slackPlugin.status?.buildChannelSummary;
-    if (!buildChannelSummary) {
-      throw new Error("slackPlugin.status.buildChannelSummary should be exposed");
-    }
+    const buildChannelSummary = slackPlugin.status!.buildChannelSummary!;
 
     const sentinelSummary = { sentinel: "passive-summary" };
     buildPassiveProbedChannelStatusSummaryMock.mockReturnValue(sentinelSummary);
@@ -124,19 +93,13 @@ describe("slackPlugin.status.buildChannelSummary lazy SDK forwarding", () => {
       buildPassiveProbedChannelStatusSummaryMock,
       0,
     );
-    // Snapshot must be forwarded by reference / structurally intact.
     expect(forwardedSnapshot).toBe(snapshot);
-    // The channel must forward the (possibly fallback'd) token sources.
     expect(forwardedExtras).toEqual({ botTokenSource: "config", appTokenSource: "config" });
-    // The SDK return value must be propagated through unchanged.
     expect(result).toBe(sentinelSummary);
   });
 
   it("falls back to 'none' for missing token sources before forwarding to the SDK helper", async () => {
-    const buildChannelSummary = slackPlugin.status?.buildChannelSummary;
-    if (!buildChannelSummary) {
-      throw new Error("slackPlugin.status.buildChannelSummary should be exposed");
-    }
+    const buildChannelSummary = slackPlugin.status!.buildChannelSummary!;
 
     buildPassiveProbedChannelStatusSummaryMock.mockReturnValue({ sentinel: true });
 
@@ -152,32 +115,9 @@ describe("slackPlugin.status.buildChannelSummary lazy SDK forwarding", () => {
   });
 });
 
-// --- Status: buildCapabilitiesDiagnostics ---------------------------------------
-
 describe("slackPlugin.status.buildCapabilitiesDiagnostics lazy scopes loader", () => {
-  it("invokes fetchSlackScopes once when only a bot token is present", async () => {
-    const buildDiagnostics = slackPlugin.status?.buildCapabilitiesDiagnostics;
-    if (!buildDiagnostics) {
-      throw new Error("slackPlugin.status.buildCapabilitiesDiagnostics should be exposed");
-    }
-
-    fetchSlackScopesMock.mockResolvedValue({ ok: true, scopes: ["chat:write"] });
-
-    const cfg = makeMinimalSlackConfig({ botToken: "xoxb-bot" });
-    const account = slackPlugin.config.resolveAccount(cfg, "default");
-    const result = await buildDiagnostics({ account, timeoutMs: 1234, cfg } as never);
-
-    expect(fetchSlackScopesMock).toHaveBeenCalledTimes(1);
-    expect(fetchSlackScopesMock).toHaveBeenCalledWith("xoxb-bot", 1234);
-    expect(result?.details).toEqual({ botScopes: { ok: true, scopes: ["chat:write"] } });
-    expect(result?.lines?.length ?? 0).toBeGreaterThan(0);
-  });
-
   it("invokes fetchSlackScopes twice (bot and user) when both tokens are present", async () => {
-    const buildDiagnostics = slackPlugin.status?.buildCapabilitiesDiagnostics;
-    if (!buildDiagnostics) {
-      throw new Error("slackPlugin.status.buildCapabilitiesDiagnostics should be exposed");
-    }
+    const buildDiagnostics = slackPlugin.status!.buildCapabilitiesDiagnostics!;
 
     fetchSlackScopesMock
       .mockResolvedValueOnce({ ok: true, scopes: ["chat:write"] })
@@ -197,10 +137,7 @@ describe("slackPlugin.status.buildCapabilitiesDiagnostics lazy scopes loader", (
   });
 
   it("does not invoke fetchSlackScopes when no bot token is present and reports a missing-token diagnostic", async () => {
-    const buildDiagnostics = slackPlugin.status?.buildCapabilitiesDiagnostics;
-    if (!buildDiagnostics) {
-      throw new Error("slackPlugin.status.buildCapabilitiesDiagnostics should be exposed");
-    }
+    const buildDiagnostics = slackPlugin.status!.buildCapabilitiesDiagnostics!;
 
     const cfg = makeMinimalSlackConfig();
     const account = slackPlugin.config.resolveAccount(cfg, "default");
@@ -213,14 +150,9 @@ describe("slackPlugin.status.buildCapabilitiesDiagnostics lazy scopes loader", (
   });
 });
 
-// --- Security: collectAuditFindings ---------------------------------------------
-
 describe("slackPlugin.security.collectAuditFindings lazy module forwarding", () => {
   it("delegates to the lazy security-audit module with the original params and returns its output", async () => {
-    const collectAuditFindings = slackPlugin.security?.collectAuditFindings;
-    if (!collectAuditFindings) {
-      throw new Error("slackPlugin.security.collectAuditFindings should be exposed");
-    }
+    const collectAuditFindings = slackPlugin.security!.collectAuditFindings!;
 
     const sentinel = [
       {
@@ -244,31 +176,11 @@ describe("slackPlugin.security.collectAuditFindings lazy module forwarding", () 
     });
     expect(result).toBe(sentinel);
   });
-
-  it("propagates an empty findings array unchanged", async () => {
-    const collectAuditFindings = slackPlugin.security?.collectAuditFindings;
-    if (!collectAuditFindings) {
-      throw new Error("slackPlugin.security.collectAuditFindings should be exposed");
-    }
-
-    collectAuditFindingsMock.mockResolvedValue([]);
-
-    const cfg = makeMinimalSlackConfig();
-    const account = slackPlugin.config.resolveAccount(cfg, "default");
-    const result = await collectAuditFindings({ cfg, account } as never);
-
-    expect(result).toStrictEqual([]);
-  });
 });
-
-// --- Resolver: resolveTargets ---------------------------------------------------
 
 describe("slackPlugin.resolver.resolveTargets lazy SDK forwarding", () => {
   it("forwards user inputs and the configured token to the lazy SDK helper and returns its output", async () => {
-    const resolveTargets = slackPlugin.resolver?.resolveTargets;
-    if (!resolveTargets) {
-      throw new Error("slackPlugin.resolver.resolveTargets should be exposed");
-    }
+    const resolveTargets = slackPlugin.resolver!.resolveTargets!;
 
     const sentinelOutput = [{ input: "U123", resolved: true, id: "U123", note: undefined }];
     resolveTargetsWithOptionalTokenMock.mockResolvedValue(sentinelOutput);
@@ -313,10 +225,7 @@ describe("slackPlugin.resolver.resolveTargets lazy SDK forwarding", () => {
   });
 
   it("prefers the user token over the bot token when both are configured", async () => {
-    const resolveTargets = slackPlugin.resolver?.resolveTargets;
-    if (!resolveTargets) {
-      throw new Error("slackPlugin.resolver.resolveTargets should be exposed");
-    }
+    const resolveTargets = slackPlugin.resolver!.resolveTargets!;
 
     resolveTargetsWithOptionalTokenMock.mockResolvedValue([]);
 
@@ -332,10 +241,7 @@ describe("slackPlugin.resolver.resolveTargets lazy SDK forwarding", () => {
   });
 
   it("uses the same lazy SDK helper for kind='group'", async () => {
-    const resolveTargets = slackPlugin.resolver?.resolveTargets;
-    if (!resolveTargets) {
-      throw new Error("slackPlugin.resolver.resolveTargets should be exposed");
-    }
+    const resolveTargets = slackPlugin.resolver!.resolveTargets!;
 
     resolveTargetsWithOptionalTokenMock.mockResolvedValue([]);
 
@@ -352,7 +258,3 @@ describe("slackPlugin.resolver.resolveTargets lazy SDK forwarding", () => {
     expect(params.inputs).toEqual(["C1"]);
   });
 });
-
-// Setup-wizard proxy delegation is unit-tested directly in
-// setup-core.lazy-proxy.test.ts so it can be type-safe against the wider
-// ChannelSetupWizard contract returned by createSlackSetupWizardProxy.

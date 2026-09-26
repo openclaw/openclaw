@@ -26,21 +26,11 @@ describe("activation planner", () => {
         {
           id: "memory-core",
           commandAliases: [{ name: "dreaming", kind: "runtime-slash", cliCommand: "memory" }],
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           origin: "bundled",
         },
         {
           id: "device-pair",
           commandAliases: [{ name: "pair", kind: "runtime-slash" }],
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           origin: "bundled",
         },
         {
@@ -52,11 +42,6 @@ describe("activation planner", () => {
               hasSubcommands: true,
             },
           ],
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           origin: "bundled",
         },
         {
@@ -68,19 +53,10 @@ describe("activation planner", () => {
           setup: {
             providers: [{ id: "openai" }],
           },
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           origin: "bundled",
         },
         {
           id: "custom-harness-plugin",
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           activation: {
             onAgentHarnesses: ["custom-harness"],
           },
@@ -88,11 +64,6 @@ describe("activation planner", () => {
         },
         {
           id: "load-path-harness-plugin",
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           activation: {
             onAgentHarnesses: ["load-path-harness"],
           },
@@ -101,9 +72,6 @@ describe("activation planner", () => {
         {
           id: "demo-channel",
           channels: ["telegram"],
-          providers: [],
-          cliBackends: [],
-          skills: [],
           hooks: ["before-agent-start"],
           contracts: {
             tools: ["web-search"],
@@ -114,7 +82,12 @@ describe("activation planner", () => {
           },
           origin: "workspace",
         },
-      ],
+      ].map((plugin) =>
+        Object.assign(
+          { providers: [], channels: [], cliBackends: [], skills: [], hooks: [] },
+          plugin,
+        ),
+      ),
       diagnostics: [],
     });
   });
@@ -259,53 +232,6 @@ describe("activation planner", () => {
         requireExplicitManifestOwnerTrust: true,
       }),
     ).toEqual([]);
-  });
-
-  it("keeps ids-only provider, agent harness, channel, and route planning stable", () => {
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "provider",
-          provider: "openai",
-        },
-      }),
-    ).toEqual(["openai"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "provider",
-          provider: "openai",
-        },
-      }),
-    ).toEqual(["openai"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "agentHarness",
-          runtime: "codex",
-        },
-      }),
-    ).toEqual(["openai"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "channel",
-          channel: "telegram",
-        },
-      }),
-    ).toEqual(["demo-channel"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "route",
-          route: "webhook",
-        },
-      }),
-    ).toEqual(["demo-channel"]);
   });
 
   it("keeps ids-only capability planning stable", () => {

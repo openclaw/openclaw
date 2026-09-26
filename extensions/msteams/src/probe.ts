@@ -5,11 +5,12 @@ import {
   type MSTeamsConfig,
 } from "../runtime-api.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
+import { loadMSTeamsDelegatedTokens } from "./delegated-state.js";
 import { formatUnknownError } from "./errors.js";
 import { withMSTeamsRequestDeadline } from "./request-timeout.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
-import { loadDelegatedTokens, resolveMSTeamsCredentials } from "./token.js";
+import { resolveMSTeamsCredentials } from "./token.js";
 
 export type ProbeMSTeamsResult = BaseProbeResult<string> & {
   appId?: string;
@@ -82,14 +83,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
       throw new Error("Failed to acquire bot token");
     }
 
-    let graph:
-      | {
-          ok: boolean;
-          error?: string;
-          roles?: string[];
-          scopes?: string[];
-        }
-      | undefined;
+    let graph: ProbeMSTeamsResult["graph"];
     try {
       const graphTokenValue = await withMSTeamsRequestDeadline({
         label: "MS Teams Graph probe token",
@@ -108,7 +102,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
     let delegatedAuth: ProbeMSTeamsResult["delegatedAuth"];
     if (cfg?.delegatedAuth?.enabled) {
       try {
-        const tokens = await loadDelegatedTokens();
+        const tokens = await loadMSTeamsDelegatedTokens();
         if (tokens) {
           const isExpired = !isFutureDateTimestampMs(tokens.expiresAt);
           delegatedAuth = {

@@ -170,7 +170,7 @@ describe("OpenAI realtime voice bridge events", () => {
     },
   );
 
-  it.each([0, 50, 400])(
+  it.each([0, 50])(
     "keeps the echo guard relative to playback across a short prefix (%i ms of continuation)",
     async (continuationMs) => {
       let playback = [

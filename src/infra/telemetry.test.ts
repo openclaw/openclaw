@@ -201,16 +201,13 @@ describe("anonymous telemetry", () => {
     expect(JSON.stringify(payload)).not.toContain("acme-internal-crm");
   });
 
-  it.each(
-    (["provider map", "auth profile", "model reference"] as const).flatMap((source) =>
-      [
-        { provider: "OpenAI", expected: ["openai"] },
-        { provider: " OpenAI ", expected: ["openai"] },
-        { provider: " Open AI ", expected: [] },
-        { provider: " Acme-Private ", expected: [] },
-      ].map(({ provider, expected }) => ({ source, provider, expected })),
-    ),
-  )(
+  it.each([
+    { source: "provider map", provider: " OpenAI ", expected: ["openai"] },
+    { source: "auth profile", provider: " OpenAI ", expected: ["openai"] },
+    { source: "model reference", provider: " OpenAI ", expected: ["openai"] },
+    { source: "provider map", provider: " Open AI ", expected: [] },
+    { source: "provider map", provider: " Acme-Private ", expected: [] },
+  ])(
     "reports loaded $source provider $provider as $expected",
     async ({ source, provider, expected }) => {
       const input: OpenClawConfig = { plugins: { enabled: false } };

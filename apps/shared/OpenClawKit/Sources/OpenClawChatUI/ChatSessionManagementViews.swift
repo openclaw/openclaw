@@ -1,11 +1,6 @@
 import Foundation
 import Observation
 import SwiftUI
-#if os(macOS)
-import AppKit
-#elseif os(iOS)
-import UIKit
-#endif
 
 enum ChatSessionBatchAction: Sendable, Equatable {
     case pin
@@ -113,17 +108,17 @@ struct ChatSessionInspectorDetails: Equatable {
     init(session: OpenClawChatSessionEntry) {
         self.title = ChatSessionSidebarModel.displayName(for: session)
         self.key = session.key
-        self.kind = Self.normalized(session.kind)
-        self.agentID = Self.normalized(OpenClawChatSessionKey.agentID(from: session.key))
-        self.group = Self.normalized(session.category)
+        self.kind = ChatPayloadDecoding.trimmedNonEmptyString(session.kind)
+        self.agentID = ChatPayloadDecoding.trimmedNonEmptyString(OpenClawChatSessionKey.agentID(from: session.key))
+        self.group = ChatPayloadDecoding.trimmedNonEmptyString(session.category)
         self.runState = Self.runState(for: session)
-        self.model = Self.normalized(session.model)
-        self.provider = Self.normalized(session.modelProvider)
-        self.runtime = Self.normalized(session.agentRuntime?.id)
+        self.model = ChatPayloadDecoding.trimmedNonEmptyString(session.model)
+        self.provider = ChatPayloadDecoding.trimmedNonEmptyString(session.modelProvider)
+        self.runtime = ChatPayloadDecoding.trimmedNonEmptyString(session.agentRuntime?.id)
         self.runDurationMs = session.runtimeMs
-        self.worktreeID = Self.normalized(session.worktree?.id)
-        self.worktreeBranch = Self.normalized(session.worktree?.branch)
-        self.worktreeRoot = Self.normalized(session.worktree?.repoRoot)
+        self.worktreeID = ChatPayloadDecoding.trimmedNonEmptyString(session.worktree?.id)
+        self.worktreeBranch = ChatPayloadDecoding.trimmedNonEmptyString(session.worktree?.branch)
+        self.worktreeRoot = ChatPayloadDecoding.trimmedNonEmptyString(session.worktree?.repoRoot)
         self.updatedAt = session.updatedAt
         self.lastActivityAt = session.lastActivityAt
         self.lastInteractionAt = session.lastInteractionAt
@@ -131,19 +126,14 @@ struct ChatSessionInspectorDetails: Equatable {
         self.endedAt = session.endedAt
     }
 
-    private static func normalized(_ value: String?) -> String? {
-        let value = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value?.isEmpty == false ? value : nil
-    }
-
     private static func runState(for session: OpenClawChatSessionEntry) -> String? {
-        if self.normalized(session.status)?.lowercased() == "queued" {
+        if ChatPayloadDecoding.trimmedNonEmptyString(session.status)?.lowercased() == "queued" {
             return String(localized: "Queued")
         }
         if session.hasActiveRun == true || session.hasActiveSubagentRun == true {
             return String(localized: "Running")
         }
-        return self.normalized(session.status)
+        return ChatPayloadDecoding.trimmedNonEmptyString(session.status)
     }
 }
 
@@ -176,7 +166,7 @@ struct ChatSessionInspectorSheet: View {
                     HStack(alignment: .firstTextBaseline) {
                         LabeledContent("Key", value: self.details.key)
                         Button {
-                            Self.copy(self.details.key)
+                            ChatPasteboard.copy(self.details.key)
                         } label: {
                             Image(systemName: "doc.on.doc")
                         }
@@ -338,15 +328,6 @@ struct ChatSessionInspectorSheet: View {
     private static func duration(_ milliseconds: Double) -> String {
         Duration.seconds(milliseconds / 1000).formatted(.units(allowed: [.hours, .minutes, .seconds]))
     }
-
-    private static func copy(_ value: String) {
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-        #elseif os(iOS)
-        UIPasteboard.general.string = value
-        #endif
-    }
 }
 
 @MainActor
@@ -484,49 +465,37 @@ struct ChatSessionGroupsSheet: View {
     }
 
     private func createGroup(named name: String) async {
-        defer { self.isMutating = false }
-        guard let routeLease = self.routeLease else {
-            self.errorText = String(localized: "Gateway changed. Close and reopen Groups to continue.")
-            return
-        }
-        do {
-            self.groups = try await self.viewModel.createSessionGroup(
-                named: name,
-                using: routeLease)
+        await self.mutateGroups { routeLease in
+            let groups = try await self.viewModel.createSessionGroup(named: name, using: routeLease)
             self.newGroupName = ""
-            self.errorText = nil
-        } catch {
-            self.errorText = error.localizedDescription
+            return groups
         }
     }
 
     private func renameGroup(_ target: OpenClawChatSessionGroup, to name: String) async {
-        defer { self.isMutating = false }
         defer { self.renameTarget = nil }
-        guard let routeLease = self.routeLease else {
-            self.errorText = String(localized: "Gateway changed. Close and reopen Groups to continue.")
-            return
-        }
-        do {
-            self.groups = try await self.viewModel.renameSessionGroup(
-                target.name,
-                to: name,
-                using: routeLease)
-            self.errorText = nil
-        } catch {
-            self.errorText = error.localizedDescription
+        await self.mutateGroups { routeLease in
+            try await self.viewModel.renameSessionGroup(target.name, to: name, using: routeLease)
         }
     }
 
     private func deleteGroup(_ target: OpenClawChatSessionGroup) async {
-        defer { self.isMutating = false }
         defer { self.deleteTarget = nil }
+        await self.mutateGroups { routeLease in
+            try await self.viewModel.deleteSessionGroup(target.name, using: routeLease)
+        }
+    }
+
+    private func mutateGroups(
+        _ operation: (OpenClawChatSessionGroupsRouteLease) async throws -> [OpenClawChatSessionGroup]) async
+    {
+        defer { self.isMutating = false }
         guard let routeLease = self.routeLease else {
             self.errorText = String(localized: "Gateway changed. Close and reopen Groups to continue.")
             return
         }
         do {
-            self.groups = try await self.viewModel.deleteSessionGroup(target.name, using: routeLease)
+            self.groups = try await operation(routeLease)
             self.errorText = nil
         } catch {
             self.errorText = error.localizedDescription

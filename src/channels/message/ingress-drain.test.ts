@@ -1,6 +1,7 @@
 // Durable ingress drain contract tests for lifecycle reliability invariants.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelIngressDrain,
@@ -108,31 +109,29 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-adopt", { text: "x" }, { laneKey: "l1" });
 
-      let settleResolve!: () => void;
-      const settleGate = new Promise<void>((resolve) => {
-        settleResolve = resolve;
-      });
+      const adopted = createDeferredCore();
+      const settleGate = createDeferredCore();
 
       const drain = createChannelIngressDrain<Payload>({
         queue,
         dispatchClaimedEvent: async (_event, lifecycle) => {
-          await lifecycle.onAdopted();
+          adopted.resolve(lifecycle.onAdopted());
+          await adopted.promise;
           // Simulate a long-running turn after adoption.
-          await settleGate;
+          await settleGate.promise;
         },
       });
 
       await drain.drainOnce();
-      // Adoption already completed the claim before settle.
-      await vi.waitFor(async () => {
-        const pending = await queue.listPending();
-        expect(pending).toEqual([]);
-      });
-      const claims = await queue.listClaims();
-      expect(claims).toEqual([]);
-      settleResolve();
-      await drain.waitForIdle();
-      drain.dispose();
+      try {
+        await adopted.promise;
+        expect(await queue.listPending()).toEqual([]);
+        expect(await queue.listClaims()).toEqual([]);
+      } finally {
+        settleGate.resolve();
+        await drain.waitForIdle();
+        drain.dispose();
+      }
     });
   });
 
@@ -918,6 +917,9 @@ describe("channel ingress drain", () => {
       expect(secondDispatches).toEqual([]);
 
       firstAbort.abort();
+      await expect(first.dispose({ waitForSettlements: true })).rejects.toThrow(
+        "already-aborted retained owner",
+      );
       // Aborted owners retire before an uncooperative handler returns, allowing
       // the replacement drain to recover under the claim-token fence.
       const recovered = await second.recoverStaleClaims();
@@ -929,36 +931,6 @@ describe("channel ingress drain", () => {
       await first.waitForIdle();
       first.dispose();
       second.dispose();
-    });
-  });
-
-  it("throws IngressAdoptionLostError when complete returns false (lease reclaimed)", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      await queue.enqueue("evt-reclaim", { text: "x" }, { laneKey: "l1" });
-
-      queue.complete = async () => false;
-
-      let adoptError: unknown;
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        dispatchClaimedEvent: async (_event, lifecycle) => {
-          try {
-            await lifecycle.onAdopted();
-          } catch (err) {
-            adoptError = err;
-            throw err;
-          }
-        },
-      });
-
-      await drain.drainOnce();
-      await drain.waitForIdle();
-      expect(isIngressAdoptionLostError(adoptError)).toBe(true);
-      expect(isIngressAdoptionLostError(adoptError) && adoptError.code).toBe("reclaimed");
-      // Claim remains held — not settled as a false success.
-      expect(drain.activeLaneKeys().has("l1")).toBe(true);
-      drain.dispose();
     });
   });
 

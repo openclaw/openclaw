@@ -35,6 +35,8 @@ export type ManagedWorktreeRecord = {
   lastActiveAt: number;
   removedAt?: number;
   runEndCleanup?: ManagedWorktreeRunEndCleanup;
+  /** Non-removal disposition for the current registry lifecycle; explicit GC retries it. */
+  gcProtection?: string;
 };
 
 type WorktreeSourceCurrent = {

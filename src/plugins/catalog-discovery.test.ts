@@ -204,10 +204,21 @@ describe("plugin discovery identity and local join", () => {
       local: {
         plugins: [
           {
+            id: "bundled-memory-plus",
+            packageName: "@alice/memory-plus",
+            clawhubPackage: "@alice/memory-plus",
+            name: "Bundled presentation",
+            origin: "bundled",
+            installed: false,
+            enabled: false,
+            state: "not-installed",
+          },
+          {
             id: "memory-plus",
             packageName: "@alice/memory-plus",
             clawhubPackage: "@alice/memory-plus",
             name: "Local presentation",
+            origin: "workspace",
             installed: true,
             enabled: true,
             state: "enabled",
@@ -495,7 +506,7 @@ describe("plugin discovery identity and local join", () => {
     });
   });
 
-  it("keeps official entries ahead of local-only entries in ordinary browse", () => {
+  it("sorts ordinary browse by downloads without an official-first tail", () => {
     const official = {
       ...remote,
       packageName: "@openclaw/official-memory",
@@ -524,10 +535,46 @@ describe("plugin discovery identity and local join", () => {
     });
 
     expect(items.map((item) => item.catalog.name)).toEqual([
-      "Official Memory",
       "Memory Plus",
+      "Official Memory",
       "Workspace Memory",
     ]);
+  });
+
+  it("pins trusted bundled identities using the registry category policy and ignores local namesakes", () => {
+    const bundled = {
+      id: "bundled-model",
+      name: "Bundled Model",
+      packageName: "@vendor/model",
+      origin: "bundled",
+      installed: true,
+      enabled: true,
+      state: "enabled" as const,
+      categories: ["models"],
+    };
+    const items = joinClawHubPluginCatalog({
+      remote: [{ ...remote, categories: ["models"], downloads: 100_000 }],
+      local: {
+        plugins: [bundled, { ...bundled, id: "impostor", origin: "workspace" }],
+        diagnostics: [],
+        mutationAllowed: true,
+      },
+      intent: "all",
+      category: "models",
+      includeBundledOnly: true,
+      categories: [
+        {
+          slug: "models",
+          label: "Models",
+          description: "Models",
+          icon: "bot",
+          order: 0,
+          pinnedPackages: ["@vendor/model"],
+        },
+      ],
+    });
+    expect(items.map((item) => item.catalog.name)).toEqual(["Bundled Model", "Memory Plus"]);
+    expect(items[0]?.catalog.categoryRanks).toEqual({ models: 0 });
   });
 
   it("filters bundled entries for unified search and keeps them ahead of ClawHub results", () => {

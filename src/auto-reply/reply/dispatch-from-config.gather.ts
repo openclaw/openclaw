@@ -259,14 +259,6 @@ export async function gatherDispatchRequest(
     });
   };
 
-  const markProcessing = () => {
-    messageLifecycle.markProcessing();
-  };
-
-  const markIdle = (reason: string) => {
-    messageLifecycle.markIdle(reason);
-  };
-
   const markInboundDedupeReplayUnsafe = () => {
     replayUnsafeActivity = true;
   };
@@ -550,8 +542,8 @@ export async function gatherDispatchRequest(
     recordProcessed,
     recordAgentDispatchStarted,
     recordAgentDispatchCompleted,
-    markProcessing,
-    markIdle,
+    markProcessing: () => messageLifecycle.markProcessing(),
+    markIdle: (reason: string) => messageLifecycle.markIdle(reason),
     markInboundDedupeReplayUnsafe,
     acpDispatchSessionKey,
     dispatchKind,

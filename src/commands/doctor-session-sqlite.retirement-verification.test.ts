@@ -203,12 +203,12 @@ describe("runDoctorSessionSqlite", () => {
   it.each([
     {
       name: "identical",
-      repeated: { role: "assistant", content: "same replay" },
+      repeated: { role: "assistant", content: [{ type: "text", text: "same replay" }] },
       archived: true,
     },
     {
       name: "divergent",
-      repeated: { role: "assistant", content: "different replay" },
+      repeated: { role: "assistant", content: [{ type: "text", text: "different replay" }] },
       archived: false,
     },
   ])(
@@ -218,10 +218,10 @@ describe("runDoctorSessionSqlite", () => {
         type: "message",
         id: "reply",
         parentId: "root",
-        message: { role: "assistant", content: "same replay" },
+        message: { role: "assistant", content: [{ type: "text", text: "same replay" }] },
       };
       const sourceEvents = [
-        { type: "session", id: "session-1", version: 3 },
+        { type: "session", id: "session-1", version: 3, timestamp: "", cwd: "" },
         {
           type: "message",
           id: "root",

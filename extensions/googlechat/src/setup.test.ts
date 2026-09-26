@@ -8,6 +8,7 @@ import {
   installChannelDmPolicyContractSuite,
   startAccountAndTrackLifecycle,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
@@ -23,7 +24,6 @@ import {
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
 import {
   listGoogleChatAccountIds,
   resolveGoogleChatAccount,

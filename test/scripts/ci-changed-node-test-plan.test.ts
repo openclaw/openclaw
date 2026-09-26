@@ -582,9 +582,7 @@ describe("CI changed Node test plan", () => {
               (group) => group.configs.includes(targetConfig) && !group.includePatterns,
             ),
         ).toBe(true);
-        expect(selectedFiles(shards)).not.toContain(
-          "test/scripts/mobile-release-authority.test.ts",
-        );
+        expect(selectedFiles(shards)).not.toContain("test/scripts/mobile-release-ci.test.ts");
       }
     },
   );
@@ -2323,7 +2321,7 @@ describe("CI changed Node test plan", () => {
         }
         expect(files).toContain(importer);
         expect(files).not.toContain(deferred);
-        expect(files).not.toContain("test/scripts/mobile-release-authority.test.ts");
+        expect(files).not.toContain("test/scripts/mobile-release-ci.test.ts");
         expect(files.some(isCiProofTestFile)).toBe(false);
       } finally {
         vi.restoreAllMocks();
@@ -3313,7 +3311,7 @@ describe("CI changed Node test plan", () => {
     );
     expect(uiGroups.length).toBeGreaterThan(0);
     expect(uiGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
-    expect(selectedFiles(shards)).not.toContain("test/scripts/mobile-release-authority.test.ts");
+    expect(selectedFiles(shards)).not.toContain("test/scripts/mobile-release-ci.test.ts");
   });
 
   it("keeps more than 96 changed tests and a direct plugin test precise with canonical worker budgets", () => {

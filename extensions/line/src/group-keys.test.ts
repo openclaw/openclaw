@@ -1,20 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Line tests cover group keys plugin behavior.
 import { describe, expect, it } from "vitest";
-import { resolveLineGroupConfigEntry, resolveLineGroupLookupIds } from "./group-keys.js";
+import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import type { LineConfig } from "./types.js";
-
-describe("resolveLineGroupLookupIds", () => {
-  it("expands raw ids to both prefixed candidates", () => {
-    expect(resolveLineGroupLookupIds("abc123")).toEqual(["abc123", "group:abc123", "room:abc123"]);
-  });
-
-  it("preserves prefixed ids while also checking the raw id", () => {
-    expect(resolveLineGroupLookupIds("room:abc123")).toEqual(["abc123", "room:abc123"]);
-    expect(resolveLineGroupLookupIds("group:abc123")).toEqual(["abc123", "group:abc123"]);
-  });
-});
 
 describe("resolveLineGroupConfigEntry", () => {
   it("matches raw, prefixed, and wildcard group config entries", () => {

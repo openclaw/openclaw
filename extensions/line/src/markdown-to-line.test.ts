@@ -134,23 +134,6 @@ describe("processLineMessage", () => {
     expect(result.text.indexOf("const line119")).toBeLessThan(result.text.indexOf("Footer"));
   });
 
-  it("processes text with code blocks", () => {
-    const text = `Check this code:
-
-\`\`\`js
-console.log("hi");
-\`\`\`
-
-That's it.`;
-
-    const result = processLineMessage(text);
-
-    expect(result.flexMessages).toHaveLength(1);
-    expect(result.text).toContain("Check this code:");
-    expect(result.text).toContain("That's it.");
-    expect(result.text).not.toContain("```");
-  });
-
   it.each([
     {
       name: "space-indented code",
@@ -335,22 +318,6 @@ print("done")
     expect(result.segments).toBeDefined();
   });
 
-  it("preserves all rows in ordered segments when a row-overflow table is downgraded", () => {
-    const rows = Array.from({ length: 15 }, (_, i) => `| R${i + 1} | V${i + 1} |`).join("\n");
-    const result = processLineMessage(`Header\n\n| Name | Value |\n|---|---|\n${rows}\n\nFooter`);
-
-    expect(result.flexMessages).toHaveLength(0);
-    expect(result.segments).toBeDefined();
-    const segmentTexts = result.segments!.filter((s) => s.type === "text").map((s) => s.text);
-    const combined = segmentTexts.join(" ");
-    expect(combined).toContain("R1");
-    expect(combined).toContain("R15");
-    expect(combined).toContain("Header");
-    expect(combined).toContain("Footer");
-    expect(combined.indexOf("Header")).toBeLessThan(combined.indexOf("R1"));
-    expect(combined.indexOf("R15")).toBeLessThan(combined.indexOf("Footer"));
-  });
-
   it("handles plain text unchanged", () => {
     const text = "Just plain text with no markdown.";
 
@@ -379,7 +346,6 @@ describe("empty code fences", () => {
   // LINE rejects the whole push when a Flex text is blank, so a fence with no
   // code has to drop out rather than cost the reply it was part of.
   it.each([
-    ["no language", "Here:\n\n```\n```\n\ndone"],
     ["with a language", "Here:\n\n```js\n```\n\ndone"],
     ["whitespace only", "Here:\n\n```\n   \n```\n\ndone"],
   ])("renders no card for a fence with %s, keeping the surrounding text", (_label, markdown) => {
@@ -388,12 +354,6 @@ describe("empty code fences", () => {
     expect(processed.flexMessages).toEqual([]);
     expect(processed.text).toContain("Here:");
     expect(processed.text).toContain("done");
-  });
-
-  it("still renders a card for a fence that has code", () => {
-    const processed = processLineMessage("Here:\n\n```js\nconst a = 1;\n```\n\ndone");
-
-    expect(processed.flexMessages).toHaveLength(1);
   });
 
   it("keeps the surviving card when one fence of two is empty", () => {

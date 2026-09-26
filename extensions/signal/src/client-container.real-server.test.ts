@@ -219,7 +219,8 @@ describe("signal REST real-server deadline", () => {
   it("returns the parsed body when it completes within the deadline", async () => {
     const server = await startServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ versions: ["v1"], build: 2 }));
+      res.write('{"versions":');
+      setTimeout(() => res.end('["v1"],"build":2}'), 30);
     });
 
     const result = await containerRpcRequest<{ versions?: string[]; build?: number }>(
@@ -232,36 +233,13 @@ describe("signal REST real-server deadline", () => {
 
   it.each([
     {
-      stagedFilename: "report---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
-      expectedFilename: "report.jpg",
+      stagedFilename: "mixed;semi;comma,comma,hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "mixed_semi_comma_comma_hash_name.jpg",
     },
     {
-      stagedFilename: "quarter;final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
-      expectedFilename: "quarter_final.jpg",
+      stagedFilename: "quarter;comma,hash#final.jpg",
+      expectedFilename: "quarter_comma_hash_final.jpg",
     },
-    {
-      stagedFilename: "first;middle;last---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
-      expectedFilename: "first_middle_last.jpg",
-    },
-    {
-      stagedFilename: "quarter,final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
-      expectedFilename: "quarter_final.jpg",
-    },
-    {
-      stagedFilename: "first,middle,last---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
-      expectedFilename: "first_middle_last.jpg",
-    },
-    {
-      stagedFilename: "hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
-      expectedFilename: "hash_name.jpg",
-    },
-    {
-      stagedFilename: "mixed;comma,hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
-      expectedFilename: "mixed_comma_hash_name.jpg",
-    },
-    { stagedFilename: "quarter;final.jpg", expectedFilename: "quarter_final.jpg" },
-    { stagedFilename: "quarter,final.jpg", expectedFilename: "quarter_final.jpg" },
-    { stagedFilename: "hash#name.jpg", expectedFilename: "hash_name.jpg" },
     {
       stagedFilename: "quarter final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
       expectedFilename: "quarter final.jpg",

@@ -68,16 +68,7 @@ async function withMaterializedVoiceMessageInput<T>(
   );
 }
 
-/**
- * Send a voice message to Discord.
- *
- * Voice messages are a special Discord feature that displays audio with a waveform
- * visualization. They require OGG/Opus format and cannot include text content.
- *
- * @param to - Recipient (user ID for DM or channel ID)
- * @param audioPath - Path to local audio file (will be converted to OGG/Opus if needed)
- * @param opts - Send options
- */
+/** Discord voice messages require OGG/Opus audio with a waveform and cannot include text. */
 export async function sendVoiceMessageDiscord(
   to: string,
   audioPath: string,

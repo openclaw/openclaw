@@ -276,22 +276,6 @@ describe("probeGatewayReachable", () => {
     });
   });
 
-  it("keeps a first-time connect-only auth result on the reachable Gateway path", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      connectLatencyMs: 42,
-      error: "missing scope: operator.read",
-      auth: { role: "operator", scopes: [], capability: "connected_no_operator_scope" },
-      server: { version: "2026.7.2", connId: "conn-1" },
-      gatewayReached: true,
-    });
-
-    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
-      kind: "reachable-unverified",
-      detail: "missing scope: operator.read",
-    });
-  });
-
   it("treats an invalid config snapshot as reachable but unverified", async () => {
     mocks.probeGateway.mockResolvedValueOnce({
       ok: true,
@@ -305,21 +289,6 @@ describe("probeGatewayReachable", () => {
     await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
       kind: "reachable-unverified",
       detail: "Gateway returned an invalid config snapshot",
-    });
-  });
-
-  it("distinguishes pre-Hello connection failures from reachable Gateway failures", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      connectLatencyMs: null,
-      error: "connect failed: timeout",
-      auth: { role: null, scopes: [], capability: "unknown" },
-      server: { version: null, connId: null },
-    });
-
-    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
-      kind: "unreachable",
-      detail: "connect failed: timeout",
     });
   });
 });

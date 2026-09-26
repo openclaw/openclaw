@@ -18,8 +18,8 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
 import {
-  type ModelAliasIndex,
   normalizeProviderId,
+  normalizeModelRef,
   resolveModelAliasFromPair,
   resolveReasoningDefault,
   resolveThinkingDefault,
@@ -56,7 +56,6 @@ import type { ThinkLevel } from "../thinking.shared.js";
 import {
   findSelectedCatalogEntry,
   mergePreparedConfiguredCatalog,
-  normalizeRuntimeRef,
   resolveRuntimeNormalization,
 } from "./model-runtime-normalization.js";
 import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
@@ -84,7 +83,6 @@ type ModelSelectionState = {
   operatorModelOverride?: boolean;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
-  policyAliasIndex: ModelAliasIndex;
   resetModelOverride: boolean;
   resetModelOverrideRef?: string;
   resetModelOverrideReason?: "disallowed" | "stale" | "temporarily-unavailable";
@@ -261,8 +259,8 @@ export async function createModelSelectionState(params: {
       normalizeProviderId(override.provider ?? "") === OPENAI_CODEX_PROVIDER_ID &&
       normalizeProviderId(primaryProvider) === OPENAI_PROVIDER_ID &&
       primaryHarnessPolicy.runtime === "codex" &&
-      normalizeRuntimeRef(OPENAI_PROVIDER_ID, override.model, runtimeModelNormalization).model ===
-        normalizeRuntimeRef(OPENAI_PROVIDER_ID, primaryModel, runtimeModelNormalization).model;
+      normalizeModelRef(OPENAI_PROVIDER_ID, override.model, runtimeModelNormalization).model ===
+        normalizeModelRef(OPENAI_PROVIDER_ID, primaryModel, runtimeModelNormalization).model;
     // Reapplying the current selection must not fight an explicit override.
     const staleLegacyAutoFallbackWithoutOrigin =
       override?.source === "session" &&
@@ -646,7 +644,6 @@ export async function createModelSelectionState(params: {
     ...(operatorModelOverride ? { operatorModelOverride } : {}),
     allowedModelKeys,
     allowedModelCatalog,
-    policyAliasIndex: visibilityPolicy.policyAliasIndex,
     resetModelOverride,
     resetModelOverrideRef,
     resetModelOverrideReason,

@@ -3,13 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { SessionCatalogSession } from "openclaw/plugin-sdk/session-catalog";
 import {
   isRecord,
   normalizeBoundedOptionalString as readBoundedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { PI_SESSION_ID_PATTERN } from "./pi-session-catalog-shared.js";
 import { piAcpSessionStoreRoot, piSessionStore } from "./pi-session-paths.js";
-import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const MAX_DISCOVERY_FILES = 10_000;
 const SUMMARY_SCAN_BATCH_SIZE = 100;
@@ -20,7 +21,6 @@ const APPEND_PROOF_EDGE_BYTES = 64 * 1024;
 const IO_CONCURRENCY = 8;
 const PI_FILE_CANDIDATE_CACHE_TTL_MS = 32_000;
 const PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES = 8;
-const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 
 type PiSessionSummary = SessionCatalogSession & { file: string; version: number };
 
@@ -383,9 +383,9 @@ async function readPiSessionSummary(
     const version =
       header?.type === "session" && typeof header.version === "number" ? header.version : 1;
     const threadId = header?.type === "session" ? readBoundedString(header.id, 256) : undefined;
-    if (header && threadId && SESSION_ID_PATTERN.test(threadId)) {
+    if (header && threadId && PI_SESSION_ID_PATTERN.test(threadId)) {
       const cwd = readBoundedString(header.cwd, 4_096);
-      const createdAt = parsePiSessionTimestampMs(header.timestamp);
+      const createdAt = parseDateFirstTimestampMs(header.timestamp);
       summary = {
         file: candidate.file,
         version,
