@@ -97,6 +97,22 @@ the `openclaw` subtree are preserved.
 | `OPENCLAW_GATEWAY_TOKEN`    | Supply token authentication for Gateway servers and clients.    |
 | `OPENCLAW_GATEWAY_PASSWORD` | Supply password authentication for Gateway servers and clients. |
 
+### External supervisor guidance
+
+| Variable                   | Purpose                                                                                                                                                                |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_SUPERVISOR_MODE` | `external`, `docker`, or `clawctl` declares external lifecycle ownership. `external` shows generic instructions; the other values select built-in deployment commands. |
+
+Values ignore surrounding whitespace and case. Unset or unknown values do not
+enable external supervision. Set the mode in the Gateway and CLI process
+environments through the deployment owner. The commands are display-only. The
+Docker preset assumes a published image and the `openclaw-gateway` Compose
+service; use `external` for local image builds or customized deployments.
+Older versions recognize only `external`; use it during mixed version rollouts
+and restore it before a downgrade. See
+[Supervisor-specific instructions](/cli/gateway/restart-and-supervision#supervisor-specific-instructions)
+for supported commands and execution locations.
+
 ### Provider credentials
 
 Core and bundled provider plugins recognize the following credential and provider-selection variables. Prefer each provider's config or SecretRef fields when you need scoped credentials rather than one process-wide value.

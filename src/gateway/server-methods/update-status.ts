@@ -9,6 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveExternalSupervisorGuidance } from "../../infra/gateway-supervision.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
@@ -120,6 +121,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
           : undefined
         : getUpdateSchedule();
       mark("response");
+      const externalSupervisorGuidance = resolveExternalSupervisorGuidance("update");
       const result = {
         sentinel,
         ...(activeRun ? { activeRun: toPublicUpdateRun(activeRun) } : {}),
@@ -127,6 +129,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         updateAvailable: getUpdateAvailable(),
         ...(effectiveChannel ? { effectiveChannel } : {}),
         ...(schedule ? { schedule } : {}),
+        ...(externalSupervisorGuidance ? { externalSupervisorGuidance } : {}),
       };
       if (!validateUpdateStatusResult(result)) {
         respond(false, undefined, {

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { formatExternalSupervisorActionRequired } from "../infra/gateway-supervision.js";
+import {
+  formatExternalSupervisorActionRequired,
+  resolveExternalSupervisorGuidance,
+} from "../infra/gateway-supervision.js";
 import type { detectGatewayRespawnSupervisor } from "../infra/supervisor-markers.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { prepareHostedStopExecutor } from "./hosted-stop-executor.js";
@@ -49,7 +52,12 @@ export async function prepareHostedGatewayStop(
     throw new Error("This Gateway host does not own the process lifecycle.");
   }
   if (owner.supervisor === "external") {
-    throw new Error(formatExternalSupervisorActionRequired("stop"));
+    throw new Error(
+      formatExternalSupervisorActionRequired(
+        "stop",
+        resolveExternalSupervisorGuidance("stop", env),
+      ),
+    );
   }
   if (
     owner.supervisor === null ||

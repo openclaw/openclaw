@@ -22,6 +22,7 @@ import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
+  resolveExternalSupervisorGuidance,
 } from "../../infra/gateway-supervision.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart-budget.js";
@@ -82,6 +83,7 @@ import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import {
   retainUpdateRequesterAuthority,
+  buildRefusedUpdateResult,
   createUnexpectedUpdateFailureResult,
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
@@ -281,19 +283,6 @@ export const updateHandlers: GatewayRequestHandlers = {
       const installRoot = installSurface.root;
       result.mode = installSurface.mode;
       result.root = installRoot;
-      const refusedUpdate = (
-        outcome: "error" | "skipped",
-        reason: string,
-        beforeVersion?: string | null,
-      ): UpdateRunResult => ({
-        status: outcome,
-        mode: installSurface.mode,
-        ...(installRoot ? { root: installRoot } : {}),
-        ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
-        reason,
-        steps: [],
-        durationMs: 0,
-      });
       const effectiveChannel = resolveEffectiveUpdateChannel({
         configChannel,
         currentVersion: VERSION,
@@ -420,18 +409,20 @@ export const updateHandlers: GatewayRequestHandlers = {
             ? effectiveChannel
             : (configChannel ?? undefined);
       if (targetFailureReason) {
-        result = refusedUpdate("error", targetFailureReason);
+        result = buildRefusedUpdateResult(installSurface, "error", targetFailureReason);
       } else if (installSurface.kind === "missing") {
-        result = refusedUpdate("error", "not-openclaw-root");
+        result = buildRefusedUpdateResult(installSurface, "error", "not-openclaw-root");
       } else if (isGatewayExternallySupervised()) {
         const beforeVersion = await readPackageVersion(installSurface.root);
-        result = refusedUpdate(
+        result = buildRefusedUpdateResult(
+          installSurface,
           "skipped",
           EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
           beforeVersion,
         );
       } else if (installSurface.kind === "package-root") {
-        result = refusedUpdate(
+        result = buildRefusedUpdateResult(
+          installSurface,
           "skipped",
           resolveUnmanagedUpdateInstallReason(),
           await readPackageVersion(installSurface.root),
@@ -443,7 +434,8 @@ export const updateHandlers: GatewayRequestHandlers = {
         const beforeVersion = installSurface.root
           ? await readPackageVersion(installSurface.root)
           : null;
-        result = refusedUpdate(
+        result = buildRefusedUpdateResult(
+          installSurface,
           "skipped",
           installSurface.kind === "global" ? "restart-unavailable" : "restart-disabled",
           beforeVersion,
@@ -597,7 +589,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           result = recordHandoffFailure(
             runId,
             err,
-            refusedUpdate("error", "managed-service-handoff-failed"),
+            buildRefusedUpdateResult(installSurface, "error", "managed-service-handoff-failed"),
             warn,
           );
         }
@@ -706,6 +698,10 @@ export const updateHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
     );
+    const externalSupervisorGuidance =
+      result.reason === EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON
+        ? resolveExternalSupervisorGuidance("update")
+        : undefined;
     respond(
       true,
       {
@@ -716,6 +712,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         acknowledgement,
         ...(outcomeMessage ? { message: outcomeMessage } : {}),
         result,
+        ...(externalSupervisorGuidance ? { externalSupervisorGuidance } : {}),
         ...(handoff ? { handoff } : {}),
         restart: null,
         sentinel: {

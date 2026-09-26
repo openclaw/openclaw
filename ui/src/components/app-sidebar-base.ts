@@ -10,7 +10,7 @@ import {
 } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
-import type { UpdateProgress } from "../app/update-confirmation.ts";
+import type { UpdateProgressWatcher } from "../app/update-confirmation.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
 import {
   readSessionMethodAccess,
@@ -54,9 +54,8 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) themeMode: ThemeMode = "system";
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) devGitBranch: string | null = null;
-  @property({ attribute: false }) watchUpdateProgress:
-    | ((listener: (progress: UpdateProgress) => void) => () => void)
-    | undefined = undefined;
+  @property({ attribute: false }) watchUpdateProgress: UpdateProgressWatcher | undefined =
+    undefined;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;

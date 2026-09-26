@@ -157,7 +157,7 @@ remain protected.
 
 ### External supervisors
 
-Set `OPENCLAW_SUPERVISOR_MODE=external` only when another process manager owns the Gateway lifecycle. In this mode:
+Set `OPENCLAW_SUPERVISOR_MODE` to `external`, `docker`, or `clawctl` only when another process manager owns the Gateway lifecycle. All three values enable external supervision:
 
 - `openclaw gateway restart` preserves the existing safe, forced, and bounded-wait behavior while targeting the verified running Gateway instead of launchd, systemd, or Task Scheduler. Exact-lock restart delivery runs inside that Gateway, so a replacement CLI does not migrate shared state before the old process hands off.
 - Native service install, start, stop, and uninstall operations are refused with guidance to use the external supervisor.
@@ -195,6 +195,70 @@ External supervisor implementations should also apply these acceptance rules:
 - Bound capability probes with a timeout that accounts for full CLI cold-start latency on the deployed runtime and storage, rather than assuming warm-start timing.
 - If capability negotiation or handoff consumption refuses replacement, exit promptly with a nonzero status so the process manager's recovery policy can run. Do not remain alive without a Gateway child or listener.
 - Treat supervisor process liveness as distinct from replacement startup and channel readiness. Report success only after the new Gateway owns its listener and `/startupz` returns `status: "started"`; monitor `/readyz` separately for configured-channel health, while `/healthz` proves liveness only.
+
+#### Supervisor-specific instructions
+
+Use `OPENCLAW_SUPERVISOR_MODE=docker` or `OPENCLAW_SUPERVISOR_MODE=clawctl`
+to enable external supervision with built-in commands for that deployment.
+`OPENCLAW_SUPERVISOR_MODE=external` keeps the existing generic instructions.
+Values ignore case and surrounding whitespace. All three modes preserve the
+same lifecycle restrictions and restart handoff; the preset commands are only
+displayed, never executed. Set the mode in both the Gateway and CLI process
+environments through the deployment owner.
+
+| Mode       | Instructions                | Run commands from                                          |
+| ---------- | --------------------------- | ---------------------------------------------------------- |
+| `clawctl`  | clawctl commands            | Windows host session                                       |
+| `docker`   | Docker Compose commands     | Docker host, in the deployment's Compose project directory |
+| `external` | Generic supervisor guidance | Your deployment's management environment                   |
+
+The `docker` mode assumes the repository's `openclaw-gateway` service name and a
+published image that can be updated with `docker compose pull`. Opt in only when
+these commands match your deployment:
+
+| Action  | Docker Compose command                                                          |
+| ------- | ------------------------------------------------------------------------------- |
+| Start   | `docker compose up -d openclaw-gateway`                                         |
+| Stop    | `docker compose stop openclaw-gateway`                                          |
+| Restart | `docker compose restart openclaw-gateway`                                       |
+| Repair  | `docker compose up -d --force-recreate openclaw-gateway`                        |
+| Update  | `docker compose pull openclaw-gateway && docker compose up -d openclaw-gateway` |
+
+Run these commands in the deployment's Compose project directory with the same
+Compose file set and order used at setup. The displayed commands use Compose
+default discovery or the host's `COMPOSE_FILE`; they cannot discover container-host
+paths or reconstruct `-f` options. If your deployment requires explicit `-f`
+options, set `COMPOSE_FILE` to the equivalent ordered file set before using the
+commands, or keep `OPENCLAW_SUPERVISOR_MODE=external` and use your existing workflow.
+
+The update command pulls the image selected by your Compose configuration. It
+does not change a pinned tag or rebuild a local image. The default Docker setup
+builds `openclaw:local`; use `OPENCLAW_SUPERVISOR_MODE=external` for that workflow, customized
+service names, or other deployments whose commands differ. See
+[Compose operations](/install/docker/compose-operations).
+
+The `clawctl` mode supplies `clawctl gateway-service start`,
+`clawctl gateway-service stop`, and `clawctl gateway-service restart`. It does
+not supply install, uninstall, repair, or update commands. Docker has no built-in
+install or uninstall guidance either; those actions retain generic instructions.
+
+The current Windows packaged launcher sets `OPENCLAW_SUPERVISOR_MODE=external`
+for its children, overriding the host shell value, so it keeps generic guidance.
+The `clawctl` preset is available to launchers that explicitly select it after
+upgrading their OpenClaw payload. This core change does not change Windows
+packaging or automatically enable its preset; package adoption must retain
+`external` for older payloads.
+
+An unset or unrecognized mode does not enable external supervision. Running
+inside Docker does not automatically select `docker`. The supported modes use
+fixed built-in copy; there is no command payload, plugin configuration, or
+persistent guidance record.
+
+Older OpenClaw versions recognize only `external`. Upgrade all Gateway and CLI
+processes before selecting `docker` or `clawctl`; keep `external` during a mixed
+version rollout. Before a downgrade, restore `OPENCLAW_SUPERVISOR_MODE=external`
+in the deployment environment so older processes retain external supervision.
+This requires no configuration migration.
 
 ### Gateway profiling
 

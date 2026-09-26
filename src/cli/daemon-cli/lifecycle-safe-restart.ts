@@ -70,6 +70,7 @@ export async function runSafeGatewayRestart(
     const mutationError = resolveGatewayServiceMutationError(
       "refresh legacy systemd service metadata",
       process.env,
+      "repair",
     );
     if (mutationError) {
       reportRefreshError(mutationError);

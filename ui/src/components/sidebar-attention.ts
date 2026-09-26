@@ -5,7 +5,7 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
-import type { UpdateProgress } from "../app/update-confirmation.ts";
+import type { UpdateProgressWatcher } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -25,7 +25,6 @@ registerSidebarAttentionEnglish();
 
 type SidebarAttentionPanelRenderer =
   typeof import("./sidebar-attention-panel.runtime.ts").renderSidebarAttentionPanel;
-type UpdateProgressWatcher = (listener: (progress: UpdateProgress) => void) => () => void;
 // Display is stylesheet-owned (layout.css `display: contents` in the footer,
 // flex when floating): the LightDomContents base's inline display would defeat
 // the floating override, re-piling the collapsed-nav cluster at the origin.

@@ -134,7 +134,7 @@ export function assertGatewayServiceManagementAllowedForUpdate(
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   try {
-    assertGatewayServiceMutationAllowed("manage the gateway service during update", env);
+    assertGatewayServiceMutationAllowed("manage the gateway service during update", env, "update");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new GatewayServiceUpdateOwnershipError(message, err);

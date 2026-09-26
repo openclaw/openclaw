@@ -347,3 +347,7 @@ export type {
 export type ProviderLoginOption = NonNullable<
   NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["loginOptions"]
 >[number];
+/** Current deployment guidance supplied by the authenticated Gateway. */
+export type ExternalSupervisorGuidance = NonNullable<
+  import("../../../packages/gateway-protocol/src/schema.js").UpdateStatusResult["externalSupervisorGuidance"]
+>;

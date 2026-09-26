@@ -447,6 +447,27 @@ describe("canonical shared-state worker admission", () => {
     }
   });
 
+  it.each(["docker", "clawctl"])(
+    "retains %s external ownership across a captured worker boundary",
+    async (supervisorMode) => {
+      const env = {
+        OPENCLAW_STATE_DIR: dirs.make("worker-supervisor-owner-"),
+        OPENCLAW_SUPERVISOR_MODE: supervisorMode,
+      };
+      claimOpenClawStateOwnership("synthetic-manager", { env });
+      await closeOpenClawStateDatabaseAsync();
+      const captured = captureOpenClawStateWorkerContext({ env });
+      env.OPENCLAW_SUPERVISOR_MODE = "unknown";
+      expect(captured.environment.OPENCLAW_SUPERVISOR_MODE).toBe("external");
+      await expect(
+        executeOpenClawStateWorker(captured, {
+          type: "flows.list",
+          input: { ownerKey: "agent:main:main" },
+        }),
+      ).resolves.toEqual([]);
+    },
+  );
+
   it.each(["open", "execute"] as const)(
     "preserves external ownership rejection from worker %s",
     async (phase) => {

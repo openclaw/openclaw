@@ -1,10 +1,8 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import {
-  confirmAndStartUpdate,
-  createUpdateProgressWatcher,
-} from "../../app/update-confirmation.ts";
+import { confirmAndStartUpdate } from "../../app/update-confirmation.ts";
 import { canReportUpdateFailure } from "../../app/update-failure-report-controller.ts";
+import { createUpdateProgressWatcher } from "../../app/update-progress-watcher.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { renderUpdates } from "./updates.ts";

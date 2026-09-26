@@ -6,7 +6,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
-import type { UpdateProgress } from "../app/update-confirmation.ts";
+import type { UpdateProgressWatcher } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -147,7 +147,7 @@ export function renderSidebarUpdateSurface(params: {
   onDismiss?: () => void;
   onNavigate: () => void;
   visible: boolean;
-  watchUpdateProgress: ((listener: (progress: UpdateProgress) => void) => () => void) | undefined;
+  watchUpdateProgress: UpdateProgressWatcher | undefined;
 }) {
   const context = params.context;
   if (!params.visible || !context) {

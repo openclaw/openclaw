@@ -136,7 +136,7 @@ export async function assertGatewayServiceInstallationRepairAllowed(
         }
       : {}),
     validateEnvBeforeStatusRead: (env) =>
-      assertGatewayServiceMutationAllowed("repair the gateway service installation", env),
+      assertGatewayServiceMutationAllowed("repair the gateway service installation", env, "repair"),
   }).catch((error: unknown) => {
     throw new Error(
       `${GATEWAY_SERVICE_INSPECTION_WARNING} ${sanitizeServiceInspectionError(error).message}`,

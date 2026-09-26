@@ -234,6 +234,7 @@ export const readGatewayOwnerLeaseMock =
   vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>();
 
 export type UpdateRunPayload = {
+  externalSupervisorGuidance?: import("../../../packages/gateway-protocol/src/schema.js").UpdateRunResult["externalSupervisorGuidance"];
   runId: string;
   ok: boolean;
   ackDelivered: boolean;

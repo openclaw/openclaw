@@ -5,7 +5,7 @@ import "../app/device-scope-upgrade-controller.runtime.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import type { UpdateProgress } from "../app/update-confirmation.ts";
+import type { UpdateProgressWatcher } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
@@ -57,7 +57,7 @@ type SidebarAttentionPanelParams = {
   overflowBelow: boolean;
   panelPosition: SidebarAttentionPanelPosition;
   selectedTab: IssueTab;
-  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
+  watchUpdateProgress?: UpdateProgressWatcher;
 };
 
 export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams): TemplateResult {

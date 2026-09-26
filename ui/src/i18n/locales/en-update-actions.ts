@@ -5,6 +5,11 @@ import { en } from "./en.ts";
 // cannot leave an update failure without its host-side recovery command.
 const enUpdateActions = {
   updates: {
+    externalSupervisor: {
+      managedBy: "Managed by {name}.",
+      runFrom: "Run from: {location}",
+      copyCommand: "Copy update command",
+    },
     run: {
       stepWarning: "Warning: {step}",
       prepareUpdaterDetails:
@@ -63,7 +68,14 @@ const enUpdateActions = {
 
 export const registerUpdateActionsEnglish = Object.assign(
   () => {
-    const sections = ["run", "confirm", "dialog", "triage", "report"] as const;
+    const sections = [
+      "run",
+      "confirm",
+      "dialog",
+      "triage",
+      "report",
+      "externalSupervisor",
+    ] as const;
     // SAFETY: The canonical English catalog defines these sections as objects.
     const updates = en.updates as Record<(typeof sections)[number], TranslationMap>;
     for (const section of sections) {

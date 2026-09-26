@@ -6,7 +6,7 @@ import {
   hasNativeUpdateBridge,
   NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
 } from "../app/native-link-routing.ts";
-import { confirmAndStartUpdate, type UpdateProgress } from "../app/update-confirmation.ts";
+import { confirmAndStartUpdate, type UpdateProgressWatcher } from "../app/update-confirmation.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import { projectUpdateRun } from "../app/update-run-projection.ts";
 import {
@@ -39,9 +39,8 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onCheckStatus: (() => Promise<boolean>) | undefined = undefined;
   @property({ attribute: false }) onAcknowledge: (() => void) | undefined = undefined;
   @property({ attribute: false }) statusBanner: ApplicationStatusBanner | null = null;
-  @property({ attribute: false }) watchUpdateProgress:
-    | ((listener: (progress: UpdateProgress) => void) => () => void)
-    | undefined = undefined;
+  @property({ attribute: false }) watchUpdateProgress: UpdateProgressWatcher | undefined =
+    undefined;
   @property({ attribute: false }) canUpdate = false;
   @property({ attribute: false }) canHoldUpdate = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;

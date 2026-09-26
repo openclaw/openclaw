@@ -3,7 +3,7 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ApplicationContext } from "./context.ts";
-import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confirmation.ts";
+import type { UpdateProgressWatcher } from "./update-confirmation.ts";
 
 type ShellViewCallbackHost = {
   readonly context: ApplicationContext | undefined;
@@ -41,10 +41,10 @@ export function createShellViewCallbacks(host: ShellViewCallbackHost) {
         host.openNewSession(agentId, target);
       }
     },
-    watchUpdateProgress: (listener: (progress: UpdateProgress) => void) => {
+    watchUpdateProgress: ((listener, createWatcher) => {
       const context = host.context;
-      return context ? createUpdateProgressWatcher(context)(listener) : () => undefined;
-    },
+      return context ? createWatcher(context)(listener) : () => undefined;
+    }) satisfies UpdateProgressWatcher,
   };
 }
 

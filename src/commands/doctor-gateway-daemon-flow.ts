@@ -102,7 +102,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
 
   note("LaunchAgent is installed but not loaded in launchd.", `${params.title} LaunchAgent`);
   if (params.serviceRepairDeferred) {
-    note(formatServiceRepairDeferredNote(), `${params.title} LaunchAgent`);
+    note(formatServiceRepairDeferredNote(undefined, params.env), `${params.title} LaunchAgent`);
     return { status: "not-loaded" };
   }
 

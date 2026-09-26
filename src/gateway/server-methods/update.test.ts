@@ -839,27 +839,43 @@ describe("update.run restart scheduling", () => {
     expect(payload?.result?.mode).toBe("npm");
   });
 
-  it("keeps external update supervision authoritative even with native systemd markers", async () => {
-    mockGlobalInstallSurface();
-    detectRespawnSupervisorMock.mockReturnValue("systemd");
+  it.each(["docker", "clawctl", "external"])(
+    "keeps external supervision authoritative and projects only supported update guidance (%s)",
+    async (supervisorMode) => {
+      mockGlobalInstallSurface();
+      detectRespawnSupervisorMock.mockReturnValue("systemd");
 
-    const payload = await withEnvAsync(
-      {
-        OPENCLAW_SUPERVISOR_MODE: "external",
-        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
-      },
-      () => captureUpdateRunPayload(),
-    );
-    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-    expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
-    expect(payload?.ok).toBe(false);
-    expect(payload?.restart).toBeNull();
-    expect(payload?.result).toMatchObject({
-      status: "skipped",
-      mode: "npm",
-      reason: "external-supervisor-update-required",
-    });
-  });
+      const payload = await withEnvAsync(
+        {
+          OPENCLAW_SUPERVISOR_MODE: supervisorMode,
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+        },
+        () => captureUpdateRunPayload(),
+      );
+      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+      expect(payload?.ok).toBe(false);
+      expect(payload?.restart).toBeNull();
+      expect(payload?.result).toMatchObject({
+        status: "skipped",
+        mode: "npm",
+        reason: "external-supervisor-update-required",
+      });
+      if (supervisorMode === "docker") {
+        expect(payload?.externalSupervisorGuidance).toEqual({
+          action: "update",
+          name: "Docker Compose",
+          runFrom: "Docker host",
+          command: "docker compose pull openclaw-gateway && docker compose up -d openclaw-gateway",
+        });
+      } else {
+        expect(payload).not.toHaveProperty("externalSupervisorGuidance");
+      }
+      const run = getUpdateRun(expectDefined(payload, "update response").runId);
+      expect(run).not.toHaveProperty("externalSupervisorGuidance");
+      expect(readCapturedPayload()).not.toHaveProperty("externalSupervisorGuidance");
+    },
+  );
 });
 
 describe("update.run prepared foreground handoff", () => {

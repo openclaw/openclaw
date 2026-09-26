@@ -8,7 +8,8 @@ import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
-import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confirmation.ts";
+import type { UpdateProgress } from "./update-confirmation.ts";
+import { createUpdateProgressWatcher } from "./update-progress-watcher.ts";
 import { updateRunHarness } from "./update-run.test-support.ts";
 
 /** Drives the dialog the way the shell does: one live lifecycle stream. */
@@ -408,6 +409,49 @@ it("keeps the dialog open and narrates the install, the disconnect, and the fail
   findButton("Close").click();
   await settled;
   expect(stream.stopped).toBe(true);
+});
+
+it("does not show a supervisor command after an unrelated request failure and status refresh", async () => {
+  const guidance = {
+    action: "update" as const,
+    name: "Docker Compose",
+    runFrom: "Docker host",
+    command: "docker compose pull openclaw-gateway && docker compose up -d openclaw-gateway",
+  };
+  const request = vi.fn<RequestFn>(async (method) => {
+    if (method === "update.run") {
+      throw new Error("Update request rejected: invalid parameters");
+    }
+    return method === "update.status" ? { externalSupervisorGuidance: guidance } : {};
+  });
+  const harness = updateRunHarness(request);
+  const overlays = createApplicationOverlays(harness.gateway);
+  try {
+    await flushMicrotasks();
+    const settled = confirmAndStartUpdateRuntime({
+      startGatewayUpdate: () => {
+        void overlays.runUpdate();
+      },
+      watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
+      onCheckStatus: () => overlays.refreshUpdateStatus(),
+      updateAvailable: UPDATE_AVAILABLE,
+      updateSchedule: null,
+      viaNativeApp: false,
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+    findButton("Update and restart").click();
+    await flushMicrotasks();
+    expect(modal.textContent).toContain("invalid parameters");
+    findButton("Check status").click();
+    await flushMicrotasks();
+    expect(overlays.snapshot.externalSupervisorGuidance).toEqual(guidance);
+    expect(modal.textContent).toContain("invalid parameters");
+    expect(modal.querySelector(".external-supervisor-guidance")).toBeNull();
+    findButton("Close").click();
+    await settled;
+  } finally {
+    overlays.dispose();
+  }
 });
 
 it("keeps the server success report visible across restart until the operator closes it", async () => {

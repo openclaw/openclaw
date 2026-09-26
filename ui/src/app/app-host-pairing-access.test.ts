@@ -13,7 +13,8 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import { loadSettings } from "./settings.ts";
 import "./app-host.ts";
-import type { UpdateProgress } from "./update-confirmation.ts";
+import type { UpdateProgressWatcher } from "./update-confirmation.ts";
+import { createUpdateProgressWatcher } from "./update-progress-watcher.ts";
 
 type PairingShell = HTMLElement & {
   runtime?: ApplicationRuntime;
@@ -40,7 +41,7 @@ type PairingSidebar = LitElement & {
   onRetryConnect?: () => void;
   onOpenNewSession?: (agentId: string) => void;
   onUpdateSidebarEntries?: (entries: string[]) => void;
-  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
+  watchUpdateProgress?: UpdateProgressWatcher;
   outboxAttentionCountForSession: (sessionKey: string) => number;
   hasSessionDraft: (sessionKey: string) => boolean;
 };
@@ -268,7 +269,7 @@ describe("application shell pairing access", () => {
     onUpdateSidebarEntries?.(["chat", "activity"]);
     onOpenNewSession?.("main");
     const progress = vi.fn();
-    const stopProgress = watchUpdateProgress?.(progress);
+    const stopProgress = watchUpdateProgress?.(progress, createUpdateProgressWatcher);
 
     expect(openDevicePairSetup).not.toHaveBeenCalled();
     expect(replacement.openDevicePairSetup).toHaveBeenCalledOnce();

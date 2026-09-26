@@ -53,6 +53,7 @@ export function resolveDaemonInstallBlockMessage(
   const mutationError = resolveGatewayServiceMutationError(
     "install or rewrite the gateway service",
     env,
+    "install",
   );
   if (mutationError) {
     return `Gateway install blocked: ${String(mutationError)}`;

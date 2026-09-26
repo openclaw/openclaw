@@ -89,6 +89,33 @@ afterEach(async () => {
 });
 
 describe("update history RPCs", () => {
+  it("projects current built-in guidance without writing it into retained history", async () => {
+    const run = createUpdateRun({ trigger: "api" });
+    finishUpdateRun(run.runId, {
+      status: "skipped",
+      reason: "external-supervisor-update-required",
+    });
+    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "docker");
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        externalSupervisorGuidance: {
+          action: "update",
+          name: "Docker Compose",
+          runFrom: "Docker host",
+          command: "docker compose pull openclaw-gateway && docker compose up -d openclaw-gateway",
+        },
+      }),
+    );
+    expect(getUpdateRun(run.runId)).not.toHaveProperty("externalSupervisorGuidance");
+    for (const supervisorMode of ["external", "clawctl", "unknown", undefined]) {
+      vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", supervisorMode);
+      const response = await requestUpdateRead("update.status");
+      expect(response.mock.calls[0]?.[0]).toBe(true);
+      expect(response.mock.calls[0]?.[1]).not.toHaveProperty("externalSupervisorGuidance");
+    }
+  });
+
   it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
     "settles an applying campaign when its handed-off run finishes %s",
     async (status) => {

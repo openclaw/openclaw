@@ -4,10 +4,15 @@
 // The dialog itself loads lazily: startup pays nothing for a confirmation the
 // operator has not opened.
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
-import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type {
+  ExternalSupervisorGuidance,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../api/types.ts";
 
 /** The live server-owned run and request state shown by the update dialog. */
 export type UpdateProgress = {
+  externalSupervisorGuidance?: ExternalSupervisorGuidance | null;
   run: UpdateRunRecord | null;
   /** The install is accepted and unfinished, across the restart. */
   busy: boolean;
@@ -19,13 +24,14 @@ export type UpdateProgress = {
 };
 
 // Keep the lazy confirmation entry independent of the application context.
-type UpdateProgressSources = {
+export type UpdateProgressSources = {
   gateway: {
     snapshot: { phase: string };
     subscribe: (listener: () => void) => () => void;
   };
   overlays: {
     snapshot: {
+      externalSupervisorGuidance?: ExternalSupervisorGuidance | null;
       updateRun: UpdateRunRecord | null;
       updateRunning: boolean;
       updateReconciliationPending: boolean;
@@ -36,31 +42,13 @@ type UpdateProgressSources = {
   };
 };
 
-export function createUpdateProgressWatcher(
-  context: UpdateProgressSources,
-): (listener: (progress: UpdateProgress) => void) => () => void {
-  return (listener) => {
-    const emit = () => {
-      const update = context.overlays.snapshot;
-      const banner = update.updateStatusBanner;
-      listener({
-        run: update.updateRun,
-        busy: update.updateRunning || update.updateReconciliationPending,
-        connected: context.gateway.snapshot.phase === "connected",
-        failure: banner && banner.tone !== "info" && banner.source !== "read" ? banner.text : null,
-        readError:
-          update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),
-      });
-    };
-    const stopOverlays = context.overlays.subscribe(emit);
-    const stopGateway = context.gateway.subscribe(emit);
-    emit();
-    return () => {
-      stopOverlays();
-      stopGateway();
-    };
-  };
-}
+/** The dialog supplies its watcher factory after loading the update runtime. */
+export type UpdateProgressWatcher = (
+  listener: (progress: UpdateProgress) => void,
+  createWatcher: (
+    context: UpdateProgressSources,
+  ) => (listener: (progress: UpdateProgress) => void) => () => void,
+) => () => void;
 
 export type ConfirmAndStartUpdateParams = {
   updateAvailable: UpdateAvailable | null;
@@ -81,7 +69,7 @@ export type ConfirmAndStartUpdateParams = {
    * A surface that cannot supply one closes on confirm instead of holding a
    * dialog it can never update; the ambient surfaces narrate from there.
    */
-  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
+  watchUpdateProgress?: UpdateProgressWatcher;
 };
 
 export async function confirmAndStartUpdate(params: ConfirmAndStartUpdateParams): Promise<void> {

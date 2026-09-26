@@ -147,7 +147,7 @@ export function repairLoadedGatewayServiceForStart(
 export async function repairLoadedGatewayServiceForStart(
   params: GatewayServiceRepairParams & { action?: "restart" | "start" },
 ): Promise<GatewayServiceRepairResult<"restarted" | "started">> {
-  assertGatewayServiceMutationAllowed("repair the gateway service");
+  assertGatewayServiceMutationAllowed("repair the gateway service", process.env, "repair");
   // Repair can persist a generated token; check definition authority before planning it.
   const capability = await params.service
     .readDefinitionMutationCapability?.({ env: process.env, environment: params.state.env })

@@ -13,6 +13,7 @@ import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatExternalSupervisorUpdateRequired,
+  resolveExternalSupervisorGuidance,
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
@@ -631,7 +632,9 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   }
 
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
-    throw new Error(formatExternalSupervisorUpdateRequired());
+    throw new Error(
+      formatExternalSupervisorUpdateRequired(resolveExternalSupervisorGuidance("update")),
+    );
   }
   // The shim can move during preparation; the loaded module owns the executing generation.
   const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
