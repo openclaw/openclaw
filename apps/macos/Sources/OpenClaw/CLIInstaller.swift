@@ -144,9 +144,15 @@ enum CLIInstaller {
         }
     }
 
+    static func installedLocation() -> String? {
+        self.installedLocations(
+            searchPaths: CommandResolver.preferredPaths(),
+            fileManager: .default).first
+    }
+
     static func installedLocation(
-        searchPaths: [String] = CommandResolver.preferredPaths(),
-        fileManager: FileManager = .default) -> String?
+        searchPaths: [String],
+        fileManager: FileManager) -> String?
     {
         self.installedLocations(searchPaths: searchPaths, fileManager: fileManager).first
     }
@@ -256,11 +262,18 @@ enum CLIInstaller {
             output: response.stdout,
             expectedVersion: expectedVersion)
         guard versionStatus.isReady else { return versionStatus }
-        let paths = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
-        guard case .success = await RuntimeLocator.resolve(searchPaths: paths) else {
+        guard await self.runtimeIsCompatible(environment: environment) else {
             return .unusable(location: location)
         }
         return versionStatus
+    }
+
+    private static func runtimeIsCompatible(environment: [String: String]) async -> Bool {
+        let paths = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
+        if case .success = await RuntimeLocator.resolve(searchPaths: paths) {
+            return true
+        }
+        return false
     }
 
     static func classifyVersion(
@@ -481,7 +494,7 @@ enum CLIInstaller {
                 "--install-method",
                 "git",
                 "--git-dir",
-                URL(fileURLWithPath: prefix).appendingPathComponent("dev/openclaw").path,
+                self.devCheckoutLocation(prefix: prefix),
             ])
         }
         return command
@@ -586,6 +599,12 @@ enum CLIInstaller {
         AppDefaults.standard.set(policy, forKey: cliInstallPolicyKey)
     }
 
+    private static func devCheckoutLocation(prefix: String) -> String {
+        URL(fileURLWithPath: prefix)
+            .appendingPathComponent("dev/openclaw")
+            .path
+    }
+
     static func activateLocalGateway(
         mode: AppState.ConnectionMode = AppStateStore.shared.connectionMode,
         paused: Bool = AppStateStore.shared.isPaused,
@@ -605,13 +624,22 @@ enum CLIInstaller {
 
     private static func parseInstallEvents(_ output: String) -> [InstallEvent] {
         let decoder = JSONDecoder()
-        return output.split(whereSeparator: \.isNewline).compactMap { line in
-            try? decoder.decode(InstallEvent.self, from: Data(line.utf8))
+        let lines = output
+            .split(whereSeparator: \.isNewline)
+            .map { String($0) }
+        var events: [InstallEvent] = []
+        for line in lines {
+            guard let data = line.data(using: .utf8) else { continue }
+            if let event = try? decoder.decode(InstallEvent.self, from: data) {
+                events.append(event)
+            }
         }
+        return events
     }
 
     nonisolated static func installStatus(forEventLine line: String) -> String? {
-        guard let event = try? JSONDecoder().decode(InstallEvent.self, from: Data(line.utf8)),
+        guard let data = line.data(using: .utf8),
+              let event = try? JSONDecoder().decode(InstallEvent.self, from: data),
               event.event == "step",
               let name = event.name,
               let status = event.status
@@ -644,11 +672,14 @@ enum CLIInstaller {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let decoder = JSONDecoder()
-        if let result = try? decoder.decode(ManagedCLIUpdateSummary.self, from: Data(trimmed.utf8)) {
+        if let data = trimmed.data(using: .utf8),
+           let result = try? decoder.decode(ManagedCLIUpdateSummary.self, from: data)
+        {
             return result
         }
         for line in trimmed.split(whereSeparator: \.isNewline).reversed() {
-            guard let result = try? decoder.decode(ManagedCLIUpdateSummary.self, from: Data(line.utf8))
+            guard let data = String(line).data(using: .utf8),
+                  let result = try? decoder.decode(ManagedCLIUpdateSummary.self, from: data)
             else { continue }
             return result
         }
@@ -663,7 +694,9 @@ enum CLIInstaller {
     }
 
     private static func limitDiagnostic(_ value: String) -> String {
-        String(value.suffix(4000))
+        let maximumCharacters = 4000
+        guard value.count > maximumCharacters else { return value }
+        return String(value.suffix(maximumCharacters))
     }
 }
 

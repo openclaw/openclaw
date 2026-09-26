@@ -8,4 +8,12 @@ enum GatewayAutostartPolicy {
     {
         (mode == .local || (mode == .remote && hostsLocalGateway)) && !paused
     }
+
+    static func shouldEnsureLaunchAgent(
+        mode: AppState.ConnectionMode,
+        paused: Bool,
+        hostsLocalGateway: Bool) -> Bool
+    {
+        self.shouldStartGateway(mode: mode, paused: paused, hostsLocalGateway: hostsLocalGateway)
+    }
 }

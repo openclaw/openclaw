@@ -96,11 +96,13 @@ extension NodeServiceManager {
 
     private struct CommandResult {
         let success: Bool
+        let payload: Data?
         let message: String?
         let parsed: ParsedServiceJson?
     }
 
     private struct ParsedServiceJson {
+        let text: String
         let object: [String: Any]
         let ok: Bool?
         let result: String?
@@ -119,11 +121,12 @@ extension NodeServiceManager {
         guard let arguments = self.launchdProgramArguments() else {
             return CommandResult(
                 success: false,
+                payload: nil,
                 message: "Could not read the node service ownership record. Check the node LaunchAgent and retry.",
                 parsed: nil)
         }
         guard !arguments.isEmpty else {
-            return CommandResult(success: true, message: nil, parsed: nil)
+            return CommandResult(success: true, payload: nil, message: nil, parsed: nil)
         }
         #if DEBUG
         self.testingServiceCommandCalls.append(args)
@@ -135,22 +138,23 @@ extension NodeServiceManager {
         let parsed = self.parseServiceJson(from: response.stdout) ?? self.parseServiceJson(from: response.stderr)
         let ok = parsed?.ok
         let message = parsed?.error ?? parsed?.message
+        let payload = parsed?.text.data(using: .utf8)
+            ?? (response.stdout.isEmpty ? response.stderr : response.stdout).data(using: .utf8)
         let success = response.success && (ok ?? true)
         if success {
-            return CommandResult(success: true, message: nil, parsed: parsed)
+            return CommandResult(success: true, payload: payload, message: nil, parsed: parsed)
         }
 
         if quiet {
-            return CommandResult(success: false, message: message, parsed: parsed)
+            return CommandResult(success: false, payload: payload, message: message, parsed: parsed)
         }
 
-        let detail = message ?? TextSummarySupport.summarizeLastLine(response.stderr)
-            ?? TextSummarySupport.summarizeLastLine(response.stdout)
+        let detail = message ?? self.summarize(response.stderr) ?? self.summarize(response.stdout)
         let exit = response.exitCode.map { "exit \($0)" } ?? (response.errorMessage ?? "failed")
         let fullMessage = detail.map { "Node service command failed (\(exit)): \($0)" }
             ?? "Node service command failed (\(exit))"
         self.logger.error("\(fullMessage, privacy: .public)")
-        return CommandResult(success: false, message: detail, parsed: parsed)
+        return CommandResult(success: false, payload: payload, message: detail, parsed: parsed)
     }
 
     private static func errorMessage(from result: CommandResult, treatNotLoadedAsError: Bool) -> String? {
@@ -174,14 +178,21 @@ extension NodeServiceManager {
 
     private static func parseServiceJson(from raw: String) -> ParsedServiceJson? {
         guard let parsed = JSONObjectExtractionSupport.extract(from: raw) else { return nil }
+        let jsonText = parsed.text
         let object = parsed.object
+        let ok = object["ok"] as? Bool
+        let result = object["result"] as? String
+        let message = object["message"] as? String
+        let error = object["error"] as? String
+        let hints = (object["hints"] as? [String]) ?? []
         return ParsedServiceJson(
+            text: jsonText,
             object: object,
-            ok: object["ok"] as? Bool,
-            result: object["result"] as? String,
-            message: object["message"] as? String,
-            error: object["error"] as? String,
-            hints: object["hints"] as? [String] ?? [])
+            ok: ok,
+            result: result,
+            message: message,
+            error: error,
+            hints: hints)
     }
 
     private static func launchdProgramArguments(
@@ -204,6 +215,10 @@ extension NodeServiceManager {
               let runtime = service["runtime"] as? [String: Any]
         else { return false }
         return runtime["status"] as? String == "running"
+    }
+
+    private static func summarize(_ text: String) -> String? {
+        TextSummarySupport.summarizeLastLine(text)
     }
 }
 

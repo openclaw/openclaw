@@ -26,5 +26,9 @@ struct GatewayAutostartPolicyTests {
             mode: mode,
             paused: paused,
             hostsLocalGateway: hostsLocalGateway) == expected)
+        #expect(GatewayAutostartPolicy.shouldEnsureLaunchAgent(
+            mode: mode,
+            paused: paused,
+            hostsLocalGateway: hostsLocalGateway) == expected)
     }
 }

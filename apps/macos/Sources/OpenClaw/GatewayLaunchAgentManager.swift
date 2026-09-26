@@ -96,7 +96,8 @@ enum GatewayLaunchAgentManager {
     }
 
     static func isLaunchAgentWriteDisabled() -> Bool {
-        FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path)
+        if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) { return true }
+        return false
     }
 
     static func applyAttachOnlyRuntimeOverride() -> String? {
@@ -180,9 +181,11 @@ enum GatewayLaunchAgentManager {
 
     static func set(
         enabled: Bool,
+        bundlePath: String,
         port: Int,
         allowUnconfigured: Bool = false) async -> String?
     {
+        _ = bundlePath
         if enabled, CommandResolver.connectionModeIsRemote(), !allowUnconfigured {
             self.logger.info("launchd change skipped (remote mode)")
             return nil
@@ -390,8 +393,7 @@ extension GatewayLaunchAgentManager {
             return CommandResult(success: true, payload: payload, message: nil)
         }
 
-        let detail = message ?? TextSummarySupport.summarizeLastLine(response.stderr)
-            ?? TextSummarySupport.summarizeLastLine(response.stdout)
+        let detail = message ?? self.summarize(response.stderr) ?? self.summarize(response.stdout)
         if quiet {
             return CommandResult(success: false, payload: payload, message: detail)
         }
@@ -414,6 +416,10 @@ extension GatewayLaunchAgentManager {
     private static func withJsonFlag(_ args: [String]) -> [String] {
         if args.contains("--json") { return args }
         return args + ["--json"]
+    }
+
+    private static func summarize(_ text: String) -> String? {
+        TextSummarySupport.summarizeLastLine(text)
     }
 
     #if DEBUG

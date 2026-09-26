@@ -185,14 +185,15 @@ enum OnboardingSystemAgentResumeStore {
         guard let routeIdentity = normalized(routeIdentity) else { return nil }
         let duration = max(0, activationTimeoutMs / 1000) + self.activationDeadlineSafetySeconds
         let deadline = now.addingTimeInterval(duration)
-        self.restorePending(
-            routeIdentity: routeIdentity,
+        var records = self.loadRecords(defaults: defaults, now: now)
+        records[routeIdentity] = Record(
+            phase: .activating,
+            startedAt: now,
+            deadline: deadline,
             activationOwner: activationOwner,
             modelTarget: modelTarget,
-            utilityModel: utilityModel,
-            deadline: deadline,
-            defaults: defaults,
-            now: now)
+            utilityModel: modelTarget == .utility ? self.normalized(utilityModel) : nil)
+        self.writeRecords(records, defaults: defaults)
         return deadline
     }
 

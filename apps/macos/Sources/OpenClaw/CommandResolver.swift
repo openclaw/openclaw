@@ -151,10 +151,19 @@ enum CommandResolver {
     }
 
     private static func openclawManagedPaths(home: URL, profile: AppProfile) -> [String] {
-        let base = profile.stateDirectoryURL(homeDirectory: home)
-        return ["bin", "tools/node/bin"]
-            .map { base.appendingPathComponent($0).path }
-            .filter { FileManager.default.fileExists(atPath: $0) }
+        let bases = [profile.stateDirectoryURL(homeDirectory: home)]
+        var paths: [String] = []
+        for base in bases {
+            let bin = base.appendingPathComponent("bin")
+            let nodeBin = base.appendingPathComponent("tools/node/bin")
+            if FileManager().fileExists(atPath: bin.path) {
+                paths.append(bin.path)
+            }
+            if FileManager().fileExists(atPath: nodeBin.path) {
+                paths.append(nodeBin.path)
+            }
+        }
+        return paths
     }
 
     private static func nodeManagerBinPaths(home: URL) -> [String] {
