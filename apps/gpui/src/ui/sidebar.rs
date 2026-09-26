@@ -125,7 +125,7 @@ impl AppView {
                                         .ghost()
                                         .small()
                                         .w_full()
-                                        .mt_2()
+                                        .mt(space::REM_SM)
                                         .label(if self.roster_loading {
                                             "Loading…"
                                         } else {
@@ -138,7 +138,13 @@ impl AppView {
                                 )
                             })
                             .when_some(self.roster_error.clone(), |el, error| {
-                                el.child(div().p_2().text_xs().text_color(p.danger).child(error))
+                                el.child(
+                                    div()
+                                        .p(space::REM_SM)
+                                        .text_size(text::WIDGET_XS_SIZE)
+                                        .text_color(p.danger)
+                                        .child(error),
+                                )
                             }),
                     )
                     .child(self.sidebar_identity(cx)),

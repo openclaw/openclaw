@@ -1,5 +1,6 @@
+use super::theme::tokens::{dock, icon, radius, shell, space, text, weight};
 use super::{AppView, theme::Palette};
-use crate::model::panels::{DIVIDER_WIDTH, PanelSlot};
+use crate::model::panels::PanelSlot;
 use gpui_kit::{
     assets::IconName,
     component::{
@@ -146,8 +147,10 @@ impl AppView {
         if let Some(dock) = self.web.sessions.get_mut(&key)
             && dock.layout.active == Some(PanelSlot::Browser)
         {
-            dock.layout
-                .initialize_browser_width(available, (available - 480.).max(312.));
+            dock.layout.initialize_browser_width(
+                available,
+                (available - dock::DEFAULT_WIDTH).max(dock::CHROME_RESERVE),
+            );
         }
         let Some(dock) = self.web.sessions.get(&key) else {
             return div().into_any_element();
@@ -166,7 +169,7 @@ impl AppView {
         let mut strip = div()
             .id("panel-tabs")
             .h_flex()
-            .h(px(38.))
+            .h(shell::DOCK_STRIP_HEIGHT)
             .min_w_0()
             .overflow_x_scroll()
             .flex_1();
@@ -184,22 +187,27 @@ impl AppView {
                     .id(SharedString::from(format!("dock-tab-{}", slot.as_str())))
                     .h_flex()
                     .h_full()
-                    .px_2()
-                    .gap_1()
-                    .border_b_2()
+                    .px(space::REM_SM)
+                    .gap(space::REM_XS)
+                    .border_b(space::XXS)
                     .border_color(if Some(&slot) == active.as_ref() {
                         p.accent
                     } else {
                         p.bg
                     })
                     .when(Some(&slot) == active.as_ref(), |el| el.bg(p.hover))
-                    .child(div().text_xs().whitespace_nowrap().child(label))
+                    .child(
+                        div()
+                            .text_size(text::WIDGET_XS_SIZE)
+                            .whitespace_nowrap()
+                            .child(label),
+                    )
                     .child(
                         Button::new(SharedString::from(format!("close-panel-{}", slot.as_str())))
                             .ghost()
                             .xsmall()
-                            .size(px(20.))
-                            .icon(Icon::new(IconName::X).size(px(12.)))
+                            .size(shell::TAB_CLOSE_SIZE)
+                            .icon(Icon::new(IconName::X).size(icon::SMALL))
                             .accessibility_label("Close panel")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
@@ -231,16 +239,16 @@ impl AppView {
         }
         let toolbar = div()
             .h_flex()
-            .h(px(38.))
-            .border_b_1()
+            .h(shell::DOCK_STRIP_HEIGHT)
+            .border_b(space::HAIRLINE)
             .border_color(p.border)
             .child(strip)
             .child(
                 Button::new("dock-add-panel")
                     .ghost()
                     .small()
-                    .size(px(28.))
-                    .icon(Icon::new(IconName::Plus).size(px(14.)))
+                    .size(shell::CHROME_BUTTON_SIZE)
+                    .icon(Icon::new(IconName::Plus).size(icon::ACTION))
                     .accessibility_label("Add panel")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.web.picker_open = !this.web.picker_open;
@@ -251,14 +259,14 @@ impl AppView {
                 Button::new("dock-expand")
                     .ghost()
                     .small()
-                    .size(px(28.))
+                    .size(shell::CHROME_BUTTON_SIZE)
                     .icon(
                         Icon::new(if expanded {
                             IconName::Minimize2
                         } else {
                             IconName::Maximize2
                         })
-                        .size(px(14.)),
+                        .size(icon::ACTION),
                     )
                     .accessibility_label(if expanded {
                         "Restore panel width"
@@ -280,8 +288,8 @@ impl AppView {
                 Button::new("dock-collapse")
                     .ghost()
                     .small()
-                    .size(px(28.))
-                    .icon(Icon::new(IconName::PanelRight).size(px(14.)))
+                    .size(shell::CHROME_BUTTON_SIZE)
+                    .icon(Icon::new(IconName::PanelRight).size(icon::ACTION))
                     .accessibility_label("Collapse panels")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_dock(cx))),
             );
@@ -293,7 +301,7 @@ impl AppView {
                 .map(|surface| surface.element())
                 .unwrap_or_else(|| {
                     div()
-                        .p_4()
+                        .p(space::REM_LG)
                         .text_color(p.muted)
                         .child("Loading panel…")
                         .into_any_element()
@@ -309,7 +317,7 @@ impl AppView {
                 el.child(
                     div()
                         .id("dock-resizer")
-                        .w(px(DIVIDER_WIDTH))
+                        .w(px(dock::DIVIDER_WIDTH))
                         .h_full()
                         .bg(p.border)
                         .cursor_col_resize()
@@ -353,10 +361,10 @@ impl AppView {
         let mut list = div()
             .id("panel-picker-list")
             .v_flex()
-            .max_h(px(540.))
+            .max_h(shell::PANEL_PICKER_MAX_HEIGHT)
             .overflow_y_scroll()
-            .p_2()
-            .gap_1();
+            .p(space::REM_SM)
+            .gap(space::REM_XS);
         for (slot, label) in entries {
             list = list.child(
                 Button::new(SharedString::from(format!("pick-panel-{}", slot.as_str())))
@@ -384,7 +392,7 @@ impl AppView {
             .id("panel-picker-overlay")
             .absolute()
             .inset_0()
-            .bg(p.bg.opacity(0.72))
+            .bg(p.bg.opacity(shell::OVERLAY_OPACITY))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -395,21 +403,21 @@ impl AppView {
             .child(
                 div()
                     .absolute()
-                    .right(px(12.))
-                    .top(px(48.))
-                    .w(px(280.))
+                    .right(space::XL)
+                    .top(shell::PANEL_PICKER_TOP)
+                    .w(shell::PANEL_PICKER_WIDTH)
                     .bg(p.popover)
-                    .border_1()
+                    .border(space::HAIRLINE)
                     .border_color(p.border_strong)
-                    .rounded_lg()
+                    .rounded(radius::WIDGET_LG)
                     .shadow_lg()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(
                         div()
-                            .px_3()
-                            .py_2()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .px(space::REM_MD)
+                            .py(space::REM_SM)
+                            .text_size(text::WIDGET_SM_SIZE)
+                            .font_weight(weight::SEMIBOLD)
                             .child("Add a panel"),
                     )
                     .child(list),

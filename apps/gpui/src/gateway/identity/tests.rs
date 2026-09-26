@@ -5,7 +5,7 @@ fn web_store_removal_requires_a_record_owned_by_this_root() {
     let directory = std::env::temp_dir().join(format!("gpui-web-store-test-{}", random_id()));
     let mut identity = Identity::load_at(&directory).unwrap();
     let mut stale = identity.clone();
-    let scope = crate::web_data_store::control_scope("wss://example.test/").unwrap();
+    let scope = crate::web_data_store::control_scope("wss://example.test/", None).unwrap();
     assert_eq!(identity.begin_web_store_removal(&scope).unwrap(), None);
     let id = identity.record_web_store(&scope).unwrap();
     let reading = identity.record_web_store("reading").unwrap();

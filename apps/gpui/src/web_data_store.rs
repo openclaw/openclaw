@@ -11,17 +11,21 @@ pub(crate) struct Record {
     pub pending_removal: bool,
 }
 
-pub(crate) fn control_scope(gateway: &str) -> Result<String, String> {
-    Ok(format!(
+pub(crate) fn control_scope(
+    gateway: &str,
+    profile: Option<&(String, String)>,
+) -> Result<String, String> {
+    let canonical_gateway = profile.map_or(gateway, |(_, url)| url.as_str());
+    let scope = format!(
         "control:{}",
-        crate::model::web_urls::control_base_url(gateway)?
+        crate::model::web_urls::control_base_url(canonical_gateway)?
             .origin()
             .ascii_serialization()
-    ))
-}
-
-pub(crate) fn profile_control_scope(profile_id: &str, gateway: &str) -> Result<String, String> {
-    Ok(format!("profile:{profile_id}:{}", control_scope(gateway)?))
+    );
+    Ok(match profile {
+        Some((id, _)) => format!("profile:{id}:{scope}"),
+        None => scope,
+    })
 }
 
 pub(crate) fn reading_scope(profile_id: Option<&str>) -> String {
@@ -281,10 +285,10 @@ mod tests {
     #[test]
     fn identifiers_are_stable_origin_and_root_scoped_rfc_uuids() {
         let root = Path::new("/isolated/app-a");
-        let origin = control_scope("wss://EXAMPLE.test:443/mount/").unwrap();
+        let origin = control_scope("wss://EXAMPLE.test:443/mount/", None).unwrap();
         assert_eq!(
             origin,
-            control_scope("https://example.test/elsewhere").unwrap()
+            control_scope("https://example.test/elsewhere", None).unwrap()
         );
         let id = identifier(root, &origin);
         assert_eq!(
@@ -293,11 +297,14 @@ mod tests {
         );
         assert_ne!(
             id,
-            identifier(root, &control_scope("wss://other.test/").unwrap())
+            identifier(root, &control_scope("wss://other.test/", None).unwrap())
         );
         assert_ne!(
             id,
-            identifier(root, &control_scope("wss://example.test:444/").unwrap())
+            identifier(
+                root,
+                &control_scope("wss://example.test:444/", None).unwrap()
+            )
         );
         assert_ne!(id, identifier(Path::new("/isolated/app-b"), &origin));
         assert_ne!(id, identifier(root, "reading"));
@@ -308,7 +315,11 @@ mod tests {
     #[test]
     fn profile_stores_isolate_reading_and_control_without_changing_legacy_stores() {
         let root = Path::new("/isolated/app");
-        let control = profile_control_scope("one", "wss://example.test/").unwrap();
+        let control = control_scope(
+            "wss://example.test/",
+            Some(&("one".into(), "wss://example.test/".into())),
+        )
+        .unwrap();
         let reading = reading_scope(Some("one"));
         assert_eq!(reading, "profile:one:reading");
         assert_ne!(identifier(root, &control), identifier(root, &reading));

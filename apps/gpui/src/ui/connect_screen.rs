@@ -1,3 +1,4 @@
+use super::theme::tokens::{icon, radius, shell, space, text, weight};
 use super::{AppView, app_view::ConnectionStage, theme::Palette};
 use gpui_kit::{
     assets::IconName,
@@ -42,52 +43,52 @@ impl AppView {
             .flex()
             .items_center()
             .justify_center()
-            .p_8()
+            .p(space::REM_XXL)
             .child(
                 div()
                     .v_flex()
                     .w_full()
-                    .max_w(px(440.))
-                    .gap(px(20.))
+                    .max_w(shell::CONNECT_MAX_WIDTH)
+                    .gap(shell::CONNECT_FORM_GAP)
                     .child(
                         div()
-                            .size(px(48.))
-                            .rounded(px(14.))
+                            .size(shell::CONNECT_LOGO_SIZE)
+                            .rounded(radius::CARD)
                             .bg(p.accent_subtle)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_size(px(30.))
+                            .text_size(shell::CONNECT_LOGO_TEXT_SIZE)
                             .text_color(p.accent)
                             .child("◈"),
                     )
                     .child(
                         div()
                             .v_flex()
-                            .gap(px(8.))
+                            .gap(space::MD)
                             .child(
                                 div()
-                                    .text_size(px(26.))
+                                    .text_size(shell::CONNECT_TITLE_SIZE)
                                     .text_color(p.strong)
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .font_weight(weight::SEMIBOLD)
                                     .child("Connect to a Gateway"),
                             )
                             .child(
                                 div()
                                     .text_color(p.muted)
-                                    .line_height(px(22.))
+                                    .line_height(shell::CONNECT_TAGLINE_HEIGHT)
                                     .child("Your agents and conversations, together on your desktop."),
                             ),
                     )
                     .child(
                         div()
                             .v_flex()
-                            .gap_2()
-                            .child(div().font_weight(FontWeight::MEDIUM).child("Gateway URL"))
+                            .gap(space::REM_SM)
+                            .child(div().font_weight(weight::MEDIUM).child("Gateway URL"))
                             .child(Input::new(&self.url).aria_label("Gateway URL").disabled(self.profile.is_some() || self.connection_stage == ConnectionStage::SigningOut))
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(text::WIDGET_XS_SIZE)
                                     .text_color(p.muted)
                                     .child("Enter an HTTPS or WebSocket address, or a hostname."),
                             ),
@@ -96,11 +97,11 @@ impl AppView {
                         form.child(
                             div()
                                 .v_flex()
-                                .gap(px(14.))
+                                .gap(shell::CONNECT_CREDENTIAL_GAP)
                                 .child(
                                     div()
                                         .v_flex()
-                                        .gap_2()
+                                        .gap(space::REM_SM)
                                         .child("Token")
                                         .child(
                                             Input::new(&self.token)
@@ -111,7 +112,7 @@ impl AppView {
                                 .child(
                                     div()
                                         .v_flex()
-                                        .gap_2()
+                                        .gap(space::REM_SM)
                                         .child("Password")
                                         .child(
                                             Input::new(&self.password)
@@ -121,8 +122,8 @@ impl AppView {
                                 )
                                 .child(
                                     div()
-                                        .text_xs()
-                                        .line_height(px(18.))
+                                        .text_size(text::WIDGET_XS_SIZE)
+                                        .line_height(shell::CONNECT_NOTE_LINE_HEIGHT)
                                         .text_color(p.muted)
                                         .child("Use the token or password configured on your Gateway. For Cloudflare Access, continue to sign in with your browser."),
                                 ),
@@ -132,25 +133,25 @@ impl AppView {
                         form.child(
                             div()
                                 .v_flex()
-                                .gap(px(8.))
-                                .p_4()
-                                .rounded(px(10.))
+                                .gap(space::MD)
+                                .p(space::REM_LG)
+                                .rounded(radius::PERSON)
                                 .bg(p.card)
-                                .border_1()
+                                .border(space::HAIRLINE)
                                 .border_color(p.border)
                                 .child(
                                     div()
                                         .h_flex()
-                                        .gap_2()
+                                        .gap(space::REM_SM)
                                         .text_color(p.strong)
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child(Icon::new(IconName::Lock).size(px(16.)))
+                                        .font_weight(weight::MEDIUM)
+                                        .child(Icon::new(IconName::Lock).size(icon::NORMAL))
                                         .child("This Gateway uses Cloudflare Access"),
                                 )
                                 .child(
                                     div()
-                                        .text_sm()
-                                        .line_height(px(20.))
+                                        .text_size(text::WIDGET_SM_SIZE)
+                                        .line_height(shell::CONNECT_BODY_LINE_HEIGHT)
                                         .text_color(p.muted)
                                         .child(if waiting {
                                             "Finish signing in in your browser. This window will connect automatically when you’re done."
@@ -162,8 +163,8 @@ impl AppView {
                                 )
                                 .when_some(self.access_identity.clone(), |card, identity| {
                                     card.child(
-                                        div().v_flex().gap_2()
-                                            .child(div().text_sm().text_color(p.ok).child(format!("Signed in as {identity}")))
+                                        div().v_flex().gap(space::REM_SM)
+                                            .child(div().text_size(text::WIDGET_SM_SIZE).text_color(p.ok).child(format!("Signed in as {identity}")))
                                             .child(Button::new("connect-sign-out").ghost().label("Sign out").on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx))))
                                     )
                                 }),
@@ -174,14 +175,14 @@ impl AppView {
                             div()
                                 .id("connection-error")
                                 .v_flex()
-                                .gap_2()
-                                .p_4()
-                                .rounded(px(10.))
+                                .gap(space::REM_SM)
+                                .p(space::REM_LG)
+                                .rounded(radius::PERSON)
                                 .bg(p.card)
-                                .border_1()
+                                .border(space::HAIRLINE)
                                 .border_color(p.border)
-                                .text_sm()
-                                .line_height(px(20.))
+                                .text_size(text::WIDGET_SM_SIZE)
+                                .line_height(shell::CONNECT_BODY_LINE_HEIGHT)
                                 .text_color(p.danger)
                                 .child(message),
                         )
@@ -189,11 +190,11 @@ impl AppView {
                     .child(
                         div()
                             .h_flex()
-                            .gap_3()
+                            .gap(space::REM_MD)
                             .child(
                                 Button::new("connect")
                                     .primary()
-                                    .h(px(40.))
+                                    .h(shell::CONNECT_BUTTON_HEIGHT)
                                     .flex_1()
                                     .label(label)
                                     .disabled(busy)
@@ -210,7 +211,7 @@ impl AppView {
                                 actions.child(
                                     Button::new("cancel-connection")
                                         .ghost()
-                                        .h(px(40.))
+                                        .h(shell::CONNECT_BUTTON_HEIGHT)
                                         .label("Cancel")
                                         .on_click(cx.listener(|this, _, _, cx| this.cancel_connection(cx))),
                                 )
@@ -219,8 +220,8 @@ impl AppView {
                     .child(Button::new("manage-gateways-connect").ghost().label("Manage Gateways…").on_click(|_,_,cx| crate::gateway_windows::manage(cx)))
                     .child(
                         div()
-                            .text_xs()
-                            .line_height(px(18.))
+                            .text_size(text::WIDGET_XS_SIZE)
+                            .line_height(shell::CONNECT_NOTE_LINE_HEIGHT)
                             .text_color(p.muted)
                             .child("Your device keeps its own identity. A Gateway administrator may need to approve it before you can chat."),
                     ),

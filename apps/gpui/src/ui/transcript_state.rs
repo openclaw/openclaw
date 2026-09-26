@@ -1,3 +1,4 @@
+use crate::ui::theme::tokens::{conversation as t, radius, space, weight};
 #[path = "transcript_markdown.rs"]
 mod image_policy;
 use super::{AppView, theme::Palette};
@@ -20,37 +21,30 @@ use std::{
 
 pub(super) fn transcript_text_style(p: Palette) -> TextViewStyle {
     TextViewStyle::default()
-        .paragraph_gap(rems(0.875))
+        .paragraph_gap(t::PARAGRAPH_GAP)
         .heading_font_size(|level, base| {
             // Chat headings inherit the browser's heading scale at a 14px base.
-            base * match level {
-                1 => 2.,
-                2 => 1.5,
-                3 => 1.17,
-                4 => 1.,
-                5 => 0.83,
-                _ => 0.67,
-            }
+            base * t::heading_scale(level)
         })
         .table(
             StyleRefinement::default()
-                .border_0()
-                .rounded_none()
+                .border(space::NONE)
+                .rounded(space::NONE)
                 .bg(transparent_black())
-                .text_size(px(13.)),
+                .text_size(t::TABLE_TEXT_SIZE),
         )
         .table_head(
             StyleRefinement::default()
                 .bg(transparent_black())
                 .text_color(p.strong)
-                .font_weight(FontWeight::SEMIBOLD)
+                .font_weight(weight::SEMIBOLD)
                 .border_color(p.border_strong),
         )
         .table_cell(
             StyleRefinement::default()
-                .border_r_0()
-                .px(px(12.))
-                .py(px(12.)),
+                .border_r(space::NONE)
+                .px(space::XL)
+                .py(space::XL),
         )
 }
 
@@ -73,25 +67,28 @@ pub(super) fn code_markdown_extensions() -> MarkdownExtensions {
                     div()
                         .id(("transcript-code", offset))
                         .w_full()
-                        .min_w_0()
-                        .rounded(px(8.))
-                        .border_1()
-                        .border_color(Hsla { a: 0.22, ..p.text })
+                        .min_w(space::NONE)
+                        .rounded(radius::CONTROL)
+                        .border(space::HAIRLINE)
+                        .border_color(Hsla {
+                            a: t::CODE_BORDER_ALPHA,
+                            ..p.text
+                        })
                         .overflow_hidden()
                         .child(
                             div()
                                 .h_flex()
                                 .justify_between()
-                                .gap_2()
-                                .min_h(px(36.))
-                                .pl(px(14.))
-                                .pr(px(8.))
-                                .pt(px(8.))
-                                .pb(px(4.))
-                                .text_size(px(11.))
-                                .line_height(px(11.))
+                                .gap(space::REM_SM)
+                                .min_h(t::CODE_HEADER_HEIGHT)
+                                .pl(t::CODE_INSET)
+                                .pr(space::MD)
+                                .pt(space::MD)
+                                .pb(space::XS)
+                                .text_size(t::CODE_LABEL_SIZE)
+                                .line_height(t::CODE_LABEL_SIZE)
                                 .text_color(p.muted)
-                                .child(div().font_family("monospace").child(language))
+                                .child(div().font_family(t::CODE_FONT_FAMILY).child(language))
                                 .child(
                                     Button::new("copy-code")
                                         .ghost()
@@ -111,12 +108,12 @@ pub(super) fn code_markdown_extensions() -> MarkdownExtensions {
                                     TextViewStyle::default().code_block(
                                         StyleRefinement::default()
                                             .bg(transparent_black())
-                                            .rounded_none()
-                                            .px(px(14.))
-                                            .pt(px(4.))
-                                            .pb(px(14.))
-                                            .text_size(px(12.))
-                                            .line_height(px(18.)),
+                                            .rounded(space::NONE)
+                                            .px(t::CODE_INSET)
+                                            .pt(space::XS)
+                                            .pb(t::CODE_INSET)
+                                            .text_size(t::CODE_TEXT_SIZE)
+                                            .line_height(t::CODE_LINE_HEIGHT),
                                     ),
                                 )
                                 .selectable(true)

@@ -1,3 +1,4 @@
+use super::theme::tokens::{icon, shell, space, text};
 use super::{AppView, agent_browser::AgentBrowser, theme::Palette, web_state::ReadingTab};
 use crate::model::panels::{LinkTarget, PanelSlot, classify_link, normalize_reading_url};
 use gpui_kit::{
@@ -271,10 +272,10 @@ impl AppView {
         }
         let modes = div()
             .h_flex()
-            .h(px(36.))
-            .px_2()
-            .gap_1()
-            .border_b_1()
+            .h(shell::BROWSER_MODE_HEIGHT)
+            .px(space::REM_SM)
+            .gap(space::REM_XS)
+            .border_b(space::HAIRLINE)
             .border_color(p.border)
             .child(
                 Button::new("reading-mode")
@@ -336,19 +337,19 @@ impl AppView {
                     .flex_1()
                     .items_center()
                     .justify_center()
-                    .gap_3()
+                    .gap(space::REM_MD)
                     .text_color(p.muted)
-                    .child(Icon::new(IconName::Globe).size(px(28.)))
+                    .child(Icon::new(IconName::Globe).size(shell::BROWSER_EMPTY_ICON_SIZE))
                     .child("Open a link or enter a URL above.")
                     .into_any_element()
             });
         let mut tabs = div()
             .id("reading-tab-strip")
             .h_flex()
-            .h(px(34.))
+            .h(shell::BROWSER_TAB_HEIGHT)
             .min_w_0()
             .overflow_x_scroll()
-            .border_b_1()
+            .border_b(space::HAIRLINE)
             .border_color(p.border);
         for tab in &dock.tabs {
             let id = tab.id;
@@ -357,18 +358,24 @@ impl AppView {
                     .id(SharedString::from(format!("reading-tab-{id}")))
                     .h_flex()
                     .h_full()
-                    .max_w(px(180.))
-                    .min_w(px(72.))
-                    .px_2()
-                    .gap_1()
+                    .max_w(shell::BROWSER_TAB_MAX_WIDTH)
+                    .min_w(shell::BROWSER_TAB_MIN_WIDTH)
+                    .px(space::REM_SM)
+                    .gap(space::REM_XS)
                     .when(Some(id) == dock.selected_tab, |el| el.bg(p.hover))
-                    .child(div().flex_1().truncate().text_xs().child(tab.title.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .text_size(text::WIDGET_XS_SIZE)
+                            .child(tab.title.clone()),
+                    )
                     .child(
                         Button::new(SharedString::from(format!("close-reading-{id}")))
                             .ghost()
                             .xsmall()
-                            .size(px(20.))
-                            .icon(Icon::new(IconName::X).size(px(12.)))
+                            .size(shell::TAB_CLOSE_SIZE)
+                            .icon(Icon::new(IconName::X).size(icon::SMALL))
                             .accessibility_label("Close reading tab")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
@@ -382,8 +389,8 @@ impl AppView {
             Button::new("new-reading-tab")
                 .ghost()
                 .small()
-                .size(px(30.))
-                .icon(Icon::new(IconName::Plus).size(px(14.)))
+                .size(shell::BROWSER_NEW_TAB_SIZE)
+                .icon(Icon::new(IconName::Plus).size(icon::ACTION))
                 .accessibility_label("New reading tab")
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.open_reading_url("about:blank", cx);
@@ -394,10 +401,10 @@ impl AppView {
         );
         let toolbar = div()
             .h_flex()
-            .h(px(40.))
-            .px_1()
-            .gap_1()
-            .border_b_1()
+            .h(shell::BROWSER_TOOLBAR_HEIGHT)
+            .px(space::REM_XS)
+            .gap(space::REM_XS)
+            .border_b(space::HAIRLINE)
             .border_color(p.border)
             .child(browser_button(
                 "back",
@@ -427,7 +434,7 @@ impl AppView {
             .child(
                 Input::new(&self.web.address)
                     .small()
-                    .h(px(28.))
+                    .h(shell::CHROME_BUTTON_SIZE)
                     .flex_1()
                     .aria_label("Browser URL"),
             )
@@ -463,8 +470,8 @@ fn browser_button(
     Button::new(id)
         .ghost()
         .small()
-        .size(px(28.))
-        .icon(Icon::new(icon).size(px(14.)))
+        .size(shell::CHROME_BUTTON_SIZE)
+        .icon(Icon::new(icon).size(icon::ACTION))
         .accessibility_label(label)
         .disabled(disabled)
         .on_click(cx.listener(move |this, _, _, cx| this.browser_command(id, cx)))

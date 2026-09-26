@@ -4,6 +4,7 @@ use super::{
     transcript_state::{code_markdown_extensions, transcript_text_style},
 };
 use crate::model::chat::{Message, now_ms};
+use crate::ui::theme::tokens::{conversation as t, radius, space, text, weight};
 use gpui_kit::{
     component::{
         IconName, Sizable, StyledExt,
@@ -34,14 +35,18 @@ impl AppView {
         if message.system {
             return div()
                 .w_full()
-                .py_5()
+                .py(space::REM_ROOMY)
                 .h_flex()
-                .gap_3()
-                .text_xs()
+                .gap(space::REM_MD)
+                .text_size(text::WIDGET_XS_SIZE)
                 .text_color(p.muted)
-                .child(div().flex_1().h(px(1.)).bg(p.border))
-                .child(div().max_w(px(600.)).child(message.text.clone()))
-                .child(div().flex_1().h(px(1.)).bg(p.border))
+                .child(div().flex_1().h(space::HAIRLINE).bg(p.border))
+                .child(
+                    div()
+                        .max_w(t::SYSTEM_MESSAGE_MAX_WIDTH)
+                        .child(message.text.clone()),
+                )
+                .child(div().flex_1().h(space::HAIRLINE).bg(p.border))
                 .into_any_element();
         }
         let user = message.role == "user";
@@ -73,19 +78,21 @@ impl AppView {
             .relative()
             .v_flex()
             .w_full()
-            .min_w_0()
-            .gap_2()
-            .text_size(px(14.))
-            .line_height(relative(1.6))
-            .pb_1()
-            .when(user, |this| this.max_w(relative(0.68)).items_end());
+            .min_w(space::NONE)
+            .gap(space::REM_SM)
+            .text_size(t::MESSAGE_TEXT_SIZE)
+            .line_height(relative(t::MESSAGE_LINE_HEIGHT))
+            .pb(space::REM_XS)
+            .when(user, |this| {
+                this.max_w(relative(t::USER_WIDTH_RATIO)).items_end()
+            });
         if !message.thinking.is_empty() {
             let toggle = thinking_key.clone();
             let thinking = self.markdown_state(thinking_key.clone(), &message.thinking, cx);
             content = content.child(
                 div()
                     .v_flex()
-                    .gap_2()
+                    .gap(space::REM_SM)
                     .text_color(p.muted)
                     .child(
                         Button::new(SharedString::from(thinking_key))
@@ -107,10 +114,10 @@ impl AppView {
                     .when(thinking_open, |this| {
                         this.child(
                             div()
-                                .border_l_2()
+                                .border_l(space::XXS)
                                 .border_color(p.border)
-                                .pl_3()
-                                .text_sm()
+                                .pl(space::REM_MD)
+                                .text_size(text::WIDGET_SM_SIZE)
                                 .child(
                                     TextView::new(&thinking)
                                         .style(transcript_text_style(p))
@@ -130,8 +137,12 @@ impl AppView {
             content = content.child(
                 div()
                     .max_w_full()
-                    .when(user, |this| this.bg(p.user_bubble).rounded(px(8.)).p_4())
-                    .when(!user, |this| this.w_full().py_1())
+                    .when(user, |this| {
+                        this.bg(p.user_bubble)
+                            .rounded(radius::CONTROL)
+                            .p(space::REM_LG)
+                    })
+                    .when(!user, |this| this.w_full().py(space::REM_XS))
                     .child(
                         TextView::new(&markdown)
                             .style(transcript_text_style(p))
@@ -147,16 +158,16 @@ impl AppView {
             );
         }
         if !message.attachments.is_empty() {
-            content = content.child(div().flex().flex_wrap().gap_2().children(
+            content = content.child(div().flex().flex_wrap().gap(space::REM_SM).children(
                 message.attachments.iter().map(|attachment| {
                     let mut chip = div()
                         .h_flex()
-                        .gap_2()
-                        .rounded_md()
-                        .border_1()
+                        .gap(space::REM_SM)
+                        .rounded(radius::WIDGET_MD)
+                        .border(space::HAIRLINE)
                         .border_color(p.border)
                         .bg(p.card)
-                        .p_2();
+                        .p(space::REM_SM);
                     let format = match attachment.mime_type.as_str() {
                         "image/png" => Some(ImageFormat::Png),
                         "image/jpeg" => Some(ImageFormat::Jpeg),
@@ -174,21 +185,25 @@ impl AppView {
                                     Arc::new(Image::from_bytes(format, attachment.bytes.to_vec()))
                                 })
                                 .clone())
-                            .size(px(56.))
+                            .size(t::ATTACHMENT_SIZE)
                             .object_fit(ObjectFit::Cover)
-                            .rounded_md(),
+                            .rounded(radius::WIDGET_MD),
                         );
                     } else {
-                        chip = chip.child(div().text_size(px(22.)).child("▤"));
+                        chip = chip.child(div().text_size(t::ATTACHMENT_GLYPH_SIZE).child("▤"));
                     }
                     chip.child(
                         div()
                             .v_flex()
-                            .gap_1()
-                            .child(div().text_sm().child(attachment.file_name.clone()))
+                            .gap(space::REM_XS)
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(text::WIDGET_SM_SIZE)
+                                    .child(attachment.file_name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(text::WIDGET_XS_SIZE)
                                     .text_color(p.muted)
                                     .child(attachment.size_label()),
                             ),
@@ -197,7 +212,7 @@ impl AppView {
             ));
         }
         if !message.media.is_empty() && message.attachments.is_empty() {
-            content = content.child(div().flex().flex_wrap().gap_2().children(
+            content = content.child(div().flex().flex_wrap().gap(space::REM_SM).children(
                 message.media.iter().map(|media| {
                     let name = media
                         .file_name
@@ -215,13 +230,13 @@ impl AppView {
                         .map(|size| format!(" · {:.1} KB", size as f64 / 1024.))
                         .unwrap_or_default();
                     div()
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .border_1()
+                        .px(space::REM_MD)
+                        .py(space::REM_SM)
+                        .rounded(radius::WIDGET_MD)
+                        .border(space::HAIRLINE)
                         .border_color(p.border)
                         .bg(p.card)
-                        .text_sm()
+                        .text_size(text::WIDGET_SM_SIZE)
                         .child(format!("▤ {name}{size}"))
                         .when_some(
                             media.url.clone().filter(|url| {
@@ -246,7 +261,12 @@ impl AppView {
             ));
         }
         if message.pending {
-            content = content.child(div().text_xs().text_color(p.muted).child("Sending…"));
+            content = content.child(
+                div()
+                    .text_size(text::WIDGET_XS_SIZE)
+                    .text_color(p.muted)
+                    .child("Sending…"),
+            );
         }
         if let Some(error) = &message.send_error {
             let retry = message.send_id.clone().unwrap_or_default();
@@ -254,8 +274,8 @@ impl AppView {
             content = content.child(
                 div()
                     .h_flex()
-                    .gap_2()
-                    .text_xs()
+                    .gap(space::REM_SM)
+                    .text_size(text::WIDGET_XS_SIZE)
                     .text_color(p.danger)
                     .child(div().flex_1().child(format!("Not sent · {error}")))
                     .child(
@@ -291,16 +311,16 @@ impl AppView {
                     .id(SharedString::from(format!("{key}:actions")))
                     .absolute()
                     .h_flex()
-                    .h(px(24.))
-                    .gap_1()
-                    .rounded_sm()
+                    .h(t::MESSAGE_ACTION_HEIGHT)
+                    .gap(space::REM_XS)
+                    .rounded(radius::WIDGET_SM)
                     .bg(p.bg)
                     .when(ends_group, |this| {
-                        this.bottom(px(-24.))
-                            .when(user, |this| this.right_0())
-                            .when(!user, |this| this.left_0())
+                        this.bottom(-t::MESSAGE_ACTION_HEIGHT)
+                            .when(user, |this| this.right(space::NONE))
+                            .when(!user, |this| this.left(space::NONE))
                     })
-                    .when(!ends_group, |this| this.top_0().right_0())
+                    .when(!ends_group, |this| this.top(space::NONE).right(space::NONE))
                     .opacity(0.)
                     .hover(|this| this.opacity(1.))
                     .group_hover(SharedString::from(key.clone()), |this| this.opacity(1.))
@@ -328,7 +348,7 @@ impl AppView {
                     .child(
                         div()
                             .id(SharedString::from(format!("{key}:timestamp")))
-                            .text_xs()
+                            .text_size(text::WIDGET_XS_SIZE)
                             .text_color(p.muted)
                             .child(timestamp)
                             .tooltip(move |window, cx| {
@@ -341,32 +361,47 @@ impl AppView {
             .w_full()
             .flex()
             .items_start()
-            .pl(px(4.))
-            .pr(px(if user { 16. } else { 62. }))
-            .gap(px(10.))
-            .pt(if group { px(28.) } else { px(2.) })
+            .pl(space::XS)
+            .pr(if user {
+                space::XXL
+            } else {
+                t::ASSISTANT_END_INSET
+            })
+            .gap(space::LG)
+            .pt(if group {
+                t::MESSAGE_GROUP_GAP
+            } else {
+                space::XXS
+            })
             .when(user, |this| this.justify_end())
             .when(!user, |this| {
-                this.child(div().w(px(36.)).flex_shrink_0().when(group, |this| {
-                    this.child(
-                        div()
-                            .size(px(36.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .border_1()
-                            .border_color(p.border)
-                            .bg(p.panel_strong)
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(p.strong)
-                            .child(self.selected_agent_avatar()),
-                    )
-                }))
+                this.child(
+                    div()
+                        .w(t::MESSAGE_AVATAR_SIZE)
+                        .flex_shrink_0()
+                        .when(group, |this| {
+                            this.child(
+                                div()
+                                    .size(t::MESSAGE_AVATAR_SIZE)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_full()
+                                    .border(space::HAIRLINE)
+                                    .border_color(p.border)
+                                    .bg(p.panel_strong)
+                                    .text_size(t::EDITOR_TEXT_SIZE)
+                                    .font_weight(weight::SEMIBOLD)
+                                    .text_color(p.strong)
+                                    .child(self.selected_agent_avatar()),
+                            )
+                        }),
+                )
             })
             .child(content)
-            .when(user, |this| this.child(div().w(px(36.)).flex_shrink_0()))
+            .when(user, |this| {
+                this.child(div().w(t::MESSAGE_AVATAR_SIZE).flex_shrink_0())
+            })
             .into_any_element()
     }
 }

@@ -1,6 +1,8 @@
 use super::{super::Palette, avatar};
 use gpui_kit::*;
 
+pub const TRANSPARENT: Hsla = hsla(0., 0., 0., 0.);
+
 pub fn navigation_hover(p: Palette) -> Hsla {
     p.hover.opacity(0.84)
 }
@@ -147,4 +149,14 @@ pub fn initials_background(hue: u16, owner: bool) -> Hsla {
 }
 pub fn initials_foreground() -> Hsla {
     rgb(0xffffff).into()
+}
+
+pub fn generated_face(seed: u32) -> [String; 3] {
+    let hues = [8, 32, 48, 82, 142, 174, 202, 232, 272, 322];
+    let hue = hues[seed as usize % hues.len()];
+    [
+        format!("hsl({hue},58%,62%)"),
+        format!("hsl({hue},65%,90%)"),
+        format!("hsl({hue},55%,18%)"),
+    ]
 }

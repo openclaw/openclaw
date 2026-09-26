@@ -42,6 +42,7 @@ export function isNativeWebChromeHost(): boolean {
 }
 
 export function nativePanelBridge(): NativePanelBridge | null {
+  // SAFETY: the native host adds this optional bridge; validate postMessage before use.
   const bridge = (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_PANEL__"];
   return typeof bridge?.postMessage === "function" ? bridge : null;
 }

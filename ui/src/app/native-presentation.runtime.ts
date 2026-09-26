@@ -51,7 +51,7 @@ export function startNativePresentation(context: {
       !failed &&
       (gateway.phase !== "connected" ||
         route.status === "idle" ||
-        route.status === "pending" ||
+        route.status === "loading" ||
         !match?.module ||
         match.status !== "success" ||
         match.isFetching === "loader" ||

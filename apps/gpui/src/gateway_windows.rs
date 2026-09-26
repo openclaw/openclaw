@@ -11,6 +11,7 @@ use crate::gateway::{
     config::{self, ConnectionConfig},
     profiles::{GatewayProfile, ProfileStore},
 };
+use crate::ui::theme::tokens::window as metrics;
 
 /// `OPENCLAW_GPUI_BACKGROUND=1` opens and reuses windows without activating the
 /// app, so UI automation (Peekaboo background input) never steals focus.
@@ -220,11 +221,11 @@ pub fn open(
     let runtime = cx.global::<GatewayWindows>().runtime.clone();
     let title = profile.as_ref().map_or("OpenClaw", |p| &p.name).to_owned();
     let id = profile.as_ref().map(|p| p.id.clone());
-    let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
+    let bounds = Bounds::centered(None, metrics::GATEWAY_SIZE, cx);
     match cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(px(720.), px(480.))),
+            window_min_size: Some(metrics::GATEWAY_MIN_SIZE),
             app_id: Some("org.openclaw.gpui".into()),
             focus: activates(),
             ..TitleBar::window_options()
@@ -266,11 +267,11 @@ pub fn manage(cx: &mut App) {
         }
         return;
     }
-    let bounds = Bounds::centered(None, size(px(880.), px(700.)), cx);
+    let bounds = Bounds::centered(None, metrics::MANAGER_SIZE, cx);
     match cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(px(780.), px(620.))),
+            window_min_size: Some(metrics::MANAGER_MIN_SIZE),
             focus: activates(),
             ..TitleBar::window_options()
         },

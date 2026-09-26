@@ -1,5 +1,6 @@
 use super::{AppView, theme::Palette};
 use crate::model::chat::{Message, now_ms};
+use crate::ui::theme::tokens::{conversation as t, radius, space, text, weight};
 use gpui_kit::{
     component::{
         Disableable, StyledExt,
@@ -22,21 +23,21 @@ impl AppView {
             return div()
                 .v_flex()
                 .flex_1()
-                .min_h_0()
+                .min_h(space::NONE)
                 .items_center()
                 .justify_center()
-                .gap_3()
-                .p_8()
+                .gap(space::REM_MD)
+                .p(space::REM_XXL)
                 .child(
                     div()
-                        .text_size(px(36.))
+                        .text_size(t::EMPTY_AVATAR_SIZE)
                         .text_color(p.accent)
                         .child(self.selected_agent_avatar()),
                 )
                 .child(
                     div()
-                        .text_size(px(24.))
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_size(t::EMPTY_TITLE_SIZE)
+                        .font_weight(weight::SEMIBOLD)
                         .text_color(p.strong)
                         .child(self.selected_agent_name()),
                 )
@@ -50,9 +51,9 @@ impl AppView {
                         div()
                             .v_flex()
                             .w_full()
-                            .max_w(px(420.))
-                            .mt_6()
-                            .gap_1()
+                            .max_w(t::RECENT_MAX_WIDTH)
+                            .mt(space::REM_XL)
+                            .gap(space::REM_XS)
                             .children(
                                 self.rows
                                     .iter()
@@ -79,11 +80,11 @@ impl AppView {
             .relative()
             .v_flex()
             .flex_1()
-            .min_h_0()
+            .min_h(space::NONE)
             .overflow_hidden()
             .when(self.chat.has_more, |this| {
                 this.child(
-                    div().flex().justify_center().py_1().child(
+                    div().flex().justify_center().py(space::REM_XS).child(
                         Button::new("earlier-messages")
                             .ghost()
                             .label(if self.chat.loading_older {
@@ -100,10 +101,10 @@ impl AppView {
                 this.child(
                     div()
                         .h_flex()
-                        .px_6()
-                        .py_2()
-                        .gap_3()
-                        .text_sm()
+                        .px(space::REM_XL)
+                        .py(space::REM_SM)
+                        .gap(space::REM_MD)
+                        .text_size(text::WIDGET_SM_SIZE)
                         .text_color(p.danger)
                         .child(
                             div()
@@ -129,17 +130,17 @@ impl AppView {
                 this.child(
                     div()
                         .absolute()
-                        .bottom_3()
-                        .left_0()
-                        .right_0()
+                        .bottom(space::REM_MD)
+                        .left(space::NONE)
+                        .right(space::NONE)
                         .flex()
                         .justify_center()
                         .child(
                             Button::new("jump-latest")
                                 .label("↓")
                                 .rounded_full()
-                                .w(px(36.))
-                                .h(px(36.))
+                                .w(t::JUMP_BUTTON_SIZE)
+                                .h(t::JUMP_BUTTON_SIZE)
                                 .bg(p.panel_strong)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.transcript_list.set_follow_mode(FollowMode::Tail);
@@ -187,14 +188,14 @@ impl AppView {
             };
             div()
                 .v_flex()
-                .gap_3()
+                .gap(space::REM_MD)
                 .child(self.render_message(index, &message, true, true, cx))
                 .child(
                     div()
                         .h_flex()
-                        .gap_2()
+                        .gap(space::REM_SM)
                         .text_color(p.muted)
-                        .text_xs()
+                        .text_size(text::WIDGET_XS_SIZE)
                         .child(Spinner::new().color(p.accent))
                         .child(format!(
                             "{phase} · {elapsed}s{}",
@@ -218,18 +219,18 @@ impl AppView {
             );
             div()
                 .v_flex()
-                .gap_2()
-                .p_3()
-                .rounded_md()
+                .gap(space::REM_SM)
+                .p(space::REM_MD)
+                .rounded(radius::WIDGET_MD)
                 .bg(p.card)
-                .border_1()
+                .border(space::HAIRLINE)
                 .border_color(if note.error { p.danger } else { p.border })
-                .text_sm()
+                .text_size(text::WIDGET_SM_SIZE)
                 .text_color(if note.error { p.danger } else { p.muted })
                 .child(
                     div()
                         .h_flex()
-                        .gap_2()
+                        .gap(space::REM_SM)
                         .child(div().flex_1().child(note.text))
                         .child(Button::new("copy-error").ghost().label("Copy").on_click(
                             move |_, _, cx| {
@@ -257,8 +258,8 @@ impl AppView {
                 .when(self.transcript_state.error_expanded, |this| {
                     this.child(
                         div()
-                            .text_xs()
-                            .font_family("monospace")
+                            .text_size(text::WIDGET_XS_SIZE)
+                            .font_family(t::CODE_FONT_FAMILY)
                             .child(details.unwrap_or_default()),
                     )
                 })
@@ -270,8 +271,8 @@ impl AppView {
             .w_full()
             .flex()
             .justify_center()
-            .px_6()
-            .child(div().w_full().max_w(px(768.)).child(content))
+            .px(space::REM_XL)
+            .child(div().w_full().max_w(t::MAX_WIDTH).child(content))
             .into_any_element()
     }
 }

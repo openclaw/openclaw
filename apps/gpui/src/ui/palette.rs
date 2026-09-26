@@ -1,3 +1,4 @@
+use super::theme::tokens::{radius, shell, space, text};
 use super::{AppView, theme::Palette};
 use crate::gateway::sessions_rpc::{self as rpc, SearchParams, SearchResults, SearchScope};
 use crate::model::{
@@ -265,13 +266,13 @@ impl AppView {
                     let p = Palette::get(cx);
                     div()
                         .v_flex()
-                        .py_1()
-                        .gap_1()
+                        .py(space::REM_XS)
+                        .gap(space::REM_XS)
                         .w_full()
                         .min_w_0()
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(text::NAV.size)
                                 .text_color(p.strong)
                                 .truncate()
                                 .child(entry.title.clone()),
@@ -279,7 +280,7 @@ impl AppView {
                         .when_some(entry.snippet.clone(), |el, snippet| {
                             el.child(
                                 div()
-                                    .text_xs()
+                                    .text_size(text::WIDGET_XS_SIZE)
                                     .text_color(p.muted)
                                     .truncate()
                                     .child(snippet),
@@ -293,8 +294,8 @@ impl AppView {
             .inset_0()
             .flex()
             .justify_center()
-            .pt(px(88.))
-            .bg(p.bg.opacity(0.72))
+            .pt(shell::PALETTE_TOP)
+            .bg(p.bg.opacity(shell::OVERLAY_OPACITY))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| this.close_palette(window, cx)),
@@ -302,12 +303,12 @@ impl AppView {
             .child(
                 div()
                     .id("search-palette")
-                    .w(px(580.))
-                    .max_w(relative(0.9))
-                    .h(px(410.))
+                    .w(shell::PALETTE_WIDTH)
+                    .max_w(relative(shell::PALETTE_WIDTH_RATIO))
+                    .h(shell::PALETTE_HEIGHT)
                     .bg(p.popover)
-                    .rounded_xl()
-                    .border_1()
+                    .rounded(radius::WIDGET_XL)
+                    .border(space::HAIRLINE)
                     .border_color(p.border_strong)
                     .shadow_lg()
                     .overflow_hidden()
@@ -316,7 +317,7 @@ impl AppView {
                         Command::new(&self.sidebar_state.command_state)
                             .placeholder("Search conversations, pages, and agents…")
                             .filterable(false)
-                            .max_h(px(350.))
+                            .max_h(shell::PALETTE_RESULTS_MAX_HEIGHT)
                             .items(items)
                             .on_query(move |_, _, cx| {
                                 let _ = query_view.update(cx, |this, cx| this.search_sessions(cx));
@@ -333,9 +334,9 @@ impl AppView {
                     )
                     .child(
                         div()
-                            .px_4()
-                            .py_2()
-                            .text_xs()
+                            .px(space::REM_LG)
+                            .py(space::REM_SM)
+                            .text_size(text::WIDGET_XS_SIZE)
                             .text_color(if self.sidebar_state.search_error.is_some() {
                                 p.danger
                             } else {

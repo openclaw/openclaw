@@ -1,5 +1,6 @@
 use super::{AppView, theme::Palette};
 use crate::model::{commands::matching, composer::context_usage};
+use crate::ui::theme::tokens::{conversation as t, icon, radius, space, text, weight};
 use gpui_kit::{
     assets::IconName,
     component::{
@@ -44,9 +45,9 @@ impl AppView {
             .v_flex()
             .flex_shrink_0()
             .items_center()
-            .px_6()
-            .pt_3()
-            .pb_3()
+            .px(space::REM_XL)
+            .pt(space::REM_MD)
+            .pb(space::REM_MD)
             .capture_key_down(cx.listener(Self::composer_key_down))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                 this.attach_paths(paths.paths().to_vec(), cx)
@@ -56,21 +57,21 @@ impl AppView {
                     .relative()
                     .v_flex()
                     .w_full()
-                    .max_w(px(768.))
-                    .gap_2()
+                    .max_w(t::MAX_WIDTH)
+                    .gap(space::REM_SM)
                     .children(self.slash_popup(cx))
                     .child(
                         div()
                             .v_flex()
-                            .px(px(14.))
-                            .py(px(10.))
-                            .min_h(px(112.))
+                            .px(t::COMPOSER_INSET)
+                            .py(space::LG)
+                            .min_h(t::COMPOSER_MIN_HEIGHT)
                             .justify_between()
-                            .gap_2()
+                            .gap(space::REM_SM)
                             .bg(p.card)
-                            .border_1()
+                            .border(space::HAIRLINE)
                             .border_color(p.border_strong)
-                            .rounded(px(20.))
+                            .rounded(t::COMPOSER_RADIUS)
                             .children(self.attachment_rail(cx))
                             .child(
                                 Textarea::new(&self.composer)
@@ -79,7 +80,7 @@ impl AppView {
                                     .appearance(false)
                                     .bordered(false)
                                     .disabled(disabled)
-                                    .text_size(px(16.))
+                                    .text_size(t::EDITOR_TEXT_SIZE)
                                     .on_paste(move |item, _, cx| {
                                         paste_target
                                             .update(cx, |this, cx| this.composer_paste(item, cx))
@@ -87,12 +88,15 @@ impl AppView {
                                     }),
                             )
                             .children(self.composer_state.error.as_ref().map(|error| {
-                                div().text_xs().text_color(p.danger).child(error.clone())
+                                div()
+                                    .text_size(text::WIDGET_XS_SIZE)
+                                    .text_color(p.danger)
+                                    .child(error.clone())
                             }))
                             .when(self.composer_state.reading > 0, |this| {
                                 this.child(
                                     div()
-                                        .text_xs()
+                                        .text_size(text::WIDGET_XS_SIZE)
                                         .text_color(p.muted)
                                         .child("Preparing attachments…"),
                                 )
@@ -103,12 +107,12 @@ impl AppView {
                                     .flex_wrap()
                                     .justify_between()
                                     .items_center()
-                                    .gap_2()
+                                    .gap(space::REM_SM)
                                     .child(
                                         div()
                                             .h_flex()
                                             .items_center()
-                                            .gap(px(6.))
+                                            .gap(space::SM)
                                             .child(self.composer_plus_control(cx))
                                             .child(self.permission_control(cx)),
                                     )
@@ -116,11 +120,11 @@ impl AppView {
                                         div()
                                             .h_flex()
                                             .flex_1()
-                                            .min_w_0()
+                                            .min_w(space::NONE)
                                             .flex_wrap()
                                             .justify_end()
                                             .items_center()
-                                            .gap_1()
+                                            .gap(space::REM_XS)
                                             .children(self.usage_control(cx))
                                             .children(self.model_controls.target.as_ref().map(
                                                 |target| {
@@ -131,11 +135,11 @@ impl AppView {
                                                 this.child(
                                                     Button::new("stop-run")
                                                         .small()
-                                                        .w(px(32.))
-                                                        .h(px(32.))
+                                                        .w(t::COMPOSER_BUTTON_SIZE)
+                                                        .h(t::COMPOSER_BUTTON_SIZE)
                                                         .icon(
                                                             Icon::new(IconName::Square)
-                                                                .size(px(14.)),
+                                                                .size(icon::ACTION),
                                                         )
                                                         .tooltip("Stop · Escape")
                                                         .on_click(cx.listener(|this, _, _, cx| {
@@ -147,11 +151,12 @@ impl AppView {
                                                 Button::new("send-message")
                                                     .primary()
                                                     .small()
-                                                    .w(px(32.))
+                                                    .w(t::COMPOSER_BUTTON_SIZE)
                                                     .rounded_full()
-                                                    .h(px(32.))
+                                                    .h(t::COMPOSER_BUTTON_SIZE)
                                                     .icon(
-                                                        Icon::new(IconName::ArrowUp).size(px(16.)),
+                                                        Icon::new(IconName::ArrowUp)
+                                                            .size(icon::NORMAL),
                                                     )
                                                     .tooltip(if steer {
                                                         "Steer current run"
@@ -178,47 +183,52 @@ impl AppView {
             div()
                 .id("attachment-rail")
                 .h_flex()
-                .gap_2()
+                .gap(space::REM_SM)
                 .overflow_x_scroll()
-                .pb_1()
+                .pb(space::REM_XS)
                 .children(self.composer_state.attachments.iter().map(|attachment| {
                     let id = attachment.id.clone();
                     let mut chip = div()
                         .h_flex()
                         .items_center()
-                        .gap_2()
-                        .h(px(56.))
+                        .gap(space::REM_SM)
+                        .h(t::ATTACHMENT_SIZE)
                         .flex_shrink_0()
-                        .pl_2()
-                        .pr_1()
-                        .rounded_md()
-                        .border_1()
+                        .pl(space::REM_SM)
+                        .pr(space::REM_XS)
+                        .rounded(radius::WIDGET_MD)
+                        .border(space::HAIRLINE)
                         .border_color(p.border)
                         .bg(p.elevated);
                     if let Some(image) = self.composer_state.previews.get(&id) {
                         chip = chip.child(
                             img(image.clone())
-                                .size(px(48.))
+                                .size(t::COMPOSER_ATTACHMENT_PREVIEW)
                                 .object_fit(ObjectFit::Cover)
-                                .rounded_sm(),
+                                .rounded(radius::WIDGET_SM),
                         );
                     } else {
-                        chip = chip.child(div().text_lg().text_color(p.muted).child("▤"));
+                        chip = chip.child(
+                            div()
+                                .text_size(text::WIDGET_LG_SIZE)
+                                .text_color(p.muted)
+                                .child("▤"),
+                        );
                     }
                     chip.child(
                         div()
                             .v_flex()
-                            .max_w(px(160.))
-                            .gap_1()
+                            .max_w(t::ATTACHMENT_LABEL_MAX_WIDTH)
+                            .gap(space::REM_XS)
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(text::WIDGET_SM_SIZE)
                                     .truncate()
                                     .child(attachment.file_name.clone()),
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(text::WIDGET_XS_SIZE)
                                     .text_color(p.muted)
                                     .child(attachment.size_label()),
                             ),
@@ -258,24 +268,24 @@ impl AppView {
                 .id("slash-commands")
                 .absolute()
                 .bottom_full()
-                .mb_2()
+                .mb(space::REM_SM)
                 .w_full()
-                .max_h(px(320.))
+                .max_h(t::SLASH_MENU_MAX_HEIGHT)
                 .overflow_y_scroll()
                 .v_flex()
-                .p_2()
-                .gap_1()
-                .rounded_lg()
+                .p(space::REM_SM)
+                .gap(space::REM_XS)
+                .rounded(radius::WIDGET_LG)
                 .bg(p.elevated)
-                .border_1()
+                .border(space::HAIRLINE)
                 .border_color(p.border_strong)
                 .shadow_lg()
                 .occlude()
                 .child(
                     div()
-                        .px_2()
-                        .pb_1()
-                        .text_xs()
+                        .px(space::REM_SM)
+                        .pb(space::REM_XS)
+                        .text_size(text::WIDGET_XS_SIZE)
                         .text_color(p.muted)
                         .child("Commands · ↑↓ to choose · Tab to complete"),
                 )
@@ -301,39 +311,39 @@ impl AppView {
                             .id(("slash-command", index))
                             .h_flex()
                             .items_start()
-                            .gap_3()
-                            .h(px(44.))
-                            .line_height(px(16.))
+                            .gap(space::REM_MD)
+                            .h(t::SLASH_ROW_HEIGHT)
+                            .line_height(t::SLASH_LINE_HEIGHT)
                             .flex_shrink_0()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
+                            .px(space::REM_SM)
+                            .py(space::REM_XS)
+                            .rounded(radius::WIDGET_MD)
                             .when(index == selected, |row| row.bg(p.hover))
                             .hover(|row| row.bg(p.hover))
                             .child(
                                 div()
                                     .v_flex()
                                     .flex_1()
-                                    .min_w_0()
-                                    .gap_1()
+                                    .min_w(space::NONE)
+                                    .gap(space::REM_XS)
                                     .child(
                                         div()
                                             .h_flex()
                                             .items_center()
-                                            .min_w_0()
-                                            .gap_2()
+                                            .min_w(space::NONE)
+                                            .gap(space::REM_SM)
                                             .child(
                                                 div()
-                                                    .text_sm()
+                                                    .text_size(text::WIDGET_SM_SIZE)
                                                     .truncate()
-                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .font_weight(weight::MEDIUM)
                                                     .text_color(p.strong)
                                                     .child(format!("/{}", command.name)),
                                             )
                                             .child(
                                                 div()
-                                                    .text_xs()
-                                                    .min_w_0()
+                                                    .text_size(text::WIDGET_XS_SIZE)
+                                                    .min_w(space::NONE)
                                                     .truncate()
                                                     .text_color(p.muted)
                                                     .child(hint),
@@ -341,7 +351,7 @@ impl AppView {
                                     )
                                     .child(
                                         div()
-                                            .text_xs()
+                                            .text_size(text::WIDGET_XS_SIZE)
                                             .truncate()
                                             .text_color(p.muted)
                                             .child(command.description.clone()),
@@ -349,7 +359,7 @@ impl AppView {
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(text::WIDGET_XS_SIZE)
                                     .flex_shrink_0()
                                     .text_color(p.muted)
                                     .child(command.category.clone()),
@@ -420,7 +430,12 @@ impl AppView {
                         .text_color(if warning { p.danger } else { p.muted })
                         .tooltip(tooltip_detail.clone()),
                 )
-                .child(div().text_sm().w(px(240.)).child(detail))
+                .child(
+                    div()
+                        .text_size(text::WIDGET_SM_SIZE)
+                        .w(t::USAGE_PANEL_WIDTH)
+                        .child(detail),
+                )
                 .into_any_element(),
         )
     }
@@ -435,14 +450,14 @@ fn usage_ring(ratio: f32, track: Hsla, fill: Hsla) -> impl IntoElement {
                 if fraction <= 0. {
                     continue;
                 }
-                let mut path = PathBuilder::stroke(px(2.));
+                let mut path = PathBuilder::stroke(space::XXS);
                 let steps = (fraction * 64.).ceil() as usize;
                 for index in 0..=steps {
                     let angle = -std::f32::consts::FRAC_PI_2
                         + std::f32::consts::TAU * fraction * index as f32 / steps as f32;
                     let point = point(
-                        center.x + px(angle.cos() * 7.),
-                        center.y + px(angle.sin() * 7.),
+                        center.x + t::USAGE_RING_RADIUS * angle.cos(),
+                        center.y + t::USAGE_RING_RADIUS * angle.sin(),
                     );
                     if index == 0 {
                         path.move_to(point);
@@ -456,5 +471,5 @@ fn usage_ring(ratio: f32, track: Hsla, fill: Hsla) -> impl IntoElement {
             }
         },
     )
-    .size(px(18.))
+    .size(icon::FOOTER)
 }

@@ -1,8 +1,10 @@
+use super::theme::tokens::{conversation, icon, radius, shell, space, text, weight};
 use super::{AppView, theme::Palette};
 use crate::{
     gateway::attention_rpc::{QuestionResolution, QuestionResolutionResult, resolve_approval},
     model::{
         approvals::{Approval, ApprovalDecision},
+        chat::now_ms,
         questions::{QuestionAnswers, QuestionRecord},
     },
 };
@@ -16,14 +18,7 @@ use gpui_kit::{
     prelude::FluentBuilder,
     *,
 };
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-pub(super) fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
+use std::time::Duration;
 
 impl AppView {
     pub(super) fn update_attention_badges(&mut self) {
@@ -116,16 +111,17 @@ impl AppView {
         self.start_attention_ticker(cx);
         let mut dock = div()
             .id("attention-dock-scroll")
-            .max_h(px(
-                (f32::from(window.viewport_size().height) * 0.45).clamp(180., 360.)
-            ))
+            .max_h(
+                (window.viewport_size().height * shell::ATTENTION_HEIGHT_RATIO)
+                    .clamp(shell::ATTENTION_MIN_HEIGHT, shell::ATTENTION_MAX_HEIGHT),
+            )
             .overflow_y_scroll()
             .v_flex()
             .w_full()
-            .max_w(px(768.))
-            .gap_2()
-            .px_4()
-            .pb_2();
+            .max_w(conversation::MAX_WIDTH)
+            .gap(space::REM_SM)
+            .px(space::REM_LG)
+            .pb(space::REM_SM);
         if let Some(approval) = approval {
             dock = dock.child(self.approval_card(approval, cx));
         }
@@ -240,20 +236,20 @@ impl AppView {
         let busy = self.attention_state.busy.contains_key(&record.id);
         let mut card = div()
             .v_flex()
-            .gap_3()
-            .p_4()
+            .gap(space::REM_MD)
+            .p(space::REM_LG)
             .bg(p.card)
-            .border_1()
+            .border(space::HAIRLINE)
             .border_color(p.accent_subtle)
-            .rounded_lg()
+            .rounded(radius::WIDGET_LG)
             .child(
                 div()
                     .h_flex()
                     .justify_between()
-                    .gap_2()
+                    .gap(space::REM_SM)
                     .child(
                         div()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .font_weight(weight::SEMIBOLD)
                             .text_color(p.strong)
                             .child(format!(
                                 "◇  {}",
@@ -264,15 +260,16 @@ impl AppView {
                                 }
                             )),
                     )
-                    .child(div().text_xs().text_color(p.muted).child(format!(
-                        "{} of {}",
-                        page + 1,
-                        record.questions.len()
-                    ))),
+                    .child(
+                        div()
+                            .text_size(text::WIDGET_XS_SIZE)
+                            .text_color(p.muted)
+                            .child(format!("{} of {}", page + 1, record.questions.len())),
+                    ),
             )
             .child(
                 div()
-                    .text_sm()
+                    .text_size(text::WIDGET_SM_SIZE)
                     .text_color(p.text)
                     .child(question.question.clone()),
             );
@@ -290,7 +287,7 @@ impl AppView {
             let q = question.clone();
             let label = option.label.clone();
             let chosen = selected.contains(&label);
-            card = card.child(div().v_flex().gap_1().child(
+            card = card.child(div().v_flex().gap(space::REM_XS).child(
                 question_option_button(index, option, q.multi_select, chosen, busy, p).on_click(
                     cx.listener(move |this, _, window, cx| {
                         let draft = this.attention_state.drafts.entry(id.clone()).or_default();
@@ -319,7 +316,12 @@ impl AppView {
             );
         }
         if let Some(error) = self.attention_state.errors.get(&record.id) {
-            card = card.child(div().text_xs().text_color(p.danger).child(error.clone()));
+            card = card.child(
+                div()
+                    .text_size(text::WIDGET_XS_SIZE)
+                    .text_color(p.danger)
+                    .child(error.clone()),
+            );
         }
         let previous_id = record.id.clone();
         let next_id = record.id.clone();
@@ -329,11 +331,11 @@ impl AppView {
             div()
                 .h_flex()
                 .justify_between()
-                .gap_2()
+                .gap(space::REM_SM)
                 .child(
                     div()
                         .h_flex()
-                        .gap_2()
+                        .gap(space::REM_SM)
                         .child(
                             Button::new("question-back")
                                 .ghost()
@@ -468,35 +470,40 @@ impl AppView {
         let busy = self.attention_state.busy.contains_key(&approval.id);
         let mut card = div()
             .v_flex()
-            .gap_3()
-            .p_4()
-            .rounded_lg()
+            .gap(space::REM_MD)
+            .p(space::REM_LG)
+            .rounded(radius::WIDGET_LG)
             .bg(p.card)
-            .border_1()
+            .border(space::HAIRLINE)
             .border_color(p.accent)
             .child(
                 div()
                     .h_flex()
                     .justify_between()
-                    .gap_2()
+                    .gap(space::REM_SM)
                     .child(
                         div()
                             .text_color(p.strong)
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .font_weight(weight::SEMIBOLD)
                             .child(format!("◇  {}", approval.title())),
                     )
-                    .child(div().text_xs().text_color(p.muted).child(format!(
-                            "Expires in {}s",
-                            approval
-                                .expires_at_ms
-                                .saturating_sub(now_ms())
-                                .div_ceil(1000)
-                        ))),
+                    .child(
+                        div()
+                            .text_size(text::WIDGET_XS_SIZE)
+                            .text_color(p.muted)
+                            .child(format!(
+                                "Expires in {}s",
+                                approval
+                                    .expires_at_ms
+                                    .saturating_sub(now_ms())
+                                    .div_ceil(1000)
+                            )),
+                    ),
             )
             .when(!approval.presentation.description.is_empty(), |card| {
                 card.child(
                     div()
-                        .text_sm()
+                        .text_size(text::WIDGET_SM_SIZE)
                         .child(approval.presentation.description.clone()),
                 )
             })
@@ -504,18 +511,23 @@ impl AppView {
                 card.child(
                     div()
                         .id("approval-preview")
-                        .max_h(px(100.))
+                        .max_h(shell::APPROVAL_DETAIL_MAX_HEIGHT)
                         .overflow_y_scroll()
-                        .p_2()
-                        .rounded_md()
+                        .p(space::REM_SM)
+                        .rounded(radius::WIDGET_MD)
                         .bg(p.elevated)
-                        .font_family("monospace")
-                        .text_xs()
+                        .font_family(conversation::CODE_FONT_FAMILY)
+                        .text_size(text::WIDGET_XS_SIZE)
                         .child(approval.preview().to_owned()),
                 )
             });
         if let Some(error) = self.attention_state.errors.get(&approval.id) {
-            card = card.child(div().text_xs().text_color(p.danger).child(error.clone()));
+            card = card.child(
+                div()
+                    .text_size(text::WIDGET_XS_SIZE)
+                    .text_color(p.danger)
+                    .child(error.clone()),
+            );
         }
         let buttons = approval
             .presentation
@@ -537,8 +549,14 @@ impl AppView {
                     )
             })
             .collect::<Vec<_>>();
-        card.child(div().h_flex().justify_end().gap_2().children(buttons))
-            .into_any_element()
+        card.child(
+            div()
+                .h_flex()
+                .justify_end()
+                .gap(space::REM_SM)
+                .children(buttons),
+        )
+        .into_any_element()
     }
 
     fn submit_approval(&mut self, id: &str, decision: ApprovalDecision, cx: &mut Context<Self>) {
@@ -595,13 +613,13 @@ fn question_option_button(
     Button::new(("question-option", index))
         .w_full()
         .h_auto()
-        .min_h(px(44.))
-        .px_3()
-        .py_2()
+        .min_h(shell::QUESTION_OPTION_MIN_HEIGHT)
+        .px(space::REM_MD)
+        .py(space::REM_SM)
         .justify_start()
         .bg(if chosen { p.accent_subtle } else { p.card })
         .border_color(if chosen {
-            p.accent.opacity(0.4)
+            p.accent.opacity(shell::QUESTION_SELECTED_BORDER_OPACITY)
         } else {
             p.border
         })
@@ -619,11 +637,11 @@ fn question_option_button(
                 .h_flex()
                 .w_full()
                 .items_start()
-                .gap_2()
+                .gap(space::REM_SM)
                 .child(
                     Icon::new(icon)
-                        .size(px(16.))
-                        .mt(px(2.))
+                        .size(icon::NORMAL)
+                        .mt(space::XXS)
                         .text_color(if chosen { p.accent } else { p.muted }),
                 )
                 .child(
@@ -633,19 +651,19 @@ fn question_option_button(
                         .min_w_0()
                         .text_left()
                         .whitespace_normal()
-                        .gap_1()
+                        .gap(space::REM_XS)
                         .child(
                             div()
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::MEDIUM)
+                                .text_size(text::NAV.size)
+                                .font_weight(weight::MEDIUM)
                                 .text_color(p.strong)
                                 .child(option.label.clone()),
                         )
                         .when_some(option.description.clone(), |copy, description| {
                             copy.child(
                                 div()
-                                    .text_size(px(12.))
-                                    .line_height(px(17.))
+                                    .text_size(text::SMALL.size)
+                                    .line_height(shell::QUESTION_DESCRIPTION_LINE_HEIGHT)
                                     .text_color(p.muted)
                                     .child(description),
                             )

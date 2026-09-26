@@ -1,10 +1,9 @@
 //! Native presentation state mirrors the Control UI sidebar layout owner.
+use crate::ui::theme::tokens::dock::{
+    BROWSER_SPLIT_MIN_WIDTH, CHROME_RESERVE, DEFAULT_WIDTH, DIVIDER_WIDTH, MAX_VIEWPORT_FRACTION,
+    MAX_WIDTH, MIN_WIDTH,
+};
 use serde::Deserialize;
-
-pub const MIN_WIDTH: f32 = 260.;
-pub const MAX_WIDTH: f32 = 1200.;
-pub const DEFAULT_WIDTH: f32 = 480.;
-pub const DIVIDER_WIDTH: f32 = 6.;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum LinkTarget {
@@ -259,10 +258,13 @@ impl DockLayout {
         if !available.is_finite() || available <= 0. {
             return Some(self.width);
         }
-        let budget = available - 312. - DIVIDER_WIDTH;
+        let budget = available - CHROME_RESERVE - DIVIDER_WIDTH;
         (budget >= MIN_WIDTH).then(|| {
             self.width
-                .min(((f64::from(available) * 0.6) as f32).clamp(MIN_WIDTH, MAX_WIDTH))
+                .min(
+                    ((f64::from(available) * MAX_VIEWPORT_FRACTION) as f32)
+                        .clamp(MIN_WIDTH, MAX_WIDTH),
+                )
                 .min(budget)
         })
     }
@@ -273,7 +275,7 @@ impl DockLayout {
             && !self.expanded
             && self.active == Some(PanelSlot::Browser)
             && available.is_finite()
-            && available >= 680.
+            && available >= BROWSER_SPLIT_MIN_WIDTH
             && chat_width.is_finite()
             && chat_width > 0.
         {

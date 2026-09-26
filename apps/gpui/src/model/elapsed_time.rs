@@ -4,11 +4,24 @@ pub enum ElapsedFormat {
     Compact,
     MinuteCompact,
     SingleUnit,
+    Run,
 }
 
 pub fn format_elapsed(ms: u64, format: ElapsedFormat) -> String {
     let ms = u128::from(ms);
     let (rounded, count) = match format {
+        ElapsedFormat::Run => {
+            let seconds = ms / 1_000;
+            return if seconds >= 3_600 {
+                format!("{}h {}m", seconds / 3_600, seconds % 3_600 / 60)
+            } else if seconds >= 60 {
+                format!("{}m {}s", seconds / 60, seconds % 60)
+            } else if ms >= 1_000 {
+                format!("{seconds}s")
+            } else {
+                format!("{ms}ms")
+            };
+        }
         ElapsedFormat::MinuteCompact => (ms.max(60_000) / 60_000 * 60_000, 2),
         ElapsedFormat::Compact => (round_to(ms.max(1_000), 1_000), 2),
         ElapsedFormat::SingleUnit => {
@@ -62,6 +75,10 @@ mod tests {
             (59_500, ElapsedFormat::SingleUnit, "1m"),
             (0, ElapsedFormat::Compact, "1s"),
             (0, ElapsedFormat::MinuteCompact, "1m"),
+            (0, ElapsedFormat::Run, "0ms"),
+            (59_999, ElapsedFormat::Run, "59s"),
+            (60_000, ElapsedFormat::Run, "1m 0s"),
+            (86_400_000, ElapsedFormat::Run, "24h 0m"),
         ] {
             assert_eq!(format_elapsed(ms, format), expected);
         }

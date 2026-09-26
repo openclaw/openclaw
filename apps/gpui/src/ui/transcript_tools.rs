@@ -1,5 +1,6 @@
 use super::{AppView, theme::Palette, transcript_state::fenced_code};
 use crate::model::tools::{ToolCall, tools_elapsed_ms};
+use crate::ui::theme::tokens::{conversation as t, radius, space, text, weight};
 use gpui_kit::{
     component::{
         Sizable, StyledExt,
@@ -26,7 +27,7 @@ impl AppView {
             !streaming && tools.len() > 1 && !self.transcript_state.expanded.contains(&key);
         let duration = tools_elapsed_ms(tools);
         let toggle = key.clone();
-        let mut group = div().v_flex().gap_2();
+        let mut group = div().v_flex().gap(space::REM_SM);
         if !streaming && tools.len() > 1 {
             group = group.child(
                 Button::new(SharedString::from(key.clone()))
@@ -69,19 +70,21 @@ impl AppView {
                 let mut card = div()
                     .v_flex()
                     .w_full()
-                    .rounded_md()
+                    .rounded(radius::WIDGET_MD)
                     .when(expanded, |card| {
-                        card.bg(p.card).border_1().border_color(p.border)
+                        card.bg(p.card)
+                            .border(space::HAIRLINE)
+                            .border_color(p.border)
                     })
                     .overflow_hidden()
                     .child(
                         div()
                             .id(SharedString::from(key.clone()))
                             .h_flex()
-                            .px(px(4.))
-                            .min_h(px(30.))
-                            .py(px(4.))
-                            .gap_2()
+                            .px(space::XS)
+                            .min_h(t::TOOL_ROW_MIN_HEIGHT)
+                            .py(space::XS)
+                            .gap(space::REM_SM)
                             .hover(|this| this.bg(p.hover))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if !this.transcript_state.expanded.remove(&toggle) {
@@ -124,21 +127,27 @@ impl AppView {
                             .child(
                                 div()
                                     .flex_1()
-                                    .min_w_0()
+                                    .min_w(space::NONE)
                                     .truncate()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_size(text::WIDGET_SM_SIZE)
+                                    .font_weight(weight::MEDIUM)
                                     .text_color(p.strong)
                                     .child(tool.summary()),
                             )
                             .child(
-                                div().text_xs().text_color(p.muted).child(
-                                    tool.duration_ms()
-                                        .map(|duration| {
-                                            format!("{status} · {:.1}s", duration as f64 / 1000.)
-                                        })
-                                        .unwrap_or_else(|| status.into()),
-                                ),
+                                div()
+                                    .text_size(text::WIDGET_XS_SIZE)
+                                    .text_color(p.muted)
+                                    .child(
+                                        tool.duration_ms()
+                                            .map(|duration| {
+                                                format!(
+                                                    "{status} · {:.1}s",
+                                                    duration as f64 / 1000.
+                                                )
+                                            })
+                                            .unwrap_or_else(|| status.into()),
+                                    ),
                             ),
                     );
                 if expanded {
@@ -151,18 +160,28 @@ impl AppView {
                     card = card.child(
                         div()
                             .v_flex()
-                            .p_3()
-                            .gap_2()
-                            .border_t_1()
+                            .p(space::REM_MD)
+                            .gap(space::REM_SM)
+                            .border_t(space::HAIRLINE)
                             .border_color(p.border)
-                            .child(div().text_xs().text_color(p.muted).child("Arguments"))
+                            .child(
+                                div()
+                                    .text_size(text::WIDGET_XS_SIZE)
+                                    .text_color(p.muted)
+                                    .child("Arguments"),
+                            )
                             .child(TextView::new(&args).selectable(true).scrollable(false))
                             .when(!tool.output.is_empty(), |this| {
                                 this.child(
                                     div()
                                         .h_flex()
                                         .justify_between()
-                                        .child(div().text_xs().text_color(p.muted).child("Result"))
+                                        .child(
+                                            div()
+                                                .text_size(text::WIDGET_XS_SIZE)
+                                                .text_color(p.muted)
+                                                .child("Result"),
+                                        )
                                         .child(
                                             Button::new(SharedString::from(format!("{key}:copy")))
                                                 .ghost()

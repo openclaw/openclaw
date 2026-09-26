@@ -1,3 +1,4 @@
+use super::theme::tokens::{radius, shell, space, text};
 use gpui_kit::{
     component::{
         Sizable, StyledExt,
@@ -345,8 +346,8 @@ impl Render for AgentBrowser {
             let close = id.clone();
             div()
                 .h_flex()
-                .gap_1()
-                .rounded_md()
+                .gap(space::REM_XS)
+                .rounded(radius::WIDGET_MD)
                 .when(selected, |d| d.bg(p.hover))
                 .child(
                     Button::new(("agent-tab", index))
@@ -377,8 +378,8 @@ impl Render for AgentBrowser {
                 .w_full()
                 .min_w_0()
                 .flex_wrap()
-                .gap_1()
-                .p_1()
+                .gap(space::REM_XS)
+                .p(space::REM_XS)
                 .children(tabs)
                 .child(
                     Button::new("agent-new-tab")
@@ -394,9 +395,9 @@ impl Render for AgentBrowser {
             root.child(
                 div()
                     .h_flex()
-                    .gap_1()
-                    .px_2()
-                    .pb_2()
+                    .gap(space::REM_XS)
+                    .px(space::REM_SM)
+                    .pb(space::REM_SM)
                     .child(
                         Button::new("agent-back")
                             .label("←")
@@ -443,15 +444,15 @@ impl Render for AgentBrowser {
         if let Some(error) = &self.error {
             root = root.child(
                 div()
-                    .p_3()
-                    .text_sm()
+                    .p(space::REM_MD)
+                    .text_size(text::WIDGET_SM_SIZE)
                     .text_color(p.danger)
                     .child(error.clone()),
             );
         }
         if !self.running && self.error.is_none() {
             root = root.child(
-                div().p_3().child(
+                div().p(space::REM_MD).child(
                     Button::new("agent-start")
                         .label("Start agent browser")
                         .small()
@@ -486,7 +487,10 @@ impl Render for AgentBrowser {
                 }
                 let (x, y) = match event.delta {
                     ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y)),
-                    ScrollDelta::Lines(delta) => (delta.x * 24., delta.y * 24.),
+                    ScrollDelta::Lines(delta) => (
+                        delta.x * shell::BROWSER_SCROLL_LINE_PIXELS,
+                        delta.y * shell::BROWSER_SCROLL_LINE_PIXELS,
+                    ),
                 };
                 this.send(BrowserCommand::Scroll { x: -x, y: -y }, cx);
                 cx.stop_propagation();
@@ -510,8 +514,8 @@ impl Render for AgentBrowser {
         } else if self.running && self.error.is_none() {
             stage = stage.child(
                 div()
-                    .p_3()
-                    .text_sm()
+                    .p(space::REM_MD)
+                    .text_size(text::WIDGET_SM_SIZE)
                     .text_color(p.muted)
                     .child("Connecting to agent browser…"),
             );
@@ -520,9 +524,9 @@ impl Render for AgentBrowser {
             .when_some(self.metadata.as_ref(), |root, metadata| {
                 root.child(
                     div()
-                        .px_2()
-                        .py_1()
-                        .text_xs()
+                        .px(space::REM_SM)
+                        .py(space::REM_XS)
+                        .text_size(text::WIDGET_XS_SIZE)
                         .text_color(p.muted)
                         .overflow_hidden()
                         .child(metadata.url.clone()),

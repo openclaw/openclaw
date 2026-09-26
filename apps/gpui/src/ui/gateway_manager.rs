@@ -1,4 +1,5 @@
 use super::theme::Palette;
+use super::theme::tokens::{radius, shell, space, text, weight};
 use crate::gateway::{
     identity::Identity,
     profiles::{GatewayKind, GatewayProfile, ProfileCredentials, ProfileStore},
@@ -329,49 +330,54 @@ impl Render for GatewayManager {
         let field = |label: &'static str, state: &Entity<InputState>| {
             div()
                 .v_flex()
-                .gap_2()
-                .child(div().text_sm().text_color(p.muted).child(label))
+                .gap(space::REM_SM)
+                .child(
+                    div()
+                        .text_size(text::WIDGET_SM_SIZE)
+                        .text_color(p.muted)
+                        .child(label),
+                )
                 .child(Input::new(state).aria_label(label).disabled(self.busy))
         };
         div().size_full().v_flex().track_focus(&self.focus).bg(p.bg).text_color(p.text)
             .on_action(cx.listener(|_, _: &crate::CloseWindow, window, _| window.remove_window()))
             .child(TitleBar::new().child("Manage Gateways"))
             .child(div().flex().flex_1().min_h_0()
-                .child(div().id("gateway-list").v_flex().w(px(310.)).flex_shrink_0().bg(p.sidebar).border_r_1().border_color(p.border).p_4().gap_3().overflow_y_scroll()
-                    .child(div().h_flex().justify_between().items_center().child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child("Your Gateways"))
+                .child(div().id("gateway-list").v_flex().w(shell::GATEWAY_LIST_WIDTH).flex_shrink_0().bg(p.sidebar).border_r(space::HAIRLINE).border_color(p.border).p(space::REM_LG).gap(space::REM_MD).overflow_y_scroll()
+                    .child(div().h_flex().justify_between().items_center().child(div().text_size(text::WIDGET_LG_SIZE).font_weight(weight::SEMIBOLD).child("Your Gateways"))
                         .child(Button::new("new-gateway").small().label("Add").disabled(self.busy).on_click(cx.listener(|this,_,window,cx| this.edit(None,window,cx)))))
                     .children(self.profiles.iter().enumerate().map(|(index,profile)| {
                         let edit = profile.clone(); let open = profile.clone(); let remove = profile.clone(); let primary_id = profile.id.clone();
                         let selected = self.selected.as_ref().is_some_and(|p| p.id == profile.id);
-                        div().id(("saved-gateway",index)).v_flex().gap_2().p_3().rounded_md().bg(if selected {p.hover} else {p.card}).border_1().border_color(if selected {p.accent} else {p.border})
+                        div().id(("saved-gateway",index)).v_flex().gap(space::REM_SM).p(space::REM_MD).rounded(radius::WIDGET_MD).bg(if selected {p.hover} else {p.card}).border(space::HAIRLINE).border_color(if selected {p.accent} else {p.border})
                             .child(Button::new(("edit-gateway",index)).ghost().label(format!("{}{}",profile.name,if self.primary.as_deref() == Some(&profile.id) {"  · Primary"} else {""})).disabled(self.busy).on_click(cx.listener(move |this,_,window,cx| this.edit(Some(edit.clone()),window,cx))))
-                            .child(div().text_xs().text_color(p.muted).child(match &profile.kind { GatewayKind::Direct{url}=>url.clone(), GatewayKind::Ssh{target,..}=>format!("{target} via SSH") }))
-                            .child(div().h_flex().gap_1()
+                            .child(div().text_size(text::WIDGET_XS_SIZE).text_color(p.muted).child(match &profile.kind { GatewayKind::Direct{url}=>url.clone(), GatewayKind::Ssh{target,..}=>format!("{target} via SSH") }))
+                            .child(div().h_flex().gap(space::REM_XS)
                                 .child(Button::new(("open-gateway",index)).small().ghost().label("Open").disabled(self.busy).on_click(move |_,_,cx| crate::gateway_windows::open_profile(open.clone(),cx)))
                                 .child(Button::new(("primary-gateway",index)).small().ghost().label("Primary").disabled(self.busy || self.primary.as_deref() == Some(&profile.id)).on_click(cx.listener(move |this,_,_,cx|this.promote(&primary_id,cx))))
                                 .child(Button::new(("remove-gateway",index)).small().ghost().label("Remove").disabled(self.busy).on_click(cx.listener(move |this,_,window,cx|this.remove(remove.clone(),window,cx)))))
-                            .child(div().h_flex().gap_1()
+                            .child(div().h_flex().gap(space::REM_XS)
                                 .child(Button::new(("up-gateway",index)).small().ghost().label("↑").disabled(self.busy || index <= 1 || self.primary.as_deref() == Some(&profile.id)).on_click(cx.listener(move |this,_,_,cx|this.reorder(index,-1,cx))))
                                 .child(Button::new(("down-gateway",index)).small().ghost().label("↓").disabled(self.busy || index+1 == self.profiles.len() || self.primary.as_deref() == Some(&profile.id)).on_click(cx.listener(move |this,_,_,cx|this.reorder(index,1,cx)))))
                     }))
-                    .when(self.profiles.is_empty(), |el| el.child(div().text_sm().text_color(p.muted).child("Save a Gateway to open it from the menu bar."))))
-                .child(div().id("gateway-editor").v_flex().flex_1().min_w_0().overflow_y_scroll().p_6().gap_4()
-                    .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).text_color(p.strong).child(if self.selected.is_some() {"Edit Gateway"} else {"Add Gateway"}))
+                    .when(self.profiles.is_empty(), |el| el.child(div().text_size(text::WIDGET_SM_SIZE).text_color(p.muted).child("Save a Gateway to open it from the menu bar."))))
+                .child(div().id("gateway-editor").v_flex().flex_1().min_w_0().overflow_y_scroll().p(space::REM_XL).gap(space::REM_LG)
+                    .child(div().text_size(text::WIDGET_XL_SIZE).font_weight(weight::SEMIBOLD).text_color(p.strong).child(if self.selected.is_some() {"Edit Gateway"} else {"Add Gateway"}))
                     .when_some(self.import.clone(), |el, profile| el.child(Button::new("import-mac").label("Import from OpenClaw for Mac").disabled(self.busy).on_click(cx.listener(move |this,_,window,cx| {
                         let result = ProfileStore::load().and_then(|mut store| store.save(profile.clone(),true));
                         match result { Ok(profile)=>{this.import=None; this.edit(Some(profile),window,cx); this.error=this.refresh(cx).err();}, Err(error)=>this.error=Some(error) }
                         cx.notify();
                     }))))
                     .child(field("Name",&self.name))
-                    .child(div().h_flex().gap_2()
+                    .child(div().h_flex().gap(space::REM_SM)
                         .child(Button::new("direct-kind").label("Direct URL").selected(!self.ssh).disabled(self.busy).on_click(cx.listener(|this,_,_,cx|{this.ssh=false;cx.notify();})))
                         .child(Button::new("ssh-kind").label("SSH tunnel").selected(self.ssh).disabled(self.busy).on_click(cx.listener(|this,_,_,cx|{this.ssh=true;cx.notify();}))))
                     .when(!self.ssh,|el|el.child(field("Gateway URL",&self.url)))
                     .when(self.ssh,|el|el.child(field("SSH target",&self.target)).child(field("Remote Gateway port",&self.port)).child(field("Identity file (optional)",&self.identity)))
-                    .child(div().text_sm().text_color(p.muted).child(if self.ssh {"Uses your existing SSH keys and known hosts. Matching remote config credentials or device pairing are used by default."} else {"Cloudflare Access sign-in opens from the Gateway window. Credentials below are optional."}))
+                    .child(div().text_size(text::WIDGET_SM_SIZE).text_color(p.muted).child(if self.ssh {"Uses your existing SSH keys and known hosts. Matching remote config credentials or device pairing are used by default."} else {"Cloudflare Access sign-in opens from the Gateway window. Credentials below are optional."}))
                     .child(field("Token (optional)",&self.token)).child(field("Password (optional)",&self.password))
-                    .when_some(self.error.clone(),|el,error|el.child(div().text_sm().text_color(p.danger).child(error)))
+                    .when_some(self.error.clone(),|el,error|el.child(div().text_size(text::WIDGET_SM_SIZE).text_color(p.danger).child(error)))
                     .child(Button::new("save-gateway").primary().label(if self.busy {"Saving…"} else {"Save Gateway"}).disabled(self.busy).on_click(cx.listener(|this,_,window,cx|this.save(window,cx))))
-                    .child(div().text_xs().text_color(p.muted).child("Removing a Gateway closes its window and removes its saved credentials and web sessions. The primary Gateway opens at launch."))))
+                    .child(div().text_size(text::WIDGET_XS_SIZE).text_color(p.muted).child("Removing a Gateway closes its window and removes its saved credentials and web sessions. The primary Gateway opens at launch."))))
     }
 }

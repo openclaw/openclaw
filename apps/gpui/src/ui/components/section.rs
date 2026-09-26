@@ -1,4 +1,5 @@
 use super::icons::filled_zap;
+use crate::ui::theme::tokens::space;
 use crate::ui::theme::{Palette, controls as t};
 use gpui_kit::{
     assets::IconName,
@@ -13,7 +14,7 @@ pub(crate) fn setting_row(icon: IconName, title: &str, description: &str, p: Pal
         .gap(px(t::SPACE_MD))
         .px(px(t::SPACE_LG))
         .py(px(t::SPACE_SECTION_Y))
-        .border_t_1()
+        .border_t(space::HAIRLINE)
         .border_color(p.controls().section_border)
         .child(if matches!(icon, IconName::Zap) {
             filled_zap(t::ICON_PROVIDER, p.accent)

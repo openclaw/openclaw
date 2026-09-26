@@ -1,3 +1,4 @@
+use crate::ui::theme::tokens::space;
 use crate::ui::theme::{Palette, controls as t};
 use gpui_kit::{base::Switch, prelude::FluentBuilder as _, *};
 /// The base switch owns activation and checked semantics; this supplies the measured Control UI skin.
@@ -19,7 +20,7 @@ pub(crate) fn toggle(
         .h(px(t::TOGGLE_HEIGHT))
         .flex_shrink_0()
         .rounded_full()
-        .border_1()
+        .border(space::HAIRLINE)
         .border_color(if active { p.accent } else { p.border_strong })
         .bg(if active {
             p.controls().toggle_active

@@ -92,7 +92,7 @@ impl AppView {
             .bg(p.bg)
             .flex_1()
             .min_w_0()
-            .px(icon::NORMAL)
+            .px(space::XXL)
             .gap(space::MD)
             .child(
                 div()

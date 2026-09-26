@@ -1,3 +1,4 @@
+use crate::ui::theme::tokens::space;
 use crate::ui::theme::{Palette, controls as t, draft_tokens, menu_tokens as tokens};
 use gpui_kit::{
     assets::IconName,
@@ -51,7 +52,7 @@ pub fn panel(id: impl Into<SharedString>, width: f32, style: MenuStyle, cx: &App
         .w(px(width))
         .rounded(px(tokens::PANEL_RADIUS))
         .bg(p.elevated)
-        .border_1()
+        .border(space::HAIRLINE)
         .border_color(p.border_strong)
         .shadow_lg();
     match style {
@@ -303,7 +304,7 @@ pub(crate) fn menu_surface(p: Palette) -> Div {
     div()
         .v_flex()
         .bg(p.controls().menu)
-        .border_1()
+        .border(space::HAIRLINE)
         .border_color(p.controls().menu_border)
         .rounded(px(t::MENU_RADIUS))
         .shadow_lg()

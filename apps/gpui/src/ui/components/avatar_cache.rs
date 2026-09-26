@@ -1,3 +1,4 @@
+mod face;
 mod http;
 
 use crate::model::{
@@ -55,12 +56,10 @@ impl AvatarCache {
     }
 
     fn face(&self, id: &str) -> Arc<Image> {
-        self.faces.get(id).cloned().unwrap_or_else(|| {
-            Arc::new(Image::from_bytes(
-                ImageFormat::Svg,
-                avatars::agent_face_svg(id).into_bytes(),
-            ))
-        })
+        self.faces
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| face::image(id))
     }
 
     /// Retains sources in caller priority order and returns only required downloads.
@@ -93,12 +92,9 @@ impl AvatarCache {
             .collect();
         self.faces.retain(|id, _| wanted_faces.contains(id));
         for id in faces {
-            self.faces.entry(id.clone()).or_insert_with(|| {
-                Arc::new(Image::from_bytes(
-                    ImageFormat::Svg,
-                    avatars::agent_face_svg(&id).into_bytes(),
-                ))
-            });
+            self.faces
+                .entry(id.clone())
+                .or_insert_with(|| face::image(&id));
         }
         let mut downloads = Vec::new();
         for url in urls {

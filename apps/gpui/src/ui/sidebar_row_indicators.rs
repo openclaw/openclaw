@@ -1,7 +1,11 @@
 use super::{AppView, Palette, SessionRow, SidebarAttention};
 use crate::ui::components::icons::icon as ui_icon;
 use crate::{
-    model::{chat::now_ms, sidebar_pr::scoped_key},
+    model::{
+        chat::now_ms,
+        elapsed_time::{ElapsedFormat, format_elapsed},
+        sidebar_pr::scoped_key,
+    },
     ui::theme::tokens::{avatar, colors, icon, space, text},
 };
 use gpui_kit::{
@@ -255,7 +259,7 @@ impl AppView {
                 div()
                     .text_size(text::COUNT.size)
                     .text_color(p.muted)
-                    .child(compact_duration(runtime)),
+                    .child(format_elapsed(runtime, ElapsedFormat::Run)),
             );
         }
         badges.into_any_element()
@@ -346,17 +350,4 @@ pub(super) fn unread_dot(p: Palette) -> AnyElement {
         .bg(p.accent)
         .flex_shrink_0()
         .into_any_element()
-}
-
-fn compact_duration(ms: u64) -> String {
-    let seconds = ms / 1000;
-    if seconds >= 3600 {
-        format!("{}h {}m", seconds / 3600, seconds % 3600 / 60)
-    } else if seconds >= 60 {
-        format!("{}m {}s", seconds / 60, seconds % 60)
-    } else if ms >= 1000 {
-        format!("{seconds}s")
-    } else {
-        format!("{ms}ms")
-    }
 }

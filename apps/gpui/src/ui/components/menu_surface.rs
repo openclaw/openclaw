@@ -183,7 +183,7 @@ impl RenderOnce for MenuSurface {
                 .w(style.metrics.width)
                 .border(space::HAIRLINE)
                 .border_color(if style.border_as_ring {
-                    transparent_black()
+                    colors::TRANSPARENT
                 } else {
                     colors::overlay_border(p)
                 })
