@@ -213,7 +213,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
       return;
     }
     if (params.closeInput) {
-      session.close(new Error("The setup window was closed."));
+      if (!session.cancel()) {
+        session.close(new Error("The setup window was closed."));
+      }
       await whenAdmittedWizardSessionSettled(session);
       const status = readWizardStatus(session);
       context.purgeWizardSession(sessionId);

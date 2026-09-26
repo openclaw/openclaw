@@ -475,6 +475,7 @@ describe("models.list OpenAI routes", () => {
               view: "provider-config",
             }),
           ).resolves.toEqual({
+            tagsScope: "defaults",
             models: [
               expect.objectContaining({
                 id: "gpt-5.5",
@@ -573,6 +574,7 @@ describe("models.list OpenAI routes", () => {
           ],
         }),
       ).resolves.toEqual({
+        tagsScope: "defaults",
         models: [
           expect.objectContaining({ id: "model-a", provider: "litellm" }),
           expect.objectContaining({ id: "model-b", provider: "litellm" }),
@@ -601,7 +603,7 @@ describe("models.list OpenAI routes", () => {
           view: "provider-config",
           catalog: [providerCatalogEntry("kimi", "kimi-for-coding")],
         }),
-      ).resolves.toEqual({ models: [] });
+      ).resolves.toEqual({ models: [], tagsScope: "defaults" });
     });
   });
 

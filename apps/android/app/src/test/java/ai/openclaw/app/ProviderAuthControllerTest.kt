@@ -24,6 +24,99 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class ProviderAuthControllerTest {
   @Test
+  fun probePreservesPartialCredentialFailuresWithoutClaimingAnAuthMutation() =
+    runTest {
+      val completed = CompletableDeferred<Unit>()
+      val fixture = Fixture(this)
+      fixture.reply = { method, params ->
+        assertEquals("models.probe", method)
+        assertEquals(Json.parseToJsonElement("""{"provider":"fixture","agentId":"writer"}"""), params)
+        completed.await()
+        """{"provider":"fixture","status":"ok","latencyMs":12,"results":[{"profileId":"fixture:ok","label":"Working account","status":"ok","latencyMs":12},{"profileId":"fixture:expired","label":"Expired account","status":"auth","error":"This credential has expired."}]}"""
+      }
+
+      fixture.controller.probe("fixture")
+      runCurrent()
+      assertTrue(fixture.controller.state.value.busy)
+      assertEquals("fixture", fixture.controller.state.value.actionProviderId)
+      assertNull(fixture.controller.state.value.probeResult)
+      completed.complete(Unit)
+      runCurrent()
+
+      val result = checkNotNull(fixture.controller.state.value.probeResult)
+      assertEquals("ok", result.status)
+      assertEquals(12L, result.latencyMs)
+      assertEquals(listOf("ok", "auth"), result.results.map { it.status })
+      assertEquals("This credential has expired.", result.results.last().error)
+      assertEquals("fixture:expired", result.results.last().profileId)
+      assertFalse(fixture.controller.state.value.busy)
+      assertFalse(fixture.changed)
+    }
+
+  @Test
+  fun removeKeyUsesOnlyApiKeyScopeAndRetainsAcknowledgedRemovalDuringRefreshFailure() =
+    runTest {
+      val removed = CompletableDeferred<Unit>()
+      val fixture = Fixture(this)
+      fixture.reply = { method, params ->
+        when (method) {
+          "models.authLogout" -> {
+            assertEquals(Json.parseToJsonElement("""{"provider":"fixture","agentId":"writer","credentialType":"api_key"}"""), params)
+            removed.await()
+            """{"provider":"fixture","removedProfiles":["fixture:key"],"abortedRunIds":[],"warning":"The environment key remains configured."}"""
+          }
+
+          "models.authStatus" -> {
+            error("Connection lost after acknowledged removal")
+          }
+
+          else -> {
+            error("Unexpected method: $method")
+          }
+        }
+      }
+
+      fixture.controller.removeApiKey("fixture")
+      runCurrent()
+      assertNull(fixture.controller.state.value.noticeText)
+      assertFalse(fixture.changed)
+      removed.complete(Unit)
+      runCurrent()
+
+      assertEquals(nativeText("API key removed."), fixture.controller.state.value.noticeText)
+      assertEquals("The environment key remains configured.", fixture.controller.state.value.warningText)
+      assertEquals(nativeText("API key removed, but provider status could not refresh. Tap Refresh to check it."), fixture.controller.state.value.errorText)
+      assertTrue(fixture.changed)
+      assertFalse(fixture.controller.state.value.busy)
+    }
+
+  @Test
+  fun providerActionsCannotDispatchOrPublishAfterTheirConnectionOrAgentRetires() =
+    runTest {
+      for (removeKey in listOf(false, true)) {
+        for ((retireBeforeEnqueue, retireOwner) in listOf(true to false, false to false, true to true, false to true)) {
+          val gate = CompletableDeferred<Unit>()
+          val fixture = Fixture(this)
+          if (retireBeforeEnqueue) fixture.beforeEnqueue = { gate.await() }
+          fixture.reply = { _, _ ->
+            gate.await()
+            if (removeKey) """{"provider":"fixture","removedProfiles":[],"abortedRunIds":[]}""" else """{"provider":"fixture","status":"ok","results":[]}"""
+          }
+          if (removeKey) fixture.controller.removeApiKey("fixture") else fixture.controller.probe("fixture")
+          runCurrent()
+          val before = fixture.controller.state.value
+          if (retireOwner) fixture.ownerCurrent = false else fixture.current = false
+          gate.complete(Unit)
+          runCurrent()
+
+          assertEquals(before, fixture.controller.state.value)
+          assertFalse(fixture.changed)
+          if (retireBeforeEnqueue) assertFalse(fixture.enqueued)
+        }
+      }
+    }
+
+  @Test
   fun advertisedApiKeyWriteWaitsForAcknowledgementAndReadsPublishedState() =
     runTest {
       var saved = CompletableDeferred<Unit>()
@@ -90,7 +183,8 @@ class ProviderAuthControllerTest {
       runCurrent()
       assertEquals(savedNotice, fixture.controller.state.value.noticeText)
       assertEquals(savedRevision, fixture.controller.state.value.apiKeySaveRevision)
-      assertEquals(nativeText("API key saved. Tap Refresh to apply it."), savedNotice)
+      assertEquals(nativeText("API key saved. Tap Refresh in this dialog to apply it."), savedNotice)
+      assertNull(fixture.controller.state.value.connectedProviderId)
       fixture.changed = false
       fixture.controller.refresh(refresh = true)
       runCurrent()
@@ -111,12 +205,14 @@ class ProviderAuthControllerTest {
       runCurrent()
       assertEquals(savedNotice, fixture.controller.state.value.noticeText)
       assertTrue(fixture.controller.state.value.apiKeySaveRevision > savedRevision)
+      assertNull(fixture.controller.state.value.connectedProviderId)
     }
 
   @Test
   fun returnedChoiceAndDeviceStepRemainPendingUntilGatewayCompletesLogin() =
     runTest {
       val terminal = CompletableDeferred<String>()
+      val published = CompletableDeferred<Unit>()
       val fixture = Fixture(this)
       var signedIn = false
       fixture.reply = { method, params ->
@@ -124,7 +220,12 @@ class ProviderAuthControllerTest {
           "models.authStatus" -> {
             assertEquals("writer", params.getValue("agentId").jsonPrimitive.content)
             assertFalse(params.containsKey("refresh"))
-            if (signedIn) """{"ts":2,"providers":[{"provider":"fixture","displayName":"Fixture","status":"ok","profiles":[]}]}""" else AUTH
+            if (signedIn) {
+              published.await()
+              """{"ts":2,"providers":[{"provider":"fixture","displayName":"Fixture","status":"ok","profiles":[]}]}"""
+            } else {
+              AUTH
+            }
           }
 
           "models.authLogin" -> {
@@ -157,10 +258,11 @@ class ProviderAuthControllerTest {
       fixture.controller.refresh()
       runCurrent()
       fixture.controller.start(
-        fixture.controller.state.value.loginOptions
+        fixture.controller.state.value.providers
           .single()
-          .getValue("id")
-          .jsonPrimitive.content,
+          .loginOptions
+          .single()
+          .id,
       )
       runCurrent()
       val step =
@@ -185,6 +287,10 @@ class ProviderAuthControllerTest {
       )
       terminal.complete("""{"done":true,"status":"done"}""")
       runCurrent()
+      assertNull(fixture.controller.state.value.connectedProviderId)
+      assertFalse(fixture.changed)
+      published.complete(Unit)
+      runCurrent()
       assertEquals(
         "done",
         fixture.controller.state.value.wizard!!
@@ -200,6 +306,71 @@ class ProviderAuthControllerTest {
       )
       assertFalse(fixture.controller.state.value.busy)
       assertNull(fixture.controller.state.value.errorText)
+      assertEquals("fixture", fixture.controller.state.value.connectedProviderId)
+    }
+
+  @Test
+  fun savedKeyOnlyConnectsAfterCurrentReadyStatusAndRejectsEmptyKeys() =
+    runTest {
+      for (outcome in listOf("ready", "missing", "unavailable", "failed")) {
+        val fixture = Fixture(this)
+        var written = false
+        var writes = 0
+        fixture.reply = { method, _ ->
+          when (method) {
+            "models.authStatus" -> {
+              when {
+                !written || outcome == "ready" -> API_KEY_AUTH
+                outcome == "failed" -> error("Disconnected during refresh")
+                outcome == "unavailable" -> """{"providers":[],"unavailable":{"code":"PREPARED_MODEL_AUTH_UNAVAILABLE"}}"""
+                else -> API_KEY_AUTH.replace("\"static\"", "\"missing\"")
+              }
+            }
+
+            "models.authSetApiKey" -> {
+              writes += 1
+              written = true
+              """{"provider":"fixture","profileId":"fixture:default"}"""
+            }
+
+            else -> {
+              error("Unexpected method: $method")
+            }
+          }
+        }
+        fixture.controller.refresh()
+        runCurrent()
+        fixture.controller.setApiKey("fixture", " ")
+        runCurrent()
+        assertEquals(0, writes)
+        assertEquals(nativeText("Enter an API key."), fixture.controller.state.value.errorText)
+        fixture.controller.setApiKey("fixture", "fixture-secret")
+        runCurrent()
+        assertEquals(1, writes)
+        assertEquals(if (outcome == "ready") "fixture" else null, fixture.controller.state.value.connectedProviderId)
+      }
+    }
+
+  @Test
+  fun providerCapabilitiesDoNotOfferUnsafeQuickKeySetupOrOtherProvidersChoices() =
+    runTest {
+      val fixture = Fixture(this)
+      fixture.reply = { method, _ ->
+        assertEquals("models.authStatus", method)
+        """{"providers":[{"provider":"remote","displayName":"Remote","status":"missing"}],"providerCapabilities":[{"provider":"remote","apiKeySupported":true,"quickApiKeySetup":false},{"provider":"account","apiKeySupported":false,"quickApiKeySetup":false,"loginOptions":[{"id":"plugin/account","label":"Account sign-in","hint":"Use your account","kind":"oauth","featured":true}]}]}"""
+      }
+      fixture.controller.refresh()
+      runCurrent()
+      val providers = fixture.controller.state.value.providers
+      val remote = providers.single { it.id == "remote" }
+      assertFalse(remote.canSignIn)
+      assertTrue(remote.loginOptions.isEmpty())
+      assertTrue(providers.single { it.id == "account" }.canSignIn)
+      fixture.controller.setApiKey("remote", "fixture-secret")
+      fixture.controller.start("plugin/unadvertised")
+      runCurrent()
+      assertFalse(fixture.controller.state.value.busy)
+      assertNull(fixture.controller.state.value.connectedProviderId)
     }
 
   @Test
@@ -250,10 +421,11 @@ class ProviderAuthControllerTest {
       runCurrent()
       val state = fixture.controller.state.value
       assertNotNull(state.authStatus?.get("unavailable"))
-      assertTrue(state.loginOptions.isEmpty())
+      assertTrue(state.providers.isEmpty())
       assertNotNull(state.errorText)
       assertNull(state.wizard)
       assertTrue(fixture.changed)
+      assertNull(fixture.controller.state.value.connectedProviderId)
     }
 
   @Test
@@ -293,7 +465,7 @@ class ProviderAuthControllerTest {
       runCurrent()
       assertTrue(fixture.controller.state.value.cancelling)
       assertFalse(fixture.changed)
-      settled.complete("""{"status":"cancelled"}""")
+      settled.complete("""{"status":"cancelled","error":"cancelled"}""")
       runCurrent()
       assertEquals(
         "cancelled",
@@ -302,6 +474,7 @@ class ProviderAuthControllerTest {
           .jsonPrimitive.content,
       )
       assertFalse(fixture.controller.state.value.cancelling)
+      assertNull(fixture.controller.state.value.errorText)
       assertTrue(fixture.changed)
     }
 
@@ -324,6 +497,7 @@ class ProviderAuthControllerTest {
   }
 
   companion object {
+    private const val API_KEY_AUTH = """{"providers":[{"provider":"fixture","displayName":"Fixture","status":"static"}],"providerCapabilities":[{"provider":"fixture","apiKeySupported":true,"quickApiKeySetup":true}]}"""
     private const val AUTH = """{"ts":1,"providers":[],"providerCapabilities":[{"provider":"fixture","apiKeySupported":false,"quickApiKeySetup":false,"loginOptions":[{"id":"plugin/returned-choice","brandId":"fixture","label":"Sign in","kind":"device-code","featured":true}]}]}"""
     private const val STEP = """{"done":false,"status":"running","step":{"id":"device","type":"action","executor":"client","externalUrl":"https://example.com/login","deviceCode":{"code":"ABCD"}}}"""
   }

@@ -230,11 +230,13 @@ export function createProviderApiKeyAuthMethod(
         noteTitle: params.noteTitle,
       });
       const profileIds = resolveProfileIds(params);
-      const defaultModel = await resolveDefaultModel(params, {
-        apiKey,
-        config: ctx.config,
-        ...(ctx.signal ? { signal: ctx.signal } : {}),
-      });
+      const defaultModel = ctx.credentialOnly
+        ? undefined
+        : await resolveDefaultModel(params, {
+            apiKey,
+            config: ctx.config,
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          });
 
       return {
         profiles: profileIds.map((profileId) => ({

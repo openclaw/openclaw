@@ -1,4 +1,9 @@
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  ModelsListResultSchema,
+  type ModelsListResult,
+} from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
@@ -8,6 +13,7 @@ import {
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { requestModelsList } from "./models-list-request.test-support.js";
 import {
   catalogEntry,
   createModelsListTestContext,
@@ -352,4 +358,109 @@ describe("models.list configured static entries", () => {
       });
     });
   });
+
+  it.each(["provider-config", "all"] as const)(
+    "keeps shared role tags separate from agent aliases in the %s view",
+    async (view) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "provider-config-role-tags-" },
+        async () => {
+          const modelIds = [
+            "global-primary",
+            "global-fallback",
+            "shared",
+            "agent-primary",
+            "agent-fallback",
+            "agent-configured",
+          ];
+          const cfg: OpenClawConfig = {
+            agents: {
+              defaults: {
+                model: { primary: "shared-primary", fallbacks: ["shared-fallback"] },
+                models: {
+                  "example/global-primary": { alias: "shared-primary" },
+                  "example/global-fallback": { alias: "shared-fallback" },
+                  "example/shared": {},
+                },
+              },
+              entries: {
+                worker: {
+                  model: {
+                    primary: "example/agent-primary",
+                    fallbacks: ["example/agent-fallback"],
+                  },
+                  models: {
+                    "example/global-primary": {
+                      alias: "worker-primary-label",
+                      agentRuntime: { id: "openclaw" },
+                    },
+                    "example/agent-configured": {},
+                  },
+                },
+              },
+            },
+            models: {
+              providers: {
+                example: {
+                  api: "openai-completions",
+                  baseUrl: "https://models.example.test/v1",
+                  apiKey: "synthetic-provider-key",
+                  models: modelIds.map((id) => ({
+                    id,
+                    name: id,
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 1024,
+                  })),
+                },
+              },
+            },
+          };
+          const catalog = modelIds.map((id) => providerCatalogEntry("example", id));
+          const { request, respond } = requestModelsList({
+            view,
+            agentId: "worker",
+            runtimeConfig: cfg,
+            publishedCatalog: catalog,
+            loadGatewayModelCatalog: vi.fn(async () => catalog),
+            reqId: "provider-roles",
+          });
+          await request;
+          const [ok, payload, error] = respond.mock.calls[0] ?? [];
+          expect(ok, JSON.stringify(error)).toBe(true);
+          expect(Value.Check(ModelsListResultSchema, payload)).toBe(true);
+          const result = payload as ModelsListResult;
+          expect(result.tagsScope).toBe(view === "provider-config" ? "defaults" : undefined);
+          const models = result.models;
+          const tags = Object.fromEntries(models.map((model) => [model.id, model.tags]));
+          expect(tags).toEqual(
+            view === "provider-config"
+              ? {
+                  "global-primary": ["default", "configured"],
+                  "global-fallback": ["fallback#1", "configured"],
+                  shared: ["configured"],
+                  "agent-primary": undefined,
+                  "agent-fallback": undefined,
+                  "agent-configured": undefined,
+                }
+              : {
+                  "global-primary": ["configured"],
+                  "global-fallback": ["configured"],
+                  shared: ["configured"],
+                  "agent-primary": ["default"],
+                  "agent-fallback": ["fallback#1"],
+                  "agent-configured": ["configured"],
+                },
+          );
+          expect(models.find((model) => model.id === "global-primary")).toMatchObject({
+            alias: "worker-primary-label",
+            agentRuntime: { id: "openclaw", source: "model" },
+            available: true,
+          });
+        },
+      );
+    },
+  );
 });

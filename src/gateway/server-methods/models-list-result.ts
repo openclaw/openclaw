@@ -136,6 +136,7 @@ function createPublicModelsListProjector(params: {
   cfg: OpenClawConfig;
   agentId: string;
   configuredEntriesByKey: ReturnType<typeof resolveConfiguredModelEntries>["byKey"];
+  configuredTagsByKey?: ReturnType<typeof resolveConfiguredModelEntries>["byKey"];
   includeInput?: boolean;
   includeDetails?: boolean;
   preserveUnknownAvailability?: boolean;
@@ -154,6 +155,9 @@ function createPublicModelsListProjector(params: {
     let preparedEntry = prepared.get(entry)?.get(runtimeKey);
     if (!preparedEntry) {
       const configuredEntry = params.configuredEntriesByKey.get(modelKey(entry.provider, entry.id));
+      const tags = (params.configuredTagsByKey ?? params.configuredEntriesByKey).get(
+        modelKey(entry.provider, entry.id),
+      )?.tags;
       const alias = configuredEntry?.aliases.at(-1);
       const publicEntry = configuredEntry?.aliasDisabled
         ? Object.assign({}, entry, { alias: undefined })
@@ -201,7 +205,7 @@ function createPublicModelsListProjector(params: {
       });
       preparedEntry = {
         ...buildPublicModelProjection(publicEntry, { includeDetails: params.includeDetails }),
-        ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
+        ...(tags?.size ? { tags: [...tags] } : {}),
         ...(agentRuntime ? { agentRuntime } : {}),
         ...thinkingProfile,
         ...(fastModeState.source === "default" ? {} : { effectiveFastMode: fastModeState.mode }),
@@ -496,10 +500,8 @@ export async function prepareModelsListResult(
   const capableProviders = includeProviderCapabilities
     ? apiKeyProviderCapabilities({ cfg, metadataSnapshot, workspaceDir })
     : undefined;
-  const configuredEntriesByKey = resolveConfiguredModelEntries({
+  const configuredEntryOptions: Parameters<typeof resolveConfiguredModelEntries>[0] = {
     cfg,
-    agentId,
-    defaultModel,
     canonicalizeRef: (ref) => ({
       ...ref,
       model:
@@ -507,6 +509,11 @@ export async function prepareModelsListResult(
     }),
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     manifestPlugins: metadataSnapshot,
+  };
+  const configuredEntriesByKey = resolveConfiguredModelEntries({
+    ...configuredEntryOptions,
+    agentId,
+    defaultModel,
   }).byKey;
   if (view === "provider-config") {
     const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
@@ -548,6 +555,8 @@ export async function prepareModelsListResult(
       cfg,
       agentId,
       configuredEntriesByKey,
+      // Inventory roles describe shared defaults; aliases and execution stay agent-scoped.
+      configuredTagsByKey: resolveConfiguredModelEntries(configuredEntryOptions).byKey,
       ...(params.includeManualSelection ? { manualSelectionAllowed: visibilityPolicy.allows } : {}),
       includeInput: true,
       includeDetails: params.params.includeDetails,
@@ -557,6 +566,7 @@ export async function prepareModelsListResult(
     return {
       isCurrent: () => isCurrent() && inventoryProjector.isCurrent(),
       read: () => ({
+        tagsScope: "defaults",
         models: entries
           .filter(({ entry }) => matchesProvider(entry))
           .map(({ entry, host }) => projectPublic(entry, evaluateNative(entry, host))),

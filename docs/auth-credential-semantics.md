@@ -224,6 +224,13 @@ catalog discovery. Configured subscription modes remain attached to direct
 credentials, and successful OAuth preparation supplies the resolved current token
 to its catalog consumer rather than the captured store's older token.
 
+When discovery selects configured provider auth and its `apiKey` matches a stored
+bearer-profile binding, it resolves that exact eligible credential instead of
+sending the profile ID as a key. An incompatible or unusable matched binding does
+not fall through to another profile or literal credential. Literal keys and SecretRefs retain
+their existing interpretation, and ordinary unbound credential ordering is
+unchanged.
+
 Environment-backed profiles keep usable values from the discovery environment,
 including cold command and worker paths. When that material is missing, only the
 selected profile's activated snapshot may supply it; otherwise discovery reports

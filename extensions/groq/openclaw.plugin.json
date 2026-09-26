@@ -35,6 +35,7 @@
       "method": "api-key",
       "choiceId": "groq-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Groq API key",
       "choiceHint": "Fast OpenAI-compatible inference",
       "groupId": "groq",

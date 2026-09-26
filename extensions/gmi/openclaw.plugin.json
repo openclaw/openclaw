@@ -45,6 +45,7 @@
       "method": "api-key",
       "choiceId": "gmi-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "GMI Cloud API key",
       "choiceHint": "OpenAI-compatible GMI Cloud endpoint",
       "groupId": "gmi",

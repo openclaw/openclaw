@@ -177,6 +177,7 @@
       "method": "api-key",
       "choiceId": "qianfan-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Qianfan API key",
       "groupId": "qianfan",
       "groupLabel": "Qianfan",

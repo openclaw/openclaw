@@ -22,13 +22,14 @@ export function createAnthropicAuthMethods() {
     setupToken: {
       id: "setup-token",
       kind: "token" as const,
-      label: "Anthropic setup-token",
-      hint: "Paste a long-lived token created with 'claude setup-token'",
+      label: "Claude subscription (setup-token)",
+      hint: "Run 'claude setup-token' on a computer with Claude Code, then paste the token here",
       run: noopAuth,
       wizard: {
         choiceId: "setup-token",
-        choiceLabel: "Anthropic setup-token",
-        choiceHint: "Token created by running 'claude setup-token' in your terminal",
+        choiceLabel: "Claude subscription (setup-token)",
+        choiceHint:
+          "Run 'claude setup-token' on a computer with Claude Code, then paste the token here",
         groupId: "anthropic",
         groupLabel: "Anthropic",
         groupHint: "Claude CLI + API key + token",

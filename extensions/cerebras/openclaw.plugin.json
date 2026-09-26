@@ -98,6 +98,7 @@
       "method": "api-key",
       "choiceId": "cerebras-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Cerebras API key",
       "groupId": "cerebras",
       "groupLabel": "Cerebras",

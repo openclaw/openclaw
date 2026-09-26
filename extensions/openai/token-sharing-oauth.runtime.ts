@@ -223,7 +223,7 @@ export async function refreshTokenSharingCredential(
   ).credential;
 }
 
-/** Local authorization owns the listener, state, verifier, and callback lifetime together. */
+/** Authorization owns the listener, manual input, state, and verifier lifetime together. */
 export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const owner = {
     ...ctx,
@@ -306,6 +306,63 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
   });
   // Register a rejection handler before browser I/O, which can outlive the callback.
   void callback.catch(() => undefined);
+  const isCurrentCallback = (callbackUrl: URL) =>
+    callbackUrl.pathname === "/auth/callback" &&
+    callbackUrl.searchParams.getAll("state").length === 1 &&
+    callbackUrl.searchParams.get("state") === state &&
+    !callbackConsumed;
+  const consumeCallback = (callbackUrl: URL) => {
+    if (!isCurrentCallback(callbackUrl)) {
+      throw new Error("Invalid or expired sign-in callback. Return to OpenClaw to retry.");
+    }
+    callbackConsumed = true;
+    owner.assertCurrent?.();
+    owner.signal.throwIfAborted();
+    if (callbackUrl.searchParams.has("error")) {
+      throw new Error(
+        callbackUrl.searchParams.get("error") === "access_denied"
+          ? "ChatGPT authorization was declined. Start sign-in again when ready."
+          : "ChatGPT authorization failed. Start sign-in again.",
+      );
+    }
+    const code = callbackUrl.searchParams.get("code");
+    if (!code || callbackUrl.searchParams.getAll("code").length !== 1) {
+      throw new Error(
+        "ChatGPT callback did not contain an authorization code. Start sign-in again.",
+      );
+    }
+    const returnedIds = callbackUrl.searchParams.getAll("client_id");
+    const returnedId = returnedIds[0];
+    // Registration changes the client ID mid-flow. Ordinary reauthorization
+    // may omit it, but must never replace the selected registration.
+    if (
+      returnedIds.length > 1 ||
+      (registering
+        ? !returnedId || !/^oaiapp_[A-Za-z0-9_-]+$/u.test(returnedId)
+        : returnedId !== undefined && returnedId !== clientId)
+    ) {
+      throw new Error("ChatGPT returned an invalid OAuth client ID. Start sign-in again.");
+    }
+    return { code, clientId: returnedId ?? clientId };
+  };
+  const parseManualCallback = (value: string) => {
+    let callbackUrl: URL;
+    try {
+      callbackUrl = new URL(value.trim());
+    } catch {
+      throw new Error("Paste the full ChatGPT redirect URL, including its state and code.");
+    }
+    if (
+      callbackUrl.origin !== new URL(TOKEN_SHARING_REDIRECT_URI).origin ||
+      callbackUrl.username ||
+      callbackUrl.password ||
+      callbackUrl.hash ||
+      !isCurrentCallback(callbackUrl)
+    ) {
+      throw new Error("The redirect URL does not belong to this sign-in. Copy its full URL again.");
+    }
+    return callbackUrl;
+  };
   const server = createServer((request, response) => {
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.setHeader("Connection", "close");
@@ -318,49 +375,16 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       response.writeHead(400).end(oauthErrorHtml("Invalid sign-in callback."));
       return;
     }
-    if (
-      request.method !== "GET" ||
-      callbackUrl.pathname !== "/auth/callback" ||
-      callbackUrl.searchParams.getAll("state").length !== 1 ||
-      callbackUrl.searchParams.get("state") !== state ||
-      callbackConsumed
-    ) {
+    if (request.method !== "GET" || !isCurrentCallback(callbackUrl)) {
       response
         .writeHead(400)
         .end(oauthErrorHtml("Invalid or expired sign-in callback. Return to OpenClaw to retry."));
       return;
     }
-    callbackConsumed = true;
     try {
-      owner.assertCurrent?.();
-      owner.signal.throwIfAborted();
-      if (callbackUrl.searchParams.has("error")) {
-        throw new Error(
-          callbackUrl.searchParams.get("error") === "access_denied"
-            ? "ChatGPT authorization was declined. Start sign-in again when ready."
-            : "ChatGPT authorization failed. Start sign-in again.",
-        );
-      }
-      const code = callbackUrl.searchParams.get("code");
-      if (!code || callbackUrl.searchParams.getAll("code").length !== 1) {
-        throw new Error(
-          "ChatGPT callback did not contain an authorization code. Start sign-in again.",
-        );
-      }
-      const returnedIds = callbackUrl.searchParams.getAll("client_id");
-      const returnedId = returnedIds[0];
-      // Registration changes the client ID mid-flow. Ordinary reauthorization
-      // may omit it, but must never replace the selected registration.
-      if (
-        returnedIds.length > 1 ||
-        (registering
-          ? !returnedId || !/^oaiapp_[A-Za-z0-9_-]+$/u.test(returnedId)
-          : returnedId !== undefined && returnedId !== clientId)
-      ) {
-        throw new Error("ChatGPT returned an invalid OAuth client ID. Start sign-in again.");
-      }
+      const authorization = consumeCallback(callbackUrl);
       browserResponse = response;
-      resolveCode({ code, clientId: returnedId ?? clientId });
+      resolveCode(authorization);
     } catch (error) {
       response
         .writeHead(400)
@@ -369,14 +393,22 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     }
   });
   try {
-    await withOAuthLoginAbort(
-      new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        // SSH forwards target IPv4 loopback; keep the registered localhost redirect unchanged.
-        server.listen(8080, "127.0.0.1", resolve);
-      }),
-      owner.signal,
-    );
+    try {
+      await withOAuthLoginAbort(
+        new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          // SSH forwards target IPv4 loopback; keep the registered localhost redirect unchanged.
+          server.listen(8080, "127.0.0.1", resolve);
+        }),
+        owner.signal,
+      );
+    } catch (error) {
+      if (!ctx.isRemote) {
+        throw error;
+      }
+      // Remote clients can return the full callback without owning a Gateway loopback port.
+      owner.signal.throwIfAborted();
+    }
     owner.assertCurrent?.();
     // Gateway wizards attach the browser URL to the next note they publish.
     await withOAuthLoginAbort(ctx.openUrl(url.toString()), owner.signal);
@@ -394,7 +426,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
               ]),
           ...(ctx.isRemote
             ? [
-                "Open the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process. For an SSH host, forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
+                "Open the sign-in link in your browser. After approving, paste the full redirect URL from the browser address bar into OpenClaw, even if localhost:8080 shows a connection error. An existing SSH port forward can still complete sign-in automatically.",
               ]
             : []),
           ...(ctx.prompter.openUrl ? [] : [`Sign-in URL: ${url.toString()}`]),
@@ -405,7 +437,34 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     );
     owner.assertCurrent?.();
     owner.signal.throwIfAborted();
-    const authorization = await withOAuthLoginAbort(callback, owner.signal);
+    let authorization: { code: string; clientId: string };
+    if (ctx.isRemote && !callbackConsumed) {
+      const inputOwner = new AbortController();
+      const inputSignal = AbortSignal.any([owner.signal, inputOwner.signal]);
+      try {
+        const manual = withOAuthLoginAbort(
+          ctx.prompter.text({
+            message: "Paste the full ChatGPT redirect URL",
+            sensitive: true,
+            signal: inputSignal,
+            validate: (value) => {
+              try {
+                parseManualCallback(value);
+                return undefined;
+              } catch (error) {
+                return error instanceof Error ? error.message : "Invalid sign-in callback.";
+              }
+            },
+          }),
+          inputSignal,
+        ).then((value) => consumeCallback(parseManualCallback(value)));
+        authorization = await Promise.race([callback, manual]);
+      } finally {
+        inputOwner.abort();
+      }
+    } else {
+      authorization = await withOAuthLoginAbort(callback, owner.signal);
+    }
     const json = await requestJson(
       TOKEN_ENDPOINT,
       owner,

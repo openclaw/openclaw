@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createTestWizardPrompter } from "../test-utils/plugin-setup-wizard.js";
 import { createProviderApiKeyAuthMethod } from "./provider-api-key-auth.js";
 
 describe("createProviderApiKeyAuthMethod", () => {
@@ -161,5 +162,42 @@ describe("createProviderApiKeyAuthMethod", () => {
 
     expect(resolveDefaultModel).toHaveBeenCalledWith({ apiKey: "test-token", config: {} });
     expect(result.defaultModel).toBe("example/enabled-model");
+  });
+
+  it("connects with a credential without discovering or selecting a starter model", async () => {
+    const resolveDefaultModel = vi.fn(async () => "example/discovered-model");
+    const method = createProviderApiKeyAuthMethod({
+      providerId: "example",
+      methodId: "api-key",
+      label: "Example",
+      optionKey: "exampleApiKey",
+      flagName: "--example-api-key",
+      envVar: "EXAMPLE_API_KEY",
+      promptMessage: "Example API key",
+      defaultModel: "example/starter-model",
+      resolveDefaultModel,
+    });
+
+    const result = await method.run({
+      config: { agents: { defaults: { model: "other/current" } } },
+      env: {},
+      opts: { exampleApiKey: "test-token" },
+      credentialOnly: true,
+      prompter: createTestWizardPrompter(),
+      runtime: createTestRuntime(),
+      secretInputMode: "plaintext",
+      isRemote: true,
+      openUrl: vi.fn(),
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    });
+
+    expect(result.profiles).toEqual([
+      {
+        profileId: "example:default",
+        credential: { type: "api_key", provider: "example", key: "test-token" },
+      },
+    ]);
+    expect(result.defaultModel).toBeUndefined();
+    expect(resolveDefaultModel).not.toHaveBeenCalled();
   });
 });

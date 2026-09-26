@@ -13,7 +13,7 @@ import { secretRefKey } from "../secrets/ref-contract.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
-import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
+import { resolveAuthProfileEligibility, resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -21,6 +21,7 @@ import {
   isNonSecretApiKeyMarker,
   resolveOAuthApiKeyMarker,
 } from "./model-auth-markers.js";
+import { resolveProviderEntryApiKeyProfileReference } from "./model-auth-provider-config.js";
 import { resolveDirectProviderCredentialMode } from "./model-auth-runtime-shared.js";
 import {
   resolveApiKeyFromCredential,
@@ -81,6 +82,54 @@ function resolveCatalogDirectAuthMode(config: OpenClawConfig | undefined, provid
     inferredMode: "api-key",
   });
   return mode === "oauth" || mode === "token" ? mode : "api_key";
+}
+
+function resolveCatalogProfileBinding(params: {
+  config?: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  store: AuthProfileStore;
+  excludeProfileIds?: readonly string[];
+}) {
+  const reference = resolveProviderEntryApiKeyProfileReference({
+    cfg: params.config,
+    sourceConfig: params.sourceConfig,
+    authAliasLookupParams: { config: params.config, env: params.env },
+    provider: params.provider,
+    store: params.store,
+  });
+  if (reference.kind === "profile-incompatible") {
+    throw new Error(
+      `Configured apiKey profile "${reference.profileId}" is incompatible with provider "${params.provider}".`,
+    );
+  }
+  if (reference.kind !== "profile") {
+    return undefined;
+  }
+  const eligibility = resolveAuthProfileEligibility({
+    cfg: params.config,
+    authAliasLookupParams: { config: params.config, env: params.env },
+    provider: reference.credential.provider,
+    store: params.store,
+    profileId: reference.profileId,
+  });
+  const resolved =
+    !params.excludeProfileIds?.includes(reference.profileId) &&
+    (eligibility.eligible || eligibility.reasonCode === "unresolved_ref")
+      ? resolveApiKeyFromCredential(reference.credential, params.env)
+      : undefined;
+  if (!resolved) {
+    throw new Error(
+      `Configured apiKey profile "${reference.profileId}" is unavailable for provider "${params.provider}". Restore the referenced credential before retrying discovery.`,
+    );
+  }
+  return {
+    apiKey: resolved.apiKey,
+    discoveryApiKey: resolved.discoveryApiKey,
+    profileId: reference.profileId,
+    mode: reference.credential.type,
+  };
 }
 
 /** Create a resolver over the credential map already selected for one lifecycle generation. */
@@ -198,6 +247,17 @@ export function createProviderApiKeyResolver(
         mode: resolveCatalogDirectAuthMode(config, authProvider),
       };
     }
+    const authStore = resolveAuthProfileStoreInput(authStoreInput);
+    const binding = resolveCatalogProfileBinding({
+      config,
+      sourceConfig: sourceConfigForSecrets,
+      env,
+      provider: authProvider,
+      store: authStore,
+    });
+    if (binding) {
+      return binding;
+    }
     const fromConfig = resolveConfigBackedProviderAuth({
       provider: authProvider,
       config,
@@ -213,7 +273,6 @@ export function createProviderApiKeyResolver(
         mode: fromConfig.mode,
       };
     }
-    const authStore = resolveAuthProfileStoreInput(authStoreInput);
     const fromProfiles = resolveApiKeyFromProfiles({
       provider: authProvider,
       store: authStore,
@@ -250,6 +309,17 @@ export function createProviderAuthResolver(
     const lookupCaches = getLookupCaches();
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
     const authStore = resolveAuthProfileStoreInput(authStoreInput);
+    const binding = resolveCatalogProfileBinding({
+      config,
+      sourceConfig: sourceConfigForSecrets,
+      env,
+      provider: authProvider,
+      store: authStore,
+      excludeProfileIds: options?.excludeProfileIds,
+    });
+    if (binding) {
+      return { ...binding, source: "profile" as const };
+    }
     const excludedProfileIds = new Set(options?.excludeProfileIds);
     const ids = resolveCatalogAuthProfileOrder({
       config,

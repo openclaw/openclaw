@@ -4,11 +4,15 @@ import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createRuntimeEnv,
+  createTestWizardPrompter,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -66,6 +70,48 @@ async function captureStreamPayload(
 }
 
 describe("zai provider plugin", () => {
+  it.each(["api-key", "coding-cn"])(
+    "connects %s without sending an inference probe or choosing a model",
+    async (methodId) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const method = provider.auth.find((candidate) => candidate.id === methodId);
+      if (!method) {
+        throw new Error(`Missing auth method ${methodId}`);
+      }
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async () => new Response(null, { status: 401 }));
+      try {
+        const result = await method.run({
+          config: { agents: { defaults: { model: "other/current" } } },
+          env: {},
+          opts: { zaiApiKey: "test-zai-key" },
+          credentialOnly: true,
+          prompter: createTestWizardPrompter(),
+          runtime: createRuntimeEnv(),
+          secretInputMode: "plaintext",
+          isRemote: true,
+          openUrl: vi.fn(),
+          oauth: { createVpsAwareHandlers: vi.fn() },
+        });
+        expect(result.profiles[0]?.credential).toEqual({
+          type: "api_key",
+          provider: "zai",
+          key: "test-zai-key",
+        });
+        expect(result.configPatch?.models?.providers?.zai?.baseUrl).toBe(
+          methodId === "coding-cn"
+            ? "https://open.bigmodel.cn/api/coding/paas/v4"
+            : "https://api.z.ai/api/paas/v4",
+        );
+        expect(result.defaultModel).toBeUndefined();
+        expect(fetch).not.toHaveBeenCalled();
+      } finally {
+        fetch.mockRestore();
+      }
+    },
+  );
+
   it("preserves all regional auth choices and the exact manifest-owned static catalog", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 

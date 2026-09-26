@@ -179,6 +179,7 @@
       "personalAccount": true,
       "choiceId": "xai-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "xAI API key",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",

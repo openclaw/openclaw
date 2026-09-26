@@ -158,7 +158,7 @@ async function runZaiApiKeyAuth(
 ): Promise<{
   profiles: Array<{ profileId: string; credential: ReturnType<typeof buildApiKeyCredential> }>;
   configPatch: ReturnType<typeof applyZaiProviderConnectionConfig>;
-  defaultModel: string;
+  defaultModel?: string;
   notes?: string[];
 }> {
   const { apiKey, input, mode } = await captureProviderApiKey(ctx, {
@@ -175,7 +175,9 @@ async function runZaiApiKeyAuth(
     missingInputMessage: "Missing Z.AI API key.",
   });
 
-  const detected = await detectZaiEndpoint({ apiKey, ...(endpoint ? { endpoint } : {}) });
+  const detected = ctx.credentialOnly
+    ? null
+    : await detectZaiEndpoint({ apiKey, ...(endpoint ? { endpoint } : {}) });
   const modelIdOverride = detected?.modelId;
   const nextEndpoint = detected?.endpoint ?? endpoint ?? (await promptForZaiEndpoint(ctx));
   const preset = {
@@ -195,7 +197,7 @@ async function runZaiApiKeyAuth(
       },
     ],
     configPatch: applyZaiProviderConnectionConfig(ctx.config, preset),
-    defaultModel: `zai/${resolveZaiModelId(preset)}`,
+    ...(!ctx.credentialOnly ? { defaultModel: `zai/${resolveZaiModelId(preset)}` } : {}),
     ...(detected?.note ? { notes: [detected.note] } : {}),
   };
 }

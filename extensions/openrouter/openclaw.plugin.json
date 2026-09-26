@@ -57,6 +57,7 @@
       "method": "api-key",
       "choiceId": "openrouter-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "OpenRouter API key",
       "groupId": "openrouter",
       "groupLabel": "OpenRouter",

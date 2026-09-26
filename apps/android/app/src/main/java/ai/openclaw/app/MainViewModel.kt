@@ -544,9 +544,17 @@ class MainViewModel private constructor(
   val gatewayUpdateAvailable: StateFlow<GatewayUpdateAvailableSummary?> = runtimeState(initial = null) { it.gatewayUpdateAvailable }
   val modelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.modelCatalog }
   val providerModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.providerModelCatalog }
+  val providerModelTagsDescribeDefaults: StateFlow<Boolean> = runtimeState(initial = false) { it.providerModelTagsDescribeDefaults }
+  val providerModelOutcomes: StateFlow<List<GatewayModelProviderOutcome>> = runtimeState(initial = emptyList()) { it.providerModelOutcomes }
+  val providerModelPendingProviders: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.providerModelPendingProviders }
+  val providerDecisionModels: StateFlow<List<GatewayDecisionModelSummary>> = runtimeState(initial = emptyList()) { it.providerDecisionModels }
+  val providerAutomaticUtilityModel: StateFlow<String?> = runtimeState(initial = null) { it.providerAutomaticUtilityModel }
+  val providerModelSelectionRestricted: StateFlow<Boolean> = runtimeState(initial = false) { it.providerModelSelectionRestricted }
+  val providerPolicyDefaultModel: StateFlow<String?> = runtimeState(initial = null) { it.providerPolicyDefaultModel }
   val providerModelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.providerModelCatalogRefreshing }
   val providerModelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.providerModelCatalogErrorText }
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
+  internal val modelAuthCapabilities: StateFlow<List<ProviderAuthProvider>> = runtimeState(initial = emptyList()) { it.modelAuthCapabilities }
   val modelFavorites: StateFlow<List<String>> = prefs.modelFavorites
   val modelRecents: StateFlow<List<String>> = prefs.modelRecents
   val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
@@ -573,6 +581,10 @@ class MainViewModel private constructor(
   val cronActionState: StateFlow<GatewayCronActionState> = runtimeState(initial = GatewayCronActionState.Idle) { it.cronActionState }
   val pendingCronRunJobIds: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.pendingCronRunJobIds }
   internal val usageState = runtimeState(initial = GatewaySummaryState<GatewayUsageSummary>()) { it.usageState }
+  internal val providerSessionSpendState = runtimeState(initial = GatewaySummaryState<Map<String, GatewayProviderSessionSpend>>()) { it.providerSessionSpendState }
+  internal val installedAgentsState = runtimeState(initial = GatewaySummaryState<List<GatewayInstalledAgent>>()) { it.installedAgentsState }
+  val installedAgentsAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.installedAgentsAvailable }
+  internal val gatewayConfigRevision: StateFlow<Long> = runtimeState(initial = 0L) { it.gatewayConfigRevision }
   internal val skillsState = runtimeState(initial = GatewaySummaryState<GatewaySkillsSummary>()) { it.skillsState }
   val clawHubSkillMethodsAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.clawHubSkillMethodsAvailable }
@@ -1533,6 +1545,16 @@ class MainViewModel private constructor(
     ensureRuntime().refreshProviderModels(refresh)
   }
 
+  fun refreshProviderSessionSpend() {
+    ensureRuntime().refreshProviderSessionSpend()
+  }
+
+  fun refreshInstalledAgents() {
+    ensureRuntime().refreshInstalledAgents()
+  }
+
+  internal fun createGatewayModelSettingsController(): GatewayModelSettingsController? = runtimeRef.value?.createGatewayModelSettingsController()
+
   fun refreshTalkSetupReadiness() {
     ensureRuntime().refreshTalkSetupReadiness()
   }
@@ -1927,13 +1949,7 @@ class MainViewModel private constructor(
   /** Reads the authoritative flows at commit time so stale Compose callbacks cannot cross chats. */
   private fun currentChatComposerOwner(): ChatComposerOwner? {
     val runtime = runtimeRef.value ?: return null
-    return resolveChatComposerOwner(
-      gatewayStableId = activeGatewayStableId.value,
-      gatewayDefaultAgentId = runtime.chat.sessionOwnerAgentId.value ?: runtime.gatewayDefaultAgentId.value,
-      lastVerifiedOwner = runtime.chat.composerDefaultAgentOwner.value,
-      sessionKey = runtime.chat.sessionKey.value,
-      mainSessionKey = runtime.mainSessionKey.value,
-    )
+    return runtime.captureChatComposerOwner()
   }
 
   /** Captures a share before async runtime startup; later hello/alias resolution may migrate it. */

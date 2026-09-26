@@ -7,9 +7,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -23,6 +29,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.lang.reflect.Field
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -56,10 +64,93 @@ class GatewaySummaryRuntimeTest {
         runtime.dreamingState.value,
         runtime.healthLogsState.value,
         runtime.usageState.value,
+        runtime.providerSessionSpendState.value,
+        runtime.installedAgentsState.value,
       )
 
     summaries.forEach { assertNull("an unrequested summary is not a successful empty response", it.summary) }
   }
+
+  @Test
+  fun installedAgentRosterIsCapabilityGatedAndRetiresOnDisconnect() =
+    runBlocking<Unit> {
+      val runtime = createRuntime()
+      connect(runtime)
+      @Suppress("UNCHECKED_CAST")
+      val scopes = field(runtime, "_operatorScopes").get(runtime) as MutableStateFlow<List<String>>
+      scopes.value = listOf("operator.read")
+      val requests = Channel<HeldSummaryRequest>(Channel.UNLIMITED)
+      runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+        check(method == "acpx.agents.list")
+        val response = CompletableDeferred<String>()
+        requests.send(HeldSummaryRequest(response, currentCoroutineContext().job))
+        response.await()
+      }
+      assertFalse(runtime.installedAgentsAvailable.value)
+      runtime.javaClass
+        .getDeclaredMethod("replaceGatewayMethods", Set::class.java, java.lang.Boolean.TYPE)
+        .apply { isAccessible = true }
+        .invoke(runtime, setOf("acpx.agents.list"), true)
+      assertTrue(runtime.installedAgentsAvailable.value)
+      runtime.refreshInstalledAgents()
+      val first = withTimeout(2_000) { requests.receive() }
+      val payload = """{"agents":[{"id":"opencode","name":"OpenCode","runtimeId":"acp-opencode","installation":"missing","enabled":true}]}"""
+      first.complete(payload)
+      val agent = checkNotNull(runtime.installedAgentsState.value.summary).single()
+      assertEquals("acp-opencode", agent.runtimeId)
+      assertEquals(GatewayInstalledAgentInstallation.Missing, agent.installation)
+      assertTrue(agent.enabled)
+
+      runtime.refreshInstalledAgents()
+      val retired = withTimeout(2_000) { requests.receive() }
+      runtime.disconnect()
+      retired.complete(payload)
+      assertFalse(runtime.installedAgentsAvailable.value)
+      assertNull(runtime.installedAgentsState.value.summary)
+      assertNull(runtime.installedAgentsState.value.errorText)
+      assertFalse(runtime.installedAgentsState.value.refreshing)
+      requests.close()
+    }
+
+  @Test
+  fun providerSpendUsesGlobalThirtyDayScopeAndRetiresOnDisconnect() =
+    runBlocking<Unit> {
+      val runtime = createRuntime()
+      connect(runtime)
+      val requests = Channel<Pair<JsonObject, HeldSummaryRequest>>(Channel.UNLIMITED)
+      runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+        check(method == "sessions.usage")
+        val response = CompletableDeferred<String>()
+        requests.send(Json.parseToJsonElement(checkNotNull(params)).jsonObject to HeldSummaryRequest(response, currentCoroutineContext().job))
+        response.await()
+      }
+      runtime.refreshProviderSessionSpend()
+      val (params, first) = withTimeout(2_000) { requests.receive() }
+      assertEquals("all", params.getValue("agentScope").jsonPrimitive.content)
+      assertFalse(params.containsKey("agentId"))
+      assertEquals("family", params.getValue("groupBy").jsonPrimitive.content)
+      assertEquals("specific", params.getValue("mode").jsonPrimitive.content)
+      assertEquals(ZoneId.systemDefault().id, params.getValue("timeZone").jsonPrimitive.content)
+      assertEquals("1000", params.getValue("limit").jsonPrimitive.content)
+      assertFalse(params.getValue("includeContextWeight").jsonPrimitive.boolean)
+      assertEquals(
+        LocalDate.parse(params.getValue("startDate").jsonPrimitive.content).plusDays(29),
+        LocalDate.parse(params.getValue("endDate").jsonPrimitive.content),
+      )
+      val payload = """{"aggregates":{"byProvider":[{"provider":"fixture","count":43,"totals":{"totalCost":1.25,"totalTokens":3400000}}]}}"""
+      first.complete(payload)
+      assertEquals(mapOf("fixture" to GatewayProviderSessionSpend(1.25, 3_400_000L, 43L)), runtime.providerSessionSpendState.value.summary)
+      assertFalse(runtime.providerSessionSpendState.value.refreshing)
+
+      runtime.refreshProviderSessionSpend()
+      val (_, retired) = withTimeout(2_000) { requests.receive() }
+      runtime.disconnect()
+      retired.complete(payload)
+      assertNull(runtime.providerSessionSpendState.value.summary)
+      assertNull(runtime.providerSessionSpendState.value.errorText)
+      assertFalse(runtime.providerSessionSpendState.value.refreshing)
+      requests.close()
+    }
 
   @Test
   fun aFailedFirstRefreshDoesNotInventAnEmptyChannelSnapshot() =

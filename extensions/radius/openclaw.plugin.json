@@ -26,6 +26,7 @@
       "method": "api-key",
       "choiceId": "radius-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Radius API key",
       "groupId": "radius",
       "groupLabel": "Radius",

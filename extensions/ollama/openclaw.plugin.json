@@ -64,6 +64,7 @@
       "method": "api-key",
       "choiceId": "ollama-cloud",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Ollama Cloud",
       "choiceHint": "Hosted models via ollama.com",
       "icon": "https://cdn.simpleicons.org/ollama",

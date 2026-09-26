@@ -179,6 +179,7 @@
       "method": "api-key",
       "choiceId": "cohere-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Cohere API key",
       "groupId": "cohere",
       "groupLabel": "Cohere",

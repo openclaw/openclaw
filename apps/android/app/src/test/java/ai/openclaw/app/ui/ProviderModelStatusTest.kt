@@ -2,9 +2,6 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayModelProviderSummary
 import ai.openclaw.app.GatewayModelSummary
-import ai.openclaw.app.parseGatewayModels
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -36,7 +33,6 @@ class ProviderModelStatusTest {
               id = "openai",
               displayName = "OpenAI",
               status = "ok",
-              profileCount = 1,
             ),
           ),
         models =
@@ -46,7 +42,7 @@ class ProviderModelStatusTest {
           ),
       )
 
-    assertEquals(listOf("openai", "byteplus"), rows.map { it.id })
+    assertEquals(listOf("byteplus", "openai"), rows.map { it.id })
     assertEquals(1, rows.first { it.id == "openai" }.modelCount)
     assertEquals(1, rows.first { it.id == "byteplus" }.modelCount)
     assertEquals(listOf("gpt-5.5"), rows.first { it.id == "openai" }.models.map { it.id })
@@ -65,7 +61,6 @@ class ProviderModelStatusTest {
               id = "openai",
               displayName = "OpenAI",
               status = "ok",
-              profileCount = 1,
             ),
           ),
         models = emptyList(),
@@ -86,7 +81,6 @@ class ProviderModelStatusTest {
               id = "openai",
               displayName = "OpenAI",
               status = "ok",
-              profileCount = 1,
             ),
           ),
         models = listOf(model(provider = "openai", id = "gpt-5.5")),
@@ -107,7 +101,6 @@ class ProviderModelStatusTest {
               id = "custom",
               displayName = "Custom",
               status = "ok",
-              profileCount = 1,
             ),
           ),
         models = listOf(model(provider = "custom", id = "offline-model", available = false)),
@@ -122,7 +115,7 @@ class ProviderModelStatusTest {
   fun oneAvailableRouteMakesProviderReadyAndModelsSortByName() {
     val rows =
       providerRows(
-        providers = emptyList(),
+        providers = listOf(GatewayModelProviderSummary("custom", "Custom", "expired", authType = "oauth", renewalFailed = true)),
         models =
           listOf(
             model(provider = "custom", id = "zeta", name = "Zeta", available = null),
@@ -133,6 +126,7 @@ class ProviderModelStatusTest {
     assertEquals(ProviderAvailability.Available, rows.single().availability)
     assertEquals(listOf("alpha", "zeta"), rows.single().models.map { it.id })
     assertTrue(rows.single().ready)
+    assertFalse(rows.single().renewalFailed)
   }
 
   @Test
@@ -143,7 +137,6 @@ class ProviderModelStatusTest {
           id = "openai",
           displayName = "OpenAI",
           status = "ok",
-          profileCount = 1,
         ),
       )
 
@@ -157,84 +150,22 @@ class ProviderModelStatusTest {
     )
   }
 
-  @Test
-  fun configuredModelCopyHandlesZeroOneAndMany() {
-    assertEquals("No configured models", configuredModelsCountText(0))
-    assertEquals("1 configured model", configuredModelsCountText(1))
-    assertEquals("2 configured models", configuredModelsCountText(2))
-    assertEquals(
-      "No configured models. Refresh to recheck availability.",
-      configuredModelsOverviewText(0),
-    )
-    assertEquals(
-      "1 configured model. Refresh to recheck availability.",
-      configuredModelsOverviewText(1),
-    )
-    assertEquals(
-      "2 configured models. Refresh to recheck availability.",
-      configuredModelsOverviewText(2),
-    )
-  }
-
-  @Test
-  fun videoCapabilitySurvivesGatewayParsingAndRendering() {
-    val payload =
-      Json
-        .parseToJsonElement(
-          """[{"id":"video-model","name":"Video Model","provider":"openai","input":["text","video"]}]""",
-        ).jsonArray
-    val model = parseGatewayModels(payload).single()
-
-    assertTrue(model.supportsVideo)
-    assertEquals("video", modelCapabilities(model))
-  }
-
-  @Test
-  fun modelCapabilitiesLocalizeControlledLabelsWithoutChangingGatewayMetadata() {
-    val model =
-      model(
-        provider = "custom-provider",
-        id = "model/internal-id",
-        name = "Model Display Name",
-        supportsReasoning = true,
-        supportsVision = true,
-        supportsAudio = true,
-        supportsVideo = true,
-        supportsDocuments = true,
-        contextTokens = 128_000,
-      )
-
-    assertEquals(
-      "reasoning / image / audio / video / document / 128k context",
-      modelCapabilities(model),
-    )
-    assertEquals("custom-provider", model.provider)
-    assertEquals("model/internal-id", model.id)
-    assertEquals("Model Display Name", model.name)
-  }
-
   private fun model(
     provider: String,
     id: String,
     name: String = id,
     available: Boolean? = null,
-    supportsReasoning: Boolean = false,
-    supportsVision: Boolean = false,
-    supportsAudio: Boolean = false,
-    supportsVideo: Boolean = false,
-    supportsDocuments: Boolean = false,
-    contextTokens: Long? = null,
   ): GatewayModelSummary =
     GatewayModelSummary(
       id = id,
       name = name,
       provider = provider,
-      supportsVision = supportsVision,
-      supportsAudio = supportsAudio,
-      supportsVideo = supportsVideo,
-      supportsDocuments = supportsDocuments,
-      supportsReasoning = supportsReasoning,
-      contextTokens = contextTokens,
+      supportsVision = false,
+      supportsAudio = false,
+      supportsVideo = false,
+      supportsDocuments = false,
+      supportsReasoning = false,
+      contextTokens = null,
       available = available,
     )
 }

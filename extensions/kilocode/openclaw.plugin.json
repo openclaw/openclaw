@@ -35,6 +35,7 @@
       "method": "api-key",
       "choiceId": "kilocode-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Kilo Gateway API key",
       "choiceHint": "API key (OpenRouter-compatible)",
       "groupId": "kilocode",

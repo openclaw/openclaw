@@ -25,6 +25,7 @@
       "method": "api-key",
       "choiceId": "synthetic-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Synthetic API key",
       "groupId": "synthetic",
       "groupLabel": "Synthetic",

@@ -19,6 +19,10 @@ import {
 } from "./auth-profiles/credential-state.js";
 import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth.js";
+import {
+  isOAuthRefreshFence,
+  isPendingOAuthRefreshFence,
+} from "./auth-profiles/oauth-refresh-marker.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -36,6 +40,8 @@ type AuthProfileHealth = {
   type: "oauth" | "token" | "api_key";
   status: AuthProfileHealthStatus;
   reasonCode?: AuthCredentialReasonCode;
+  /** The refresh owner settled this OAuth credential's renewal as failed. */
+  renewalFailed?: true;
   expiresAt?: number;
   remainingMs?: number;
   source: AuthProfileSource;
@@ -264,6 +270,10 @@ function buildProfileHealth(params: {
       type: "oauth",
       status: eligibility.reasonCode === "expired" ? "expired" : "missing",
       reasonCode: eligibility.reasonCode,
+      ...(isOAuthRefreshFence(effectiveCredential) &&
+      !isPendingOAuthRefreshFence(effectiveCredential)
+        ? { renewalFailed: true as const }
+        : {}),
       source,
       label,
     };

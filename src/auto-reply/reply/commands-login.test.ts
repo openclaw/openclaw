@@ -354,9 +354,14 @@ describe("handleLoginCommand", () => {
     expect(patchSessionEntryMock).not.toHaveBeenCalled();
   });
 
-  it("hands setup-only secret input to Configure Models", async () => {
+  it("hands API-key input to Connect provider without starting a chat login", async () => {
     const result = await handleLoginCommand(buildLoginParams("/login openai/openai-api-key"), true);
-    expect(result?.reply?.text).toContain("Models → Configure Models");
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "OpenAI API Key needs secure input that chat must not store. Open Control UI → Models → Connect provider, then choose “OpenAI API Key”.",
+      },
+    });
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
   });
 

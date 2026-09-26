@@ -243,6 +243,7 @@
       "method": "api-key",
       "choiceId": "baseten-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Baseten API key",
       "groupId": "baseten",
       "groupLabel": "Baseten",

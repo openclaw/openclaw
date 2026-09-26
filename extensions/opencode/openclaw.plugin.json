@@ -194,6 +194,7 @@
       "method": "api-key",
       "choiceId": "opencode-zen",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "OpenCode Zen catalog",
       "groupId": "opencode",
       "groupLabel": "OpenCode",

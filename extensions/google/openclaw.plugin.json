@@ -913,6 +913,7 @@
       "method": "api-key",
       "choiceId": "gemini-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Google AI Studio API key",
       "choiceHint": "Supported API-key access from aistudio.google.com/apikey",
       "groupId": "google",

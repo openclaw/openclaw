@@ -119,6 +119,8 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
 
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  /** Provider inventory role tags describe shared defaults, not the requested agent. */
+  tagsScope: Type.Optional(Type.Literal("defaults")),
   /** The Gateway owns role restrictions and the effective permitted reset target. */
   modelSelectionPolicy: Type.Optional(
     closedObject({

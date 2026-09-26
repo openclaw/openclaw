@@ -341,6 +341,7 @@
       "method": "api-key",
       "choiceId": "volcengine-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Volcano Engine API key",
       "groupId": "volcengine",
       "groupLabel": "Volcano Engine",

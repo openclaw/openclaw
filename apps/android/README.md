@@ -22,6 +22,55 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 - Open the folder `apps/android`.
 
+## Providers and models
+
+Open **Settings → Providers and models** for the Gateway's **Models** page.
+**Defaults for all agents** sets the primary, utility, decision, and fallback
+models, thinking level, and Fast Mode. Utility models can be automatic, disabled,
+or selected explicitly. Decision models use their own catalog and remain disabled
+until selected; chat models are not their fallback. Agent-specific settings
+continue to override these shared defaults. Changes require administrator access.
+
+When the Gateway provides **Installed agents**, check its coding-agent installation
+status and enable or disable each integration. These are apps on the Gateway
+computer, not models. Each app owns its installation and sign-in; enabling one
+does not authenticate it.
+
+Under **Provider access**, search by provider or model, view the selected agent's credential sources, and
+expand each card's models. **Gateway default** and **Fallback** identify the
+Gateway's shared model defaults, not the selected agent's overrides or active
+requests. Older Gateways that omit this tag scope omit those badges. **More
+models** expands the remaining inventory without labeling it old. Expanding a
+provider or model does not change the configured default.
+
+**Connect Provider** and **Add provider** group account, device-code, subscription,
+token, and API-key methods by the same provider families as the Gateway's model
+configuration assistant. Regional and plan-specific methods keep their original
+credential owners. Methods that require the broader Gateway setup remain listed
+with their exact name and instructions for `openclaw configure --section model`.
+**Edit API key** opens a masked field only for an existing key; new connections
+start with the method chooser.
+**Test connection** displays the Gateway's result, including partial failures.
+**Remove key** asks for confirmation and removes only saved API keys, preserving
+OAuth and token profiles; environment-managed keys remain managed on the
+Gateway computer. Removing a shared Gateway config key also affects other agents
+using that key; the confirmation calls this out. Saved profile changes keep the
+selected agent's credential scope. These actions require administrator access.
+Providers without app sign-in still offer **Set up on Gateway** guidance.
+
+Cards distinguish **Credentials configured** from **Ready** using the Gateway's
+catalog result. Inactive or excluded profiles do not count as configured
+credentials; saved inactive API keys remain removable.
+**Global usage and cost** shows provider-reported quotas and
+billing; **Global session spend · 30d** shows the Gateway's session totals, not
+just the selected agent. Missing metrics are not displayed as zero. Refresh
+updates these independent sources without hiding provider controls when usage
+is unavailable.
+
+OAuth renewal remains automatic. **Renewal failed** appears only when the
+Gateway reports a terminal failure, not merely an expired access token. Older
+Gateways without that signal cannot show the distinction.
+
 ## Session colors
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.

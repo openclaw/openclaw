@@ -22,6 +22,8 @@
       "provider": "clawrouter",
       "method": "api-key",
       "choiceId": "clawrouter-api-key",
+      "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "ClawRouter proxy key",
       "choiceHint": "Approved models through one managed key",
       "groupId": "clawrouter",

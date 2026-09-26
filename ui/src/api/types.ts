@@ -347,3 +347,6 @@ export type {
 export type ProviderLoginOption = NonNullable<
   NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["loginOptions"]
 >[number];
+export type ProviderSetupOption = NonNullable<
+  NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["setupOptions"]
+>[number];

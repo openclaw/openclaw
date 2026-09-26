@@ -24,6 +24,7 @@ import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-valu
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { defineModelAuthCapabilityTests } from "./models-auth-capabilities.suite.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type BuildAuthHealthSummary = typeof import("../../agents/auth-health.js").buildAuthHealthSummary;
@@ -137,6 +138,11 @@ vi.mock("../server-model-catalog-auth.js", () => ({
 }));
 
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  createApiKeyProfile,
+  createStaticApiKeyProvider,
+  createOpenAiCodexOauthHealthSummary,
+} from "./models-auth-health.test-support.js";
 import { modelsAuthOrderHandlers } from "./models-auth-order.js";
 import { clearModelAuthStatusUsageCache } from "./models-auth-status-usage-cache.js";
 import {
@@ -190,17 +196,6 @@ function createActiveRun(providerId: string, authProviderId?: string, agentId = 
   };
 }
 
-function createApiKeyProfile(provider: string) {
-  return {
-    profileId: `${provider}:default`,
-    provider,
-    type: "api_key",
-    status: "static",
-    source: "store",
-    label: `${provider}:default`,
-  } satisfies AuthHealthSummary["profiles"][number];
-}
-
 function expiredOAuthProfile(profileId: string, provider = "claude-cli") {
   return {
     profileId,
@@ -237,14 +232,6 @@ function mockHealthProvider(provider: AuthHealthSummary["providers"][number], no
     profiles: provider.profiles,
     providers: [provider],
   });
-}
-
-function createStaticApiKeyProvider(provider: string) {
-  return {
-    provider,
-    status: "static",
-    profiles: [createApiKeyProfile(provider)],
-  } satisfies AuthHealthSummary["providers"][number];
 }
 
 function createLogoutOptions(
@@ -433,33 +420,6 @@ async function expectLogoutFailureDoesNotAbortRun(params: {
     run: activeRun,
     message: params.message,
   });
-}
-
-function createOpenAiCodexOauthHealthSummary(): AuthHealthSummary {
-  const profile = {
-    profileId: "openai:default",
-    provider: "openai",
-    type: "oauth",
-    status: "ok",
-    expiresAt: 1_000_000,
-    remainingMs: 60_000,
-    source: "store",
-    label: "openai:default",
-  } satisfies AuthHealthSummary["profiles"][number];
-  return {
-    now: 0,
-    warnAfterMs: 0,
-    profiles: [profile],
-    providers: [
-      {
-        provider: "openai",
-        status: "ok",
-        expiresAt: 1_000_000,
-        remainingMs: 60_000,
-        profiles: [profile],
-      },
-    ],
-  };
 }
 
 describe("models.authStatus", () => {
@@ -836,57 +796,12 @@ describe("models.authStatus", () => {
     },
   );
 
-  it("projects provider capabilities from the published lifecycle metadata", async () => {
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "provider-auth",
-          origin: "bundled",
-          providers: ["OpenAI", "github-copilot", "media-only"],
-          providerAuthAliases: { "openai-legacy": "openai" },
-          providerAuthChoices: [
-            {
-              provider: "openai-legacy",
-              method: "api-key",
-              choiceId: "openai-api-key",
-              choiceLabel: "OpenAI API key",
-              appGuidedSecret: true,
-            },
-            {
-              provider: "openai",
-              method: "oauth",
-              choiceId: "openai-oauth",
-              choiceLabel: "OpenAI OAuth",
-            },
-            {
-              provider: "media-only",
-              method: "api-key",
-              choiceId: "media-only-key",
-              choiceLabel: "Media API key",
-              onboardingScopes: ["image-generation"],
-            },
-            {
-              provider: "github-copilot",
-              method: "oauth",
-              choiceId: "github-copilot-oauth",
-              choiceLabel: "GitHub Copilot OAuth",
-            },
-          ],
-        },
-        {
-          id: "search-tool",
-          setup: { providers: [{ id: "search-tool", authMethods: ["api-key"] }] },
-        },
-      ],
-    });
-    setPreparedMetadataSnapshot(snapshot);
-
-    const result = await readAuthStatus();
-
-    expect(result.providerCapabilities).toEqual([
-      { provider: "github-copilot", apiKeySupported: false, quickApiKeySetup: false },
-      { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
-    ]);
+  defineModelAuthCapabilityTests({
+    setPreparedMetadataSnapshot,
+    readAuthStatus,
+    setConfig: (config) => {
+      mocks.getRuntimeConfig.mockReturnValue(config);
+    },
   });
 
   it("uses the published metadata owner for provider env auth and aliases", async () => {
@@ -1374,29 +1289,28 @@ describe("models.authStatus", () => {
     expect(provider?.profiles).toHaveLength(1);
   });
 
-  it("forwards unresolved auth reason codes to status clients", async () => {
+  it.each([
+    { status: "missing", reasonCode: "unresolved_ref", renewalFailed: undefined },
+    { status: "expired", reasonCode: "expired", renewalFailed: true },
+  ] as const)("forwards $reasonCode credential health to status clients", async (health) => {
     const profile = {
       profileId: "openai-codex:default",
       provider: "openai-codex",
       type: "oauth",
-      status: "missing",
-      reasonCode: "unresolved_ref",
+      ...health,
       source: "store",
       label: "openai-codex:default",
     } satisfies AuthHealthSummary["profiles"][number];
     mockHealthProvider({
-      provider: "openai-codex",
-      status: "missing",
+      provider: profile.provider,
+      status: health.status,
       profiles: [profile],
     });
 
-    const opts = createOptions();
-    await handler(opts);
-
-    const [, payload] = firstRespondCall(opts) ?? [];
-    const result = payload as ModelAuthStatusResult;
-    expect(result.providers[0]?.status).toBe("missing");
-    expect(result.providers[0]?.profiles[0]?.reasonCode).toBe("unresolved_ref");
+    const result = await readAuthStatus();
+    expect(result.providers[0]?.status).toBe(health.status);
+    expect(result.providers[0]?.profiles[0]?.reasonCode).toBe(health.reasonCode);
+    expect(result.providers[0]?.profiles[0]?.renewalFailed).toBe(health.renewalFailed);
   });
 
   it("shares provider resolution across 20 clients of one published auth generation", async () => {

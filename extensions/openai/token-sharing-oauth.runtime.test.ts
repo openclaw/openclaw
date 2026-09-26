@@ -52,6 +52,16 @@ async function identityToken() {
     .sign(keys.privateKey);
 }
 
+function authorizationCallbackUrl() {
+  const callback = new URL(authorization.searchParams.get("redirect_uri")!);
+  callback.searchParams.set("state", authorization.searchParams.get("state")!);
+  callback.searchParams.set(callbackError ? "error" : "code", callbackError ?? "test-code");
+  for (const id of callbackClientIds) {
+    callback.searchParams.append("client_id", id);
+  }
+  return callback;
+}
+
 function context(): ProviderAuthContext {
   const callbackOwner = new AbortController();
   return {
@@ -59,6 +69,9 @@ function context(): ProviderAuthContext {
     prompter: {
       note: vi.fn(async () => undefined),
       select: vi.fn(async ({ initialValue }: { initialValue: string }) => initialValue),
+      text: vi.fn<ProviderAuthContext["prompter"]["text"]>(
+        async () => await new Promise<string>(() => {}),
+      ),
     },
     existingProfiles: [
       {
@@ -81,12 +94,7 @@ function context(): ProviderAuthContext {
     ],
     openUrl: async (url: string) => {
       authorization = new URL(url);
-      const callback = new URL(authorization.searchParams.get("redirect_uri")!);
-      callback.searchParams.set("state", authorization.searchParams.get("state")!);
-      callback.searchParams.set(callbackError ? "error" : "code", callbackError ?? "test-code");
-      for (const id of callbackClientIds) {
-        callback.searchParams.append("client_id", id);
-      }
+      const callback = authorizationCallbackUrl();
       // SSH forwards commonly target IPv4 even when localhost resolves to IPv6 first.
       callback.hostname = "127.0.0.1";
       callbackResponse = fetch(callback);
@@ -146,6 +154,87 @@ afterEach(async () => {
 });
 
 describe("ChatGPT token-sharing authorization", () => {
+  it.for([false, true])(
+    "completes remote sign-in from a masked redirect URL without a tunnel (registering=%s)",
+    async (registering, { signal }) => {
+      const ctx = context();
+      ctx.signal = signal;
+      ctx.isRemote = true;
+      if (registering) {
+        ctx.existingProfiles = [];
+        callbackClientIds = ["oaiapp_remote"];
+        idTokenAudience = "oaiapp_remote";
+      }
+      ctx.openUrl = async (url) => {
+        authorization = new URL(url);
+      };
+      ctx.prompter.text = vi.fn(async ({ sensitive, validate }) => {
+        const input = authorizationCallbackUrl().href;
+        expect(sensitive).toBe(true);
+        expect(validate?.(input)).toBeUndefined();
+        return input;
+      });
+
+      const result = await loginTokenSharing(ctx);
+      expect(callbackResponse).toBeUndefined();
+      expect(result.profiles[0]?.credential).toMatchObject({
+        access: "opaque-test-access",
+        clientId: registering ? "oaiapp_remote" : clientId,
+        authFlow: TOKEN_SHARING_AUTH_FLOW,
+      });
+      const form = request.mock.calls.find(([params]) => params.init?.method === "POST")![0].init
+        .body as URLSearchParams;
+      expect(form.get("code")).toBe("test-code");
+      expect(authorization.searchParams.get("code_challenge")).toBe(
+        createHash("sha256").update(form.get("code_verifier")!).digest("base64url"),
+      );
+    },
+  );
+
+  it.for(["origin", "state", "duplicate-state", "client-id", "authority", "cancel"])(
+    "rejects a remote redirect with invalid %s before exchanging credentials",
+    async (invalid, { signal }) => {
+      const ctx = context();
+      const controller = new AbortController();
+      ctx.signal = AbortSignal.any([signal, controller.signal]);
+      ctx.isRemote = true;
+      let revoked = false;
+      ctx.assertCurrent = () => {
+        if (revoked) {
+          throw new Error("Owner revoked");
+        }
+      };
+      ctx.openUrl = async (url) => {
+        authorization = new URL(url);
+      };
+      ctx.prompter.text = vi.fn(async () => {
+        const callback = authorizationCallbackUrl();
+        if (invalid === "origin") {
+          callback.hostname = "attacker.example";
+        }
+        if (invalid === "state") {
+          callback.searchParams.set("state", "another-login");
+        }
+        if (invalid === "duplicate-state") {
+          callback.searchParams.append("state", "another-login");
+        }
+        if (invalid === "client-id") {
+          callback.searchParams.set("client_id", "oaiapp_replaced");
+        }
+        if (invalid === "authority") {
+          revoked = true;
+        }
+        if (invalid === "cancel") {
+          controller.abort(new Error("Owner cancelled"));
+        }
+        return callback.href;
+      });
+
+      await expect(loginTokenSharing(ctx)).rejects.toThrow();
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { isRemote: false, browserLink: true },
     { isRemote: true, browserLink: true },
@@ -172,7 +261,7 @@ describe("ChatGPT token-sharing authorization", () => {
           expect(message).toContain(pendingUrl!);
         }
         if (isRemote) {
-          expect(message).toContain("8080:127.0.0.1:8080");
+          expect(message).toContain("paste the full redirect URL");
         }
         await visitBrowser(pendingUrl!);
       });

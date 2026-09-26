@@ -283,6 +283,7 @@ function mapProvider(
         type: prof.type,
         status: prof.status,
         reasonCode: prof.reasonCode,
+        ...(prof.renewalFailed ? { renewalFailed: true as const } : {}),
         source: configBoundProfileIds.has(prof.profileId)
           ? "config"
           : externalProfileIds.has(prof.profileId)

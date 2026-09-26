@@ -353,24 +353,30 @@ class ScreenTypographyLayoutTest {
   fun providerPageKeepsHeadingHierarchyAndPhoneGutters() {
     show { ProvidersModelsScreen(model, onBack = {}) }
     capture("providers-dark")
-    assertTextStyle("Providers & Models", type.display)
-    assertTextStyle("Review provider readiness\nand configured models.", type.caption)
+    assertTextStyle("Models", type.title)
     assertPhoneGutter()
-    assertTextStyle("1 configured model", type.caption, scroll = true)
-    assertTextStyle("gpt-5.2", type.caption, scroll = true)
+    composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("1 provider · 1 model"))
+    assertTextStyle("1 provider · 1 model", type.caption)
+    composeRule.onNodeWithText("OpenAI").performClick()
+    composeRule.onNodeWithText("1 more model").performScrollTo().performClick()
+    assertTextStyle("GPT-5.2", type.body, scroll = true)
   }
 
   @Test
   @Config(qualifiers = "w320dp-h800dp-mdpi")
-  fun providerHeadingWrapsWithoutClippingAtLargeFontScale() {
+  fun providerHeadingsAndDescriptionRemainReadableAtLargeFontScale() {
     show(fontScale = 2f) { ProvidersModelsScreen(model, onBack = {}) }
     capture("providers-large-dark")
-    val title = assertTextStyle("Providers & Models", type.display)
-    assertTrue("The large page title must wrap instead of shrinking or clipping", title.lineCount > 1)
-    assertFalse("The full page name must remain readable", title.hasVisualOverflow)
-    val titleBounds = composeRule.onNodeWithText("Providers & Models").getUnclippedBoundsInRoot()
-    val subtitleBounds = composeRule.onNodeWithText("Review provider readiness\nand configured models.").getUnclippedBoundsInRoot()
-    assertTrue("The wrapped heading must not overlap its helper copy", titleBounds.bottom <= subtitleBounds.top)
+    assertFalse("The page title must remain readable", assertTextStyle("Models", type.title).hasVisualOverflow)
+    val section = assertTextStyle("Defaults for all agents", type.section)
+    assertFalse("The full section name must remain readable: lines=${section.lineCount}, size=${section.size}, constraints=${section.layoutInput.constraints}, widthOverflow=${section.didOverflowWidth}, heightOverflow=${section.didOverflowHeight}", section.hasVisualOverflow)
+    val description = "Model and behavior defaults for all agents. Agent-specific settings override these defaults."
+    val descriptionLayout = assertTextStyle(description, type.caption)
+    assertTrue("The long description must wrap instead of shrinking or clipping", descriptionLayout.lineCount > 1)
+    assertFalse("The full description must remain readable", descriptionLayout.hasVisualOverflow)
+    val titleBounds = composeRule.onNodeWithText("Defaults for all agents").getUnclippedBoundsInRoot()
+    val subtitleBounds = composeRule.onNodeWithText(description).getUnclippedBoundsInRoot()
+    assertTrue("The section heading must not overlap its description", titleBounds.bottom <= subtitleBounds.top)
   }
 
   @Test
@@ -404,7 +410,7 @@ class ScreenTypographyLayoutTest {
   fun providerPageRetainsHeadingHierarchyInLightMode() {
     show(dark = false) { ProvidersModelsScreen(model, onBack = {}) }
     capture("providers-light")
-    assertTextStyle("Providers & Models", type.display)
+    assertTextStyle("Models", type.title)
     assertPhoneGutter()
   }
 

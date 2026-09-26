@@ -5,6 +5,10 @@
  */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createFailedOAuthRefreshFence,
+  createOAuthRefreshFence,
+} from "./auth-profiles/oauth-refresh-marker.js";
 import { parseLegacyCredentialEntry } from "./auth-profiles/persisted.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
@@ -315,6 +319,43 @@ describe("buildAuthHealthSummary", () => {
 
     expect(statuses["google:no-refresh"]).toBe("expired");
   });
+
+  it.each(["expired", "pending", "failed", "failed with healthy sibling"] as const)(
+    "distinguishes terminal renewal failure from %s credential state",
+    (state) => {
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const profileId = "example:saved";
+      const expired: OAuthCredential = {
+        type: "oauth",
+        provider: "example",
+        access: "synthetic-access",
+        refresh: "synthetic-refresh",
+        expires: now - 10_000,
+      };
+      const pending = createOAuthRefreshFence({ profileId, credential: expired });
+      const credential =
+        state === "expired"
+          ? expired
+          : state === "pending"
+            ? pending
+            : createFailedOAuthRefreshFence(pending);
+      const profiles: Record<string, OAuthCredential> = { [profileId]: credential };
+      if (state === "failed with healthy sibling") {
+        profiles["example:healthy"] = { ...expired, expires: now + 2 * DEFAULT_OAUTH_WARN_MS };
+      }
+
+      const summary = buildAuthHealthSummary({ store: { version: 1, profiles } });
+      const profile = summary.profiles.find((entry) => entry.profileId === profileId);
+      expect(summary.providers[0]?.status).toBe(
+        state === "failed with healthy sibling" ? "ok" : "expired",
+      );
+      expect(profile).toMatchObject({ profileId, type: "oauth", status: "expired" });
+      expect(profile?.renewalFailed).toBe(state.startsWith("failed") ? true : undefined);
+      expect(profile?.reasonCode).toBe(state === "expired" ? undefined : "expired");
+      expect(JSON.stringify(summary)).not.toContain(credential.access);
+      expect(JSON.stringify(summary)).not.toContain(credential.refresh);
+    },
+  );
 
   it("reports command-shaped API-key profiles as missing malformed auth", () => {
     const store = {

@@ -25,6 +25,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `provider` is optional and only affects native naming plus native plugin
     command availability.
   - `includeArgs=false` omits serialized argument metadata from the response.
+- `models.authStatus` (`operator.read`) returns provider credential health for an
+  agent. A profile's `renewalFailed: true` records a terminal OAuth renewal
+  failure. Ordinary access-token expiry and an in-progress renewal omit this
+  flag; `status: "expired"` or `reasonCode: "expired"` alone does not mean the
+  person needs to sign in again.
 - `tools.catalog` (`operator.read`) fetches the runtime tool catalog for an
   agent. The response includes grouped tools and provenance metadata:
   - `source`: `core` or `plugin`
@@ -123,7 +128,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `"provider-config"`: source-authored `models.providers.*.models` inventory,
   independent of picker allowlists. Rows include public model capabilities and
   route-aware availability, but omit provider endpoints, auth material, and
-  runtime request configuration.
+  runtime request configuration. `tagsScope: "defaults"` confirms that the
+  `default`, `fallback#…`, and `configured` tags describe shared `agents.defaults`,
+  independent of the requested agent's model overrides. Older Gateways omit
+  `tagsScope`; clients must not label their tags as shared defaults. Aliases,
+  execution runtime, and readiness remain agent-scoped.
 - `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 

@@ -149,6 +149,7 @@
       "method": "api-key",
       "choiceId": "mistral-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Mistral API key",
       "groupId": "mistral",
       "groupLabel": "Mistral AI",

@@ -2,9 +2,9 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
-import type { ModelAuthStatusResult, ProviderLoginOption } from "../../api/types.ts";
+import type { ModelAuthStatusResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { providerDisplayLabel, renderProviderBrandIcon } from "../../components/provider-icon.ts";
+import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { WizardLoginController } from "../../components/wizard-login-controller.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -20,8 +20,11 @@ import type {
 } from "../model-setup/wizard-runner.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
+import { buildProviderLoginGroups } from "./login-providers.ts";
 import { renderProviderAccountSummary } from "./profiles-view.ts";
 registerSettingsEnglish();
+
+const MODEL_SETUP_COMMAND = "openclaw configure --section model";
 
 type LoginControllerOptions = {
   getScope: () => {
@@ -34,14 +37,6 @@ type LoginControllerOptions = {
   refresh: () => Promise<unknown>;
   onDiscover?: () => void;
   onApiKey?: (provider: string) => void;
-};
-
-type LoginProvider = {
-  id: string;
-  label: string;
-  choices: ProviderLoginOption[];
-  authProviders: string[];
-  apiKeyProvider?: string;
 };
 
 export class ModelProviderLoginController implements ReactiveController {
@@ -199,52 +194,12 @@ export class ModelProviderLoginController implements ReactiveController {
     });
   }
 
-  private loginProviders(
-    providers?: string[],
-    authStatus = this.options.getScope().authStatus,
-  ): LoginProvider[] {
-    const groups = new Map<string, LoginProvider>();
-    const choices = new Set<string>();
-    for (const capability of authStatus?.providerCapabilities ?? []) {
-      if (providers && !providers.includes(capability.provider)) {
-        continue;
-      }
-      for (const option of capability.loginOptions ?? []) {
-        let group = groups.get(option.brandId);
-        if (!group) {
-          group = { id: option.brandId, label: "", choices: [], authProviders: [] };
-          groups.set(group.id, group);
-        }
-        group.label ||= option.groupLabel?.trim() ?? "";
-        if (!group.authProviders.includes(capability.provider)) {
-          group.authProviders.push(capability.provider);
-        }
-        if (!choices.has(option.id)) {
-          choices.add(option.id);
-          group.choices.push(option);
-        }
-      }
-      // Quick-key support is independent of wizard choices. Keep the exact
-      // capability owner for the key form even when its login brand is an alias.
-      if (capability.quickApiKeySetup && this.options.onApiKey) {
-        const brands = capability.loginOptions?.length
-          ? capability.loginOptions.map((option) => option.brandId)
-          : [capability.provider];
-        for (const id of new Set(brands)) {
-          const group = groups.get(id) ?? { id, label: "", choices: [], authProviders: [] };
-          if (!group.authProviders.includes(capability.provider)) {
-            group.authProviders.push(capability.provider);
-          }
-          groups.set(id, { ...group, apiKeyProvider: group.apiKeyProvider ?? capability.provider });
-        }
-      }
-    }
-    for (const group of groups.values()) {
-      group.label ||= providerDisplayLabel(group.id);
-    }
-    return [...groups.values()].toSorted(
-      (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id),
-    );
+  private loginProviders(providers?: string[], authStatus = this.options.getScope().authStatus) {
+    return buildProviderLoginGroups({
+      capabilities: authStatus?.providerCapabilities,
+      providers,
+      includeApiKey: Boolean(this.options.onApiKey),
+    });
   }
 
   async open(providers?: string[], authChoice?: string): Promise<void> {
@@ -349,7 +304,7 @@ export class ModelProviderLoginController implements ReactiveController {
     const target =
       this.focusPicker === "search"
         ? this.searchInput.value
-        : (choices?.querySelector<HTMLElement>("button") ?? choices);
+        : (choices?.querySelector<HTMLElement>("button, summary") ?? choices);
     this.focusPicker = null;
     target?.focus({ preventScroll: true });
   }
@@ -376,8 +331,9 @@ export class ModelProviderLoginController implements ReactiveController {
             )
           : [];
       const docsUrl =
-        provider?.choices.find((choice) => choice.docsUrl)?.docsUrl ??
-        "https://docs.openclaw.ai/concepts/model-providers";
+        [...(provider?.choices ?? []), ...(provider?.setupChoices ?? [])].find(
+          (choice) => choice.docsUrl,
+        )?.docsUrl ?? "https://docs.openclaw.ai/concepts/model-providers";
       const missing = this.missingSelection();
       const recovery =
         missing && accounts.some((card) => card.id === missing.provider) ? missing : null;
@@ -387,7 +343,10 @@ export class ModelProviderLoginController implements ReactiveController {
           group.id,
           group.label,
           ...(group.apiKeyProvider ? [t("modelProviders.status.apiKey")] : []),
-          ...group.choices.flatMap((choice) => [choice.label, choice.hint ?? ""]),
+          ...[...group.choices, ...group.setupChoices].flatMap((choice) => [
+            choice.label,
+            choice.hint ?? "",
+          ]),
         ].some((text) => text.toLocaleLowerCase().includes(query)),
       );
       return html`
@@ -467,6 +426,18 @@ export class ModelProviderLoginController implements ReactiveController {
                                 `,
                               )}
                             </div>
+                            ${provider.setupChoices.map(
+                              (option) => html`
+                                <details data-models-login-setup=${option.id}>
+                                  <summary>${option.label}</summary>
+                                  ${option.hint ? html`<p>${option.hint}</p>` : nothing}
+                                  <p>
+                                    ${t("modelProviders.login.gatewaySetupHint", { provider: provider.label })}
+                                  </p>
+                                  <code>${MODEL_SETUP_COMMAND}</code>
+                                </details>
+                              `,
+                            )}
                             ${
                               provider.apiKeyProvider
                                 ? html`
@@ -544,6 +515,7 @@ export class ModelProviderLoginController implements ReactiveController {
                                       <span>
                                         ${[
                                           ...group.choices.map((choice) => choice.label),
+                                          ...group.setupChoices.map((choice) => choice.label),
                                           ...(group.apiKeyProvider
                                             ? [t("modelProviders.status.apiKey")]
                                             : []),

@@ -9,7 +9,13 @@ import type {
 import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { ModelAuthStatusResult, WizardNextResult } from "../../api/types.ts";
+import type { ModelAuthStatusResult } from "../../api/types.ts";
+import {
+  loginHarness,
+  openPicker,
+  providerChoices,
+  selectProvider,
+} from "../../test-helpers/model-provider-login.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { ModelProviderLoginController } from "./login-controller.ts";
 import {
@@ -27,112 +33,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function loginHarness(
-  options: {
-    capabilities?: ModelAuthStatusResult["providerCapabilities"];
-    providers?: ModelAuthStatusResult["providers"];
-    saved?: boolean;
-  } = {},
-) {
-  const harness = createHarness("writer");
-  const { context, request } = harness;
-  const originalRequest = request.getMockImplementation()!;
-  let saved = options.saved ?? false;
-  let stepShown = false;
-  const answer = deferred<WizardNextResult>();
-  const cancel = deferred<{ status: "running" | "cancelled" }>();
-  const status = deferred<{ status: "cancelled" }>();
-  const authStatus = (): ModelAuthStatusResult => ({
-    ts: 1,
-    providers:
-      options.providers ??
-      (saved
-        ? [
-            {
-              provider: "example",
-              displayName: "Example provider",
-              status: "ok",
-              profiles: [{ profileId: "example:new", type: "api_key", status: "ok" }],
-            },
-          ]
-        : []),
-    providerCapabilities: options.capabilities ?? [
-      {
-        provider: "example",
-        apiKeySupported: true,
-        quickApiKeySetup: true,
-        loginOptions: [
-          {
-            id: "example-browser",
-            brandId: "example",
-            label: "Example browser sign-in",
-            kind: "oauth",
-            featured: true,
-          },
-          {
-            id: "example-secret",
-            brandId: "example",
-            label: "Example API key",
-            groupLabel: "Example provider",
-            hint: "Use your Example account key",
-            kind: "secret",
-            featured: false,
-          },
-        ],
-      },
-    ],
-  });
-  request.mockImplementation(async (method: string) => {
-    switch (method) {
-      case "models.authStatus":
-        return authStatus();
-      case "models.authLogin":
-        return { done: false, status: "running" };
-      case "wizard.next":
-        if (!stepShown) {
-          stepShown = true;
-          return {
-            done: false,
-            status: "running",
-            step: { id: "credential", type: "text", sensitive: true, message: "Enter your key" },
-          };
-        }
-        return answer.promise.then((result) => {
-          saved = result.done && result.status === "done";
-          return result;
-        });
-      case "wizard.cancel":
-        return cancel.promise;
-      case "wizard.status":
-        return status.promise;
-      default:
-        return originalRequest(method);
-    }
-  });
-  context.runtimeConfig.runExternalMutation = async (task, mutationOptions) => {
-    if (mutationOptions?.canDispatch?.() === false) {
-      return { ok: false, reason: "rejected", error: "Sign-in owner changed" };
-    }
-    const value = await task(context.gateway.snapshot.client!);
-    return { ok: true, value, refresh: { ok: true } };
-  };
-  return { ...harness, answer, cancel, status };
-}
-
-async function openPicker(page: ModelProvidersPageTestElement) {
-  await waitForFast(() => expect(page.data?.updatedAt).toEqual(expect.any(Number)));
-  await waitForFast(() =>
-    expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(false),
-  );
-  page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
-  await page.updateComplete;
-}
-
-async function selectProvider(page: ModelProvidersPageTestElement, provider: string) {
-  page.querySelector<HTMLButtonElement>(`[data-models-login-provider="${provider}"]`)!.click();
-  await page.updateComplete;
-}
-
 async function chooseLogin(page: ModelProvidersPageTestElement, choice = "example-secret") {
   await openPicker(page);
   await selectProvider(page, "example");
@@ -143,19 +43,6 @@ async function openLogin(page: ModelProvidersPageTestElement, choice = "example-
   await openPicker(page);
   await selectProvider(page, "example");
   await startSelectedLogin(page, choice);
-}
-
-async function searchProviders(page: ModelProvidersPageTestElement, query: string) {
-  const input = page.querySelector<HTMLInputElement>("[data-models-login-search]")!;
-  input.value = query;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  await page.updateComplete;
-}
-
-function providerChoices(page: Element) {
-  return [...page.querySelectorAll<HTMLElement>("[data-models-login-provider]")].map(
-    (button) => button.dataset.modelsLoginProvider,
-  );
 }
 
 describe("Models provider login", () => {
@@ -646,201 +533,6 @@ describe("Models provider login", () => {
     await page.updateComplete;
     expect(page.textContent).not.toContain("Provider credentials saved.");
     expect(page.querySelector<HTMLInputElement>('input[name="wizard-text"]')).toBeNull();
-  });
-
-  it("groups and searches advertised providers before selecting their supported sign-in method", async () => {
-    const base = loginHarness();
-    const auth =
-      await base.context.gateway.snapshot.client!.request<ModelAuthStatusResult>(
-        "models.authStatus",
-      );
-    const example = auth.providerCapabilities![0]!;
-    const { context, request } = loginHarness({
-      capabilities: [
-        {
-          provider: "zebra",
-          apiKeySupported: false,
-          quickApiKeySetup: false,
-          loginOptions: [
-            {
-              id: "plugin/zebra-login",
-              brandId: "zebra",
-              groupLabel: "Zebra",
-              label: "Device sign-in",
-              kind: "device-code",
-              featured: true,
-            },
-          ],
-        },
-        example,
-        { ...example, provider: "example-alias" },
-        {
-          provider: "alpha",
-          apiKeySupported: true,
-          quickApiKeySetup: true,
-          loginOptions: [
-            {
-              id: "plugin/alpha-key",
-              brandId: "alpha",
-              groupLabel: "Alpha",
-              label: "Account key",
-              kind: "secret",
-              featured: false,
-            },
-          ],
-        },
-        { provider: "unsupported", apiKeySupported: false, quickApiKeySetup: false },
-      ],
-    });
-    const page = appendPage(context);
-    await openPicker(page);
-    expect(providerChoices(page)).toEqual(["alpha", "example", "zebra"]);
-    expect(page.querySelector("[data-models-login-choice]")).toBeNull();
-    expect(page.querySelector("[data-models-login-discover]")).not.toBeNull();
-    expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
-
-    await searchProviders(page, "  EXAMPLE  ");
-    expect(providerChoices(page)).toEqual(["example"]);
-    await searchProviders(page, "browser sign-in");
-    expect(providerChoices(page)).toEqual(["example"]);
-    await searchProviders(page, "your Example account key");
-    expect(providerChoices(page)).toEqual(["example"]);
-    await selectProvider(page, "example");
-    expect(
-      [...page.querySelectorAll("[data-models-login-choice] strong")].map(
-        (element) => element.textContent,
-      ),
-    ).toEqual(["Example browser sign-in", "Example API key"]);
-    expect(document.activeElement).toBe(page.querySelector("[data-models-login-choice] button"));
-    expect(page.querySelector("[data-models-login-start]")).toBeNull();
-    expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
-    expect(page.querySelector("[data-models-login-discover]")).toBeNull();
-
-    page.querySelector<HTMLButtonElement>("[data-models-login-back]")!.click();
-    await page.updateComplete;
-    expect(document.activeElement).toBe(page.querySelector("[data-models-login-search]"));
-    expect(page.querySelector<HTMLInputElement>("[data-models-login-search]")!.value).toBe(
-      "your Example account key",
-    );
-    await searchProviders(page, "no such provider");
-    expect(providerChoices(page)).toEqual([]);
-    expect(page.querySelector(".model-provider-login [role=status]")?.textContent).toContain(
-      "No providers match",
-    );
-    await searchProviders(page, "");
-    expect(providerChoices(page)).toEqual(["alpha", "example", "zebra"]);
-    await selectProvider(page, "zebra");
-    await startSelectedLogin(page, "plugin/zebra-login");
-    expect(request).toHaveBeenCalledWith(
-      "models.authLogin",
-      {
-        authChoice: "plugin/zebra-login",
-        agentId: "writer",
-        sessionId: expect.any(String),
-      },
-      { timeoutMs: null },
-    );
-  });
-
-  it("shows accounts from the selected provider's credential owner before another login", async () => {
-    const { context, request } = loginHarness({
-      capabilities: [
-        {
-          provider: "example-owner",
-          apiKeySupported: false,
-          quickApiKeySetup: false,
-          loginOptions: [
-            {
-              id: "example-browser",
-              brandId: "example",
-              groupLabel: "Example provider",
-              label: "Example browser sign-in",
-              kind: "oauth",
-              featured: true,
-            },
-          ],
-        },
-      ],
-      providers: [
-        {
-          provider: "example-owner",
-          authProvider: "example-owner",
-          displayName: "Example provider",
-          status: "ok",
-          profiles: [
-            {
-              profileId: "example:external",
-              type: "oauth",
-              status: "ok",
-              source: "external",
-              email: "same-account@example.invalid",
-              displayName: "External CLI account",
-            },
-            {
-              profileId: "example:saved",
-              type: "oauth",
-              status: "expiring",
-              source: "saved",
-              email: "same-account@example.invalid",
-              displayName: "Saved browser account",
-            },
-          ],
-        },
-        {
-          provider: "unrelated",
-          displayName: "Unrelated provider",
-          status: "ok",
-          profiles: [
-            {
-              profileId: "unrelated:one",
-              type: "oauth",
-              status: "ok",
-              email: "other-provider@example.invalid",
-            },
-          ],
-        },
-      ],
-    });
-    const page = appendPage(context);
-    await waitForFast(() =>
-      expect(page.querySelector('[data-provider-id="example-owner"]')).not.toBeNull(),
-    );
-    const card = page.querySelector('[data-provider-id="example-owner"]')!;
-    const addAccount = [...card.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Add account",
-    );
-    expect(addAccount?.disabled).toBe(false);
-    addAccount!.click();
-    await page.updateComplete;
-    expect(page.querySelector("[data-models-login-search]")).toBeNull();
-    expect(page.querySelector(".model-provider-login__provider")?.textContent).toContain(
-      "Example provider",
-    );
-    const dialog = page.querySelector("openclaw-modal-dialog")!;
-    expect(dialog.textContent).toContain("Accounts available to this agent");
-    const profiles = [...dialog.querySelectorAll<HTMLElement>("[data-profile-id]")];
-    expect(profiles.map((profile) => profile.dataset.profileId)).toEqual([
-      "example:external",
-      "example:saved",
-    ]);
-    expect(
-      profiles.every((profile) => profile.textContent?.includes("same-account@example.invalid")),
-    ).toBe(true);
-    expect(profiles[0]?.textContent).toContain("External CLI account");
-    expect(profiles[1]?.textContent).toContain("Saved browser account");
-    expect(profiles[1]?.textContent).toContain("Expiring");
-    expect(dialog.textContent).not.toContain("other-provider@example.invalid");
-    expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
-    await startSelectedLogin(page, "example-browser");
-    expect(request).toHaveBeenCalledWith(
-      "models.authLogin",
-      {
-        authChoice: "example-browser",
-        agentId: "writer",
-        sessionId: expect.any(String),
-      },
-      { timeoutMs: null },
-    );
   });
 
   it.each([false, true])(

@@ -158,6 +158,7 @@
       "method": "api-key",
       "choiceId": "byteplus-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "BytePlus API key",
       "groupId": "byteplus",
       "groupLabel": "BytePlus",

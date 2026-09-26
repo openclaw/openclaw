@@ -356,6 +356,7 @@
       "personalAccount": true,
       "choiceId": "openai-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "OpenAI API Key",
       "choiceHint": "Use your OpenAI API key directly",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",

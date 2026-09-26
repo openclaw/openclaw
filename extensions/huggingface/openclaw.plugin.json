@@ -67,6 +67,7 @@
       "method": "api-key",
       "choiceId": "huggingface-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Hugging Face API key",
       "choiceHint": "Inference API (HF token)",
       "groupId": "huggingface",

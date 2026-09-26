@@ -167,6 +167,7 @@
       "method": "api-key",
       "choiceId": "kimi-code-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Kimi Code API key (subscription)",
       "groupId": "moonshot",
       "groupLabel": "Moonshot AI (Kimi)",

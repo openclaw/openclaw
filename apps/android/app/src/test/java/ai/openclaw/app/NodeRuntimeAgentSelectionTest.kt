@@ -45,6 +45,150 @@ import java.util.concurrent.atomic.AtomicReference
 @Config(sdk = [34])
 class NodeRuntimeAgentSelectionTest {
   @Test
+  fun providerCardsFollowSidebarSessionOwnerAndRejectLatePickerAgentReads() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val initialJobs = Channel<Job>(Channel.UNLIMITED)
+      val heldAlphaRead = CompletableDeferred<Job>()
+      val releaseAlphaRead = CompletableDeferred<String>()
+      val betaAuthRead = CompletableDeferred<Job>()
+      val phase = AtomicInteger(0)
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          val params = Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject
+          val agentId = params["agentId"]?.jsonPrimitive?.content ?: "alpha"
+          when (method) {
+            "models.list" -> {
+              if (phase.get() == 0) initialJobs.send(currentCoroutineContext().job)
+              if (phase.get() == 1 && agentId == "alpha" && params["view"]?.jsonPrimitive?.content == "provider-config") {
+                heldAlphaRead.complete(currentCoroutineContext().job)
+                releaseAlphaRead.await()
+              } else {
+                """{"models":[{"id":"$agentId-model","name":"$agentId model","provider":"fixture","available":true}],"providerOutcomes":[{"provider":"fixture","status":"ready"}]}"""
+              }
+            }
+
+            "models.authStatus" -> {
+              if (agentId == "beta") betaAuthRead.complete(currentCoroutineContext().job)
+              """{"providers":[{"provider":"$agentId-credential","status":"static","apiKey":{"source":"config"},"profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected provider request: $method")
+            }
+          }
+        }
+        runtime.selectChatAgent("alpha")
+        withTimeout(2_000) { repeat(2) { initialJobs.receive().join() } }
+        assertEquals(
+          "alpha-credential",
+          runtime.modelAuthProviders.value
+            .single()
+            .id,
+        )
+        phase.set(1)
+        runtime.refreshProviderModels()
+        val retired = withTimeout(2_000) { heldAlphaRead.await() }
+
+        runtime.switchChatSession("agent:beta:sidebar", "beta")
+        assertEquals("alpha", ReflectionHelpers.getField<String>(runtime, "selectedChatAgentId"))
+        assertEquals("beta", runtime.captureChatComposerOwner().agentId)
+        withTimeout(2_000) { betaAuthRead.await().join() }
+        assertEquals(
+          "beta-model",
+          runtime.providerModelCatalog.value
+            .single()
+            .id,
+        )
+        assertEquals(
+          "beta-credential",
+          runtime.modelAuthProviders.value
+            .single()
+            .id,
+        )
+
+        releaseAlphaRead.complete("""{"models":[],"refreshFailed":true,"providerOutcomes":[{"provider":"fixture","status":"auth-rejected"}]}""")
+        withTimeout(2_000) { retired.join() }
+        assertEquals(
+          "beta-model",
+          runtime.providerModelCatalog.value
+            .single()
+            .id,
+        )
+        assertEquals(
+          "beta-credential",
+          runtime.modelAuthProviders.value
+            .single()
+            .id,
+        )
+        assertEquals(
+          "ready",
+          runtime.providerModelOutcomes.value
+            .single()
+            .status,
+        )
+        assertEquals(null, runtime.providerModelCatalogErrorText.value)
+        assertFalse(runtime.providerModelCatalogRefreshing.value)
+      } finally {
+        releaseAlphaRead.complete("""{"models":[]}""")
+        closeNodeRuntimeTestFixture(runtime)
+        initialJobs.close()
+      }
+    }
+
+  @Test
+  fun providerCredentialsWaitForVerifiedAgentRoutingAndRecover() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val requests = AtomicInteger(0)
+      val recovered = CompletableDeferred<Job>()
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
+          requests.incrementAndGet()
+          assertEquals(
+            "beta",
+            Json
+              .parseToJsonElement(paramsJson.orEmpty())
+              .jsonObject["agentId"]
+              ?.jsonPrimitive
+              ?.content,
+          )
+          when (method) {
+            "models.list" -> {
+              """{"models":[]}"""
+            }
+
+            "models.authStatus" -> {
+              recovered.complete(currentCoroutineContext().job)
+              """{"providers":[{"provider":"beta-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected provider request: $method")
+            }
+          }
+        }
+        runtime.switchChatSession("unscoped", null)
+        assertFalse(runtime.captureChatComposerOwner().routingVerified)
+        withTimeout(2_000) { runtime.providerModelCatalogErrorText.first { !it.isNullOrBlank() } }
+        assertEquals(0, requests.get())
+        assertTrue(runtime.modelAuthProviders.value.isEmpty())
+
+        runtime.switchChatSession("agent:beta:sidebar", "beta")
+        withTimeout(2_000) { recovered.await().join() }
+        assertEquals(
+          "beta-credential",
+          runtime.modelAuthProviders.value
+            .single()
+            .id,
+        )
+        assertEquals(null, runtime.providerModelCatalogErrorText.value)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
   fun selectedAgentPublishesRefreshFailureAndSuccessfulEmptyResult() =
     runBlocking {
       val runtime = createConnectedRuntime()
@@ -263,7 +407,8 @@ class NodeRuntimeAgentSelectionTest {
           jobs.forEach { it.join() }
         }
         assertEquals(listOf("legacy-model"), runtime.modelCatalog.value.map { it.id })
-        assertEquals(listOf("legacy-model"), runtime.providerModelCatalog.value.map { it.id })
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertEquals("Update your Gateway to view provider model config.", runtime.providerModelCatalogErrorText.value)
         assertEquals(listOf("legacy-credential"), runtime.modelAuthProviders.value.map { it.id })
       } finally {
         closeNodeRuntimeTestFixture(runtime)

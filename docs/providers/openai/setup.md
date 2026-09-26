@@ -451,10 +451,14 @@ Approve token sharing during sign-in to enable model calls. If you grant identit
 permissions only, OpenClaw saves the account but asks you to enable sharing or
 choose another credential before inference.
 
-The browser returns to `http://localhost:8080/auth/callback`. If your browser runs
-on another computer, forward its port 8080 to OpenClaw's IPv4 loopback before
-starting sign-in. For an SSH host, keep this command running on your browser's
-computer:
+The browser returns to `http://localhost:8080/auth/callback`. With a remote
+Gateway, paste the full redirect URL from your browser's address bar into the
+OpenClaw sign-in prompt. A localhost connection error in that browser is expected;
+copy its full URL to complete sign-in on the Gateway.
+
+For automatic completion through SSH, you can instead forward port 8080 to
+OpenClaw's IPv4 loopback before starting sign-in. Keep this command running on
+your browser's computer:
 
 ```bash
 ssh -N -L 8080:127.0.0.1:8080 user@gateway-host

@@ -43,6 +43,7 @@
       "method": "api-key",
       "choiceId": "novita-api-key",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "NovitaAI API key",
       "choiceHint": "OpenAI-compatible NovitaAI endpoint",
       "groupId": "novita",
