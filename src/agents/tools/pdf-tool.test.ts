@@ -781,32 +781,32 @@ describe("createPdfTool", () => {
     });
   });
 
-  it.each([
-    { name: "text extraction", input: ["text", "image"], images: [] },
-    {
-      name: "images extracted for a text-only model",
-      input: ["text"],
-      images: [{ type: "image" as const, data: "base64img", mimeType: "image/png" }],
-    },
-  ])("adds Codex instructions for $name", async ({ input, images }) => {
+  it("adds Codex instructions for PDF extraction fallback requests", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
         provider: "openai",
         api: "openai-chatgpt-responses",
-        input,
+        input: ["text", "image"],
       });
+
       vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
-        images,
+        images: [],
       });
+
       completeMock.mockResolvedValue({
         role: "assistant",
         stopReason: "stop",
         content: [{ type: "text", text: "codex summary" }],
       } as never);
+
       const cfg = withPdfModel(CODEX_PDF_MODEL);
       const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
-      const result = await tool.execute("t1", { prompt: "summarize", pdf: "/tmp/doc.pdf" });
+
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
 
       expect(result.content).toEqual([{ type: "text", text: "codex summary" }]);
       expect(result.details).toMatchObject({

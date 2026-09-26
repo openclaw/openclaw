@@ -145,7 +145,6 @@ describe("execCommand", () => {
     spawnMock.mockReturnValue(child);
     completionMock.mockReturnValue(completion.promise);
     waitForSpawnMock.mockReturnValue(spawned.promise);
-    const { execCommand } = await import("./exec.js");
 
     const result = execCommand("cmd", [], "/tmp");
     child.pid = 1234;
@@ -168,7 +167,6 @@ describe("execCommand", () => {
     const wait = createDeferred<number | null>();
     spawnMock.mockReturnValue(child);
     completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
 
     const resultPromise = execCommand("cmd", ["arg"], "/tmp");
     wait.resolve(0);
@@ -197,7 +195,6 @@ describe("execCommand", () => {
     const wait = createDeferred<number | null>();
     spawnMock.mockReturnValue(child);
     completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
 
     const resultPromise = execCommand("cmd", [], "/tmp", { maxOutputChars: 3 });
     child.stdout.emit("data", Buffer.from("abcdef"));
@@ -324,7 +321,6 @@ describe("execCommand", () => {
     const wait = createDeferred<number | null>();
     spawnMock.mockReturnValue(child);
     completionMock.mockReturnValue(wait.promise);
-    const { execCommand } = await import("./exec.js");
 
     const resultPromise = execCommand("cmd", [], "/tmp", { timeout: 10 });
     await vi.advanceTimersByTimeAsync(10);
@@ -348,7 +344,6 @@ describe("execCommand", () => {
       spawnMock.mockReturnValue(child);
       completionMock.mockReturnValue(completion.promise);
       waitForSpawnMock.mockReturnValue(started.promise);
-      const { execCommand } = await import("./exec.js");
       const result = execCommand("cmd", [], "/tmp", {
         signal: controller.signal,
         ...(reason === "timeout" ? { timeout: 10 } : {}),

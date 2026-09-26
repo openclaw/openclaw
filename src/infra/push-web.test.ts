@@ -52,7 +52,7 @@ async function readBoundSubscriptions(stateDir: string) {
   );
 }
 
-const subscriptionKeys = { p256dh: "p256dh-key", auth: "auth-key" };
+const defaultSubscriptionKeys = { p256dh: "p256dh-key", auth: "auth-key" };
 
 type SubscriptionOverrides = Partial<
   Omit<Parameters<typeof registerWebPushSubscription>[0], "endpoint" | "baseDir">
@@ -61,7 +61,7 @@ type SubscriptionOverrides = Partial<
 function registerSubscription(endpoint: string, overrides: SubscriptionOverrides = {}) {
   return registerWebPushSubscription({
     endpoint,
-    keys: subscriptionKeys,
+    keys: defaultSubscriptionKeys,
     ...overrides,
     baseDir: tmpDir,
   });
@@ -539,7 +539,7 @@ describe("subscription CRUD", () => {
           legacy: {
             subscriptionId: "c0a80101-0000-4000-8000-000000000001",
             endpoint: "https://push.example.com/legacy",
-            keys: subscriptionKeys,
+            keys: defaultSubscriptionKeys,
             createdAtMs: 1,
             updatedAtMs: 1,
           },
@@ -668,7 +668,7 @@ describe("approval delivery target persistence", () => {
     for (const deviceId of ["removed", "rebound", "unchanged"]) {
       await registerWebPushSubscription({
         endpoint: `https://push.example.com/approval-${deviceId}`,
-        keys: subscriptionKeys,
+        keys: defaultSubscriptionKeys,
         binding: { deviceId, userProfileId: `profile-${deviceId}` },
         baseDir: tmpDir,
       });
@@ -688,7 +688,7 @@ describe("approval delivery target persistence", () => {
     ).resolves.toBe(true);
     await registerWebPushSubscription({
       endpoint: "https://push.example.com/approval-rebound",
-      keys: subscriptionKeys,
+      keys: defaultSubscriptionKeys,
       binding: { deviceId: "new-device", userProfileId: "new-profile" },
       baseDir: tmpDir,
     });

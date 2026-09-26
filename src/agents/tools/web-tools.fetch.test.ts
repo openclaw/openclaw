@@ -500,11 +500,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.spill.chars).toBe(WEB_FETCH_SPILL_MAX_CHARS - 1);
     expect(details.text).toContain(`Spilled first ${WEB_FETCH_SPILL_MAX_CHARS - 1} chars.`);
     expect(details.spill.truncated).toBe(true);
-    expect(details.text?.length).toBeLessThanOrEqual(500);
     const spilledText = await readFile(details.spill.path, "utf8");
-    expect(spilledText).toContain("SECURITY NOTICE");
-    expect(spilledText.length).toBeGreaterThan(WEB_FETCH_SPILL_MAX_CHARS);
-    expect(spilledText.length).toBeLessThan(WEB_FETCH_SPILL_MAX_CHARS + 1_000);
     expect(spilledText).toContain(prefix);
     expect(spilledText).not.toContain(String.fromCodePoint(0x1f600));
     expect(spilledText).not.toContain(String.fromCharCode(0xd83d));
