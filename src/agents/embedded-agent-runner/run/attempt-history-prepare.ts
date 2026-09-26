@@ -13,7 +13,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
-import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { limitHistoryTurns, resolveHistoryLimitForAttempt } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
@@ -149,10 +149,15 @@ export async function prepareEmbeddedAttemptHistory(
         heartbeatFiltered,
         limitHistoryTurns(
           heartbeatFiltered,
-          getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config, {
-            accountId: attempt.agentAccountId,
-            peerId: attempt.conversationRoutePeerId,
-            chatType: attempt.chatType,
+          resolveHistoryLimitForAttempt({
+            sessionKey: attempt.sessionKey,
+            config: attempt.config,
+            route: {
+              accountId: attempt.agentAccountId,
+              peerId: attempt.conversationRoutePeerId,
+              chatType: attempt.chatType,
+            },
+            inputProvenance: attempt.inputProvenance,
           }),
         ),
         attempt.model,

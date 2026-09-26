@@ -36,9 +36,11 @@ function stripThreadSuffix(value: string): string {
  */
 export function limitHistoryTurns(
   messages: AgentMessage[],
-  limit: number | undefined,
+  limit: number | SettleHistoryLimit | undefined,
 ): AgentMessage[] {
-  if (!limit || limit <= 0 || messages.length === 0) {
+  const keepFirstUser = typeof limit === "object" ? limit.keepFirstUser : false;
+  const rawLimit = typeof limit === "object" ? limit.limit : limit;
+  if (!rawLimit || rawLimit <= 0 || messages.length === 0) {
     return messages;
   }
 
@@ -57,16 +59,24 @@ export function limitHistoryTurns(
     conversationStart++;
   }
 
+  let firstUserIndex = -1;
   let userCount = 0;
   for (let i = conversationStart; i < messages.length; i++) {
     if (messages[i]?.role === "user") {
+      if (firstUserIndex < 0) {
+        firstUserIndex = i;
+      }
       userCount++;
     }
   }
 
   // Allow a 50% cushion, then evict a full batch so the prompt-cache prefix stays
   // stable between cuts; up to 1.5x turns trades strictness for amortized cache reuse.
-  const targetUserTurns = Math.floor(limit);
+  const effectiveLimit =
+    keepFirstUser && firstUserIndex >= 0
+      ? Math.max(1, Math.floor(rawLimit) - 1)
+      : Math.floor(rawLimit);
+  const targetUserTurns = effectiveLimit;
   const maxUserTurns = Math.ceil(targetUserTurns * 1.5);
   if (userCount <= maxUserTurns) {
     return messages;
@@ -81,7 +91,16 @@ export function limitHistoryTurns(
     if (messages[i]?.role === "user") {
       userCount++;
       if (userCount > userTurnsToKeep) {
-        return [...messages.slice(0, conversationStart), ...messages.slice(lastUserIndex)];
+        const retainedTail = messages.slice(lastUserIndex);
+        if (keepFirstUser && firstUserIndex >= 0) {
+          let firstTurnEnd = firstUserIndex + 1;
+          while (firstTurnEnd < messages.length && messages[firstTurnEnd]?.role !== "user") {
+            firstTurnEnd++;
+          }
+          const firstTurn = messages.slice(firstUserIndex, firstTurnEnd);
+          return [...messages.slice(0, conversationStart), ...firstTurn, ...retainedTail];
+        }
+        return [...messages.slice(0, conversationStart), ...retainedTail];
       }
       lastUserIndex = i;
     }
@@ -219,4 +238,42 @@ export function getHistoryLimitFromSessionKey(
   }
 
   return undefined;
+}
+
+/** Cap applied to requester-settle wakes so they do not replay a fat DM transcript. */
+const REQUESTER_SETTLE_HISTORY_USER_TURN_CAP = 4;
+
+/**
+ * History limit for an embedded attempt. Requester-settle turns keep the same
+ * session (delivery + yield adoption) but only recent user turns — the wake
+ * prompt and evidence path carry the task, not the full Telegram transcript.
+ */
+export type SettleHistoryLimit = {
+  limit: number;
+  keepFirstUser: true;
+};
+
+export function resolveHistoryLimitForAttempt(params: {
+  sessionKey: string | undefined;
+  config: OpenClawConfig | undefined;
+  route?: { accountId?: string | null; peerId?: string; chatType?: ChatType };
+  inputProvenance?: { sourceTool?: string | null } | null;
+}): number | SettleHistoryLimit | undefined {
+  const configured = getHistoryLimitFromSessionKey(params.sessionKey, params.config, params.route);
+  const sourceTool = normalizeOptionalLowercaseString(
+    params.inputProvenance?.sourceTool ?? undefined,
+  );
+  if (sourceTool !== "subagent_settle") {
+    return configured;
+  }
+  // Keep the originating user request plus the most recent settlement-cap turns.
+  // This preserves output constraints and parent requirements while trimming
+  // fat Telegram/DM transcript replay from child-result wakes.
+  if (configured !== undefined && configured > 0) {
+    if (configured <= REQUESTER_SETTLE_HISTORY_USER_TURN_CAP) {
+      return configured;
+    }
+    return { limit: REQUESTER_SETTLE_HISTORY_USER_TURN_CAP, keepFirstUser: true };
+  }
+  return { limit: REQUESTER_SETTLE_HISTORY_USER_TURN_CAP, keepFirstUser: true };
 }
