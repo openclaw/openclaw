@@ -428,7 +428,7 @@ impl AppView {
         self.sidebar_state.create_generation += 1;
         self.composer_state.set_attachments(Vec::new());
         self.composer_state.commands.clear();
-        self.composer_state.models.clear();
+        self.model_controls.reset_connection();
         self.composer_state.catalog_cache.clear();
         self.composer_state.close_popups();
         self.composer_state.error = None;

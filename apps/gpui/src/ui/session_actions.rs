@@ -57,15 +57,6 @@ impl AppView {
             cx,
         );
     }
-    pub(super) fn patch_selected_session(&mut self, fields: Value, cx: &mut Context<Self>) {
-        if let Some(row) = self.selected_row().cloned() {
-            self.patch_session(row, fields, cx);
-        } else {
-            self.mutation_error(
-                "The session is still loading. Refresh before changing its settings.".into(),
-            );
-        }
-    }
     pub(super) fn patch_session(&mut self, row: SessionRow, fields: Value, cx: &mut Context<Self>) {
         self.patch_session_then(row, fields, cx, |_, _, _| {});
     }

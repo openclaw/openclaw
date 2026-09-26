@@ -38,7 +38,7 @@ interactions have not been verified.
 | Conversations | Agent picker and All Agents roster, Home, New Chat, category/person/project/flat grouping, sort and ownership/archive filters, ten-row section paging, lazy child trees, unread/run/attention and pull-request indicators, title and Gateway transcript search. |
 | People and navigation | Online users with avatars, idle state, facepiles and activity cards; profile identity menu; authenticated agent/owner/channel images; native Home and embedded Control UI administration/plugin routes. |
 | Session actions | Inline rename, pin/unpin, read/unread, copy key, fork, archive with Undo, and confirmed transcript deletion. Shift-range/Cmd-toggle selection supports Gateway batch actions; row menus expose organization and ownership actions. |
-| Composer | One-to-six-line growth, per-conversation drafts, history recall, slash-command completion, file picker/drop, clipboard images, large-text paste attachments, attachment-only sends, model and supported thinking-level selection, token/context usage when real totals are available, and a read-only permission-mode chip. |
+| Composer | One-to-six-line growth, per-conversation drafts, history recall, slash-command completion, file picker/drop, clipboard images, large-text paste attachments, attachment-only sends, searchable provider and model-account selection, supported effort levels, fast mode and context-window choices, token/context usage when real totals are available, and a read-only permission-mode chip. |
 | Transcript | Grouped messages, Markdown tables/task lists/links, highlighted code with a language/copy toolbar, attachment previews, thinking sections, humanized live/history tool cards, working phase and elapsed time, errors and stopped markers, older-history pagination, follow-tail and jump-to-latest. |
 | Questions and approvals | Session-scoped question forms with choices, multiple answers, Other, masked secret answers, navigation and Skip; approval cards with command/change previews, expiry and Gateway-provided decisions. |
 | Window | One window per saved Gateway, native Gateways menu and profile manager, custom title bar, collapsible 240–400px sidebar, system/light/dark appearance, connection status, reconnect countdown, and retry. |
@@ -54,6 +54,37 @@ effective steering policy; otherwise the Gateway decides how to queue the send.
 An optimistic user turn stays pending until acknowledged. A failed turn offers
 Retry with its original idempotency key, or Discard. Delivery is never retried
 automatically.
+
+The model menu follows the Control UI catalog, including provider groups,
+runtime alternatives, account availability, and the configured model's
+**Default** badge. Search ranks model names before runtime, provider, and reference
+matches. Effort uses the model's advertised levels; unsupported controls stay
+disabled or hidden. Fast mode and context-window choices appear only where the
+Gateway advertises them. Session changes update the chips immediately, then
+confirm through `sessions.patch`; rejection restores the previous selection and
+shows an error notification. Sending waits for an in-flight settings change.
+
+The picker and effort controls share `model_controls_view(target, window, cx)`.
+Call `set_model_controls_target(target, cx)` when entering a session or draft.
+`ModelControlsTarget` contains `agent_id`, an optional `session_key`, and an
+optional `draft_id` to distinguish multiple drafts for one agent. A draft target
+never sends `sessions.patch`. Its creation owner reads
+`model_controls_draft_patch(&target)` and applies those preferences when creating
+the session, before sending the first message. The controls own catalog fetching,
+account selection, capability projection, and optimistic session updates; the
+creation owner continues to own draft submission and composer layout.
+
+Shared UI building blocks live in `src/ui/components`: composer chips, anchored
+control popovers, menu rows and surfaces, setting rows, provider icons, toggles,
+and a discrete slider. They use GPUI component/base widgets for interaction and
+`theme::controls` plus `Palette::controls()` for the measured Control UI styling.
+The slider uses the base slider's pointer state and exposes preview/commit
+callbacks; the application owns only the target and the settings mutation.
+
+Pure catalog, menu, and selection projections live in `src/model/model_controls.rs`,
+`model_picker.rs`, and `model_selection.rs`. The UI state owns scoped RPC requests,
+connection/target lifetimes, and pending mutations. Draft storage has one domain
+owner, and the composer no longer maintains a parallel model catalog.
 
 Files are checked against the Gateway's advertised attachment limits. Clipboard
 text longer than 1,000 UTF-16 units becomes a text-file attachment. Draft text and
@@ -97,6 +128,10 @@ show the tool action and its primary argument; expanded cards retain full JSON.
 | Down during recall | Move forward, then restore the original draft |
 | Up/Down/Home/End in slash completion | Navigate commands |
 | Tab / Enter in slash completion | Complete / select a command |
+| Up / Down in model search | Move through selectable results |
+| Enter / 1–9 in the model menu | Choose the highlighted result / numbered result; digits type normally in search |
+| Escape in model search | Clear the query first, then close the menu |
+| Left / Right / Home / End in effort | Select a supported effort stop |
 | Escape | Close a popup or Settings, or cancel rename; otherwise stop the active run |
 | Enter / Escape during rename | Save / cancel; an empty title clears the manual label |
 | Cmd+W / Cmd+M / Cmd+Q | Close window / minimize / quit |
@@ -382,6 +417,9 @@ to expose each inactive window's internally focused element. The matching
 on the same crate identities; their versions and source behavior are unchanged.
 The `gpui-pre-macos` patch at `~/Projects/oss/gpui-pre-macos` attaches the adapter
 to the rendering view that serves as AppKit's first responder.
+The Wry patch at `~/Projects/oss/wry` prevents hidden, unfocused macOS webviews
+from activating the app when the panel catalog is created. The upstream change
+is tracked in [tauri-apps/wry#1866](https://github.com/tauri-apps/wry/pull/1866).
 These absolute Cargo paths are local proof wiring and must be replaced with
 released dependencies before shipping the app.
 

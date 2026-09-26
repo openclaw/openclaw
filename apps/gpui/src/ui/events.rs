@@ -62,13 +62,14 @@ impl AppView {
             self.close_palette(window, cx);
         } else if self.sidebar_state.rename_row.is_some() {
             self.sidebar_state.rename_row = None;
-        } else if self.composer_state.model_open
-            || self.composer_state.effort_open
+        } else if self.model_controls.model_open
+            || self.model_controls.effort_open
             || self.composer_state.usage_open
             || !self.composer_state.slash_dismissed
                 && self.composer.read(cx).value().starts_with('/')
         {
             self.composer_state.close_popups();
+            self.model_controls.close_popups();
         } else if self.web.settings_open {
             self.close_settings(window, cx);
         } else {
