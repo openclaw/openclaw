@@ -47,8 +47,10 @@ import {
   buildLinePostbackContext,
   getLineSourceInfo,
   readLineTextMessageBody,
+  prepareLineInboundRoute,
   type LineInboundContext,
   type LineInboundMentionAccess,
+  type PreparedLineInboundRoute,
 } from "./bot-message-context.js";
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
@@ -210,6 +212,7 @@ async function resolveLineEventAdmission(
     contextBinding?: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
   mentions?: LineInboundMentionAccess;
+  preparedRoute?: PreparedLineInboundRoute;
 } | null> {
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
@@ -235,18 +238,15 @@ async function resolveLineEventAdmission(
   const groupAllowFrom = normalizeStringEntries(
     firstDefined(groupConfig?.allowFrom, account.config.groupAllowFrom),
   );
+  const preparedRoute =
+    isGroup && event.type === "message"
+      ? await prepareLineInboundRoute({ source: event.source, cfg, account })
+      : undefined;
   const mentionFacts = (() => {
-    if (!isGroup || event.type !== "message") {
+    if (!preparedRoute || event.type !== "message") {
       return undefined;
     }
-    const peerId = groupId ?? roomId ?? userId ?? "unknown";
-    const { agentId } = resolveAgentRoute({
-      cfg,
-      channel: "line",
-      accountId: account.accountId,
-      peer: { kind: "group", id: peerId },
-    });
-    const mentionRegexes = buildMentionRegexes(cfg, agentId);
+    const mentionRegexes = buildMentionRegexes(cfg, preparedRoute.mentionAgentId);
     const wasMentionedByNative = isLineBotMentioned(event.message);
     const wasMentionedByPattern =
       event.message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
@@ -335,7 +335,7 @@ async function resolveLineEventAdmission(
           requireMention,
         }
       : undefined;
-    return { access, resolveBoundAccess: resolveAccess, mentions };
+    return { access, resolveBoundAccess: resolveAccess, mentions, preparedRoute };
   }
 
   if (access.senderAccess.decision === "allow") {
@@ -544,6 +544,7 @@ async function handleMessageEvent(
       ...(context.missingParts === undefined ? {} : { missingParts: context.missingParts }),
       cfg,
       account,
+      preparedRoute: decision.preparedRoute,
       commandAuthorized: decision.access.commandAccess.authorized,
       resolveChannelIngress: decision.resolveBoundAccess,
       inboundHistory: historyReservation.inboundHistory,

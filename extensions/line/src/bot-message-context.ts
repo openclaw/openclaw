@@ -19,6 +19,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getSessionBindingService,
   inspectRuntimeConversationBindingRoute,
+  type ConfiguredBindingRouteResult,
+  type RuntimeConversationBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
   ensureConfiguredBindingRouteReady,
@@ -30,6 +32,7 @@ import {
   parseAgentSessionKey,
   resolveAgentRoute,
   resolveInboundLastRouteSessionKey,
+  type ResolvedAgentRoute,
 } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -64,6 +67,7 @@ interface BuildLineMessageContextParams {
   missingParts?: number;
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
+  preparedRoute?: PreparedLineInboundRoute;
   commandAuthorized: boolean;
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
@@ -78,6 +82,15 @@ type LineSourceInfo = {
   groupId?: string;
   roomId?: string;
   isGroup: boolean;
+};
+
+export type PreparedLineInboundRoute = LineSourceInfo & {
+  peerId: string;
+  route: ResolvedAgentRoute;
+  mentionAgentId: string;
+  runtimeRoute: RuntimeConversationBindingRouteResult;
+  configuredBinding: ConfiguredBindingRouteResult["bindingResolution"];
+  configuredBindingSessionKey: string;
 };
 
 export function getLineSourceInfo(source: EventSource): LineSourceInfo {
@@ -115,24 +128,11 @@ function buildPeerId(source: EventSource): string {
   return "unknown";
 }
 
-async function resolveLineInboundRoute(params: {
+export async function prepareLineInboundRoute(params: {
   source: EventSource;
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
-}): Promise<{
-  userId?: string;
-  groupId?: string;
-  roomId?: string;
-  isGroup: boolean;
-  peerId: string;
-  route: ReturnType<typeof resolveAgentRoute>;
-}> {
-  recordChannelActivity({
-    channel: "line",
-    accountId: params.account.accountId,
-    direction: "inbound",
-  });
-
+}): Promise<PreparedLineInboundRoute> {
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
   const peerId = buildPeerId(params.source);
   const routeInput = {
@@ -171,28 +171,59 @@ async function resolveLineInboundRoute(params: {
     selection.boundSessionKey &&
     (parseAgentSessionKey(selection.boundSessionKey) ||
       (typeof metadataAgentId === "string" && metadataAgentId.trim()));
-  let route: ReturnType<typeof resolveAgentRoute>;
-  let configuredBinding: ReturnType<typeof resolveConfiguredBindingRoute>["bindingResolution"] =
-    null;
-  let configuredBindingSessionKey = "";
-  if (hasBoundAgent) {
-    route = resolveScopeRoute(selection.boundAgentId);
-  } else {
-    const configuredRoute = resolveConfiguredBindingRoute({
-      cfg: params.cfg,
-      route: resolveAgentRoute({ ...routeInput, cfg: params.cfg }),
-      conversation,
-    });
-    route = configuredRoute.route;
-    configuredBinding = configuredRoute.bindingResolution;
-    configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
-  }
+  const baseRoute = hasBoundAgent
+    ? resolveScopeRoute(selection.boundAgentId)
+    : resolveAgentRoute({ ...routeInput, cfg: params.cfg });
+  const configuredRoute: ConfiguredBindingRouteResult = hasBoundAgent
+    ? { route: baseRoute, bindingResolution: null }
+    : resolveConfiguredBindingRoute({
+        cfg: params.cfg,
+        route: baseRoute,
+        conversation,
+      });
+  const runtimeRoute = inspectRuntimeConversationBindingRoute({
+    route: configuredRoute.route,
+    inspection,
+  });
+  return {
+    userId,
+    groupId,
+    roomId,
+    isGroup,
+    peerId,
+    route: runtimeRoute.route,
+    mentionAgentId: baseRoute.agentId,
+    runtimeRoute,
+    configuredBinding: runtimeRoute.bindingRecord ? null : configuredRoute.bindingResolution,
+    configuredBindingSessionKey: configuredRoute.boundSessionKey ?? "",
+  };
+}
 
-  const runtimeRoute = inspectRuntimeConversationBindingRoute({ route, inspection });
-  route = runtimeRoute.route;
+async function resolveLineInboundRoute(params: {
+  source: EventSource;
+  cfg: OpenClawConfig;
+  account: ResolvedLineAccount;
+  preparedRoute?: PreparedLineInboundRoute;
+}) {
+  recordChannelActivity({
+    channel: "line",
+    accountId: params.account.accountId,
+    direction: "inbound",
+  });
+  const prepared = params.preparedRoute ?? (await prepareLineInboundRoute(params));
+  const {
+    userId,
+    groupId,
+    roomId,
+    isGroup,
+    peerId,
+    route,
+    runtimeRoute,
+    configuredBinding,
+    configuredBindingSessionKey,
+  } = prepared;
   if (runtimeRoute.bindingRecord) {
-    configuredBinding = null;
-    await bindingService.touchAsync(
+    await getSessionBindingService().touchAsync(
       runtimeRoute.bindingRecord.bindingId,
       undefined,
       runtimeRoute.bindingRecord.conversation,
@@ -496,6 +527,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     source,
     cfg,
     account,
+    preparedRoute: params.preparedRoute,
   });
 
   const message = event.message;
