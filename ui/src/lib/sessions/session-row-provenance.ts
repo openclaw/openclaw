@@ -217,16 +217,17 @@ export function createSessionRowProvenance() {
     if (!key || key !== identity(row, sourceMetadata.agentId)) {
       return row;
     }
-    const fields = new Map(sourceMetadata.fields);
+    let fields: Map<string, FieldObservation> | undefined;
     if (donor && identity(donor) === key) {
       const donated = metadata(donor, sourceMetadata.agentId);
       for (const field of donatedFields) {
         if (row[field] !== source[field] && row[field] === donor[field]) {
+          fields ??= new Map(sourceMetadata.fields);
           fields.set(field, donated.fields.get(field) ?? donated.read);
         }
       }
     }
-    observationsByRow.set(row, { ...sourceMetadata, fields });
+    observationsByRow.set(row, { ...sourceMetadata, fields: fields ?? sourceMetadata.fields });
     return row;
   };
   const mergeRow = (
