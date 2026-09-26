@@ -4458,9 +4458,24 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 .shell--settings .content:has(> .connection-action-block) > openclaw-router-outlet {
-  display: block;
   margin-top: 0;
   padding-top: var(--settings-content-block-start-padding);
+
+  &:not(:has(.settings-workspace--fill-height)) {
+    display: block;
+  }
+}
+
+/* Fill-height pages share the available height with the notice. Keep this below
+   the page-owned mobile layout rules in specificity. */
+:where(.shell--settings)
+  .content:where(:has(> .connection-action-block):has(.settings-workspace--fill-height)) {
+  display: flex;
+  flex-direction: column;
+
+  > .connection-action-block {
+    flex-shrink: 0;
+  }
 }
 
 .connection-action-block {
