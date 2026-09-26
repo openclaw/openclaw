@@ -4,6 +4,28 @@ import { normalizeModelCatalog, normalizeModelCatalogProviderRows } from "./inde
 import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 
 describe("model catalog normalization", () => {
+  it.each([
+    { input: [" model-2 ", "model-0"], expected: ["model-2", "model-0"] },
+    { input: ["missing"], expected: undefined },
+    { input: ["model-0", " model-0 "], expected: undefined },
+    { input: Array.from({ length: 9 }, (_, index) => `model-${index}`), expected: undefined },
+    { input: [" "], expected: undefined },
+    { input: [42], expected: undefined },
+  ])("normalizes a complete recommendation list or omits it: $input", ({ input, expected }) => {
+    const catalog = normalizeModelCatalog(
+      {
+        providers: {
+          openai: {
+            recommendedModels: input,
+            models: Array.from({ length: 9 }, (_, index) => ({ id: `model-${index}` })),
+          },
+        },
+      },
+      { ownedProviders: new Set(["openai"]) },
+    );
+    expect(catalog?.providers?.openai?.recommendedModels).toEqual(expected);
+  });
+
   it("normalizes catalog ownership, aliases, suppressions, and row fields", () => {
     const catalog = normalizeModelCatalog(
       {

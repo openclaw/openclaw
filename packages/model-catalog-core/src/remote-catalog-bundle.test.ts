@@ -143,6 +143,51 @@ const validBundleV2 = {
 } as const;
 
 describe("remote model catalog v2", () => {
+  it("preserves ordered provider recommendations only in v2", () => {
+    const providers = { first: { recommendedModels: [" other ", "vendor/model"] }, second: {} };
+    const bundle = parseRemoteModelCatalogBundleV2({
+      ...validBundleV2,
+      providers,
+      models: [
+        ...validBundleV2.models,
+        { id: "other", provider: "first", pricing: { status: "unknown" } },
+      ],
+    });
+    expect(bundle.providers.first?.recommendedModels).toEqual(["other", "vendor/model"]);
+    expect(() =>
+      parseRemoteModelCatalogBundle({
+        ...validBundle,
+        providers: {
+          anthropic: { ...validBundle.providers.anthropic, recommendedModels: ["claude-test"] },
+        },
+      }),
+    ).toThrow("recommendedModels");
+  });
+
+  it.each([
+    ["unknown id", ["missing"]],
+    ["duplicate id", ["vendor/model", " vendor/model "]],
+    ["over cap", Array.from({ length: 9 }, (_, index) => `model-${index}`)],
+    ["empty id", [" "]],
+    ["other provider", ["second-only"]],
+  ])("rejects recommended models with %s", (_name, recommendedModels) => {
+    expect(() =>
+      parseRemoteModelCatalogBundleV2({
+        ...validBundleV2,
+        providers: { first: { recommendedModels }, second: {} },
+        models: [
+          ...validBundleV2.models,
+          ...Array.from({ length: 9 }, (_, index) => ({
+            id: `model-${index}`,
+            provider: "first",
+            pricing: { status: "unknown" },
+          })),
+          { id: "second-only", provider: "second", pricing: { status: "unknown" } },
+        ],
+      }),
+    ).toThrow();
+  });
+
   it("keeps native ids distinct by provider and unknown prices distinct from free", () => {
     const bundle = parseRemoteModelCatalogBundleV2(validBundleV2);
     expect(bundle.providers).toEqual(validBundleV2.providers);

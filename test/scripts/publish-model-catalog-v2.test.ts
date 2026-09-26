@@ -49,7 +49,11 @@ function fixtureRoot() {
               index === 0 ? { ...model, cost: { input: 0.5 } } : model,
             ),
           },
-          openai: { defaultModel: "seed-0", models: seeds },
+          openai: {
+            defaultModel: "seed-0",
+            recommendedModels: ["seed-2", "seed-0"],
+            models: seeds,
+          },
           "fixture-native": {
             models: [
               { id: "free", cost: { input: 9, output: 9 } },
@@ -207,6 +211,8 @@ describe("publish model catalog v2", () => {
     expect(v1.minVersion).toBe("2026.7.0");
     expect(v2.models).toHaveLength(203);
     expect(v2.providers.openai?.defaultModel).toBe("seed-0");
+    expect(v2.providers.openai?.recommendedModels).toEqual(["seed-2", "seed-0"]);
+    expect(v1.providers.openai).not.toHaveProperty("recommendedModels");
     expect(
       v2.models.find((model) => model.provider === "anthropic" && model.id === "seed-0")?.pricing,
     ).toEqual({

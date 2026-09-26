@@ -185,7 +185,12 @@ export async function assembleModelCatalogBundle(options: {
       if (Object.hasOwn(providers, providerId)) {
         throw new Error(`provider ${providerId} is declared by more than one plugin manifest`);
       }
-      providers[providerId] = provider;
+      if (isRecord(provider)) {
+        const { recommendedModels: _recommendedModels, ...v1Provider } = provider;
+        providers[providerId] = v1Provider;
+      } else {
+        providers[providerId] = provider;
+      }
     }
   }
 
@@ -1019,14 +1024,28 @@ export async function assembleModelCatalogBundleV2(
   bundle: PublishedModelCatalogBundle,
   pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
   standalonePricing?: StandalonePricing,
+  manifests: ModelCatalogManifestInput[] = [],
 ): Promise<RemoteModelCatalogBundleV2> {
-  const providers: RemoteModelCatalogBundleV2["providers"] = {};
+  const recommendations = new Map<string, unknown>();
+  for (const entry of manifests) {
+    for (const [id, provider] of Object.entries(entry.manifest.modelCatalog?.providers ?? {})) {
+      if (isRecord(provider) && provider.recommendedModels !== undefined) {
+        recommendations.set(id, provider.recommendedModels);
+      }
+    }
+  }
+  const providers: Record<string, unknown> = {};
   const models: RemoteModelCatalogBundleV2["models"] = [];
   for (const [providerId, provider] of Object.entries(bundle.providers)) {
+    const recommendedModels = recommendations.get(providerId);
     providers[providerId] = {
       api: provider.api,
       defaultModel: provider.defaultModel,
       defaultUtilityModel: provider.defaultUtilityModel,
+      ...(recommendedModels !== undefined &&
+      !(Array.isArray(recommendedModels) && recommendedModels.length === 0)
+        ? { recommendedModels }
+        : {}),
     };
     for (const model of provider.models) {
       const { cost, ...metadata } = model;
@@ -1149,7 +1168,7 @@ export async function runPublishModelCatalog(
   const validateBundle = await loadClientBundleValidator();
   // Project while selection facts still refer to the assembled model objects.
   const bundleV2 = args.outV2
-    ? await assembleModelCatalogBundleV2(bundle, pricingSelections, standalonePricing)
+    ? await assembleModelCatalogBundleV2(bundle, pricingSelections, standalonePricing, manifests)
     : undefined;
   bundle = validateBundle(bundle);
   const summary = summarizeModelCatalogBundle(bundle);
