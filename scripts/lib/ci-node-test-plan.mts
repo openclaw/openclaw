@@ -442,6 +442,12 @@ const COMPACT_HOSTED_PR_STORAGE_FILE_SECONDS = new Map([
   ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", 475],
   ["test/canonical-descendant.integration.test.ts", 127],
 ]);
+// PR run 36215159024: serial case totals separate these runtime consumers.
+// Apply them only within that partition, not to the ordinary CLI cost allocation.
+const COMPACT_HOSTED_PR_CLI_RUNTIME_FILE_SECONDS = new Map([
+  ["src/cli/update-cli/update-command-rollback.test.ts", 171],
+  ["src/cli/update-cli/update-command-service.integration.test.ts", 226],
+]);
 // Hourly hosted run 35983526919 spent ~25 minutes in each of these owners.
 // Bound the main-tier work independently of stale whole-owner timing estimates.
 const COMPACT_HOSTED_MAIN_MAX_FILES = new Map([
@@ -3647,6 +3653,10 @@ function splitOversizedCompactGroup(
     runnerBackend === "github-pr" && group.shard_name === "core-runtime-infra-storage-state";
   const prStorageFileSeconds = (file: string) =>
     hostedPrStorage ? COMPACT_HOSTED_PR_STORAGE_FILE_SECONDS.get(file) : undefined;
+  const prCliRuntimeFileSeconds = (file: string) =>
+    runnerBackend === "github-pr" && isCliProcess
+      ? COMPACT_HOSTED_PR_CLI_RUNTIME_FILE_SECONDS.get(file)
+      : undefined;
   const weightForFile = isTooling
     ? toolingFileWeight
     : (file: string) =>
@@ -3799,7 +3809,7 @@ function splitOversizedCompactGroup(
         ? createStripedBatches(
             runtimeFiles,
             Math.min(runtimeFiles.length, Math.max(1, Math.ceil(runtimeSeconds / groupSecondsCap))),
-            weightForFile,
+            (file) => prCliRuntimeFileSeconds(file) ?? weightForFile(file),
           )
         : [runtimeFiles]
       : [];
@@ -4024,6 +4034,11 @@ function splitOversizedCompactGroup(
       runnerBackend === "github-pr" ? compactGroupMembershipTimingKey(child) : undefined;
     if (membershipKey && childTimings[membershipKey] !== undefined) {
       return { group: child, seconds: childTimings[membershipKey] };
+    }
+    const cliRuntimeSingletonSeconds =
+      patterns.length === 1 ? prCliRuntimeFileSeconds(patterns[0]!) : undefined;
+    if (cliRuntimeSingletonSeconds !== undefined) {
+      return { group: child, seconds: cliRuntimeSingletonSeconds };
     }
     const singletonSeconds = patterns.length === 1 ? prStorageFileSeconds(patterns[0]!) : undefined;
     if (singletonSeconds !== undefined && singletonSeconds >= COMPACT_HOSTED_PR_GROUP_SECONDS) {
