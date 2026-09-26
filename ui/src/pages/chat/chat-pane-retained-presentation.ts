@@ -131,6 +131,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       exactKey: true,
     });
     runSessionNavigationIntent(this, {
+      agentId: edit.agentId,
       face: "chat",
       sessionKey: edit.sessionKey,
       commit: () => {
