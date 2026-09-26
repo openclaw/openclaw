@@ -33,6 +33,7 @@ describe("pending-final delivery completion", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-delivery-completion-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
     storePath = path.join(tmpDir, "sessions.json");
     completion.storePath = storePath;
     const entry: InternalSessionEntry = {
@@ -58,6 +59,7 @@ describe("pending-final delivery completion", () => {
 
   afterEach(async () => {
     await cleanupSessionStateForTest({ stateDir: tmpDir });
+    vi.unstubAllEnvs();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
