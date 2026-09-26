@@ -88,13 +88,8 @@ permissions:
 run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}
 
 concurrency:
-  # Admit each scheduled run independently so a prior iOS tail cannot block core CI.
-  # The iOS job owns scheduled simulator serialization; manual/release runs stay independent.
-  # Canonical main uses run-number parity for two non-canceling slots. Each
-  # slot keeps GitHub's single coalesced pending tip while its active run finishes.
-  # Passive draft events must not replace runnable CI before job gates: pending
-  # replacement happens even with cancel-in-progress false. Keep converted_to_draft
-  # in the PR group so it still cancels earlier work.
+  # Hourly runs are independent; iOS serializes its own tail. Main has two non-canceling parity slots.
+  # Passive drafts must not displace runnable CI; converted_to_draft still cancels prior PR work.
   group: >-
     ${{ github.event_name == 'pull_request' && github.event.pull_request.draft &&
         github.event.action != 'converted_to_draft' && format('{0}-draft-v1-{1}', github.workflow, github.run_id) ||
@@ -110,10 +105,7 @@ env:
   NODE_VERSION: "24.21.0"
 
 jobs:
-  # Preflight: establish routing truth and job matrices once, then let real
-  # work fan out from a single source of truth.
-  # Fork PRs cannot read base-repository vars, so their retries select hosted
-  # runners independently of the backend override, including preflight itself.
+  # Preflight owns routing and matrices. Fork retries stay hosted without base-repository vars.
   preflight:
     permissions:
       contents: read
@@ -986,8 +978,7 @@ jobs:
         id: checkout_ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      # The owner exports matching revisions; retain Actions checkout's existing
-      # transport and retry contract for independently pinned workflow revisions.
+      # Owner-exported revisions retain Actions checkout's transport and retry contract.
       - name: Checkout trusted CI harness
         if: ${{ steps.checkout_ref.outputs.sha != github.workflow_sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1362,10 +1353,8 @@ jobs:
             node scripts/ci-changed-scope.mjs --base "$BASE" --head "$HEAD_SHA"
           fi
 
-      # Current-revision preflight is dependency-free: the manifest planner
-      # closure and protocol coverage import only node builtins and relative
-      # files, and Node strips their types natively. Different-revision manual
-      # targets retain tsx for their candidate-owned syntax.
+      # Current preflight uses only Node builtins/relative imports and native type stripping.
+      # Different-revision manual targets retain tsx for candidate-owned syntax.
       - name: Setup manifest pnpm
         if: github.event_name == 'workflow_dispatch' && steps.checkout_ref.outputs.sha != github.workflow_sha
         uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
@@ -2609,8 +2598,7 @@ jobs:
             node scripts/check-protocol-event-coverage.mts
           fi
 
-      # Validate and consume the immutable dependency archive before same-repo
-      # Blacksmith jobs fan out. Cache publication belongs to the trusted warmer.
+      # Validate the immutable archive before fanout; only the trusted warmer publishes it.
       - name: Restore exact dependency cache
         if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.repository == 'openclaw/openclaw' && steps.manifest.outputs.run_node == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
         uses: ./.ci-harness/.github/actions/setup-node-env
@@ -2619,8 +2607,7 @@ jobs:
           dependency-cache: "true"
           install-bun: "false"
 
-  # Preflight budgets optional hosted work before security allocates a runner.
-  # Security still runs after a failed preflight; other work never waits for it.
+  # Preflight budgets security's runner; security survives preflight failure and gates no other work.
   security-fast:
     permissions:
       contents: read
@@ -2750,10 +2737,7 @@ jobs:
           source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
-      # First-party scan before any package install: the scan itself uses no
-      # network and no third-party hook code, so a PyPI outage cannot stop it.
-      # Node 24 comes from the runner tool cache; the shared helper downloads
-      # only on images that lack it.
+      # Scan before installs without network/third-party hooks. Download Node 24 only on a tool-cache miss.
       - name: Detect committed private keys
         run: node "$PRIVATE_KEY_SCANNER_PATH"
 
@@ -2799,8 +2783,7 @@ jobs:
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
 
-      # Full manual CI compares main with itself. Keep differential protections
-      # on the actual push range rather than losing them between hourly runs.
+      # Manual CI compares main with itself; hourly differential checks retain the actual push range.
       - name: Setup differential guard dependencies
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true'
         uses: ./.ci-harness/.github/actions/setup-node-env
@@ -2819,9 +2802,7 @@ jobs:
           pnpm check:assertion-safety --base "$BASE_SHA"
           node --import ./scripts/tsx.mjs scripts/check-protocol-since.mts
 
-  # Build dist once for the built-artifact checks in this job.
-  # Keep this overlapping with the fast correctness lanes so green PRs get heavy
-  # test/build feedback sooner instead of waiting behind a full `check` pass.
+  # Build dist once, overlapping artifact validation with fast checks.
   build-artifacts:
     permissions:
       contents: read
@@ -2871,9 +2852,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
-      # Reruns the (warm, seconds-cheap) asset hooks and fails on drift so
-      # packages/-only PRs cannot land stale committed plugin bundles; the
-      # extension byte-equality suites do not run for those diffs.
+      # Warm asset hooks reject stale package-only plugin bundles outside extension byte-equality checks.
       - name: Check bundled plugin generated assets
         run: |
           set -euo pipefail
@@ -2963,9 +2942,7 @@ jobs:
           console.log(JSON.stringify({ proof: "browser-native-host", fullNames: expectedNames, passed: expectedNames.length, failed: 0, pending: 0 }));
           BROWSER_PROOF_REPORT
 
-      # Startup RSS is measured alone on every runner before independent dist
-      # readers share the artifact-check wave. The step is unconditional because
-      # the verifiers always run; each selected check self-gates.
+      # Measure startup RSS alone before the shared verifier wave; each verifier self-gates.
       - name: Run built artifact checks
         env:
           PARALLEL_GATEWAY_WATCH: ${{ runner.environment != 'github-hosted' && 'true' || 'false' }}
@@ -4432,9 +4409,7 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      # Build the CLI runtime before Vitest workers consume memory or import dist.
-      # qaRuntime supplies the shared JavaScript, assets, and freshness stamps;
-      # build-artifacts owns SDK declaration and Control UI validation.
+      # Prepare CLI runtime before workers; build-artifacts separately owns SDK declarations and UI.
       - name: Build Node test runtime
         id: node-test-runtime
         if: matrix.pretest_build_mode != null
@@ -4634,8 +4609,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
 
-      # Full runs publish core state in five stripe caches. The changed-graph
-      # queue needs that same state even when it runs inside the central row.
+      # The central changed-graph queue consumes the same five core stripe caches as full runs.
       - name: Restore changed core test-type stripe 1
         if: matrix.task == 'test-types' && needs.preflight.outputs.changed_core_test_paths_json != '' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -4710,10 +4684,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-extension-package-boundary-v4-
 
-      # check-lint's shard runner rebuilds the same plugin-sdk boundary
-      # artifacts the boundary lane snapshots (~72s cold); restore them from
-      # the shared sticky. Strictly read-only (commit: false): only the
-      # protected boundary lane may publish this repository-global snapshot.
+      # Restore shared SDK boundary artifacts read-only; only the protected boundary lane publishes.
       - name: Mount extension boundary sticky disk
         if: matrix.task == 'lint' && steps.extension-boundary-inputs.outputs.enabled == 'true' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@94697d49e77d0dd78b77deb85ad3de63a28b4b8a # v1.7.1
@@ -5078,11 +5049,8 @@ jobs:
           path: .artifacts/tsgo-cache
           key: ${{ steps.test-type-cache.outputs.cache-primary-key }}
 
-  # Keep five core stripes; the runner isolates large targets into serial child processes.
-  # Ordinary hybrid runs serialize the stripes across two jobs; use Blacksmith
-  # on trusted first attempts because hosted assignment put these on the critical path.
-  # The first packed row took 621s on the 8-class; retain four actual CPUs there.
-  # GitHub, frozen and manual runs retain five jobs. All-Blacksmith keeps one lint job.
+  # Five core stripes: hybrid packs two jobs, GitHub/frozen/manual keep five, Blacksmith keeps one.
+  # Trusted hybrid first attempts avoid hosted assignment; the 621s first row needs four actual CPUs.
 
   check-lint-hosted-core-shard:
     permissions:
@@ -5369,11 +5337,8 @@ jobs:
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Same-repo runs carry boundary artifacts on a Blacksmith sticky disk:
-      # the GitHub cache below is evicted so quickly under the repo quota that
-      # its prefix restore never hits, leaving every run to rebuild ~113s of
-      # plugin-sdk declarations. Fork PRs must never produce writable
-      # repository-global snapshots, so they keep the GitHub cache path.
+      # Sticky SDK artifacts avoid ~113s rebuilds after GitHub cache eviction.
+      # Forks retain GitHub caching and must never write repository-global snapshots.
       - name: Mount extension boundary sticky disk
         if: matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@94697d49e77d0dd78b77deb85ad3de63a28b4b8a # v1.7.1
@@ -5577,10 +5542,8 @@ jobs:
           path: .artifacts/plugin-sdk-api-diff.json
           retention-days: 14
 
-      # Only the protected writer refreshes the snapshot (pull_request mounts
-      # never commit, so seeding there would burn wall clock on a discarded
-      # clone). Seed the payload before the sticky post-action flushes.
-      # rsync -aR mirrors the repo-relative layout the restore step replays.
+      # Only protected writers seed before sticky flush; PR mounts cannot commit.
+      # rsync -aR retains the restore step's repo-relative layout.
       - name: Seed extension boundary sticky disk
         if: success() && steps.extension-boundary-inputs.outputs.enabled == 'true' && steps.boundary-sticky-restore.outputs.restored == 'false' && matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.event_name != 'workflow_dispatch' && github.event_name != 'pull_request' && github.repository == 'openclaw/openclaw'
         shell: bash
@@ -5602,9 +5565,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
-    # Always hosted: check-docs clones the ClawHub mirror without lending the
-    # repository token (git-owner boundary), and unauthenticated GitHub fetches
-    # from Blacksmith egress are refused often enough to fail the job.
+    # Hosted egress keeps unauthenticated ClawHub cloning reliable without lending the repo token.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
@@ -6921,13 +6882,8 @@ jobs:
           --config.enable-pre-post-scripts=true
           --config.side-effects-cache=true
 
-      # Same-repo runs carry the Gradle user home (dependency, wrapper, and
-      # build caches) on a Blacksmith sticky disk: the Actions Gradle cache
-      # above is evicted so quickly under the repo quota that it rarely
-      # restores, leaving every run to re-resolve the full dependency graph.
-      # Fork PRs, manual dispatches, the GitHub backend, and hosted hybrid retries must never produce writable
-      # repository-global snapshots, so they keep the GitHub cache path (their
-      # runs-on already selects non-Blacksmith ubuntu-24.04 runners).
+      # Sticky Gradle state avoids re-resolving dependencies after Actions cache eviction.
+      # Forks, manual/GitHub runs and hosted hybrid retries keep GitHub caches; never write global snapshots.
       - name: Mount Gradle sticky disk
         if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@94697d49e77d0dd78b77deb85ad3de63a28b4b8a # v1.7.1
