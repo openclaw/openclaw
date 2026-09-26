@@ -9658,6 +9658,14 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("reduces iOS screenshots only after every shard's latest attempt succeeded", () => {
+    const reducer = readCiWorkflow().jobs["ios-screenshot-evidence"];
+    // The reducer accepts shard evidence retained from earlier attempts. The implicit
+    // success() gate keeps such an artifact from standing in for a failed shard rerun.
+    expect(reducer.needs).toContain("ios-screenshot-shard");
+    expect(reducer.if).not.toMatch(/\b(?:always|cancelled|failure|success)\(\)/u);
+  });
+
   it.skipIf(process.platform === "win32").each<{
     label: string;
     context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>;
