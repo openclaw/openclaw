@@ -219,6 +219,7 @@ export async function listUsageCountedTranscriptSources(
   agentId: string,
   params?: {
     minMtimeMs?: number;
+    minSqliteUpdatedAtMs?: number;
     sessionsDir?: string;
     storePath?: string;
   } & UsageCostCollectionAccess,
@@ -243,13 +244,14 @@ export async function listUsageCountedTranscriptSources(
   const instances = params?.listSqliteInstances
     ? await params.listSqliteInstances(agentId, storePath)
     : listSessionTranscriptInstances({ agentId, storePath, env: params?.env, projection: "list" });
+  const minSqliteUpdatedAtMs = params?.minSqliteUpdatedAtMs ?? params?.minMtimeMs;
   const sqliteBacked = (
     await readUsageCostSqliteFiles(
       instances
         .filter(
           (instance) =>
             instance.agentId === logicalAgentId &&
-            (params?.minMtimeMs === undefined || instance.updatedAtMs >= params.minMtimeMs),
+            (minSqliteUpdatedAtMs === undefined || instance.updatedAtMs >= minSqliteUpdatedAtMs),
         )
         .map((instance) => ({ agentId: logicalAgentId, sessionId: instance.sessionId, storePath })),
       params,
@@ -266,6 +268,7 @@ export async function listUsageCountedTranscriptStats(
   agentId: string,
   params?: {
     minMtimeMs?: number;
+    minSqliteUpdatedAtMs?: number;
     sessionsDir?: string;
     storePath?: string;
   } & UsageCostCollectionAccess,

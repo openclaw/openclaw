@@ -19,6 +19,20 @@ vi.mock("./session-cost-usage-aggregation.js", async (importOriginal) => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("session cost usage refresh", () => {
+  it("keeps the earliest requested start when bounded cost refreshes coalesce", async () => {
+    await withRefreshFixture(async ({ agentId }) => {
+      const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockResolvedValue("refreshed");
+      const endMs = Date.now();
+      const recentStartMs = endMs - 7 * 86_400_000;
+      const olderStartMs = endMs - 30 * 86_400_000;
+      await loadCostUsageSummaryFromCache({ agentId, startMs: recentStartMs, endMs });
+      await loadCostUsageSummaryFromCache({ agentId, startMs: olderStartMs, endMs });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(refresh.mock.calls[0]?.[0].startMs).toBe(olderStartMs);
+    });
+  });
+
   it("doubles consecutive busy delays, caps them, and resets after success", async () => {
     const root = tempDirs.make("openclaw-session-cost-backoff-");
     const sessionFile = path.join(root, "agents", "backoff-test", "sessions", "next-session.jsonl");
@@ -85,6 +99,9 @@ describe("session cost usage refresh", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(refresh).toHaveBeenCalledTimes(12);
         expect(refresh.mock.calls[10]?.[0].sessionFiles).toBeUndefined();
+        expect(refresh.mock.calls.slice(0, 11).every(([request]) => request.startMs === 0)).toBe(
+          true,
+        );
         expect(refresh.mock.calls[11]?.[0].sessionFiles).toEqual([sessionFile]);
 
         await vi.advanceTimersByTimeAsync(49);

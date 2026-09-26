@@ -1589,7 +1589,7 @@ describe("session cost usage", () => {
     });
   });
 
-  it("limits synchronous cold aggregate rebuilds to the requested range", async () => {
+  it("keeps old-mtime JSONL usage in a bounded cold aggregate rebuild", async () => {
     const root = await makeSessionCostRoot("cost-cache-cold-sync-range");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -1642,18 +1642,7 @@ describe("session cost usage", () => {
         refreshMode: "sync-when-empty",
       });
 
-      expect(summary.totals.totalTokens).toBe(30);
-      await waitForFast(
-        async () => {
-          const refreshed = await loadCostUsageSummaryFromCache({
-            startMs: Date.UTC(2026, 1, 5),
-            endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
-            requestRefresh: false,
-          });
-          expect(refreshed.totals.totalTokens).toBe(230);
-        },
-        { interval: 1, timeout: 2_000 },
-      );
+      expect(summary.totals.totalTokens).toBe(230);
     });
   });
 

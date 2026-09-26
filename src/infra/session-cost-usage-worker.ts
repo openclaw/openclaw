@@ -75,6 +75,11 @@ type ReadDatabase = <T>(
   read: () => T | Promise<T>,
 ) => Promise<T>;
 
+function boundedInventoryStartMs(startMs: number | undefined): number | undefined {
+  // An all-history request has no lower inventory bound and can safely prune missing sources.
+  return startMs !== undefined && startMs > 0 ? startMs : undefined;
+}
+
 export async function executeUsageCostWorker(
   input: UsageCostWorkerInput,
   channel: WorkerTaskChannel,
@@ -162,12 +167,12 @@ export async function executeUsageCostWorker(
       return result;
     },
   };
-  const inventory = (minMtimeMs?: number, sessionsDir?: string) =>
+  const inventory = (minSqliteUpdatedAtMs?: number, sessionsDir?: string) =>
     listUsageCountedTranscriptStats(location.agentId, {
       ...access,
       storePath: location.storePath,
       sessionsDir,
-      minMtimeMs,
+      minSqliteUpdatedAtMs,
     });
   if (operation.kind === "inventory") {
     const files = operation.sessionFiles
@@ -263,7 +268,7 @@ export async function executeUsageCostWorker(
       // not make a valid newer checkpoint appear ahead of this report's inventory.
       const reportFiles =
         operation.kind === "summary"
-          ? await inventory()
+          ? await inventory(boundedInventoryStartMs(operation.startMs))
           : await resolveUsageCostTranscriptFiles(
               operation.sessions.map((session) => session.sessionFile),
               access,
@@ -389,7 +394,8 @@ export async function executeUsageCostWorker(
   const rows = await readMetadata();
   const byPath = new Map(rows.map((row) => [row.key, row]));
 
-  const discovered = await inventory(undefined, operation.sessionsDir);
+  const inventoryStartMs = boundedInventoryStartMs(operation.startMs);
+  const discovered = await inventory(inventoryStartMs, operation.sessionsDir);
   const requestedFiles = (
     await resolveUsageCostTranscriptFiles(operation.sessionFiles ?? [], access)
   ).filter((file) => file !== undefined);
@@ -400,25 +406,24 @@ export async function executeUsageCostWorker(
   for (const file of requestedFiles) {
     filesByPath.set(file.filePath, file);
   }
-  for (const row of rows) {
-    if (filesByPath.has(row.key)) {
-      continue;
+  // A bounded inventory cannot decide whether older cache rows still have a source.
+  if (inventoryStartMs === undefined) {
+    for (const row of rows) {
+      if (filesByPath.has(row.key)) {
+        continue;
+      }
+      const bytes = new TextEncoder().encode(row.valueJson);
+      await host("prune-row", { key: row.key, value: bytes, updatedAt: row.updatedAt }, [
+        bytes.buffer,
+      ]);
     }
-    const bytes = new TextEncoder().encode(row.valueJson);
-    await host("prune-row", { key: row.key, value: bytes, updatedAt: row.updatedAt }, [
-      bytes.buffer,
-    ]);
+    await host("prune", {});
   }
-  await host("prune", {});
   const requestedPaths = new Set(requestedFiles.map((file) => file.filePath));
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const stale = [];
   for (const file of filesByPath.values()) {
-    if (
-      requestedPaths.size > 0
-        ? !requestedPaths.has(file.filePath)
-        : operation.startMs !== undefined && file.mtimeMs < operation.startMs
-    ) {
+    if (requestedPaths.size > 0 && !requestedPaths.has(file.filePath)) {
       continue;
     }
     const row = byPath.get(file.filePath);

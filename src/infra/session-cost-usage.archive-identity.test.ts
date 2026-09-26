@@ -175,6 +175,74 @@ describe("usage archive identity", () => {
     expect(tableExists(db, "session_transcript_archives")).toBe(false);
   });
 
+  it("includes recent SQLite transcript usage despite old session window metadata", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "recent-transcript-old-entry",
+      sessionKey: "agent:main:recent-transcript-old-entry",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const now = Date.now();
+    const startMs = now - 7 * 86_400_000;
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { ...assistant(17), timestamp: now } }],
+      touchSessionEntry: false,
+    });
+    runOpenClawAgentWriteTransaction(
+      ({ db }) => {
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<DB>(db)
+            .updateTable("session_windows")
+            .set({ updated_at: 1 })
+            .where("session_id", "=", scope.sessionId),
+        );
+      },
+      { agentId: "main", env: state.env },
+    );
+
+    const window = openOpenClawAgentDatabase({ agentId: "main", env: state.env })
+      .db.prepare(
+        "SELECT updated_at, transcript_updated_at FROM session_windows WHERE session_id = ?",
+      )
+      .get(scope.sessionId) as { updated_at: number; transcript_updated_at: number } | undefined;
+    expect(window?.updated_at).toBe(1);
+    expect(window?.transcript_updated_at).toBeGreaterThanOrEqual(startMs);
+    expect(await listUsageCountedTranscriptStats("main", { minMtimeMs: startMs })).toEqual([
+      expect.objectContaining({ sessionId: scope.sessionId, kind: "sqlite" }),
+    ]);
+    expect(
+      await loadCostUsageSummary({
+        agentId: "main",
+        config,
+        startMs,
+        endMs: now + 86_400_000,
+      }),
+    ).toMatchObject({ totals: { totalTokens: 17 } });
+  });
+
+  it("retains older rollups during bounded refresh but prunes them for all history", async () => {
+    const sessionFile = await writeArchive({ state, manager: transcript(), encoding: "plain" });
+    await loadSessionCostSummary({ agentId: "main", sessionFile, config });
+    expect(readSessionCostUsageRollupRows("main")).toHaveLength(1);
+    await fs.unlink(sessionFile);
+
+    expect(
+      await refreshCostUsageCacheForAgent({
+        agentId: "main",
+        config,
+        startMs: Date.now() - 7 * 86_400_000,
+      }),
+    ).toBe("refreshed");
+    expect(readSessionCostUsageRollupRows("main")).toHaveLength(1);
+
+    expect(await refreshCostUsageCacheForAgent({ agentId: "main", config, startMs: 0 })).toBe(
+      "refreshed",
+    );
+    expect(readSessionCostUsageRollupRows("main")).toEqual([]);
+  });
+
   it.each(["shared.sqlite", "my-store.json", "shared-link.sqlite"])(
     "keeps %s usage with its logical agent before and after archival",
     async (storeName) => {
@@ -365,6 +433,23 @@ describe("usage archive identity", () => {
     ).toEqual(before);
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
     expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+    await persistSessionTranscriptTurn(hotScope, { messages: [{ message: assistant(19) }] });
+    const bounded = new AsyncWorkScope();
+    try {
+      await bounded.track(() =>
+        loadCostUsageSummaryFromCache({
+          agentId: "main",
+          config: coldConfig,
+          startMs: Date.now() - 7 * 86_400_000,
+          endMs: Date.now(),
+          refreshMode: "background",
+        }),
+      );
+      await bounded.runWhenIdle(() => undefined);
+      expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+    } finally {
+      await bounded.drain();
+    }
     const sessions = [
       before.filePath,
       formatSqliteSessionFileMarker(hotScope),
@@ -379,7 +464,7 @@ describe("usage archive identity", () => {
         requestRefresh: false,
       }),
     ).toMatchObject({
-      summaries: [null, { totalTokens: 19 }, { totalTokens: 19 }, null],
+      summaries: [null, { totalTokens: 38 }, { totalTokens: 38 }, null],
       cacheStatus: { cachedFiles: 2, pendingFiles: 2 },
     });
     expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
@@ -390,7 +475,7 @@ describe("usage archive identity", () => {
         startMs: 0,
         endMs: Date.now() + 86_400_000,
       }),
-    ).toMatchObject({ totals: { totalTokens: 36 } });
+    ).toMatchObject({ totals: { totalTokens: 55 } });
     expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeUndefined();
     const rollups = readSessionCostUsageRollupRows("main");
     const missingScope = {
