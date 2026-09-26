@@ -52,6 +52,7 @@ import { resolveTelegramTransport } from "./fetch.js";
 import { isRetryableTelegramApiError, isTelegramAuthenticationError } from "./network-errors.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { createTelegramStatusPublisher } from "./transport-status.js";
+import { createTelegramLegacyWebhookAuthLimiter } from "./webhook-legacy.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -139,6 +140,7 @@ type TelegramWebhookTarget = {
   requestPath: string;
   secret: string;
   legacyListener?: { port: number; host?: string };
+  legacyAuthGuard?: ReturnType<typeof createTelegramLegacyWebhookAuthLimiter>;
   diagnosticsEnabled: () => boolean;
   isActive: () => boolean;
   handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
@@ -181,14 +183,18 @@ async function handleTelegramWebhook(
   if (match.kind !== "single") {
     // Authenticated Telegram delivery must not consume the abuse budget. Only
     // failed secret guesses are rate-limited, before the body is read.
-    if (
-      !applyBasicWebhookRequestGuards({
-        req,
-        res,
-        rateLimiter,
-        rateLimitKey: `${req.url}:${resolveRequestClientIp(req) ?? "unknown"}`,
-      })
-    ) {
+    // An invalid secret cannot identify an account. Shared legacy endpoints use
+    // their first live target's failure budget and shipped proxy-hop policy.
+    const legacyAuthGuard = legacyListener ? targets[0]?.legacyAuthGuard : undefined;
+    const allowed = legacyAuthGuard
+      ? legacyAuthGuard(req, res)
+      : applyBasicWebhookRequestGuards({
+          req,
+          res,
+          rateLimiter,
+          rateLimitKey: `${req.url}:${resolveRequestClientIp(req) ?? "unknown"}`,
+        });
+    if (!allowed) {
       return true;
     }
     res.shouldKeepAlive = false;
@@ -231,6 +237,9 @@ export async function startTelegramWebhook(opts: {
   const readConfig = createRuntimeConfigReader(opts.config ?? {});
   const legacyListener = resolveTelegramLegacyWebhookListener(opts.legacyWebhook);
   const path = opts.path ?? "/telegram-webhook";
+  if (path === "/healthz") {
+    throw new Error(`Telegram webhook path "${path}" conflicts with the health path.`);
+  }
   const pathname = URL.parse(path, "http://localhost")?.pathname ?? path;
   const probe = classifyGatewayProbePath(pathname);
   const pathConflict =
@@ -460,6 +469,9 @@ export async function startTelegramWebhook(opts: {
         requestPath: path,
         secret,
         legacyListener,
+        legacyAuthGuard: legacyListener
+          ? createTelegramLegacyWebhookAuthLimiter(opts.config)
+          : undefined,
         handle,
         diagnosticsEnabled: () => isDiagnosticsEnabled(readConfig()),
         isActive: () => !shutDown && !opts.abortSignal?.aborted,
@@ -481,7 +493,9 @@ export async function startTelegramWebhook(opts: {
       accountId: opts.accountId,
       reuseExistingSameOwner: true,
       throwOnFailure: true,
-      legacyListener,
+      legacyListener: legacyListener
+        ? { ...legacyListener, health: { path: "/healthz" } }
+        : undefined,
       handler: (req, res) => handleTelegramWebhook(webhookTargets, rateLimiter, req, res),
       log,
     });

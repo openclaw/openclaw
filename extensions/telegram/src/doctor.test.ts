@@ -722,8 +722,14 @@ describe("telegram doctor", () => {
     cfg.channels.telegram.accounts.ops.webhookUrl = `https://example.test${reservedPath}`;
     cfg.channels.telegram.accounts.ops.webhookPath = reservedPath;
 
-    expect((await collectWebhookNotes(cfg)).warningNotes.join("\n")).toContain(
+    const warnings = (await collectWebhookNotes(cfg)).warningNotes.join("\n");
+    expect(warnings).toContain(
       `Telegram account "ops" resolves webhookPath to ${reservedPath}, which is reserved`,
+    );
+    expect(warnings).toContain(
+      reservedPath === "/healthz"
+        ? "This account cannot start until its webhook path is changed."
+        : "The legacy listener remains available",
     );
 
     const disabledCfg = {
@@ -791,7 +797,7 @@ describe("telegram doctor", () => {
     } satisfies OpenClawConfig;
 
     expect((await collectWebhookNotes(cfg)).warningNotes.join("\n")).toContain(
-      "before setting legacyWebhook: false",
+      "This account cannot start until its webhook path is changed.",
     );
     expect((await collectWebhookNotes(cfg)).warningNotes.join("\n")).toContain(
       'Telegram account "default" resolves webhookPath to /healthz, which is reserved',

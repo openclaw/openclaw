@@ -401,7 +401,9 @@ describe("startTelegramWebhook", () => {
         },
         async ({ port }) => {
           const endpoint = { port: 8787, host };
-          expect(gateway.registry.httpRoutes[0]?.legacyListeners).toEqual([endpoint]);
+          expect(gateway.registry.httpRoutes[0]?.legacyListeners).toEqual([
+            { ...endpoint, health: { path: "/healthz" } },
+          ]);
           legacyListenerForRequest.mockReturnValue(endpoint);
           const response = await postWebhookJson({
             url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
@@ -2299,6 +2301,116 @@ describe("startTelegramWebhook", () => {
     );
   });
 
+  it.each([
+    {
+      name: "untrusted loopback hops",
+      trustedProxy: "127.0.0.1",
+      suffix: ", 127.0.0.2",
+      otherHopStatus: 401,
+    },
+    {
+      name: "ignored bracketed proxy entries",
+      trustedProxy: "[127.0.0.1]",
+      suffix: "",
+      otherHopStatus: 429,
+    },
+  ])(
+    "isolates legacy auth budgets and preserves $name across account restarts",
+    async ({ trustedProxy, suffix, otherHopStatus }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const endpoint = { port: 9000, host: "127.0.0.1" };
+      const base = {
+        token: TELEGRAM_TOKEN,
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        spoolDir: requireWebhookSpoolDir(),
+        config: { gateway: { trustedProxies: [trustedProxy] } },
+      };
+      let first = await startTelegramWebhook({
+        ...base,
+        accountId: "first",
+        legacyWebhook: endpoint,
+      });
+      const secondEndpoint = { ...endpoint, port: 9001 };
+      let second: typeof first | undefined;
+      let shared: typeof first | undefined;
+      let updateId = 899;
+      const request = async (forwarded: string, secret = "wrong-secret") => {
+        const response = await fetch(
+          webhookUrl(getServerPort(gatewayServer), TELEGRAM_WEBHOOK_PATH),
+          {
+            method: "POST",
+            headers: { "x-telegram-bot-api-secret-token": secret, "x-forwarded-for": forwarded },
+            body: JSON.stringify(telegramMessageUpdate(updateId++, "legacy budget")),
+          },
+        );
+        const body = await response.text();
+        return {
+          status: response.status,
+          body,
+          accepted: response.headers.get("x-openclaw-delivery-accepted"),
+        };
+      };
+      try {
+        second = await startTelegramWebhook({
+          ...base,
+          accountId: "second",
+          legacyWebhook: secondEndpoint,
+        });
+        legacyListenerForRequest.mockReturnValue(endpoint);
+        for (let index = 1; index <= 120; index += 1) {
+          expect((await request(`198.51.100.${index}${suffix}`)).status).toBe(401);
+        }
+        expect(await request(`203.0.113.1${suffix}`)).toEqual({
+          status: 429,
+          body: "Too Many Requests",
+          accepted: null,
+        });
+        shared = await startTelegramWebhook({
+          ...base,
+          accountId: "shared",
+          secret: "shared-secret",
+          legacyWebhook: endpoint,
+        });
+        expect(await request(`203.0.113.1${suffix}`)).toEqual({
+          status: 429,
+          body: "Too Many Requests",
+          accepted: null,
+        });
+        expect((await request("203.0.113.1, 127.0.0.3")).status).toBe(otherHopStatus);
+        expect(await request(`203.0.113.1${suffix}`, "shared-secret")).toEqual({
+          status: 200,
+          body: "",
+          accepted: "durable",
+        });
+        expect(await request(`203.0.113.1${suffix}`, TELEGRAM_SECRET)).toEqual({
+          status: 200,
+          body: "",
+          accepted: "durable",
+        });
+
+        legacyListenerForRequest.mockReturnValue(secondEndpoint);
+        expect((await request(`203.0.113.1${suffix}`)).status).toBe(401);
+        legacyListenerForRequest.mockReturnValue(undefined);
+        expect((await request(`203.0.113.1${suffix}`)).status).toBe(401);
+
+        await shared.stop();
+        await first.stop();
+        first = await startTelegramWebhook({
+          ...base,
+          accountId: "first",
+          legacyWebhook: endpoint,
+        });
+        legacyListenerForRequest.mockReturnValue(endpoint);
+        expect((await request(`203.0.113.1${suffix}`)).status).toBe(401);
+      } finally {
+        await first.stop();
+        await second?.stop();
+        await shared?.stop();
+      }
+    },
+  );
+
   it("rejects startup when webhook secret is missing", async () => {
     await expect(
       startTelegramWebhook({
@@ -2311,6 +2423,7 @@ describe("startTelegramWebhook", () => {
     { path: "/hook?token=known", legacyWebhook: false as const },
     { path: "/ready/webhook", legacyWebhook: false as const },
     { path: "/readyz?token=known", legacyWebhook: undefined },
+    { path: "/healthz?token=known", legacyWebhook: undefined },
     { path: "/%61pi/channels/telegram", legacyWebhook: { port: 8787, host: "127.0.0.1" } },
   ])("preserves exact webhook target $path", async ({ path, legacyWebhook }) => {
     await withStartedWebhook({ secret: TELEGRAM_SECRET, path, legacyWebhook }, async ({ port }) => {
@@ -2345,7 +2458,7 @@ describe("startTelegramWebhook", () => {
         },
         async ({ port }) => {
           expect(gateway.registry.httpRoutes[0]?.legacyListeners).toEqual(
-            endpoint ? [endpoint] : undefined,
+            endpoint ? [{ ...endpoint, health: { path: "/healthz" } }] : undefined,
           );
           expect(port).toBeGreaterThan(0);
           expect(setWebhookSpy).toHaveBeenCalledTimes(1);

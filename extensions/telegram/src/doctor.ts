@@ -607,14 +607,16 @@ export const telegramDoctor: ChannelDoctorAdapter = {
       const pathname = URL.parse(path, "http://localhost")?.pathname ?? path;
       const probe = classifyGatewayProbePath(pathname);
       const pathConflict =
-        probe === "live" || probe === "ready" || probe === "startup"
-          ? "is reserved for Gateway probes"
-          : isProtectedPluginRoutePathFromContext(resolvePluginRoutePathContext(pathname))
-            ? "requires Gateway authentication"
-            : undefined;
+        path === "/healthz"
+          ? "is reserved for webhook listener health checks"
+          : probe === "live" || probe === "ready" || probe === "startup"
+            ? "is reserved for Gateway probes"
+            : isProtectedPluginRoutePathFromContext(resolvePluginRoutePathContext(pathname))
+              ? "requires Gateway authentication"
+              : undefined;
       if (pathConflict) {
         warningNotes.push(
-          `Telegram account "${accountId}" resolves webhookPath to ${path}, which ${pathConflict}. Set webhookPath to /telegram-webhook and update webhookUrl or its reverse-proxy mapping. ${legacyListener ? "The legacy listener remains available; verify delivery on the new route before setting legacyWebhook: false." : "This account cannot start until its webhook path is changed."}`,
+          `Telegram account "${accountId}" resolves webhookPath to ${path}, which ${pathConflict}. Set webhookPath to /telegram-webhook and update webhookUrl or its reverse-proxy mapping. ${legacyListener && path !== "/healthz" ? "The legacy listener remains available; verify delivery on the new route before setting legacyWebhook: false." : "This account cannot start until its webhook path is changed."}`,
         );
         continue;
       }
