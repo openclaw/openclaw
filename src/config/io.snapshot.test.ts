@@ -205,4 +205,66 @@ describe("config snapshot plugin metadata", () => {
     expect(result.pluginMetadataSnapshot).toBeUndefined();
     expect(loader).not.toHaveBeenCalled();
   });
+
+  it("migrates a blank workspace contributed by a resolved include on runtime load", async () => {
+    // The include boundary resolves includes before validation; the runtime
+    // blank-workspace migration must run on the resolved value so an included
+    // blank workspace keeps loading (falling back to the default directory).
+    const root = tempDirs.make("openclaw-config-blank-workspace-include-");
+    const context = createContext(root);
+    fs.writeFileSync(
+      path.join(root, "agents.json"),
+      JSON.stringify({ agents: { entries: { alpha: { workspace: "   " } } } }),
+    );
+    fs.writeFileSync(
+      context.configPath,
+      JSON.stringify({
+        $include: "./agents.json",
+        gateway: { mode: "local", port: 18799, auth: { mode: "none" } },
+      }),
+    );
+
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+
+    expect(snapshot.valid).toBe(true);
+    expect(snapshot.config.agents?.entries?.alpha?.workspace).toBeUndefined();
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("Removed blank agents.entries.alpha.workspace"),
+      }),
+    );
+  });
+
+  it("retains a blank workspace contributed by a resolved include for strict validation", async () => {
+    // Strict CLI validation is the diagnostic surface: it deliberately skips
+    // the runtime migration so an explicitly blank workspace stays visible and
+    // the field-level error is reported.
+    const root = tempDirs.make("openclaw-config-blank-workspace-include-strict-");
+    const context = createContext(root);
+    fs.writeFileSync(
+      path.join(root, "agents.json"),
+      JSON.stringify({ agents: { entries: { alpha: { workspace: "   " } } } }),
+    );
+    fs.writeFileSync(
+      context.configPath,
+      JSON.stringify({
+        $include: "./agents.json",
+        gateway: { mode: "local", port: 18799, auth: { mode: "none" } },
+      }),
+    );
+
+    const result = await readConfigFileSnapshotWithPluginMetadataFromContext(context, {
+      prepareValidation: "strict",
+    });
+
+    expect(result.snapshot.valid).toBe(false);
+    expect(result.snapshot.issues).toContainEqual(
+      expect.objectContaining({
+        path: "agents.entries.alpha.workspace",
+        message: expect.stringContaining("must not be blank"),
+      }),
+    );
+    // The authored blank is preserved for the operator to see and fix.
+    expect(result.snapshot.config.agents?.entries?.alpha?.workspace).toBe("   ");
+  });
 });

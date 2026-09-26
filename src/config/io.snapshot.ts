@@ -55,6 +55,7 @@ import type {
 import { warnIfConfigFromFuture } from "./io.warnings.js";
 import {
   findLegacyConfigIssues,
+  migrateBlankAgentWorkspace,
   migrateLegacyContextBudgetConfig,
   migratePersistedImplicitMainRoster,
 } from "./legacy.js";
@@ -257,12 +258,22 @@ async function readConfigSnapshotWithPreparation(
       env: deps.env,
       homedir: deps.homedir,
     });
-    envVarWarnings.push(
-      ...contextBudgetMigration.changes,
-      ...contextBudgetMigration.warnings,
-      ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
-    );
-    const effectiveConfigRaw = rosterMigration.config;
+    // The blank workspace migration runs on this snapshot path only for runtime
+    // consumption (default / "runtime" preparation): the Gateway startup and
+    // other runtime readers must keep loading a saved blank workspace (possibly
+    // contributed by a resolved include) with its unchanged defaulted workspace
+    // directory. Strict CLI validation (`openclaw config validate`,
+    // prepareValidation: "strict") deliberately skips the migration so an
+    // explicitly blank workspace stays visible and the field-level error is
+    // reported — validation is the diagnostic surface, not the loader.
+    const shouldMigrateBlankWorkspace = options.prepareValidation !== "strict";
+    const blankWorkspaceMigration = shouldMigrateBlankWorkspace
+      ? migrateBlankAgentWorkspace(rosterMigration.config)
+      : { config: rosterMigration.config, changed: false, changes: [], warnings: [] };
+    if (shouldMigrateBlankWorkspace) {
+      envVarWarnings.push(...blankWorkspaceMigration.changes, ...blankWorkspaceMigration.warnings);
+    }
+    const effectiveConfigRaw = blankWorkspaceMigration.config;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;
     const snapshotParsed = effectiveParsed;
