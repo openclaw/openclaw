@@ -6,8 +6,8 @@ const { hasAnthropicVertexAvailableAuthMock } = vi.hoisted(() => ({
   hasAnthropicVertexAvailableAuthMock: vi.fn(),
 }));
 
-vi.mock("./api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api.js")>();
+vi.mock("./region.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./region.js")>();
   return {
     ...actual,
     hasAnthropicVertexAvailableAuth: hasAnthropicVertexAvailableAuthMock,
@@ -27,7 +27,7 @@ describe("anthropic-vertex provider plugin", () => {
   });
 
   afterAll(() => {
-    vi.doUnmock("./api.js");
+    vi.doUnmock("./region.js");
     vi.resetModules();
   });
 
