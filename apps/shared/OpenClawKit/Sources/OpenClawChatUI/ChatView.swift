@@ -565,6 +565,10 @@ extension OpenClawChatView {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
+        let metadata = ChatTranscriptRow.footerMetadata(
+            in: ChatTranscriptRow.build(from: self.viewModel.transcriptMessages),
+            activeRunIDs: Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs),
+            runWorking: self.viewModel.hasBlockingRunActivity || self.viewModel.streamingAssistantText != nil)
         let liveRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
         let groups = ChatAssistantRunGroup.build(
             self.transcriptRows,
@@ -586,6 +590,7 @@ extension OpenClawChatView {
                     ForEach(group.parts) { part in
                         self.runPart(
                             part,
+                            metadata: metadata,
                             contextWindowTokens: contextWindowTokens,
                             isGrouped: true,
                             answerID: group.answerID)
@@ -596,6 +601,7 @@ extension OpenClawChatView {
                 ForEach(group.parts) { part in
                     self.runPart(
                         part,
+                        metadata: metadata,
                         contextWindowTokens: contextWindowTokens,
                         isGrouped: false,
                         answerID: nil)
@@ -609,6 +615,7 @@ extension OpenClawChatView {
     @ViewBuilder
     private func runPart(
         _ part: ChatAssistantRunGroup.Part,
+        metadata: [UUID: ChatMessageMetadata],
         contextWindowTokens: Int?,
         isGrouped: Bool,
         answerID: UUID?) -> some View
@@ -617,6 +624,7 @@ extension OpenClawChatView {
         case let .row(row):
             self.transcriptRow(
                 row,
+                metadata: metadata,
                 contextWindowTokens: contextWindowTokens,
                 isGrouped: isGrouped,
                 answerID: answerID)
@@ -629,6 +637,7 @@ extension OpenClawChatView {
     @ViewBuilder
     private func transcriptRow(
         _ row: ChatTranscriptRow,
+        metadata: [UUID: ChatMessageMetadata],
         contextWindowTokens: Int?,
         isGrouped: Bool,
         answerID: UUID?) -> some View
@@ -637,6 +646,7 @@ extension OpenClawChatView {
         case let .message(message):
             self.messageRow(
                 for: message,
+                metadata: metadata[message.id],
                 contextWindowTokens: contextWindowTokens,
                 showsActions: !isGrouped || message.id == answerID)
                 .background(
@@ -655,7 +665,11 @@ extension OpenClawChatView {
                 .frame(maxWidth: .infinity)
         case let .completedWork(work):
             ChatCompletedWorkDisclosure(work: work) { message in
-                self.messageRow(for: message, contextWindowTokens: contextWindowTokens, showsActions: !isGrouped)
+                self.messageRow(
+                    for: message,
+                    metadata: metadata[message.id],
+                    contextWindowTokens: contextWindowTokens,
+                    showsActions: !isGrouped)
             }
         }
     }
@@ -704,6 +718,7 @@ extension OpenClawChatView {
     @ViewBuilder
     private func messageRow(
         for msg: OpenClawChatMessage,
+        metadata: ChatMessageMetadata?,
         contextWindowTokens: Int?,
         showsActions: Bool = true) -> some View
     {
@@ -712,6 +727,7 @@ extension OpenClawChatView {
             liveToolCalls: self.viewModel.toolActivities.filter {
                 $0.runID != nil && $0.runID == msg.workRunID
             },
+            metadata: metadata,
             sourcePreviews: self.viewModel.sourcePreviews(for: msg),
             sourceContextRevision: self.viewModel.sourcePreviewState.revision,
             sourceFaviconsEnabled: self.viewModel.sourcePreviewState.context?.automaticallyFetchFavicons == true,

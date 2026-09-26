@@ -54,6 +54,16 @@ Names stay free of status suffixes, and unnamed tasks appear as **Subagent**.
 Reduced Motion keeps the running claw still. Existing detail expansion and
 completed-task retention are unchanged.
 
+## Message times and models
+
+Completed message groups show a quiet time label alongside message usage. Recent
+messages use relative time; messages at least a week old show a compact local
+date, including the year when needed. Hover the time for the full date, time,
+and time zone; VoiceOver reads those exact details too. Assistant replies also
+show the originating model recorded in the transcript, when known. Changing the
+composer's model does not relabel earlier replies. Live streaming, commentary,
+and tool activity do not gain timestamp footers.
+
 ## Pending questions and approvals
 
 Thread rows, agent rows, and collapsed group headings show a question or approval
