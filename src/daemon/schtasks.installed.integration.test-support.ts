@@ -18,6 +18,7 @@ import { run, type CommandRecord } from "./schtasks.installed-command.test-suppo
 import {
   doctorReportSchema,
   inspectDisabledDiscoveryTasks,
+  inspectInstalledUpdateFailure,
   type InstalledTask as Task,
 } from "./schtasks.installed-diagnostics.test-support.js";
 import {
@@ -499,6 +500,9 @@ export async function runInstalledLifecycle(
     }
   } catch (error) {
     cellFailure = toErrorObject(error, "Installed Scheduled Task fixture failed");
+    if (key !== "fresh" && tasks[0]) {
+      observations.updateFailure = await inspectInstalledUpdateFailure(tasks[0]);
+    }
     try {
       await recordProgress("before-native-cleanup", cellFailure);
     } catch (recordError) {
