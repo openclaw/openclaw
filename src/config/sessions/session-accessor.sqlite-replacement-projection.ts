@@ -60,7 +60,7 @@ type ReplacementProjectionOptions = {
   assertCommitAllowed?: () => void;
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
-  onLifecycleCommitted?: () => void;
+  onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   env?: NodeJS.ProcessEnv;
   activeSessionKey?: string;
   agentId?: string;
@@ -268,9 +268,8 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                     const committed = runOpenClawAgentWriteTransaction(
                       (database) => {
                         if (params.onLifecycleCommitted) {
-                          deferOpenClawAgentPostCommitPublication(
-                            database,
-                            params.onLifecycleCommitted,
+                          deferOpenClawAgentPostCommitPublication(database, () =>
+                            params.onLifecycleCommitted?.(result.pendingArchiveRecovery),
                           );
                         }
                         const result = commitSessionEntryReplacementsInDatabase(

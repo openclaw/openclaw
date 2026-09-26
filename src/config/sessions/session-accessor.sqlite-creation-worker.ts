@@ -129,7 +129,15 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
         if (transcriptError !== undefined) {
           return { ok: false, error: transcriptError, phase: "transcript" };
         }
+        let pendingArchiveRecovery = false;
+        const onLifecycleCommitted = (pending: boolean) => {
+          pendingArchiveRecovery = pending;
+          options.onLifecycleCommitted?.(created.entry);
+        };
         const publishArchives = async () => {
+          if (!pendingArchiveRecovery) {
+            return;
+          }
           // Match lifecycle adoption recovery, after registration and writer release.
           // The archive owner retains batching, byte validation, events and failure semantics.
           const run = <T>(
@@ -182,9 +190,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
             assertCommitAllowed: assertCurrent,
             withCommit,
             ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
-            onLifecycleCommitted: options.onLifecycleCommitted
-              ? () => options.onLifecycleCommitted!(created.entry)
-              : undefined,
+            onLifecycleCommitted,
             afterCommitted: options.afterCommitted
               ? (_result, source) => options.afterCommitted!(created.entry, source)
               : undefined,
@@ -202,7 +208,6 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
           await publishArchives();
           return { ok: true, entry: created.entry, sessionFile: normalizedKey };
         }
-        let adopted = false;
         options.onPhase?.("writerAdmission");
         const commit = (assertSourceCurrent?: () => void) =>
           runExclusiveSqliteSessionWrite(
@@ -226,7 +231,6 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
               if (!replacement || replacement.databaseIdentity !== databaseIdentity) {
                 throw new Error("Session creation database changed before entry commit");
               }
-              adopted = replacement.expectedRows.has(normalizedKey);
               // Creation owns its canonical target, including hidden run-owned nodes. The
               // canonical-replacement projection deliberately does not admit those nodes.
               await commitSessionEntryReplacementsInWorker(
@@ -245,9 +249,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
                   afterCommitted: options.afterCommitted
                     ? (source) => options.afterCommitted!(created.entry, source)
                     : undefined,
-                  onLifecycleCommitted: options.onLifecycleCommitted
-                    ? () => options.onLifecycleCommitted!(created.entry)
-                    : undefined,
+                  onLifecycleCommitted,
                 },
               );
             },
@@ -258,9 +260,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
         } else {
           await commit();
         }
-        if (adopted) {
-          await publishArchives();
-        }
+        await publishArchives();
         return { ok: true, entry: created.entry, sessionFile: normalizedKey };
       },
     );
