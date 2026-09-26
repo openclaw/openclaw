@@ -317,13 +317,20 @@ async function readMigrationConfig(
 export async function migratePluginRegistryForDoctor(
   params: PluginRegistryDoctorMigrationParams = {},
 ): Promise<PluginRegistryDoctorMigrationResult> {
+  const preflight = preflightPluginRegistryDoctorMigration(params);
   if (params.dryRun) {
-    const preflight = preflightPluginRegistryDoctorMigration(params);
     return {
       status: preflight.action === "skip-existing" ? "skip-existing" : "dry-run",
       migrated: false,
       preflight,
     };
+  }
+  if (preflight.action !== "skip-existing") {
+    // Config may come from readConfig; reject it before acquiring a mutating lease.
+    preflightPluginRegistryDoctorMigration({
+      ...params,
+      config: await readMigrationConfig(params),
+    });
   }
   return await withPluginLifecycleLease(
     resolveInstalledPluginIndexStateDatabaseOptions(params),

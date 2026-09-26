@@ -17,6 +17,7 @@ import {
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { publishPluginSourceAdmission } from "./plugin-source-admission-store.js";
 import { createInstalledPluginIndexCandidate as createCandidate } from "./test-helpers/installed-plugin-index.js";
 
 const temp = useAutoCleanupTempDirTracker((cleanup) =>
@@ -30,7 +31,7 @@ const temp = useAutoCleanupTempDirTracker((cleanup) =>
 const makeTempDir = () => temp.make("openclaw-installed-plugin-index-policy-");
 
 describe("installed plugin index policy refresh", () => {
-  it("refreshes policy without rebuilding source and preserves a concurrently published admission", async () => {
+  it("preserves admitted source during policy refresh and refuses publication under its lease", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -60,6 +61,13 @@ describe("installed plugin index policy refresh", () => {
     };
     const sourceAdmissions = { [admissionKey]: admission };
     const latestAdmission = { ...admission, signature: "readmitted-source" };
+    const newerAdmission = { ...admission, signature: "source-observed-during-refresh" };
+    const publication = {
+      pluginId: "demo",
+      rootDir: fs.realpathSync(pluginDir),
+      installRecordHash: initial.plugins[0]?.installRecordHash,
+      key: admissionKey,
+    };
     await writePersistedInstalledPluginIndex(
       {
         ...initial,
@@ -70,6 +78,9 @@ describe("installed plugin index policy refresh", () => {
     expect(
       Object.keys((await readPersistedInstalledPluginIndex({ stateDir }))!.installRecords),
     ).toEqual(["orphaned", "package"]);
+    expect(
+      await publishPluginSourceAdmission({ ...publication, stateDir, receipt: latestAdmission }),
+    ).toBe(true);
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -98,20 +109,17 @@ describe("installed plugin index policy refresh", () => {
       },
       policyPluginIds: ["demo"],
       now: () => {
-        // Admission commits after refresh reads its snapshot but before its write transaction.
+        // Refresh owns the snapshot through publication; a newer receipt cannot replace it.
         expect(
           runOpenClawStateWriteTransaction(
             ({ db }) =>
               publishPluginSourceAdmissionInDatabase(db, {
-                pluginId: "demo",
-                rootDir: fs.realpathSync(pluginDir),
-                installRecordHash: initial.plugins[0]?.installRecordHash,
-                key: admissionKey,
-                receipt: latestAdmission,
+                ...publication,
+                receipt: newerAdmission,
               }),
             resolveInstalledPluginIndexStateDatabaseOptions({ stateDir }),
           ),
-        ).toBe(true);
+        ).toBe(false);
         return new Date();
       },
     });

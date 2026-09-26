@@ -608,29 +608,40 @@ function assertNeverPluginRegistryIssue(issue: never): never {
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryDoctorRepairResult> {
+  const readPreflight = () => {
+    try {
+      return preflightPluginRegistryDoctorMigration(params);
+    } catch (error) {
+      if (!(error instanceof InvalidPluginInstallRecordStateError)) {
+        throw error;
+      }
+      note(error.message, "Plugin registry");
+      return undefined;
+    }
+  };
+  // Invalid input must not bootstrap state; only leased facts can authorize repair.
+  const initial = readPreflight();
+  if (!initial) {
+    return { config: params.config };
+  }
   if (!params.prompter.shouldRepair) {
-    return await inspectOrRepairPluginRegistryState(params);
+    return await inspectOrRepairPluginRegistryState(params, initial);
   }
   return await withPluginLifecycleLease(
     resolveInstalledPluginIndexStateDatabaseOptions(params),
-    async () => inspectOrRepairPluginRegistryState(params),
+    async () => {
+      const current = readPreflight();
+      return current
+        ? inspectOrRepairPluginRegistryState(params, current)
+        : { config: params.config };
+    },
   );
 }
 
 async function inspectOrRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
+  preflight: ReturnType<typeof preflightPluginRegistryDoctorMigration>,
 ): Promise<PluginRegistryDoctorRepairResult> {
-  let preflight: ReturnType<typeof preflightPluginRegistryDoctorMigration>;
-  try {
-    preflight = preflightPluginRegistryDoctorMigration(params);
-  } catch (error) {
-    if (!(error instanceof InvalidPluginInstallRecordStateError)) {
-      throw error;
-    }
-    note(error.message, "Plugin registry");
-    return { config: params.config };
-  }
-
   // Earlier Doctor stages can commit install-record repairs inside another metadata scope.
   // This refresh owns the next write, so it must start from the durable ledger.
   clearLoadInstalledPluginIndexInstallRecordsCache();

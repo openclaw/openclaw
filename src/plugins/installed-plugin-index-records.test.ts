@@ -693,6 +693,8 @@ describe("plugin index install records store", () => {
       { stateDir, candidates: [] },
     );
 
+    // Platform spoofing changes the coordinator directory captured by the seeded worker.
+    await closeOpenClawStateDatabaseAsync();
     const loaded = await withMockedWindowsPlatform(() =>
       loadInstalledPluginIndexInstallRecords({ stateDir }),
     );
