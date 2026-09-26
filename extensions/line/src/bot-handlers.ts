@@ -218,6 +218,10 @@ async function resolveLineEventAdmission(
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
   const groupConfig = resolveLineGroupConfigEntry(account.config.groups, { groupId, roomId });
+  if (isGroup && groupConfig?.enabled === false) {
+    logVerbose(`Blocked line group ${groupId ?? roomId ?? "unknown"} (group disabled)`);
+    return null;
+  }
   const rawText = resolveEventRawText(event);
   const requireMention = isGroup ? groupConfig?.requireMention !== false : false;
   const dmPolicy = account.config.dmPolicy ?? "pairing";
@@ -280,9 +284,6 @@ async function resolveLineEventAdmission(
         id: (groupId ?? roomId ?? senderId) || "unknown",
       },
       ...(contextBinding ? { contextBinding } : {}),
-      ...(isGroup && groupConfig?.enabled === false
-        ? { route: { id: "line:group-config", enabled: false } }
-        : {}),
       mentionFacts,
       event: { kind: event.type === "join" ? "system" : event.type },
       dmPolicy,
@@ -319,7 +320,6 @@ async function resolveLineEventAdmission(
     // Joins have no sender to match. A configured audience must still contain
     // matchable entries after access-group expansion and LINE normalization.
     const roomAllowed =
-      groupConfig?.enabled !== false &&
       groupPolicy !== "disabled" &&
       (groupPolicy !== "allowlist" || access.state.allowlists.group.hasMatchableEntries);
     return roomAllowed ? { access, resolveBoundAccess: resolveAccess } : null;
@@ -344,10 +344,6 @@ async function resolveLineEventAdmission(
   }
 
   if (isGroup) {
-    if (groupConfig?.enabled === false) {
-      logVerbose(`Blocked line group ${groupId ?? roomId ?? "unknown"} (group disabled)`);
-      return null;
-    }
     if (groupConfig?.allowFrom !== undefined) {
       if (!senderId) {
         logVerbose("Blocked line group message (group allowFrom override, no sender ID)");

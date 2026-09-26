@@ -23,9 +23,14 @@ vi.mock("./send.js", () => ({
   replyMessageLine: vi.fn(),
 }));
 
-it.each(["group", "user"] as const)(
-  "routes a signed bound %s message before ambiguous agent selection",
-  async (kind) => {
+it.each([
+  { kind: "group", disabled: false },
+  { kind: "user", disabled: false },
+  { kind: "group", disabled: true },
+  { kind: "user", disabled: true },
+] as const)(
+  "settles a signed $kind message (disabled=$disabled) with binding-first routing",
+  async ({ kind, disabled }) => {
     await withTempHome(async () => {
       setLineRuntime(createPluginRuntimeMock());
       const account: ResolvedLineAccount = {
@@ -35,19 +40,21 @@ it.each(["group", "user"] as const)(
         channelSecret: "test-secret",
         tokenSource: "config",
         config: {
-          dmPolicy: "allowlist",
+          dmPolicy: disabled ? "disabled" : "allowlist",
           allowFrom: ["sender"],
           groupPolicy: "allowlist",
           groupAllowFrom: ["sender"],
-          groups: { "*": { requireMention: true } },
+          groups: { "*": { requireMention: true, enabled: !disabled } },
         },
       };
       const cfg: OpenClawConfig = {
         agents: {
-          list: [
-            { id: "main", groupChat: { mentionPatterns: ["wrong-owner"] } },
-            { id: "bound", groupChat: { mentionPatterns: ["helper"] } },
-          ],
+          list: disabled
+            ? [{ id: "main" }]
+            : [
+                { id: "main", groupChat: { mentionPatterns: ["wrong-owner"] } },
+                { id: "bound", groupChat: { mentionPatterns: ["helper"] } },
+              ],
         },
         channels: { line: account.config },
         bindings: [],
@@ -69,6 +76,9 @@ it.each(["group", "user"] as const)(
         listBySession: () => (current ? [current] : []),
         resolveByConversation: () => current,
         inspectByConversationAsync: async () => {
+          if (disabled) {
+            throw new Error("binding owner unavailable");
+          }
           const selected = current;
           current = null;
           return selected;
@@ -146,6 +156,11 @@ it.each(["group", "user"] as const)(
         const response = await send();
         expect(response.status).toBe(200);
         await response.text();
+        if (disabled) {
+          expect(processMessage).not.toHaveBeenCalled();
+          expect(failures).toEqual([]);
+          return;
+        }
         expect(processMessage).toHaveBeenCalledWith(
           expect.objectContaining({
             route: expect.objectContaining({
