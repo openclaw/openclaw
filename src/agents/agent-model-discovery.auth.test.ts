@@ -224,7 +224,7 @@ describe("discoverAuthStorage", () => {
   });
 
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {
-    const store = createAuthProfileStoreFixture({
+    const store = createAuthProfileStoreFixture<AuthProfileStore["profiles"]>({
       "openrouter:default": {
         type: "api_key",
         provider: "openrouter",
