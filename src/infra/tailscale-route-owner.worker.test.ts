@@ -10,7 +10,8 @@ import {
 } from "./tailscale-route-owner-protocol.js";
 import { runTailscaleRouteOwner } from "./tailscale-route-owner.worker.js";
 
-function spawnRouteOwnerFixture() {
+function spawnRouteOwnerFixture(waitForReady: boolean, signal: AbortSignal) {
+  signal.throwIfAborted();
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.tailscaleRouteOwner);
   const workerPath = fileURLToPath(workerUrl);
   const fixturePath = fileURLToPath(
@@ -29,7 +30,43 @@ function spawnRouteOwnerFixture() {
   );
   const messages: TailscaleRouteOwnerMessage[] = [];
   worker.on("message", (message: TailscaleRouteOwnerMessage) => messages.push(message));
-  return { messages, worker };
+  const ready = waitForReady
+    ? new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          worker.off("message", onMessage);
+          worker.off("error", onError);
+          worker.off("exit", onExit);
+          signal.removeEventListener("abort", onAbort);
+        };
+        const onMessage = (message: TailscaleRouteOwnerMessage) => {
+          if (message.type === "ready") {
+            cleanup();
+            resolve();
+          } else if (message.type === "failed") {
+            onError(new Error(message.stderr || message.stdout || "route owner failed"));
+          }
+        };
+        const onError = (error: Error) => {
+          cleanup();
+          reject(error);
+        };
+        const onAbort = () => {
+          onError(new Error("route owner readiness canceled", { cause: signal.reason }));
+        };
+        const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+          onError(
+            new Error(
+              `route owner exited before readiness (${signal ? `signal ${signal}` : `code ${code ?? "unknown"}`})`,
+            ),
+          );
+        };
+        worker.on("message", onMessage);
+        worker.once("error", onError);
+        worker.once("exit", onExit);
+        signal.addEventListener("abort", onAbort, { once: true });
+      })
+    : undefined;
+  return { messages, ready, worker };
 }
 
 describe("Tailscale route owner", () => {
@@ -70,15 +107,13 @@ describe("Tailscale route owner", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32").each([false, true])(
+  it.runIf(process.platform !== "win32").for([false, true])(
     "terminates the claim when the Gateway IPC owner disappears (ready=%s)",
-    async (waitForReady) => {
-      const { messages, worker } = spawnRouteOwnerFixture();
+    async (waitForReady, { signal }) => {
+      const { ready, worker } = spawnRouteOwnerFixture(waitForReady, signal);
       try {
         if (waitForReady) {
-          await vi.waitFor(() => {
-            expect(messages).toContainEqual({ type: "ready" });
-          });
+          await ready;
         }
         const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
           (resolve) => {
@@ -98,13 +133,11 @@ describe("Tailscale route owner", () => {
 
   it.runIf(process.platform !== "win32")(
     "terminates the claim before exiting on an interactive interrupt",
-    async () => {
-      const { messages, worker } = spawnRouteOwnerFixture();
+    async ({ signal }) => {
+      const { messages, ready, worker } = spawnRouteOwnerFixture(true, signal);
       let routePid: number | undefined;
       try {
-        await vi.waitFor(() => {
-          expect(messages).toContainEqual({ type: "ready" });
-        });
+        await ready;
         const spawned = messages.find((message) => message.type === "spawned");
         if (!spawned) {
           throw new Error("route owner did not report its claim process");
