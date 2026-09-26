@@ -28,6 +28,7 @@ import {
 } from "./session-binding-native-selection.js";
 import {
   buildChannelAccountKey,
+  captureConversationRef,
   normalizeConversationRef,
   withSessionBindingInspectionConversation,
 } from "./session-binding-normalization.js";
@@ -54,7 +55,7 @@ export { isSessionBindingError } from "./session-binding-errors.js";
 
 export type SessionBindingService = {
   bind: (input: SessionBindingBindInput) => Promise<SessionBindingRecord>;
-  getCapabilities: (params: { channel: string; accountId: string }) => SessionBindingCapabilities;
+  getCapabilities: (params: SessionBindingScope) => SessionBindingCapabilities;
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
   /** @deprecated Use touchAsync. Retained through the next Plugin SDK major. */
@@ -97,10 +98,6 @@ export type SessionBindingAdapter = {
 
 function normalizePlacement(raw: unknown): SessionBindingPlacement | undefined {
   return raw === "current" || raw === "child" ? raw : undefined;
-}
-
-function inferDefaultPlacement(ref: ConversationRef): SessionBindingPlacement {
-  return ref.conversationId ? "current" : "child";
 }
 
 function resolveAdapterPlacements(adapter: SessionBindingAdapter): SessionBindingPlacement[] {
@@ -200,10 +197,9 @@ export function unregisterSessionBindingAdapter(params: {
   ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, nextRegistrations);
 }
 
-function resolveAdapterForChannelAccount(params: {
-  channel: string;
-  accountId: string;
-}): NativeCapableSessionBindingAdapter | null {
+function resolveAdapterForChannelAccount(
+  params: SessionBindingScope,
+): NativeCapableSessionBindingAdapter | null {
   return (
     ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(params))?.at(-1)?.normalizedAdapter ??
     null
@@ -230,17 +226,6 @@ function assertAdapterSelectionCurrent(
       { channel: ref.channel, accountId: ref.accountId },
     );
   }
-}
-
-function captureConversationRef(ref: ConversationRef): ConversationRef {
-  return normalizeConversationRef({
-    channel: ref.channel,
-    accountId: ref.accountId,
-    conversationId: ref.conversationId,
-    ...(ref.parentConversationId !== undefined
-      ? { parentConversationId: ref.parentConversationId }
-      : {}),
-  });
 }
 
 function getActiveRegisteredAdapters(
@@ -466,7 +451,8 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
         );
       }
       const placement =
-        normalizePlacement(input.placement) ?? inferDefaultPlacement(normalizedConversation);
+        normalizePlacement(input.placement) ??
+        (normalizedConversation.conversationId ? "current" : "child");
       const supportedPlacements = adapter
         ? resolveAdapterPlacements(adapter)
         : genericCapabilities!.placements;
@@ -520,10 +506,7 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
       }
       const results: SessionBindingRecord[] = [];
       for (const adapter of getActiveRegisteredAdapters()) {
-        const entries = adapter.listBySession(key);
-        if (entries.length > 0) {
-          results.push(...entries);
-        }
+        results.push(...adapter.listBySession(key));
       }
       results.push(...listGenericCurrentConversationBindingsBySession(key));
       return dedupeBindings(results);
@@ -601,10 +584,7 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
         if (!adapter.unbind) {
           continue;
         }
-        const entries = await adapter.unbind(input);
-        if (entries.length > 0) {
-          removed.push(...entries);
-        }
+        removed.push(...(await adapter.unbind(input)));
       }
       if (!input.scope || adapters.length === 0) {
         removed.push(...(await unbindGenericCurrentConversationBindings(input)));

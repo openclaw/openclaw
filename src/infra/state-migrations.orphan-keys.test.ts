@@ -583,12 +583,16 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
-  it("keeps most recently updated entry when both orphan and canonical exist", async () => {
+  it("keeps the newest entry and prefers canonical keys on ties in either source order", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);
       writeStore(storePath, {
         "agent:main:main": { sessionId: "old-orphan", updatedAt: 500 },
         "agent:ops:work": { sessionId: "current", updatedAt: 2000 },
+        "agent:ops:TIE-ONE": { sessionId: "noncanonical-earlier", updatedAt: 1000 },
+        "agent:ops:tie-one": { sessionId: "canonical-later", updatedAt: 1000 },
+        "agent:ops:tie-two": { sessionId: "canonical-earlier", updatedAt: 1000 },
+        "agent:ops:TIE-TWO": { sessionId: "noncanonical-later", updatedAt: 1000 },
       });
 
       await migrateFixtureState(stateDir);
@@ -596,6 +600,10 @@ describe("migrateOrphanedSessionKeys", () => {
       const store = readStore(storePath);
       expect((store["agent:ops:work"] as { sessionId: string }).sessionId).toBe("current");
       expect(store["agent:main:main"]).toBeUndefined();
+      expect(requireStoreEntry(store, "agent:ops:tie-one").sessionId).toBe("canonical-later");
+      expect(requireStoreEntry(store, "agent:ops:tie-two").sessionId).toBe("canonical-earlier");
+      expect(store["agent:ops:TIE-ONE"]).toBeUndefined();
+      expect(store["agent:ops:TIE-TWO"]).toBeUndefined();
     });
   });
 

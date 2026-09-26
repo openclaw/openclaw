@@ -13,7 +13,7 @@ import {
   type ClawHubRequestParams,
 } from "./clawhub-client.js";
 import { normalizeClawHubSha256Hex } from "./clawhub-integrity.js";
-import { sha256Base64, sha256Hex } from "./crypto-digest.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { createTempDownloadTarget } from "./temp-download.js";
 
 const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";
@@ -73,8 +73,7 @@ async function stageClawHubArchive(params: {
   sha256Hex?: string;
   result?: Omit<ClawHubDownloadResult, "archivePath" | "integrity" | "sha256Hex" | "cleanup">;
 }): Promise<ClawHubDownloadResult> {
-  const sha256Digest =
-    params.sha256Hex ?? Buffer.from(sha256Base64(params.bytes), "base64").toString("hex");
+  const sha256Digest = params.sha256Hex ?? sha256Hex(params.bytes);
   const target = await createTempDownloadTarget(params);
   try {
     await fs.writeFile(target.path, params.bytes);

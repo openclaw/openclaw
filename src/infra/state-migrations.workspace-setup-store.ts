@@ -1,6 +1,8 @@
 // SQLite import and receipt semantics for retired workspace state.
-import { createHash } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { LEGACY_WORKSPACE_ATTESTATION_HEADER } from "../agents/workspace-legacy-state.js";
 import {
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
@@ -163,33 +165,31 @@ export function parseSource(
   return source.kind === "setup" ? parseSetup(snapshot.raw) : parseAttestation(snapshot);
 }
 
-function mapsEqual(left: ReadonlyMap<string, string>, right: ReadonlyMap<string, string>): boolean {
-  if (left.size !== right.size) {
-    return false;
-  }
-  for (const [key, value] of left) {
-    if (right.get(key) !== value) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function canonicalFingerprint(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+function readGeneratedHashes(database: DatabaseSync, workspaceKey: string): Map<string, string> {
+  return new Map(
+    executeSqliteQuerySync(
+      database,
+      getNodeSqliteKysely<WorkspaceMigrationDatabase>(database)
+        .selectFrom("workspace_generated_bootstrap_hashes")
+        .select(["filename", "sha256"])
+        .where("workspace_key", "=", workspaceKey),
+    ).rows.map((row) => [row.filename, row.sha256]),
+  );
 }
 
 function attestationFingerprint(params: {
   attestedAtMs: number;
   generatedHashes: ReadonlyMap<string, string>;
 }): string {
-  return canonicalFingerprint({
-    kind: "attestation",
-    attestedAtMs: params.attestedAtMs,
-    generatedHashes: [...params.generatedHashes.entries()].toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    ),
-  });
+  return sha256Hex(
+    JSON.stringify({
+      kind: "attestation",
+      attestedAtMs: params.attestedAtMs,
+      generatedHashes: [...params.generatedHashes.entries()].toSorted(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    }),
+  );
 }
 
 function receiptPreservesAuthority(
@@ -291,16 +291,8 @@ export function canonicalCoversParsedSource(params: {
     if (row.attested_at_ms < params.parsed.value.attestedAtMs) {
       return false;
     }
-    const hashes = new Map(
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("workspace_generated_bootstrap_hashes")
-          .select(["filename", "sha256"])
-          .where("workspace_key", "=", params.source.workspaceKey),
-      ).rows.map((hashRow) => [hashRow.filename, hashRow.sha256]),
-    );
-    if (mapsEqual(hashes, params.parsed.value.generatedHashes)) {
+    const hashes = readGeneratedHashes(db, params.source.workspaceKey);
+    if (isDeepStrictEqual(hashes, params.parsed.value.generatedHashes)) {
       return true;
     }
     const fingerprint = attestationFingerprint({
@@ -448,21 +440,10 @@ export function importAndRecordReceipt(params: {
             .selectAll()
             .where("workspace_key", "=", params.source.workspaceKey),
         );
-        const existing =
-          existingRow && existingRow.attested_at_ms != null
-            ? { attested_at_ms: existingRow.attested_at_ms }
-            : null;
-        if (existing) {
-          const rows = executeSqliteQuerySync(
-            db,
-            kysely
-              .selectFrom("workspace_generated_bootstrap_hashes")
-              .select(["filename", "sha256"])
-              .where("workspace_key", "=", params.source.workspaceKey),
-          ).rows;
-          const existingHashes = new Map(rows.map((row) => [row.filename, row.sha256]));
+        if (existingRow?.attested_at_ms != null) {
+          const existingHashes = readGeneratedHashes(db, params.source.workspaceKey);
           const existingFingerprint = attestationFingerprint({
-            attestedAtMs: existing.attested_at_ms,
+            attestedAtMs: existingRow.attested_at_ms,
             generatedHashes: existingHashes,
           });
           const replaceExistingAttestation = () => {
@@ -485,15 +466,15 @@ export function importAndRecordReceipt(params: {
             insertGeneratedHashes();
           };
           const equivalent =
-            existing.attested_at_ms === parsedAttestation.attestedAtMs &&
-            mapsEqual(existingHashes, parsedAttestation.generatedHashes);
+            existingRow.attested_at_ms === parsedAttestation.attestedAtMs &&
+            isDeepStrictEqual(existingHashes, parsedAttestation.generatedHashes);
           if (equivalent) {
             resolution = "verified";
             verifiedFingerprint = existingFingerprint;
-          } else if (existing.attested_at_ms > parsedAttestation.attestedAtMs) {
+          } else if (existingRow.attested_at_ms > parsedAttestation.attestedAtMs) {
             resolution = "superseded";
             verifiedFingerprint = existingFingerprint;
-          } else if (existing.attested_at_ms === parsedAttestation.attestedAtMs) {
+          } else if (existingRow.attested_at_ms === parsedAttestation.attestedAtMs) {
             const authority = findMigrationAuthority({
               db,
               kysely,
@@ -552,26 +533,15 @@ export function importAndRecordReceipt(params: {
             .select("attested_at_ms")
             .where("workspace_key", "=", params.source.workspaceKey),
         );
-        const verified =
-          verifiedRow && verifiedRow.attested_at_ms != null
-            ? { attested_at_ms: verifiedRow.attested_at_ms }
+        const verifiedHashes = readGeneratedHashes(db, params.source.workspaceKey);
+        const actualFingerprint =
+          verifiedRow?.attested_at_ms != null
+            ? attestationFingerprint({
+                attestedAtMs: verifiedRow.attested_at_ms,
+                generatedHashes: verifiedHashes,
+              })
             : null;
-        const verifiedHashes = new Map(
-          executeSqliteQuerySync(
-            db,
-            kysely
-              .selectFrom("workspace_generated_bootstrap_hashes")
-              .select(["filename", "sha256"])
-              .where("workspace_key", "=", params.source.workspaceKey),
-          ).rows.map((row) => [row.filename, row.sha256]),
-        );
-        const actualFingerprint = verified
-          ? attestationFingerprint({
-              attestedAtMs: verified.attested_at_ms,
-              generatedHashes: verifiedHashes,
-            })
-          : null;
-        if (!verified || actualFingerprint !== verifiedFingerprint) {
+        if (actualFingerprint !== verifiedFingerprint) {
           throw new Error("SQLite verification failed for workspace attestation state");
         }
       }

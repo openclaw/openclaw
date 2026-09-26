@@ -43,6 +43,7 @@ import type { CurrentConversationBindingTouch } from "./current-conversation-bin
 import { SessionBindingError } from "./session-binding-errors.js";
 import {
   buildChannelAccountKey,
+  captureConversationRef,
   normalizeConversationRef,
 } from "./session-binding-normalization.js";
 import type {
@@ -160,7 +161,7 @@ export function deleteCurrentConversationBindingRecordsBySession(
   });
 }
 
-function resolveChannelConversationBindingSupport(params: { channel: string; accountId: string }) {
+function resolveChannelConversationBindingSupport(params: SessionBindingScope) {
   const normalized =
     normalizeAnyChannelId(params.channel) ??
     normalizeOptionalLowercaseString(normalizeConversationText(params.channel));
@@ -184,10 +185,7 @@ function resolveChannelConversationBindingSupport(params: { channel: string; acc
   return plugin?.conversationBindings;
 }
 
-function resolveChannelSupportsCurrentConversationBinding(params: {
-  channel: string;
-  accountId: string;
-}): boolean {
+function resolveChannelSupportsCurrentConversationBinding(params: SessionBindingScope): boolean {
   const bindingSupport = resolveChannelConversationBindingSupport(params);
   if (
     bindingSupport?.supportsCurrentConversationBinding !== true ||
@@ -202,18 +200,12 @@ function resolveChannelSupportsCurrentConversationBinding(params: {
 }
 
 /** True when an active channel lifecycle owns bindings through a registered adapter. */
-export function requiresRegisteredSessionBindingAdapter(params: {
-  channel: string;
-  accountId: string;
-}): boolean {
+export function requiresRegisteredSessionBindingAdapter(params: SessionBindingScope): boolean {
   const support = resolveChannelConversationBindingSupport(params);
   return support?.bindingStore === "adapter" || typeof support?.createManager === "function";
 }
 
-function supportsGenericCurrentConversationBinding(ref: {
-  channel: string;
-  accountId: string;
-}): boolean {
+function supportsGenericCurrentConversationBinding(ref: SessionBindingScope): boolean {
   const normalized = normalizeConversationRef({
     ...ref,
     conversationId: "capability-check",
@@ -249,10 +241,9 @@ function bindingRefFromId(bindingId: string, scope?: SessionBindingScope): Conve
 }
 
 /** Reports generic current-conversation binding support for plugin-owned channels. */
-export function getGenericCurrentConversationBindingCapabilities(params: {
-  channel: string;
-  accountId: string;
-}): SessionBindingCapabilities | null {
+export function getGenericCurrentConversationBindingCapabilities(
+  params: SessionBindingScope,
+): SessionBindingCapabilities | null {
   if (!supportsGenericCurrentConversationBinding(params)) {
     return null;
   }
@@ -407,22 +398,11 @@ export async function unbindGenericCurrentConversationBindings(
     : [];
 }
 
-/** Async transport carries only the canonical conversation identity, not caller context. */
-function captureCurrentConversationRef(ref: ConversationRef): ConversationRef {
-  const { channel, accountId, conversationId, parentConversationId } = ref;
-  return normalizeConversationRef({
-    channel,
-    accountId,
-    conversationId,
-    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
-  });
-}
-
 /** Reads committed state without creating the store, pruning expiry, or repairing rows. */
 export async function inspectCurrentConversationBindingRecordAsync(
   ref: ConversationRef,
 ): Promise<SessionBindingRecord | null> {
-  const conversation = captureCurrentConversationRef(ref);
+  const conversation = captureConversationRef(ref);
   const result = await executeExistingOpenClawStateRead(
     {},
     { type: "conversationBindings.inspect", conversation },
@@ -440,7 +420,7 @@ export async function resolveCurrentConversationBindingRecordAsync(
   ref: ConversationRef,
   assertCurrent?: () => void,
 ): Promise<SessionBindingRecord | null> {
-  const conversation = captureCurrentConversationRef(ref);
+  const conversation = captureConversationRef(ref);
   const context = captureOpenClawStateWorkerContext();
   const result = await runOpenClawStateWorkerOperation(
     context,
@@ -463,7 +443,7 @@ export async function readCurrentConversationBindingSelectionAsync(
   refs: readonly ConversationRef[],
   assertCurrent?: () => void,
 ): Promise<ReadonlyArray<SessionBindingRecord | null>> {
-  const conversations = refs.map(captureCurrentConversationRef);
+  const conversations = refs.map(captureConversationRef);
   const context = captureOpenClawStateWorkerContext();
   const result = await runOpenClawStateWorkerOperation(
     context,
@@ -481,7 +461,7 @@ export async function touchCurrentConversationBindingRecordAsync(
   assertCurrent?: () => void,
 ) {
   const captured: CurrentConversationBindingTouch = {
-    conversation: captureCurrentConversationRef(input.conversation),
+    conversation: captureConversationRef(input.conversation),
     bindingId: input.bindingId,
     at: input.at,
     ...(input.accountPolicy
@@ -547,7 +527,7 @@ export async function inspectGenericCurrentConversationBindingAsync(
   ref: ConversationRef,
   options?: { assertCurrent?: () => void },
 ): Promise<SessionBindingRecord | null> {
-  const conversation = captureCurrentConversationRef(ref);
+  const conversation = captureConversationRef(ref);
   const captured = captureGenericBindingSupport(conversation);
   if (!captured.supported) {
     return null;
@@ -563,7 +543,7 @@ export async function resolveGenericCurrentConversationBindingAsync(
   ref: ConversationRef,
   options?: { assertCurrent?: () => void },
 ): Promise<SessionBindingRecord | null> {
-  const conversation = captureCurrentConversationRef(ref);
+  const conversation = captureConversationRef(ref);
   const captured = captureGenericBindingSupport(conversation);
   if (!captured.supported) {
     return null;
@@ -579,7 +559,7 @@ export async function readGenericCurrentConversationBindingSelectionAsync(
   refs: readonly ConversationRef[],
   options?: { assertCurrent?: () => void },
 ): Promise<ReadonlyArray<SessionBindingRecord | null>> {
-  const conversations = refs.map(captureCurrentConversationRef);
+  const conversations = refs.map(captureConversationRef);
   const captured = conversations.map(captureGenericBindingSupport);
   const assertCurrent = () => {
     options?.assertCurrent?.();
@@ -647,7 +627,7 @@ export async function touchGenericCurrentConversationBindingAsync(
   if (!ref) {
     return;
   }
-  const conversation = captureCurrentConversationRef(ref);
+  const conversation = captureConversationRef(ref);
   const captured = captureGenericBindingSupport(conversation);
   if (!captured.supported) {
     return;

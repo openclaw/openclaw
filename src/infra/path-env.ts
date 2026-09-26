@@ -164,24 +164,14 @@ function candidateBinDirs(
 
   // Keep the active runtime directory ahead of PATH hardening so shebang-based
   // subprocesses keep using the same Node/Bun the current OpenClaw process is on.
-  try {
-    const execDir = path.dirname(execPath);
-    if (isExecutable(execPath)) {
-      prepend.push(execDir);
-    }
-  } catch {
-    // ignore
+  const execDir = path.dirname(execPath);
+  if (isExecutable(execPath)) {
+    prepend.push(execDir);
   }
 
   // Bundled macOS app: `openclaw` lives next to the executable (process.execPath).
-  try {
-    const execDir = path.dirname(execPath);
-    const siblingCli = path.join(execDir, "openclaw");
-    if (isExecutable(siblingCli)) {
-      prepend.push(execDir);
-    }
-  } catch {
-    // ignore
+  if (isExecutable(path.join(execDir, "openclaw"))) {
+    prepend.push(execDir);
   }
 
   // Project-local installs are a common repo-based attack vector (bin hijacking). Keep this
@@ -211,8 +201,7 @@ function candidateBinDirs(
     homeDir,
   });
   if (pnpmHome) {
-    append.push(pnpmHome);
-    append.push(path.join(pnpmHome, "bin"));
+    append.push(pnpmHome, path.join(pnpmHome, "bin"));
   }
   const npmPrefix = normalizeTrustedPackageManagerRoot({
     value: process.env.NPM_CONFIG_PREFIX,
@@ -228,8 +217,10 @@ function candidateBinDirs(
     append.push(miseShims);
   }
   if (platform === "darwin") {
-    append.push(path.join(homeDir, "Library", "pnpm", "bin"));
-    append.push(path.join(homeDir, "Library", "pnpm"));
+    append.push(
+      path.join(homeDir, "Library", "pnpm", "bin"),
+      path.join(homeDir, "Library", "pnpm"),
+    );
   }
   if (process.env.XDG_BIN_HOME) {
     append.push(process.env.XDG_BIN_HOME);

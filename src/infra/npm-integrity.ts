@@ -1,18 +1,12 @@
-// Resolves npm integrity metadata and detects package drift.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NpmIntegrityDrift, NpmSpecResolution } from "./install-source-utils.js";
 
-/** Payload passed to npm integrity drift handlers during archive installs. */
 export type NpmIntegrityDriftPayload = {
   spec: string;
   expectedIntegrity: string;
   actualIntegrity: string;
   resolution: NpmSpecResolution;
 };
-
-function normalizeIntegrity(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
-}
 
 type ResolveNpmIntegrityDriftWithDefaultMessageParams = {
   spec: string;
@@ -22,20 +16,16 @@ type ResolveNpmIntegrityDriftWithDefaultMessageParams = {
   warn?: (message: string) => void;
 };
 
-/**
- * Resolves integrity drift with OpenClaw's default warning and abort messages.
- * Used by npm archive installers that do not need a custom payload shape.
- */
 export async function resolveNpmIntegrityDriftWithDefaultMessage(
   params: ResolveNpmIntegrityDriftWithDefaultMessageParams,
 ): Promise<{ integrityDrift?: NpmIntegrityDrift; error?: string }> {
-  const expectedIntegrity = normalizeIntegrity(params.expectedIntegrity);
+  const expectedIntegrity = normalizeOptionalString(params.expectedIntegrity);
   if (!expectedIntegrity) {
     return {};
   }
 
   const subject = params.resolution.resolvedSpec ?? params.spec;
-  const actualIntegrity = normalizeIntegrity(params.resolution.integrity);
+  const actualIntegrity = normalizeOptionalString(params.resolution.integrity);
   if (!actualIntegrity) {
     return { error: `aborted: npm package integrity missing for ${subject}` };
   }

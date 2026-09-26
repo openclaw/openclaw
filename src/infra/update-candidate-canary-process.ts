@@ -44,6 +44,13 @@ export function launchCanary(params: {
     stream.setEncoding("utf8");
     let pending = "";
     let droppingLine = false;
+    const captureLine = (line: string) => {
+      if (stream === child.stderr) {
+        captureStderr(line);
+      }
+      capture(line);
+      params.onLine?.(line);
+    };
     stream.on("data", (chunk: string) => {
       let text = chunk;
       if (droppingLine) {
@@ -58,11 +65,7 @@ export function launchCanary(params: {
       const lines = pending.split(/\r?\n/u);
       pending = lines.pop() ?? "";
       for (const line of lines) {
-        if (stream === child.stderr) {
-          captureStderr(line);
-        }
-        capture(line);
-        params.onLine?.(line);
+        captureLine(line);
       }
       if (pending.length > 64 * 1024) {
         // Discard an oversized unterminated line whole, never through a secret.
@@ -76,11 +79,7 @@ export function launchCanary(params: {
     });
     return () => {
       if (pending) {
-        if (stream === child.stderr) {
-          captureStderr(pending);
-        }
-        capture(pending);
-        params.onLine?.(pending);
+        captureLine(pending);
         pending = "";
       }
     };

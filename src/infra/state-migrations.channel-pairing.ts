@@ -282,15 +282,13 @@ function mergePairingRequests(
   return merged;
 }
 
-function removeImportedSource(filePath: string, warnings: string[]): boolean {
+function removeImportedSource(filePath: string, warnings: string[]): void {
   try {
     fs.rmSync(filePath, { force: true });
-    return true;
   } catch (err) {
     warnings.push(
       `Imported legacy channel pairing state but failed removing ${filePath}: ${String(err)}`,
     );
-    return false;
   }
 }
 

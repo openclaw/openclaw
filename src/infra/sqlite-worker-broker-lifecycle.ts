@@ -3,7 +3,10 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "./sqlite-coordinator.js";
 import { releaseSqliteWorkerActorCoordinators } from "./sqlite-worker-broker-admission.js";
 import {
   receiveSqliteWorkerReply,
@@ -208,14 +211,7 @@ export function createSqliteWorkerLifecycle({
       } finally {
         forget(actor);
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "SQLite worker actor cleanup failed", {
-          cause: errors[0],
-        });
-      }
+      throwSqliteLifecycleErrors(errors, "SQLite worker actor cleanup failed");
     })().finally(() => {
       actor.closing = undefined;
     });
@@ -258,14 +254,7 @@ export function createSqliteWorkerLifecycle({
           errors.push(error);
         }
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "SQLite worker retirement cleanup failed", {
-          cause: errors[0],
-        });
-      }
+      throwSqliteLifecycleErrors(errors, "SQLite worker retirement cleanup failed");
     })().finally(() => {
       slot.retiring = undefined;
     });

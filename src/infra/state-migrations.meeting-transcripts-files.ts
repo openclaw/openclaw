@@ -308,10 +308,6 @@ async function snapshotFile(filePath: string): Promise<{
   return { hash: await sha256File(filePath), sizeBytes: stat.size };
 }
 
-async function snapshotSourceFiles(files: string[]) {
-  return await Promise.all(files.map(snapshotFile));
-}
-
 function sourceFilesHash(
   files: string[],
   snapshots: Array<{ hash?: string; sizeBytes: number }>,
@@ -338,7 +334,7 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   const summaryJsonPath = path.join(sourceDir, "summary.json");
   const summaryMarkdownPath = path.join(sourceDir, "summary.md");
   const files = [metadataPath, transcriptPath, summaryJsonPath, summaryMarkdownPath];
-  const beforeSnapshots = await snapshotSourceFiles(files);
+  const beforeSnapshots = await Promise.all(files.map(snapshotFile));
   if (!beforeSnapshots[0]?.hash) {
     throw new Error(`legacy transcript session is missing metadata.json: ${sourceDir}`);
   }
@@ -368,7 +364,7 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
     throw new Error(`legacy transcript summary session mismatch at ${summaryJsonPath}`);
   }
 
-  const fileSnapshots = await snapshotSourceFiles(files);
+  const fileSnapshots = await Promise.all(files.map(snapshotFile));
   if (
     fileSnapshots.some(
       (snapshot, index) =>
@@ -541,7 +537,7 @@ export async function rehashLegacyMeetingTranscriptSnapshots(
     const files = ["metadata.json", "transcript.jsonl", "summary.json", "summary.md"].map(
       (fileName) => path.join(snapshot.sourceDir, fileName),
     );
-    const fileSnapshots = await snapshotSourceFiles(files);
+    const fileSnapshots = await Promise.all(files.map(snapshotFile));
     const currentHash = sourceFilesHash(files, fileSnapshots);
     if (currentHash !== snapshot.sourceHash) {
       return false;

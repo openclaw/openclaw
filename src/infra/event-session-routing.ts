@@ -1,6 +1,8 @@
-// Resolves event-triggered work to the correct session key and target.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SessionScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
@@ -15,10 +17,6 @@ import {
 } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
-
-// Event session routing maps cron/heartbeat wakeups back to the right main,
-// direct, or global session key while honoring DM allowlists and route policy.
-type UnknownRecord = Record<string, unknown>;
 
 /** Routing policy derived from config and the source session for an event. */
 export type EventSessionRoutingPolicy = {
@@ -39,26 +37,12 @@ type DirectSessionTarget = {
 };
 
 function readAllowFrom(value: unknown): Array<string | number> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const allowFrom = value.allowFrom;
+  const allowFrom = asOptionalRecord(value)?.allowFrom;
   return Array.isArray(allowFrom) ? allowFrom : undefined;
 }
 
 function readDmAllowFrom(value: unknown): Array<string | number> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  return readAllowFrom(value.dm);
-}
-
-function readAccountConfig(value: unknown): UnknownRecord | undefined {
-  return isRecord(value) && isRecord(value.config) ? value.config : undefined;
-}
-
-function normalizeEntry(value: string): string | undefined {
-  return normalizeLowercaseStringOrEmpty(value) || undefined;
+  return readAllowFrom(asOptionalRecord(value)?.dm);
 }
 
 /** Parse an agent direct-session key into channel/account/peer routing parts. */
@@ -112,7 +96,7 @@ function resolveEventSessionAllowFrom(params: {
     accountId && isRecord(channelConfig.accounts)
       ? resolveChannelAccountEntry(channelConfig.accounts, accountId, channelKey, (id) => id)
       : undefined;
-  const accountNestedConfig = readAccountConfig(accountConfig);
+  const accountNestedConfig = asOptionalRecord(asOptionalRecord(accountConfig)?.config);
   return (
     readDmAllowFrom(accountConfig) ??
     readDmAllowFrom(accountNestedConfig) ??
@@ -163,9 +147,8 @@ export function resolveEventSessionRoutingPolicy(params: {
   allowFrom?: ReadonlyArray<string | number> | null;
 }): EventSessionRoutingPolicy {
   const target = parseDirectAgentSessionTarget(params.sessionKey);
-  const channel = normalizeLowercaseStringOrEmpty(params.channel ?? target?.channel) || undefined;
-  const accountId =
-    normalizeLowercaseStringOrEmpty(params.accountId ?? target?.accountId) || undefined;
+  const channel = normalizeOptionalLowercaseString(params.channel ?? target?.channel);
+  const accountId = normalizeOptionalLowercaseString(params.accountId ?? target?.accountId);
   const allowFrom =
     params.allowFrom ??
     resolveEventSessionAllowFrom({
@@ -220,9 +203,9 @@ export function resolveMainScopedEventSessionKey(params: {
   const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
     dmScope: policy.dmScope ?? params.cfg?.session?.dmScope,
     allowFrom,
-    normalizeEntry,
+    normalizeEntry: normalizeOptionalLowercaseString,
   });
-  if (!pinnedOwner || normalizeEntry(target.peerId) !== pinnedOwner) {
+  if (!pinnedOwner || normalizeOptionalLowercaseString(target.peerId) !== pinnedOwner) {
     return null;
   }
   if (

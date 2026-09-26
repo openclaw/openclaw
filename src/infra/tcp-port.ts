@@ -6,9 +6,6 @@ export const MAX_TCP_PORT = 65_535;
 
 /** Parse a positive TCP port or return null for absent/invalid input. */
 export function parseTcpPort(raw: unknown): number | null {
-  if (raw === undefined || raw === null) {
-    return null;
-  }
   const parsed = parseStrictPositiveInteger(raw);
   if (parsed === undefined || parsed > MAX_TCP_PORT) {
     return null;
@@ -24,20 +21,13 @@ export function parseTcpPortFromArgs(programArguments: string[] | undefined): nu
   let latestPort: number | null = null;
   for (let index = 0; index < programArguments.length; index += 1) {
     const argument = programArguments[index];
+    let value: string | undefined;
     if (argument === "--port") {
-      const parsed = parseTcpPort(programArguments[index + 1]);
-      if (parsed !== null) {
-        latestPort = parsed;
-      }
-      index += 1;
-      continue;
+      value = programArguments[++index];
+    } else if (argument?.startsWith("--port=")) {
+      value = argument.slice("--port=".length);
     }
-    if (argument?.startsWith("--port=")) {
-      const parsed = parseTcpPort(argument.slice("--port=".length));
-      if (parsed !== null) {
-        latestPort = parsed;
-      }
-    }
+    latestPort = parseTcpPort(value) ?? latestPort;
   }
   return latestPort;
 }

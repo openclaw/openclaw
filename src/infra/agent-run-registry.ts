@@ -145,33 +145,24 @@ export function registerAgentRunContext(
   }
   const runIndexInputBefore = projectedAgentRunInputKey(existing);
   const previous = { sessionKey: existing.sessionKey, agentId: existing.agentId };
-  if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
-    existing.sessionKey = context.sessionKey;
-  }
-  if (context.sessionId && existing.sessionId !== context.sessionId) {
-    existing.sessionId = context.sessionId;
-  }
-  if (context.agentId && existing.agentId !== context.agentId) {
-    existing.agentId = context.agentId;
+  for (const key of ["sessionKey", "sessionId", "agentId"] as const) {
+    if (context[key] && existing[key] !== context[key]) {
+      existing[key] = context[key];
+    }
   }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
   }
   existing.completionSource ??= context.completionSource;
-  if (context.isControlUiVisible !== undefined) {
-    existing.isControlUiVisible = context.isControlUiVisible;
-  }
-  if (
-    context.projectSessionActive !== undefined &&
-    existing.projectSessionActive !== context.projectSessionActive
-  ) {
-    existing.projectSessionActive = context.projectSessionActive;
-  }
-  if (context.projectSessionLifecycle !== undefined) {
-    existing.projectSessionLifecycle = context.projectSessionLifecycle;
-  }
-  if (context.projectSessionMessages !== undefined) {
-    existing.projectSessionMessages = context.projectSessionMessages;
+  for (const key of [
+    "isControlUiVisible",
+    "projectSessionActive",
+    "projectSessionLifecycle",
+    "projectSessionMessages",
+  ] as const) {
+    if (context[key] !== undefined) {
+      existing[key] = context[key];
+    }
   }
   if (context.mainSessionRestartRecovery === true) {
     existing.mainSessionRestartRecovery = true;
@@ -185,11 +176,10 @@ export function registerAgentRunContext(
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
   }
-  if (context.registeredAt !== undefined) {
-    existing.registeredAt = context.registeredAt;
-  }
-  if (context.lastActiveAt !== undefined) {
-    existing.lastActiveAt = context.lastActiveAt;
+  for (const key of ["registeredAt", "lastActiveAt"] as const) {
+    if (context[key] !== undefined) {
+      existing[key] = context[key];
+    }
   }
   recordAgentEventRouting(runId, existing);
   if (runIndexInputBefore !== projectedAgentRunInputKey(existing)) {

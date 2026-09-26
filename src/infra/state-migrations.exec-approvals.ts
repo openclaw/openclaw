@@ -177,23 +177,14 @@ function decideAndRecordMigration(params: {
       } else if (receiptImportedSameSource && canonicalFile) {
         decision = "receipt-authoritative";
         removeSource = true;
-      } else if (!canonical) {
+      } else if (!canonical || !canonicalFile) {
         writeExecApprovalsConfigRow({
           db,
           file: legacyFile,
           raw: importedRaw ?? undefined,
           now,
         });
-        decision = "legacy-imported";
-        removeSource = true;
-      } else if (!canonicalFile) {
-        writeExecApprovalsConfigRow({
-          db,
-          file: legacyFile,
-          raw: importedRaw ?? undefined,
-          now,
-        });
-        decision = "invalid-canonical-repaired";
+        decision = canonical ? "invalid-canonical-repaired" : "legacy-imported";
         removeSource = true;
       } else {
         decision = "canonical-preserved";

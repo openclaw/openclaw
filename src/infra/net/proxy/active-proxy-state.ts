@@ -68,7 +68,7 @@ export function registerActiveManagedProxyUrl(
           "stop the current proxy before changing proxy.loopbackMode.",
       );
     }
-    if (!areProxyTlsOptionsEqual(activeProxyTlsOptions, proxyTls)) {
+    if (activeProxyTlsOptions?.ca !== proxyTls?.ca) {
       throw new Error(
         "proxy: cannot activate a managed proxy with different proxy TLS options while another proxy is active; " +
           "stop the current proxy before changing proxy.tls.",
@@ -85,13 +85,6 @@ export function registerActiveManagedProxyUrl(
   activeProxyTlsOptions = proxyTls;
   activeProxyRegistrationCount = 1;
   return { proxyUrl: activeProxyUrl, stopped: false };
-}
-
-function areProxyTlsOptionsEqual(
-  left: ManagedProxyTlsOptions | undefined,
-  right: ManagedProxyTlsOptions | undefined,
-): boolean {
-  return left?.ca === right?.ca;
 }
 
 /** Stops one registration scope and clears active proxy state after the last owner. */

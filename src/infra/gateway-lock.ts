@@ -163,44 +163,31 @@ export async function resolveGatewayOwnerStatus(
     ((p: number) =>
       readGatewayLockProcessCmdline(p, platform, remainingTimeoutMs(), opts.deadlineMs));
   const identityOptions = readCmdline ? undefined : { pid };
-  if (
-    role === "agent-embedded" ||
-    role === "sqlite-maintenance" ||
-    role === "skill-workshop-apply"
-  ) {
-    const args = readFn(pid);
-    remainingTimeoutMs();
-    if (!args) {
-      return "unknown";
-    }
-    // Embedded roles cover every direct state-writing command, including local TUI and probes.
-    const identity =
-      role === "agent-embedded"
-        ? classifyOpenClawArgv(args, identityOptions)
-        : classifyOpenClawArgv(args, {
-            ...identityOptions,
-            command: role === "sqlite-maintenance" ? "doctor" : "skills",
-          });
-    remainingTimeoutMs();
-    return identity.kind === "unclassified"
-      ? "unknown"
-      : identity.kind === "openclaw"
-        ? "alive"
-        : "dead";
-  }
-
+  const embedded =
+    role === "agent-embedded" || role === "sqlite-maintenance" || role === "skill-workshop-apply";
   const args = readFn(pid);
   remainingTimeoutMs();
   if (!args) {
-    // Cmdline reader unavailable or failed. On Linux legacy locks (no
-    // start-time), "unknown" lets the stale-lock heuristic eventually reclaim
-    // very old locks. On win32/darwin/other, conservatively assume "alive" to
-    // preserve single-instance guarantees when wmic/ps is unavailable.
-    return platform === "linux" || opts.trustUnknownCmdlineOwner === false ? "unknown" : "alive";
+    // Legacy Linux locks can eventually become stale. Other Gateway locks retain
+    // conservative liveness when platform inspection is unavailable.
+    return embedded || platform === "linux" || opts.trustUnknownCmdlineOwner === false
+      ? "unknown"
+      : "alive";
   }
-  // Long-running gateways retitle themselves so macOS/BSD process inspection
-  // can identify the owner after the original argv is no longer available.
-  const identity = classifyOpenClawArgv(args, { command: "gateway", ...identityOptions });
+  // Embedded agents cover every state-writing command; maintenance roles require
+  // their exact command. Gateway classification also recognizes retitled processes.
+  const command =
+    role === "agent-embedded"
+      ? undefined
+      : role === "sqlite-maintenance"
+        ? "doctor"
+        : role === "skill-workshop-apply"
+          ? "skills"
+          : "gateway";
+  const identity = classifyOpenClawArgv(
+    args,
+    command ? { command, ...identityOptions } : identityOptions,
+  );
   remainingTimeoutMs();
   return identity.kind === "unclassified"
     ? "unknown"

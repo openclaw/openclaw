@@ -392,24 +392,15 @@ async function migrateWithExclusiveStateOwnership(params: {
     return { changes, warnings };
   }
 
-  if (activePath === sourcePath) {
-    try {
+  let result: ReturnType<typeof importAndRecordReceipt>;
+  try {
+    if (activePath === sourcePath) {
       snapshot = await source.claim({
         snapshot,
         mismatchMessage: "legacy APNs source changed before Doctor could claim it",
         beforeClaim: params.beforeClaim,
       });
-    } catch (error) {
-      const restoreError = await source.restore();
-      warnings.push(
-        `Failed migrating legacy APNs state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-      );
-      return { changes, warnings };
     }
-  }
-
-  let result: ReturnType<typeof importAndRecordReceipt>;
-  try {
     result = importAndRecordReceipt({
       env: params.env,
       sourcePath,

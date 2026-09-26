@@ -1,4 +1,3 @@
-// Defines and sanitizes runtime diagnostic event payloads.
 import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -657,7 +656,6 @@ export type DiagnosticHarnessRunOutcome = "completed" | "aborted" | "timed_out" 
 
 type DiagnosticHarnessRunBaseEvent = DiagnosticBaseEvent &
   DiagnosticRunScopeFields & {
-    type: "harness.run.started" | "harness.run.completed" | "harness.run.error";
     harnessId: string;
     pluginId?: string;
   };
@@ -690,7 +688,6 @@ export type DiagnosticHarnessRunErrorEvent = DiagnosticHarnessRunBaseEvent & {
 };
 
 type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
-  type: "model.call.started" | "model.call.completed" | "model.call.error";
   runId: string;
   agentId?: string;
   callId: string;
@@ -1159,16 +1156,10 @@ function dispatchDiagnosticEvent(
             createDiagnosticMetadataForListener(metadata),
           );
         } catch (err) {
-          const errorMessage =
-            err instanceof Error
-              ? (err.stack ?? err.message)
-              : typeof err === "string"
-                ? err
-                : String(err);
+          const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
           console.error(
             `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
           );
-          // Ignore listener failures.
         }
       }
     }
@@ -1202,16 +1193,10 @@ function dispatchDiagnosticEvent(
           );
         }
       } catch (err) {
-        const errorMessage =
-          err instanceof Error
-            ? (err.stack ?? err.message)
-            : typeof err === "string"
-              ? err
-              : String(err);
+        const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
         console.error(
           `[diagnostic-events] trusted listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
         );
-        // Ignore listener failures.
       }
     }
   } finally {
@@ -1430,9 +1415,11 @@ function dispatchTrustedToolExecutionEvent(
   state.toolExecutionSeq += 1;
   let enriched: TrustedToolExecutionEvent;
   try {
-    enriched = deepFreezeDiagnosticValue(
-      structuredClone({ ...event, seq: state.toolExecutionSeq, ts: Date.now() }),
-    ) as TrustedToolExecutionEvent;
+    enriched = cloneDiagnosticValueForListener({
+      ...event,
+      seq: state.toolExecutionSeq,
+      ts: Date.now(),
+    });
   } catch (error) {
     console.error(
       `[diagnostic-events] tool execution clone error type=${event.type}: ${String(error)}`,
@@ -1556,13 +1543,11 @@ export function emitTrustedDiagnosticEventWithPrivateData(
   }
   // Plugin-facing emitters may provide trusted private content, but host attribution
   // is reserved for the object-identity provenance consumed above.
-  const sanitized = {
-    ...(privateData as DiagnosticEventPrivateData & { hostPluginId?: unknown }),
-  } as Record<string, unknown>;
-  delete sanitized.hostPluginId;
+  const sanitized = { ...privateData };
+  Reflect.deleteProperty(sanitized, "hostPluginId");
   emitDiagnosticEventWithTrust(event, true, {
     coreModelRequestLifecycle,
-    privateData: sanitized as DiagnosticEventPrivateData,
+    privateData: sanitized,
   });
 }
 

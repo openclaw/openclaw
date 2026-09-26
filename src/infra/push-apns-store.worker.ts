@@ -73,35 +73,13 @@ function registerApnsRegistrationInDatabase(
         updatedAtMs: nextApnsRegistrationVersion(nodeId, previousVersions, input.nowMs),
       };
       const row = apnsRegistrationToRow(next);
-      const {
-        token,
-        relay_handle,
-        send_grant,
-        installation_id,
-        relay_origin,
-        distribution,
-        token_debug_suffix,
-      } = row;
+      const { node_id: _nodeId, ...updates } = row;
       executeSqliteQuerySync(
         db,
         stateDb
           .insertInto("apns_registrations")
           .values(row)
-          .onConflict((conflict) =>
-            conflict.column("node_id").doUpdateSet({
-              transport: row.transport,
-              token,
-              relay_handle,
-              send_grant,
-              installation_id,
-              relay_origin,
-              topic: row.topic,
-              environment: row.environment,
-              distribution,
-              token_debug_suffix,
-              updated_at_ms: row.updated_at_ms,
-            }),
-          ),
+          .onConflict((conflict) => conflict.column("node_id").doUpdateSet(updates)),
       );
       executeSqliteQuerySync(
         db,

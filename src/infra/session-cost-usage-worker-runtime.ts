@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import type { Transferable } from "node:worker_threads";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectErrorGraphCandidates,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -148,15 +151,13 @@ export function resolveUsageCostWorkerDayBucket(dayBucket?: UsageDailyBucket): U
 }
 
 function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>): unknown {
-  const pending = [error];
-  const seen = new Set<unknown>();
   const restoredOrigins = new Set<number>();
   let result = error;
-  for (const current of pending) {
-    if (seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
+  for (const current of collectErrorGraphCandidates(error, (entry) =>
+    entry instanceof Error
+      ? [entry.cause, ...(entry instanceof AggregateError ? entry.errors : [])]
+      : [],
+  )) {
     if (current instanceof UsageCostWorkerReplyError) {
       const failure = current.failure;
       const remote = new Error(failure.message);
@@ -181,12 +182,6 @@ function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>):
               toErrorObject(restored, "Usage cost worker failed"),
               result,
             );
-    }
-    if (current instanceof Error && current.cause) {
-      pending.push(current.cause);
-    }
-    if (current instanceof AggregateError) {
-      pending.push(...current.errors);
     }
   }
   // Cancellation can retire the worker before an accepted write returns its failure.

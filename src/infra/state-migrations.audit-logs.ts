@@ -126,7 +126,7 @@ async function secureAuditArchiveFile(params: {
 async function archiveLegacyAuditClaim(params: {
   source: LegacyAuditLogSource;
   claimRelativePath: string;
-  archivePaths: { sanitized: string; raw: string; resumeSanitized: boolean };
+  archivePaths: AuditArchiveRelativePaths;
   snapshot: LegacyAuditSourceSnapshot;
   sanitizedJsonl: string;
   root: AuditMigrationRoot;
@@ -417,7 +417,7 @@ async function migrateLegacyAuditLogSource(params: {
     let candidateRecords = previousCheckpoint
       ? prepared.records.slice(previousCheckpoint.recordCount)
       : prepared.records;
-    if (!previousCheckpoint && candidateRecords === prepared.records) {
+    if (!previousCheckpoint) {
       const lastRetainedSourceIndex = prepared.records.findLastIndex((record) =>
         existingKeys.has(record.key),
       );
@@ -438,6 +438,11 @@ async function migrateLegacyAuditLogSource(params: {
       retainedNewRows === missing.length
         ? ""
         : `; ${retainedNewRows} retained after bounded retention`;
+    let scrubbedSnapshot: LegacyAuditSourceSnapshot | undefined;
+    let checkpointRawPath = params.source.sourcePath;
+    let checkpointRawRelativePath = claimRelativePath;
+    let checkpointSanitizedRelativePath: string;
+    let recordOrdinalBase: number;
     if (params.source.storage === "raw-archive") {
       if (!sanitizedRelativePath) {
         throw new Error(`Missing sanitized archive path for ${params.source.sourcePath}`);
@@ -492,87 +497,52 @@ async function migrateLegacyAuditLogSource(params: {
           `Recovered ${missing.length} later ${params.source.label} row(s) from ${params.source.sourcePath}${retentionNote}`,
         );
       }
-      const scrubbedSnapshot = await scrubLegacyAuditRecoveryArchive({
+      scrubbedSnapshot = await scrubLegacyAuditRecoveryArchive({
         root,
         relativePath: claimRelativePath,
         expectedSnapshot: snapshot,
         label: params.source.label,
         warnings,
       });
-      if (!scrubbedSnapshot) {
-        return result("refused");
+      checkpointSanitizedRelativePath = sanitizedRelativePath;
+      recordOrdinalBase =
+        (previousCheckpoint?.recordOrdinalBase ?? 0) +
+        Math.max(previousCheckpoint?.recordCount ?? 0, prepared.records.length);
+    } else {
+      if (!archivePaths) {
+        throw new Error(`Missing archive generation for ${params.source.sourcePath}`);
       }
-      const scrubbedRecords = prepareLegacyAuditRecords(
-        params.source,
-        scrubbedSnapshot.raw,
-        legacyAuditSourceGenerationKey(rawArchiveRelativePath),
+      changes.push(
+        `Migrated ${params.source.label} -> shared SQLite state (${missing.length} new row(s)${retentionNote})`,
       );
-      if (!scrubbedRecords.ok) {
-        warnings.push(...scrubbedRecords.warnings);
-        warnings.push(
-          `Retained uncheckpointed ${params.source.label} recovery archive; rerun openclaw doctor --fix`,
-        );
-        return result("refused");
-      }
-      if (scrubbedRecords.records.length !== 0) {
-        warnings.push(
-          `A legacy ${params.source.label} writer appended during recovery; rerun openclaw doctor --fix to import the retained rows`,
-        );
-        return result("refused");
-      }
-      const checkpointed = await recordLegacyAuditRawCheckpoint({
-        stateDir: params.stateDir,
-        rawPath: params.source.sourcePath,
-        rawRelativePath: claimRelativePath,
-        sanitizedRelativePath,
+      const archived = await archiveLegacyAuditClaim({
+        source: params.source,
+        claimRelativePath,
+        archivePaths,
+        snapshot,
+        sanitizedJsonl: prepared.sanitizedJsonl,
         root,
-        snapshot: scrubbedSnapshot,
-        phase: "raw",
-        recordCount: 0,
-        recordOrdinalBase:
-          (previousCheckpoint?.recordOrdinalBase ?? 0) +
-          Math.max(previousCheckpoint?.recordCount ?? 0, prepared.records.length),
+        changes,
         warnings,
       });
-      if (checkpointed) {
-        await finalizeLegacyAuditRecoveryArchive({ root, relativePath: claimRelativePath }).catch(
-          (error: unknown) => {
-            warnings.push(
-              `Failed removing completed ${params.source.label} recovery journal: ${String(error)}`,
-            );
-          },
-        );
+      claimFinalized = archived.moved;
+      if (!archived.moved || !archived.rawRelativePath) {
+        changes.pop();
+        return result("refused");
       }
-      return result(checkpointed ? "completed" : "refused");
+      scrubbedSnapshot = archived.scrubbedSnapshot;
+      checkpointRawPath = path.join(params.stateDir, archived.rawRelativePath);
+      checkpointRawRelativePath = archived.rawRelativePath;
+      checkpointSanitizedRelativePath = archivePaths.sanitized;
+      recordOrdinalBase = prepared.records.length;
     }
-    if (!archivePaths) {
-      throw new Error(`Missing archive generation for ${params.source.sourcePath}`);
-    }
-    changes.push(
-      `Migrated ${params.source.label} -> shared SQLite state (${missing.length} new row(s)${retentionNote})`,
-    );
-    const archived = await archiveLegacyAuditClaim({
-      source: params.source,
-      claimRelativePath,
-      archivePaths,
-      snapshot,
-      sanitizedJsonl: prepared.sanitizedJsonl,
-      root,
-      changes,
-      warnings,
-    });
-    claimFinalized = archived.moved;
-    if (!archived.moved || !archived.rawRelativePath) {
-      changes.pop();
-      return result("refused");
-    }
-    if (!archived.scrubbedSnapshot) {
+    if (!scrubbedSnapshot) {
       return result("refused");
     }
     const scrubbedRecords = prepareLegacyAuditRecords(
       params.source,
-      archived.scrubbedSnapshot.raw,
-      legacyAuditSourceGenerationKey(archived.rawRelativePath),
+      scrubbedSnapshot.raw,
+      legacyAuditSourceGenerationKey(checkpointRawRelativePath),
     );
     if (!scrubbedRecords.ok) {
       warnings.push(...scrubbedRecords.warnings);
@@ -583,34 +553,37 @@ async function migrateLegacyAuditLogSource(params: {
     }
     if (scrubbedRecords.records.length !== 0) {
       warnings.push(
-        `A legacy ${params.source.label} writer appended during migration; rerun openclaw doctor --fix to import the retained rows`,
+        `A legacy ${params.source.label} writer appended during ${params.source.storage === "raw-archive" ? "recovery" : "migration"}; rerun openclaw doctor --fix to import the retained rows`,
       );
       return result("refused");
     }
-    const rawPath = path.join(params.stateDir, archived.rawRelativePath);
     const checkpointed = await recordLegacyAuditRawCheckpoint({
       stateDir: params.stateDir,
-      rawPath,
-      rawRelativePath: archived.rawRelativePath,
-      sanitizedRelativePath: archivePaths.sanitized,
+      rawPath: checkpointRawPath,
+      rawRelativePath: checkpointRawRelativePath,
+      sanitizedRelativePath: checkpointSanitizedRelativePath,
       root,
-      snapshot: archived.scrubbedSnapshot,
+      snapshot: scrubbedSnapshot,
       phase: "raw",
       recordCount: 0,
-      recordOrdinalBase: prepared.records.length,
+      recordOrdinalBase,
       warnings,
     });
     if (checkpointed) {
       await finalizeLegacyAuditRecoveryArchive({
         root,
-        relativePath: archived.rawRelativePath,
+        relativePath: checkpointRawRelativePath,
       }).catch((error: unknown) => {
         warnings.push(
           `Failed removing completed ${params.source.label} recovery journal: ${String(error)}`,
         );
       });
     }
-    if ((await root.exists(sourceRelativePath)) && !params.recreatedSourceScheduled) {
+    if (
+      params.source.storage !== "raw-archive" &&
+      (await root.exists(sourceRelativePath)) &&
+      !params.recreatedSourceScheduled
+    ) {
       warnings.push(
         `An old writer recreated ${params.source.label} at ${params.source.logicalSourcePath}; rerun openclaw doctor --fix to import the retained rows`,
       );

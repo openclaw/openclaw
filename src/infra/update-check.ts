@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import { detectPackageManager } from "./detect-package-manager.js";
 import { createGitCommandError, executeGitCommand } from "./git-exec.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageName } from "./package-json.js";
@@ -218,10 +218,6 @@ async function exists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function detectPackageManager(root: string): Promise<PackageManager> {
-  return (await detectPackageManagerImpl(root)) ?? "unknown";
 }
 
 /** Classify installation ownership without reading Git history or dependency state. */
@@ -464,54 +460,36 @@ async function checkGitUpdateStatus(params: {
   };
 }
 
-async function resolveDepsMarker(params: { root: string; manager: PackageManager }): Promise<{
-  lockfilePath: string | null;
-  markerPath: string | null;
-}> {
-  const root = params.root;
-  if (params.manager === "pnpm") {
-    return {
-      lockfilePath: path.join(root, "pnpm-lock.yaml"),
-      markerPath: path.join(root, "node_modules", ".modules.yaml"),
-    };
-  }
-  if (params.manager === "bun") {
-    const textLockfilePath = path.join(root, "bun.lock");
-    return {
-      lockfilePath: (await exists(textLockfilePath))
-        ? textLockfilePath
-        : path.join(root, "bun.lockb"),
-      markerPath: path.join(root, "node_modules"),
-    };
-  }
-  if (params.manager === "npm") {
-    return {
-      lockfilePath: path.join(root, "package-lock.json"),
-      markerPath: path.join(root, "node_modules"),
-    };
-  }
-  return { lockfilePath: null, markerPath: null };
-}
-
 async function checkDepsStatus(params: {
   root: string;
   manager: PackageManager;
 }): Promise<DepsStatus> {
   const root = path.resolve(params.root);
-  const { lockfilePath, markerPath } = await resolveDepsMarker({
-    root,
-    manager: params.manager,
-  });
-  const paths = { manager: params.manager, lockfilePath, markerPath };
-
-  if (!lockfilePath || !markerPath) {
+  const manager = params.manager;
+  if (manager === "unknown") {
     return {
-      ...paths,
+      manager,
+      lockfilePath: null,
+      markerPath: null,
       status: "unknown",
       reason: "unknown package manager",
     };
   }
-
+  const lockfile =
+    manager === "pnpm"
+      ? "pnpm-lock.yaml"
+      : manager === "npm"
+        ? "package-lock.json"
+        : (await exists(path.join(root, "bun.lock")))
+          ? "bun.lock"
+          : "bun.lockb";
+  const lockfilePath = path.join(root, lockfile);
+  const markerPath = path.join(
+    root,
+    "node_modules",
+    ...(manager === "pnpm" ? [".modules.yaml"] : []),
+  );
+  const paths = { manager, lockfilePath, markerPath };
   const lockExists = await exists(lockfilePath);
   const markerExists = await exists(markerPath);
   if (!lockExists) {
@@ -532,38 +510,6 @@ async function checkDepsStatus(params: {
   return {
     ...paths,
     status: "ok",
-  };
-}
-
-async function fetchNpmLatestVersion(params?: {
-  timeoutMs?: number;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-}): Promise<RegistryStatus> {
-  const res = await fetchNpmTagVersion({
-    ...params,
-    tag: "latest",
-  });
-  return {
-    latestVersion: res.version,
-    error: res.error,
-  };
-}
-
-async function fetchNpmRegistryVersionForChannel(params: {
-  channel: UpdateChannel;
-  timeoutMs?: number;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-}): Promise<RegistryStatus> {
-  const res = await resolveNpmChannelTag(params);
-  return {
-    latestVersion: res.version,
-    tag: res.tag,
-    error: res.error,
-    ...(res.reason ? { error: res.reason, reason: res.reason } : {}),
   };
 }
 
@@ -651,13 +597,15 @@ export async function checkUpdateStatus(params: {
   const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
   const resolveRegistryChannel = (status: UpdateInstallIdentity) =>
     params.registryChannel ?? params.resolveRegistryChannel?.(status);
-  const fetchRegistry = (registryChannel: UpdateChannel | undefined) =>
-    registryChannel
-      ? fetchNpmRegistryVersionForChannel({
-          channel: registryChannel,
-          timeoutMs,
-        })
-      : fetchNpmLatestVersion({ timeoutMs });
+  const fetchRegistry = async (channel: UpdateChannel | undefined): Promise<RegistryStatus> => {
+    const result = await resolveNpmChannelTag({ channel: channel ?? "stable", timeoutMs });
+    return {
+      latestVersion: result.version,
+      ...(channel ? { tag: result.tag } : {}),
+      error: result.error,
+      ...(result.reason ? { error: result.reason, reason: result.reason } : {}),
+    };
+  };
   const root = params.root ? path.resolve(params.root) : null;
   if (!root) {
     const registryChannel = resolveRegistryChannel({ installKind: "unknown" });
@@ -691,7 +639,7 @@ export async function checkUpdateStatus(params: {
     };
   }
   const packageManager = isGit
-    ? await detectPackageManager(root)
+    ? ((await detectPackageManager(root)) ?? "unknown")
     : ((await detectGlobalInstallManagerForRoot(
         async (argv, options) => {
           params.signal?.throwIfAborted();

@@ -428,26 +428,15 @@ async function migrateWithExclusiveStateOwnership(params: {
     };
   }
 
-  if (activePath === params.detected.sourcePath) {
-    try {
+  let result: ReturnType<typeof importAndRecordReceipt>;
+  try {
+    if (activePath === params.detected.sourcePath) {
       snapshot = await source.claim({
         snapshot,
         mismatchMessage: "legacy device identity changed before Doctor could claim it",
         beforeClaim: () => params.beforeClaim?.(params.detected.sourcePath),
       });
-    } catch (error) {
-      const restoreError = await source.restore();
-      return {
-        changes: [],
-        warnings: [
-          `Failed migrating legacy device identity: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-        ],
-      };
     }
-  }
-
-  let result: ReturnType<typeof importAndRecordReceipt>;
-  try {
     result = importAndRecordReceipt({
       env: params.env,
       sourcePath: params.detected.sourcePath,

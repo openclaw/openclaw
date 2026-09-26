@@ -138,15 +138,6 @@ function resolvePluginStateImportTargetKey(scopeKey: string, key: string): strin
   return scopeKey ? `${scopeKey}:${key}` : key;
 }
 
-function findMissingKey(expected: Set<string>, actual: Set<string>): string | undefined {
-  for (const key of expected) {
-    if (!actual.has(key)) {
-      return key;
-    }
-  }
-  return undefined;
-}
-
 function compareImportEntriesNewestFirst(
   a: { ttlMs?: number; timestamp?: number },
   b: { ttlMs?: number; timestamp?: number },
@@ -306,10 +297,10 @@ export async function runLegacyMigrationPlans(
                 ...(entry.ttlMs != null ? { ttlMs: entry.ttlMs } : {}),
                 ...(entry.timestamp !== undefined ? { createdAtMs: entry.timestamp } : {}),
               });
-              const nextExpectedKeys = new Set(expectedKeys);
-              nextExpectedKeys.add(entry.targetKey);
               const liveKeys = new Set((await store.entries()).map(({ key }) => key));
-              const missingKey = findMissingKey(nextExpectedKeys, liveKeys);
+              const missingKey = [...expectedKeys, entry.targetKey].find(
+                (key) => !liveKeys.has(key),
+              );
               if (missingKey) {
                 // A concurrent write pushed the store over a cap and evicted a row. Roll back
                 // only the entry whose write triggered the eviction, restore the evicted live

@@ -1,6 +1,5 @@
 // Starts and monitors SSH tunnels for remote gateway access.
 import { spawn } from "node:child_process";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { createAbortError, isAbortError, racePromiseWithAbortSignal } from "./abort-signal.js";
 import { sleepWithAbort } from "./backoff.js";
@@ -8,6 +7,7 @@ import { formatErrorMessage, isErrno } from "./errors.js";
 import { probeTcpListener, tryListenOnPort } from "./ports-probe.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
 import { resolveSshClient } from "./ssh-client.js";
+import { parseTcpPort } from "./tcp-port.js";
 
 export type SshParsedTarget = {
   user?: string;
@@ -54,42 +54,24 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
     return null;
   }
 
-  const [userPart, hostPart] = trimmed.includes("@")
-    ? ((): [string | undefined, string] => {
-        const idx = trimmed.indexOf("@");
-        const user = trimmed.slice(0, idx).trim();
-        const host = trimmed.slice(idx + 1).trim();
-        return [user || undefined, host];
-      })()
-    : [undefined, trimmed];
-
-  const colonIdx = hostPart.lastIndexOf(":");
-  if (colonIdx > 0 && colonIdx < hostPart.length - 1) {
-    const host = hostPart.slice(0, colonIdx).trim();
-    const portRaw = hostPart.slice(colonIdx + 1).trim();
-    const port = parseStrictPositiveInteger(portRaw);
-    if (!host || port === undefined || port > 65535) {
-      return null;
-    }
-    if (!isSafeSshTargetHost(host)) {
-      return null;
-    }
-    if (userPart !== undefined && !isSafeSshTargetUser(userPart)) {
-      return null;
-    }
-    return { user: userPart, host, port };
+  const at = trimmed.indexOf("@");
+  const user = at === -1 ? undefined : trimmed.slice(0, at).trim() || undefined;
+  let host = at === -1 ? trimmed : trimmed.slice(at + 1).trim();
+  let port: number | null = 22;
+  const colonIdx = host.lastIndexOf(":");
+  if (colonIdx > 0 && colonIdx < host.length - 1) {
+    port = parseTcpPort(host.slice(colonIdx + 1).trim());
+    host = host.slice(0, colonIdx).trim();
   }
-
-  if (!hostPart) {
+  if (
+    !host ||
+    port === null ||
+    !isSafeSshTargetHost(host) ||
+    (user !== undefined && !isSafeSshTargetUser(user))
+  ) {
     return null;
   }
-  if (!isSafeSshTargetHost(hostPart)) {
-    return null;
-  }
-  if (userPart !== undefined && !isSafeSshTargetUser(userPart)) {
-    return null;
-  }
-  return { user: userPart, host: hostPart, port: 22 };
+  return { user, host, port };
 }
 
 async function waitForLocalListener(

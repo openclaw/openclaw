@@ -10,7 +10,7 @@ import {
   readRequiredClawHubNumberField,
   readRequiredClawHubStringField,
   resolveClawHubImageUrl,
-  type ClawHubFetch,
+  type ClawHubRequestParams,
 } from "./clawhub-client.js";
 import {
   parseClawHubPackageSecurityResponse,
@@ -108,13 +108,10 @@ export type ClawHubPluginVersionCategories = {
   categories: string[] | null;
 };
 
-type ClawHubReadOptions = {
-  baseUrl?: string;
-  token?: string;
-  skipAuth?: boolean;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-};
+type ClawHubReadOptions = Pick<
+  ClawHubRequestParams,
+  "baseUrl" | "token" | "skipAuth" | "timeoutMs" | "fetchImpl"
+>;
 
 const BARE_ICON_KEY = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const PLUGIN_CATEGORY_ICON_KEYS = new Set([

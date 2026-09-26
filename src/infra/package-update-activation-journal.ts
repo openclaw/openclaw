@@ -4,10 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import {
-  withExistingSqliteRollbackDatabase,
-  type ExistingSqliteTransaction,
-} from "./sqlite-existing-database.js";
+import { withExistingSqliteRollbackDatabase } from "./sqlite-existing-database.js";
 
 export const PACKAGE_ACTIVATION_JOURNAL = "operation.sqlite";
 const MAX_PACKAGE_ACTIVATION_DESCRIPTOR_BYTES = 1024 * 1024;
@@ -154,25 +151,6 @@ export function openPackageActivationJournal(anchor: string) {
       throw new Error("Package publication journal identity changed");
     }
   };
-  const withDatabase = <T>(
-    write: boolean,
-    operation: (db: DatabaseSync, transact: ExistingSqliteTransaction) => T,
-  ): T =>
-    withExistingSqliteRollbackDatabase(
-      journalPath,
-      {
-        write,
-        busyTimeoutMs: 0,
-        assertIdentity: assertFiles,
-        validate: (db) => {
-          executeSqliteQuerySync(
-            db,
-            queries(db).selectFrom("package_activation").selectAll().limit(0),
-          );
-        },
-      },
-      operation,
-    );
   const decode = (row: ActivationRow | undefined): PackageActivationRecord => {
     if (
       !row ||
@@ -247,8 +225,22 @@ export function openPackageActivationJournal(anchor: string) {
     }
     return rows[0];
   };
-  const read = () => withDatabase(false, (db) => decode(readRow(db)));
   return {
-    read,
+    read: () =>
+      withExistingSqliteRollbackDatabase(
+        journalPath,
+        {
+          write: false,
+          busyTimeoutMs: 0,
+          assertIdentity: assertFiles,
+          validate: (db) => {
+            executeSqliteQuerySync(
+              db,
+              queries(db).selectFrom("package_activation").selectAll().limit(0),
+            );
+          },
+        },
+        (db) => decode(readRow(db)),
+      ),
   };
 }
