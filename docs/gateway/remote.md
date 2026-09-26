@@ -84,6 +84,13 @@ Persist a remote target so CLI commands use it by default:
 
 When the Gateway is loopback-only, keep the URL at `ws://127.0.0.1:18789` and open the SSH tunnel first. In the macOS app's SSH-tunnel transport, the discovered Gateway hostname goes in `gateway.remote.sshTarget` (`user@host` or `user@host:port`); `gateway.remote.url` stays the local tunnel URL. If the remote port differs from the local one, set `gateway.remote.remotePort`.
 
+Remote diagnostic probes do not reuse cached device tokens for loopback URLs,
+even after pairing: a forwarded port can later reach a different Gateway.
+Configure `gateway.remote.token` or `gateway.remote.password` for the intended
+remote Gateway; for an explicit `--url`, pass `--token` or `--password` instead.
+Local diagnostics still reuse paired-device credentials, and non-loopback remote
+probes can use a device token cached for their exact Gateway origin.
+
 Running `openclaw configure --section gateway` or interactive onboarding again
 preserves the remote TLS fingerprint and transport settings when you keep the
 same URL (ignoring surrounding whitespace). Changing the URL clears those
