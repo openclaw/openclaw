@@ -169,14 +169,17 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
   async function readSnapshotIfPresent<T>(
     target: ResolvedTranscriptReadTarget,
     read: (projection: CurrentTranscriptProjection) => T,
-    options?: { readOnly?: boolean },
+    options?: SessionTranscriptReadOptions,
   ): Promise<T | undefined> {
     try {
       return await access.readSnapshot(target, read, options);
     } catch (error) {
+      // Count and exact-ID reads retain their existing missing-store result.
+      // History reads suppress the error only to try a reset archive.
       if (
         error instanceof SessionTranscriptStorageUnavailableError &&
         error.reason === "database-missing" &&
+        (options === undefined || options.allowResetArchiveFallback === true) &&
         !options?.readOnly
       ) {
         return undefined;

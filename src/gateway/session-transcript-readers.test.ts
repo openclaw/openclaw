@@ -256,6 +256,19 @@ describe("session transcript reader facade", () => {
       line("retained archive"),
     );
 
+    for (const allowResetArchiveFallback of [false, undefined]) {
+      await expect(
+        readSessionMessagesPageWithStatsAsync(scope, {
+          offset: 0,
+          maxMessages: 1,
+          allowResetArchiveFallback,
+        }),
+      ).rejects.toMatchObject({
+        name: "SessionTranscriptStorageUnavailableError",
+        reason: "database-missing",
+      });
+    }
+
     await expect(
       readSessionMessagesAsync(scope, {
         mode: "full",
