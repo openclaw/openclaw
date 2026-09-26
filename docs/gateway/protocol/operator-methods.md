@@ -154,7 +154,9 @@ catalog consumers, retaining cancellation and any explicit request deadline.
   retains compatible rows and reports its `providerOutcomes`; successful empty
   acquisition remains empty.
 - `provider: "<id>"` filters the published result through the captured provider
-  aliases. Unknown provider IDs are rejected.
+  aliases. Unknown provider IDs return `INVALID_REQUEST` with the rejected ID.
+  Omit the filter or run `openclaw models list --all` to list models and their
+  provider IDs.
 - `includeDetails: true` includes available input modalities, effective
   `contextTokens`, and a `local` endpoint classification. It does not expose
   endpoint URLs, headers, credentials, costs or runtime request parameters.

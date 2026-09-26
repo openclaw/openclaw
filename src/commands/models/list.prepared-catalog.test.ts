@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   createApiKeyCredential,
@@ -8,6 +9,7 @@ import * as catalog from "../../agents/prepared-model-catalog.js";
 import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
+import { runCommandWithRuntime } from "../../cli/cli-utils.js";
 import * as runtimeConfig from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as gateway from "../../gateway/call.js";
@@ -187,6 +189,27 @@ describe("models list published transport", () => {
     expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
       expect.not.objectContaining({ localPortOverride: expect.anything() }),
     );
+  });
+
+  it("prints an unknown provider rejection and exits unsuccessfully", async () => {
+    const message =
+      'Unknown model catalog provider "missing". Run openclaw models list --all to list models and their provider IDs.';
+    vi.mocked(gateway.callGateway).mockRejectedValue(
+      new GatewayClientRequestError({ code: "INVALID_REQUEST", message }),
+    );
+
+    await runCommandWithRuntime(runtime, () => list({ provider: "missing" }));
+
+    expect(gateway.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "models.list",
+        params: expect.objectContaining({ provider: "missing" }),
+      }),
+    );
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
   });
 
   it("treats an explicit Gateway port as a selected target even without a local lock", async () => {
