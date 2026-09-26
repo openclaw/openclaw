@@ -3,7 +3,7 @@ use super::{
     components::{
         facepile::{self, FacepileItem},
         hover_card::{HoverCard, HoverCardDismiss},
-        list::{list_row, section_header},
+        list::{list_row, section_header, section_header_content},
     },
     theme::{
         Palette,
@@ -64,31 +64,7 @@ impl AppView {
         } else {
             self.sidebar_state.preferences.people_collapsed
         };
-        let mut header = section_header("online-people-toggle")
-            .border_0()
-            .accessibility_label("Online")
-            .h(header::SECTION_HEIGHT)
-            .pl(space::MD)
-            .pr(space::LG)
-            .flex()
-            .items_center()
-            .gap(space::MD)
-            .cursor_pointer()
-            .text_color(p.muted)
-            .typography(text::SECTION)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.change_sidebar_preferences(
-                    |preferences| {
-                        if preferences.all_agents {
-                            preferences.people_collapsed_roster =
-                                !preferences.people_collapsed_roster;
-                        } else {
-                            preferences.people_collapsed = !preferences.people_collapsed;
-                        }
-                    },
-                    cx,
-                )
-            }))
+        let mut header_content = section_header_content()
             .child(
                 div()
                     .w(icon::LEADING)
@@ -118,10 +94,35 @@ impl AppView {
                     ),
             );
         if collapsed {
-            header = header
+            header_content = header_content
                 .child(div().flex_1())
                 .child(self.online_facepile(&people, 2, cx));
         }
+        let header = section_header("online-people-toggle", "Online")
+            .border_0()
+            .h(header::SECTION_HEIGHT)
+            .pl(space::MD)
+            .pr(space::LG)
+            .flex()
+            .items_center()
+            .gap(space::MD)
+            .cursor_pointer()
+            .text_color(p.muted)
+            .typography(text::SECTION)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.change_sidebar_preferences(
+                    |preferences| {
+                        if preferences.all_agents {
+                            preferences.people_collapsed_roster =
+                                !preferences.people_collapsed_roster;
+                        } else {
+                            preferences.people_collapsed = !preferences.people_collapsed;
+                        }
+                    },
+                    cx,
+                )
+            }))
+            .child(header_content);
         let mut section = div()
             .id("sidebar-online")
             .v_flex()
@@ -142,6 +143,12 @@ impl AppView {
                 let title = person.person.label().to_owned();
                 let idle = person.idle();
                 let row = list_row(SharedString::from(format!("online:{id}")), row::PERSON)
+                    .role(if route.is_some() {
+                        Role::Button
+                    } else {
+                        Role::Group
+                    })
+                    .aria_label(title.clone())
                     .group(SharedString::from(format!("online-row:{id}")))
                     .h(row::PERSON.min_height)
                     .px(space::MD)

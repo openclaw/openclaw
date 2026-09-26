@@ -7,6 +7,9 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
 };
 
+mod ownership;
+pub use ownership::SidebarOwners;
+
 pub const SECTION_PAGE_SIZE: usize = 10;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

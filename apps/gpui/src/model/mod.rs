@@ -14,6 +14,7 @@ pub mod avatars;
 pub mod elapsed_time;
 pub mod overlay_placement;
 pub mod people;
+pub mod session_channel;
 pub mod session_links;
 pub mod sidebar;
 pub mod sidebar_activity;

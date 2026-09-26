@@ -4,7 +4,7 @@ use super::{
         hover_card::HoverCard,
         icon::icon as ui_icon,
         icon_button::icon_button as ui_icon_button,
-        list::{empty_state, section_header},
+        list::{empty_state, section_header, section_header_content},
     },
     theme::{
         Palette,
@@ -40,10 +40,9 @@ impl AppView {
             .filter(|row| !adopted.contains(&row.key))
             .cloned()
             .collect();
-        let mut preferences = self.sidebar_state.preferences.clone();
-        if preferences.all_agents {
-            preferences.grouping = sidebar::Grouping::None;
-        }
+        let preferences = self
+            .sidebar_owners()
+            .effective_preferences(&self.sidebar_state.preferences);
         let mut sections = sidebar::sections(
             &rows,
             &preferences,
@@ -384,7 +383,7 @@ impl AppView {
                     .into_iter()
                     .find(|online| online.person.key() == person.key())
             });
-            let header = section_header(SharedString::from(format!("section:{key}")))
+            let header_content = section_header_content()
                 .child(
                     div()
                         .w(row::NAV.leading_width)
@@ -453,10 +452,13 @@ impl AppView {
                             p.accent
                         }),
                     )
-                })
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.toggle_sidebar_section(&toggle, cx)),
-                );
+                });
+            let header = section_header(
+                SharedString::from(format!("section:{key}")),
+                section.label.clone(),
+            )
+            .child(header_content)
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_sidebar_section(&toggle, cx)));
             let card_person = person.as_ref().filter(|person| {
                 person.profile_id().is_some()
                     && self

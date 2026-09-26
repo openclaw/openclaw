@@ -180,6 +180,7 @@ pub struct RowMetrics {
 }
 pub mod row {
     use super::*;
+    pub const CHANNEL_MAX_WIDTH: Pixels = px(120.);
     pub const NAV: RowMetrics = RowMetrics {
         min_height: px(32.),
         padding: Insets::new(0., 8., 0., 8.),

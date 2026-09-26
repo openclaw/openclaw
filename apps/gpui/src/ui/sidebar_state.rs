@@ -46,6 +46,7 @@ pub(super) struct SidebarState {
     pub pull_request_generation: u64,
     pub activity: crate::model::sidebar_activity::SidebarActivity,
     pub owners: Vec<Value>,
+    owners_known: bool,
     pub list_focus: FocusHandle,
     pub catalogs: super::sidebar_catalog::SidebarCatalogState,
     pub collapsed: bool,
@@ -120,6 +121,7 @@ impl SidebarState {
             pull_request_generation: 0,
             activity: Default::default(),
             owners: Vec::new(),
+            owners_known: false,
             list_focus: cx.focus_handle(),
             catalogs: Default::default(),
             collapsed: false,
@@ -176,6 +178,8 @@ impl AppView {
         self.sidebar_state.children.clear();
         self.sidebar_state.attention.clear();
         self.sidebar_state.pending_selection = None;
+        self.sidebar_state.owners.clear();
+        self.sidebar_state.owners_known = false;
         self.sidebar_state.catalogs = Default::default();
         self.sidebar_state.agent_activity.clear();
         self.sidebar_state.agent_activity_generation += 1;
@@ -362,6 +366,8 @@ impl AppView {
             return;
         }
         self.sidebar_state.selected_agent = Some(id);
+        self.sidebar_state.owners.clear();
+        self.sidebar_state.owners_known = false;
         self.sidebar_state.agent_revision += 1;
         self.sidebar_state.selected_descriptor = None;
         self.sidebar_state.children.clear();
@@ -415,7 +421,20 @@ impl AppView {
         self.select_session(rows[index].key.clone(), window, cx);
     }
 
+    pub(super) fn sidebar_owners(&self) -> crate::model::sidebar::SidebarOwners {
+        crate::model::sidebar::SidebarOwners::project(
+            self.sidebar_state
+                .owners_known
+                .then_some(self.sidebar_state.owners.as_slice()),
+            self.sidebar_state.people.self_user.as_ref(),
+            self.rows
+                .iter()
+                .chain(self.sidebar_state.children.values().flatten()),
+        )
+    }
+
     pub(super) fn invalidate_roster_reads(&mut self) {
+        self.sidebar_state.owners_known = false;
         self.sidebar_state.roster_request += 1;
         self.roster_loading = false;
     }
@@ -479,15 +498,12 @@ impl AppView {
                         + (started.elapsed() * 3)
                             .clamp(Duration::from_secs(5), Duration::from_secs(15)),
                 );
-                if let Ok(value) = &result
-                    && let Some(owners) = value.get("owners").and_then(Value::as_array)
-                {
-                    this.sidebar_state.owners = owners.clone();
-                }
                 match result
                     .and_then(|value| SessionPage::parse(value).map_err(|error| error.to_string()))
                 {
                     Ok(mut page) => {
+                        this.sidebar_state.owners_known = page.owners.is_some();
+                        this.sidebar_state.owners = page.owners.take().unwrap_or_default();
                         retain_newer_rows(&this.rows, &mut page.sessions);
                         let sampled_at = crate::model::chat::now_ms();
                         for row in &mut page.sessions {

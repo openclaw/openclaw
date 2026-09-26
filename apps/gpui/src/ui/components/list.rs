@@ -19,15 +19,26 @@ pub(crate) fn list_row(id: impl Into<ElementId>, metrics: RowMetrics) -> Statefu
         .rounded(metrics.radius)
 }
 
-pub(crate) fn section_header(id: impl Into<ElementId>) -> Button {
+pub(crate) fn section_header(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
     Button::new(id)
+        .role(Role::Button)
+        .accessibility_label(label)
         .ghost()
         .small()
         .flex_1()
         .min_w_0()
         .h(header::SECTION_HEIGHT)
-        .justify_start()
         .px(space::MD)
+}
+
+/// Button's private content container centers its children; a full-width child
+/// owns section alignment without replacing the widget's action/focus behavior.
+pub(crate) fn section_header_content() -> Div {
+    div()
+        .h_flex()
+        .w_full()
+        .min_w_0()
+        .justify_start()
         .gap(row::NAV.gap)
 }
 

@@ -54,6 +54,17 @@ struct MenuHost {
     open: bool,
 }
 
+impl MenuHost {
+    fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.open = open;
+        if !open {
+            self.menu = None;
+            self.subscription = None;
+        }
+        cx.notify();
+    }
+}
+
 #[derive(IntoElement)]
 pub(crate) struct MenuSurface {
     id: SharedString,
@@ -106,21 +117,27 @@ impl RenderOnce for MenuSurface {
             ..Default::default()
         };
         let open_holder = holder.downgrade();
+        let keyboard_holder = holder.downgrade();
         let content_holder = holder.clone();
         let build = self.build;
         let popup = Popover::new(SharedString::from(format!("menu-surface:{}", self.id)))
             .appearance(false)
             .overlay_closable(false)
-            .trigger(self.trigger)
+            .open(holder.read(cx).open)
+            .trigger(self.trigger.on_click(move |event, window, cx| {
+                // Pointer activation belongs to Popover's mouse-down handler.
+                // Keyboard and accessibility presses reach the button directly.
+                if event.is_keyboard() {
+                    cx.stop_propagation();
+                    let _ = keyboard_holder.update(cx, |holder, cx| {
+                        holder.set_open(!holder.open, cx);
+                    });
+                    window.refresh();
+                }
+            }))
             .top(space::NONE)
             .on_open_change(move |open, _, cx| {
-                let _ = open_holder.update(cx, |holder, _| {
-                    holder.open = *open;
-                    if !open {
-                        holder.menu = None;
-                        holder.subscription = None;
-                    }
-                });
+                let _ = open_holder.update(cx, |holder, cx| holder.set_open(*open, cx));
             })
             .content(move |_, window, cx| {
                 let existing = content_holder.read(cx).menu.clone();

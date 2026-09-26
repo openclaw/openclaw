@@ -114,6 +114,7 @@ impl AppView {
         } else {
             self.sidebar_subtitle(row)
         };
+        let channel = crate::model::session_channel::channel_label(row);
         let color = row
             .color
             .as_deref()
@@ -127,6 +128,8 @@ impl AppView {
                 row_style::SESSION
             },
         )
+        .role(Role::Button)
+        .aria_label(row.title())
         .group("session-row")
         .key_context("SidebarSessionMenu")
         .on_action(
@@ -226,6 +229,9 @@ impl AppView {
                                     .truncate()
                                     .child(row.title()),
                             )
+                            .when_some(channel.clone().filter(|_| team), |el, label| {
+                                el.child(channel_caption(label, p))
+                            })
                             .when(row.visibility.as_deref() == Some("draft"), |el| {
                                 el.child(row_badge(
                                     &key,
@@ -254,19 +260,29 @@ impl AppView {
                                 ))
                             }),
                     )
-                    .when_some(subtitle, |el, preview| {
+                    .when(!team && (channel.is_some() || subtitle.is_some()), |el| {
                         el.child(
                             div()
-                                .typography(text::CAPTION)
-                                .text_color(match attention {
-                                    SidebarAttention::Agent | SidebarAttention::Approval => {
-                                        colors::attention_text(p)
-                                    }
-                                    SidebarAttention::Error => colors::error_text(p),
-                                    _ => p.muted,
-                                })
-                                .truncate()
-                                .child(preview),
+                                .h_flex()
+                                .gap(space::SM)
+                                .min_w_0()
+                                .when_some(channel, |el, label| el.child(channel_caption(label, p)))
+                                .when_some(subtitle, |el, preview| {
+                                    el.child(
+                                        div()
+                                            .typography(text::CAPTION)
+                                            .text_color(match attention {
+                                                SidebarAttention::Agent
+                                                | SidebarAttention::Approval => {
+                                                    colors::attention_text(p)
+                                                }
+                                                SidebarAttention::Error => colors::error_text(p),
+                                                _ => p.muted,
+                                            })
+                                            .truncate()
+                                            .child(preview),
+                                    )
+                                }),
                         )
                     }),
             );
@@ -485,4 +501,13 @@ impl AppView {
         }
         branch.into_any_element()
     }
+}
+
+fn channel_caption(label: String, p: Palette) -> Div {
+    div()
+        .max_w(row_style::CHANNEL_MAX_WIDTH)
+        .typography(text::CAPTION)
+        .text_color(p.muted)
+        .truncate()
+        .child(label)
 }

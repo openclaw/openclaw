@@ -501,6 +501,7 @@ fn menu_entry(
     div()
         .id(("agent-command", index))
         .role(Role::MenuItem)
+        .aria_label(entry.label.clone())
         .h_flex()
         .h(menu::ROW_HEIGHT)
         .insets(menu::ITEM_PADDING)
