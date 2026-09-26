@@ -61,8 +61,11 @@ it("resolves progress across aliases and session IDs within the selected agent",
     { agentId: "ops", sessionId: "running-id", projectSessionActive: true },
     { sessionKey: "legacy", projectSessionActive: true },
   ];
+  for (const context of contexts) {
+    context.lifecycleGeneration = "current";
+  }
   const index = buildAgentRunProjectionIndex({
-    contexts: contexts.map((context) => ({ ...context, lifecycleGeneration: "current" })),
+    contexts,
     lifecycleGeneration: "current",
   });
   const state = (
