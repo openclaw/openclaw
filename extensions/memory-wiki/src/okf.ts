@@ -48,15 +48,6 @@ type OkfConceptDocument = {
   timestamp?: string;
 };
 
-type OkfImportedPage = {
-  conceptId: string;
-  sourcePath: string;
-  pageId: string;
-  pagePath: string;
-  title: string;
-  created: boolean;
-};
-
 type ImportMemoryWikiOkfWarning = {
   code: "invalid-concept" | "missing-type" | "unreadable-entry";
   path: string;
@@ -219,8 +210,7 @@ async function readOkfTextFile(params: {
 function deriveOkfTitle(relativePath: string, frontmatter: Record<string, unknown>): string {
   return (
     normalizeOptionalString(frontmatter.title) ??
-    path.posix.basename(relativePath, ".md").replace(/[-_]+/g, " ").trim() ??
-    trimMarkdownExtension(relativePath)
+    path.posix.basename(relativePath, ".md").replace(/[-_]+/g, " ").trim()
   );
 }
 
@@ -598,7 +588,7 @@ export async function importMemoryWikiOkfBundle(params: {
     });
   }
 
-  const importedPages: OkfImportedPage[] = [];
+  const pagePaths: string[] = [];
   let updatedCount = 0;
 
   await fs.mkdir(path.join(params.config.vault.path, "concepts"), { recursive: true });
@@ -669,16 +659,9 @@ export async function importMemoryWikiOkfBundle(params: {
     if (!writeResult.created && writeResult.changed) {
       updatedCount++;
     }
-    importedPages.push({
-      conceptId: concept.conceptId,
-      sourcePath: concept.absolutePath,
-      pageId: page.pageId,
-      pagePath: page.pagePath,
-      title: concept.title,
-      created: writeResult.created,
-    });
+    pagePaths.push(page.pagePath);
   }
-  const currentPagePaths = new Set(importedPages.map((page) => page.pagePath));
+  const currentPagePaths = new Set(pagePaths);
   const removedPagePaths =
     warnings.length === 0
       ? await removeStaleOkfConceptPages({
@@ -694,11 +677,11 @@ export async function importMemoryWikiOkfBundle(params: {
     details: {
       bundlePath,
       bundleName,
-      importedCount: importedPages.length,
+      importedCount: pagePaths.length,
       updatedCount,
       removedCount: removedPagePaths.length,
       skippedCount: warnings.length,
-      pagePaths: importedPages.map((page) => page.pagePath),
+      pagePaths,
       removedPagePaths,
     },
   });
@@ -708,11 +691,11 @@ export async function importMemoryWikiOkfBundle(params: {
     bundlePath,
     bundleName,
     ...(bundleMetadata.version ? { okfVersion: bundleMetadata.version } : {}),
-    importedCount: importedPages.length,
+    importedCount: pagePaths.length,
     updatedCount,
     removedCount: removedPagePaths.length,
     skippedCount: warnings.length,
-    pagePaths: importedPages.map((page) => page.pagePath),
+    pagePaths,
     removedPagePaths,
     warnings,
     indexUpdatedFiles: compile.updatedFiles,

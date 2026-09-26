@@ -97,23 +97,12 @@ export function resolveBaselineReadonlyPaths(env: BaselineReadonlyEnv): string[]
   const systemRoot = firstNonBlankEnv(env.SystemRoot, env.WINDIR) ?? "C:\\Windows";
   const programFiles = firstNonBlankEnv(env.ProgramFiles, env.ProgramW6432) ?? "C:\\Program Files";
   const programFilesX86 = firstNonBlankEnv(env["ProgramFiles(x86)"]) ?? "C:\\Program Files (x86)";
-  return dedupeStable([
-    programFiles,
-    programFilesX86,
-    win32.join(systemRoot, "System32"),
-    win32.join(systemRoot, "SysWOW64"),
-  ]);
-}
-
-function dedupeStable(values: readonly string[]): string[] {
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    if (seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    deduped.push(value);
-  }
-  return deduped;
+  return [
+    ...new Set([
+      programFiles,
+      programFilesX86,
+      win32.join(systemRoot, "System32"),
+      win32.join(systemRoot, "SysWOW64"),
+    ]),
+  ];
 }

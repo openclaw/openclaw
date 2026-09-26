@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as wikiWalk from "./bounded-walk.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import * as wikiLinks from "./markdown-links.js";
 import { renderWikiMarkdown } from "./markdown.js";
@@ -227,24 +226,13 @@ describe("wiki query page reads", () => {
         await fs.unlink(targetPath);
         await fs.symlink(outside.targetPath, targetPath);
       };
-      if (route === "exact") {
-        __setFsSafeTestHooksForTest({
-          beforeOpen: async (filePath) => {
-            if (path.resolve(filePath) === canonicalTarget) {
-              await swap();
-            }
-          },
-        });
-      } else {
-        const walk = wikiWalk.walkMemoryWikiDirectory;
-        vi.spyOn(wikiWalk, "walkMemoryWikiDirectory").mockImplementation(async (...args) => {
-          const entries = await walk(...args);
-          if (args[0] === rootDir && entries.some((entry) => entry.relativePath === relativePath)) {
+      __setFsSafeTestHooksForTest({
+        beforeOpen: async (filePath) => {
+          if (path.resolve(filePath) === canonicalTarget) {
             await swap();
           }
-          return entries;
-        });
-      }
+        },
+      });
       const readdir = vi.spyOn(fs, "readdir");
       const read =
         route === "search"

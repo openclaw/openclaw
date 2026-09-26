@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements compile behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
@@ -13,7 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { walkMemoryWikiDirectory } from "./bounded-walk.js";
+import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -375,15 +374,6 @@ type CompileMemoryWikiOptions = {
   signal?: AbortSignal;
 };
 
-async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
-  const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
-  return entries
-    .filter((entry) => entry.kind === "file" && entry.relativePath.endsWith(".md"))
-    .map((entry) => entry.relativePath.split(path.sep).join("/"))
-    .filter((relativePath) => path.basename(relativePath) !== "index.md")
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 async function readPageSummaries(
   rootDir: string,
   signal?: AbortSignal,
@@ -394,7 +384,13 @@ async function readPageSummaries(
   overviewItems: MemoryWikiOverviewItem[];
 }> {
   const filePaths = (
-    await Promise.all(COMPILE_PAGE_GROUPS.map((group) => collectMarkdownFiles(rootDir, group.dir)))
+    await Promise.all(
+      COMPILE_PAGE_GROUPS.map(async (group) =>
+        (await listMemoryWikiPagePaths(rootDir, group.dir)).toSorted((left, right) =>
+          left.localeCompare(right),
+        ),
+      ),
+    )
   ).flat();
   signal?.throwIfAborted();
 
@@ -1078,7 +1074,7 @@ function rankFreshnessLevel(level: WikiFreshnessLevel): number {
 }
 
 function sortClaims(page: WikiPageSummary): WikiClaim[] {
-  return [...page.claims].toSorted((left, right) => {
+  return page.claims.toSorted((left, right) => {
     const leftConfidence = left.confidence ?? -1;
     const rightConfidence = right.confidence ?? -1;
     if (leftConfidence !== rightConfidence) {
@@ -1097,57 +1093,46 @@ function buildCompiledCacheSnapshot(
   scan: Awaited<ReturnType<typeof readPageSummaries>>,
 ): MemoryWikiCompiledCacheSnapshot {
   const pagesInput = scan.pages;
-  const pages = [...pagesInput]
+  const pages = pagesInput
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
-    .map((page) => {
-      return Object.assign(
-        {},
-        page.id ? { id: page.id } : {},
-        {
-          title: page.title,
-          kind: page.kind,
-          path: page.relativePath,
-          aliases: [...page.aliases],
-          sourceIds: [...page.sourceIds],
-          questions: [...page.questions],
-          contradictions: [...page.contradictions],
-          bestUsedFor: [...page.bestUsedFor],
-          notEnoughFor: [...page.notEnoughFor],
-          relationshipCount: page.relationships.length,
-          topRelationships: page.relationships.slice(0, 5),
-        },
-        page.pageType ? { pageType: page.pageType } : {},
-        page.entityType ? { entityType: page.entityType } : {},
-        page.canonicalId ? { canonicalId: page.canonicalId } : {},
-        page.privacyTier ? { privacyTier: page.privacyTier } : {},
-        page.personCard ? { personCard: page.personCard } : {},
-        {
-          claimCount: page.claims.length,
-          topClaims: sortClaims(page)
-            .slice(0, 5)
-            .map((claim) => {
-              const freshness = assessClaimFreshness({ page, claim });
-              return Object.assign(
-                {},
-                claim.id ? { id: claim.id } : {},
-                {
-                  text: claim.text,
-                  status: normalizeClaimStatus(claim.status),
-                },
-                typeof claim.confidence === "number" ? { confidence: claim.confidence } : {},
-                {
-                  freshnessLevel: freshness.level,
-                },
-              );
-            }),
-        },
-      );
-    });
+    .map((page) => ({
+      ...(page.id ? { id: page.id } : {}),
+      title: page.title,
+      kind: page.kind,
+      path: page.relativePath,
+      aliases: [...page.aliases],
+      sourceIds: [...page.sourceIds],
+      questions: [...page.questions],
+      contradictions: [...page.contradictions],
+      bestUsedFor: [...page.bestUsedFor],
+      notEnoughFor: [...page.notEnoughFor],
+      relationshipCount: page.relationships.length,
+      topRelationships: page.relationships.slice(0, 5),
+      ...(page.pageType ? { pageType: page.pageType } : {}),
+      ...(page.entityType ? { entityType: page.entityType } : {}),
+      ...(page.canonicalId ? { canonicalId: page.canonicalId } : {}),
+      ...(page.privacyTier ? { privacyTier: page.privacyTier } : {}),
+      ...(page.personCard ? { personCard: page.personCard } : {}),
+      claimCount: page.claims.length,
+      topClaims: sortClaims(page)
+        .slice(0, 5)
+        .map((claim) => {
+          const freshness = assessClaimFreshness({ page, claim });
+          return {
+            ...(claim.id ? { id: claim.id } : {}),
+            text: claim.text,
+            status: normalizeClaimStatus(claim.status),
+            ...(typeof claim.confidence === "number" ? { confidence: claim.confidence } : {}),
+            freshnessLevel: freshness.level,
+          };
+        }),
+    }));
   const claims = pagesInput
     .flatMap((page) =>
       sortClaims(page).map((claim) => {
         const freshness = assessClaimFreshness({ page, claim });
-        return Object.assign({}, claim.id ? { id: claim.id } : {}, {
+        return {
+          ...(claim.id ? { id: claim.id } : {}),
           pageId: page.id,
           pageTitle: page.title,
           pageKind: page.kind,
@@ -1172,7 +1157,7 @@ function buildCompiledCacheSnapshot(
           ],
           freshnessLevel: freshness.level,
           lastTouchedAt: freshness.lastTouchedAt,
-        });
+        };
       }),
     )
     .toSorted(

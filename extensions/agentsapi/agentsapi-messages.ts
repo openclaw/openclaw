@@ -45,7 +45,7 @@ type NativeTextState = {
 };
 
 /** Native identities keep saved-state recovery and live events on the same projection. */
-class AgentsApiMessageProjection {
+export class AgentsApiMessageProjection {
   readonly reply: AgentsApiReply = { assistantUsage: makeAgentsApiZeroUsage() };
   private readonly items = new Map<string, NativeTextState>();
   private readonly turnByItem = new Map<string, string>();
@@ -674,15 +674,6 @@ class AgentsApiMessageProjection {
   private append<TMessage extends AgentMessage>(message: TMessage): Promise<TMessage> {
     return appendAgentsApiTranscriptMessage(this.params, message, this.assertCurrent);
   }
-}
-
-export function createAgentsApiMessageProjection(
-  params: AgentHarnessAttemptParamsV2,
-  remoteSessionId: string,
-  emitEvent: (event: AgentEvent) => void | Promise<void>,
-  assertCurrent: () => void,
-) {
-  return new AgentsApiMessageProjection(params, remoteSessionId, emitEvent, assertCurrent);
 }
 
 const INTERNAL_EVENT_TYPES = new Set([

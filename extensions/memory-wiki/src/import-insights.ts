@@ -1,6 +1,6 @@
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-// Memory Wiki plugin module implements import insights behavior.
 import {
   loadMemoryWikiCompiledDashboards,
   MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
@@ -18,13 +18,6 @@ function normalizeStringArray(value: unknown): string[] {
   return value.filter(
     (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
   );
-}
-
-function normalizeFiniteInt(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return 0;
-  }
-  return Math.max(0, Math.floor(value));
 }
 
 function humanizeLabelSuffix(label: string): string {
@@ -83,7 +76,7 @@ function extractIntegerField(lines: string[], prefix: string): number {
     return 0;
   }
   const match = raw.match(/\d+/);
-  return match ? normalizeFiniteInt(Number(match[0])) : 0;
+  return match ? resolveNonNegativeIntegerOption(Number(match[0]), 0) : 0;
 }
 
 function extractPreferenceSignals(lines: string[]): string[] {
@@ -230,10 +223,6 @@ function deriveSummary(params: {
   return params.title;
 }
 
-function shouldExposeImportContent(digestStatus: "available" | "withheld"): boolean {
-  return digestStatus === "available";
-}
-
 function normalizeRiskLevel(value: unknown): MemoryWikiImportInsightItem["riskLevel"] {
   if (value === "low" || value === "medium" || value === "high") {
     return value;
@@ -302,7 +291,7 @@ export function projectMemoryWikiImportInsight(
   )
     ? "withheld"
     : "available";
-  const exposeImportContent = shouldExposeImportContent(digestStatus);
+  const exposeImportContent = digestStatus === "available";
   const userTurns = transcriptTurns.filter((turn) => turn.role === "user");
   const assistantTurns = transcriptTurns.filter((turn) => turn.role === "assistant");
   const assistantOpener = exposeImportContent
@@ -372,25 +361,23 @@ export function buildMemoryWikiImportInsights(
 
   const clusters = [...clustersByKey.entries()]
     .map(([key, clusterItems]) => {
-      const sortedItems = [...clusterItems].toSorted(compareItemsByUpdated);
+      const sortedItems = clusterItems.toSorted(compareItemsByUpdated);
       const updatedAt = sortedItems
         .map((item) => item.updatedAt ?? item.createdAt)
         .find((value): value is string => typeof value === "string" && value.length > 0);
-      return Object.assign(
-        {
-          key,
-          label: sortedItems[0]?.topicLabel ?? humanizeLabelSuffix(key),
-          itemCount: sortedItems.length,
-          highRiskCount: sortedItems.filter((item) => item.riskLevel === `high`).length,
-          withheldCount: sortedItems.filter((item) => item.digestStatus === `withheld`).length,
-          preferenceSignalCount: sortedItems.reduce(
-            (sum, item) => sum + item.preferenceSignals.length,
-            0,
-          ),
-        },
-        updatedAt ? { updatedAt } : {},
-        { items: sortedItems },
-      ) satisfies MemoryWikiImportInsightCluster;
+      return {
+        key,
+        label: sortedItems[0]?.topicLabel ?? humanizeLabelSuffix(key),
+        itemCount: sortedItems.length,
+        highRiskCount: sortedItems.filter((item) => item.riskLevel === "high").length,
+        withheldCount: sortedItems.filter((item) => item.digestStatus === "withheld").length,
+        preferenceSignalCount: sortedItems.reduce(
+          (sum, item) => sum + item.preferenceSignals.length,
+          0,
+        ),
+        ...(updatedAt ? { updatedAt } : {}),
+        items: sortedItems,
+      } satisfies MemoryWikiImportInsightCluster;
     })
     .toSorted((left, right) => {
       const leftKey = left.updatedAt ?? "";
