@@ -339,8 +339,9 @@ test.each([
         context: {
           workerSessionPlacementService: {
             getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
-            waitForTurnClaimRelease: (claimSessionId, waitOptions) =>
-              placementStore.waitForTurnClaimRelease(claimSessionId, waitOptions),
+            waitForTurnClaimRelease: (
+              ...args: Parameters<WorkerSessionPlacementStore["waitForTurnClaimRelease"]>
+            ) => placementStore.waitForTurnClaimRelease(...args),
             retireSessionPlacement: (retirement: WorkerSessionPlacementRetirement) => {
               expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
               events.push("placement:retire");
