@@ -541,6 +541,7 @@ suite.define(() => {
         await expect.poll(() => userImage.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
         await expectDecodedThumbnail(userImage, 180);
         const initialImageSrc = await userImage.getAttribute("src");
+        const initialImageAlt = await userImage.getAttribute("alt");
         const captureThumbnail = () =>
           page.video()
             ? takeControlUiElementScreenshot(page, userImage, [userImage])
@@ -633,6 +634,17 @@ suite.define(() => {
         expect(await userImage.getAttribute("data-initial-image-node")).toBe("true");
         expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
         await captureUiProof(suite, page, "initial-image-canonical-ready.png");
+        await userRow.locator(".chat-message-image-button").click();
+        const lightbox = page.locator("openclaw-image-lightbox");
+        const dialog = lightbox.getByRole("dialog");
+        await dialog.waitFor({ state: "visible" });
+        await captureUiProof(suite, page, "initial-image-filename-preview.png", {
+          surface: dialog,
+          content: [lightbox.locator("img.image")],
+        });
+        expect(initialImageAlt).toBe("pixel.png");
+        expect(await userImage.getAttribute("alt")).toBe("pixel.png");
+        expect(await dialog.getAttribute("aria-label")).toBe("Image preview: pixel.png");
       } finally {
         releaseMedia();
       }
