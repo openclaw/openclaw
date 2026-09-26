@@ -7,7 +7,6 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
   claimAgentRunContext,
@@ -17,14 +16,12 @@ import {
 import { readUserProfileIdentity, retainUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { publishChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
 import {
   createExpectedProfileBinding,
   ExpectedProfileMismatchError,
   prepareGatewayRecipientProfile,
 } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
-import { bindChatSendPreparedSession } from "./server-methods/chat-send-session-binding.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
@@ -388,36 +385,32 @@ it("presents current recipient roles without SQLite while rejecting source overr
       }
       expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
       const replacement = connection.chatAbortControllers.get("replacement-run")!;
-      const bindSession = bindChatSendPreparedSession({
-        chatAbortControllers: connection.chatAbortControllers,
-        clientRunId: "replacement-run",
-        sessionKey: replacement.sessionKey,
-        sessionBinding: replacement,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        admission: { isActive: () => true },
-        progressRefresh: false,
-      });
-      for (const change of ["session-id", "terminal"] as const) {
-        replacement.sessionId = entry.sessionId;
+      for (const change of [
+        "session-id",
+        "session-key",
+        "terminal",
+        "visibility",
+        "agent",
+      ] as const) {
+        replacement.sessionKey = change === "session-key" ? query.key : "agent:main:adopted-source";
+        replacement.sessionId = change === "session-key" ? "adopted-session" : entry.sessionId;
+        replacement.agentId = query.agentId;
         replacement.projectSessionActive = true;
-        publishChatAbortControllerEntry(
-          connection.chatAbortControllers,
-          "replacement-run",
-          replacement,
-        );
+        replacement.controlUiVisible = true;
         for (const client of clients) {
           vi.mocked(client.socket).send.mockClear();
         }
         vi.mocked(clients[0]!.socket).send.mockImplementationOnce(() => {
           if (change === "session-id") {
-            bindSession({ sessionKey: replacement.sessionKey, sessionId: "adopted-session" });
-          } else {
+            replacement.sessionId = "adopted-session";
+          } else if (change === "session-key") {
+            replacement.sessionKey = "agent:main:adopted-source";
+          } else if (change === "terminal") {
             replacement.projectSessionActive = false;
-            publishChatAbortControllerEntry(
-              connection.chatAbortControllers,
-              "replacement-run",
-              replacement,
-            );
+          } else if (change === "visibility") {
+            replacement.controlUiVisible = false;
+          } else {
+            replacement.agentId = "other";
           }
         });
         connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
@@ -430,6 +423,26 @@ it("presents current recipient roles without SQLite while rejecting source overr
           });
         }
         expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
+      }
+      Object.assign(replacement, activeRun);
+      const joining = connection.chatAbortControllers.get("unrelated-0")!;
+      for (const client of clients) {
+        vi.mocked(client.socket).send.mockClear();
+      }
+      vi.mocked(clients[0]!.socket).send.mockImplementationOnce(() => {
+        joining.sessionKey = query.key;
+      });
+      connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+      for (const [index, activeRunIds] of [
+        [0, ["replacement-run"]],
+        [1, ["replacement-run", "unrelated-0"]],
+      ] as const) {
+        const sends = vi.mocked(clients[index]!.socket).send.mock.calls;
+        expect(sends).toHaveLength(1);
+        expect(JSON.parse(String(sends[0]?.[0])).payload.session).toMatchObject({
+          hasActiveRun: true,
+          activeRunIds,
+        });
       }
       connection.chatAbortControllers.clear();
       expect(prepares).not.toHaveBeenCalled();

@@ -34,7 +34,6 @@ import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
-import { publishChatAbortControllerEntry } from "../chat-abort-lifecycle-internal.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
@@ -581,11 +580,6 @@ export async function startAgentRunExecution(params: {
                 onSessionIdChanged: (sessionId) => {
                   if (prepared.activeRunAbort.entry) {
                     prepared.activeRunAbort.entry.sessionId = sessionId;
-                    publishChatAbortControllerEntry(
-                      params.context.chatAbortControllers,
-                      params.runId,
-                      prepared.activeRunAbort.entry,
-                    );
                   }
                 },
                 workspaceDir: prepared.workspaceOverride,

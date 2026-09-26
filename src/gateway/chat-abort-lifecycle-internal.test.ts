@@ -1,20 +1,19 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  ChatAbortControllerRegistry,
   markChatAbortTerminalPersistenceError,
-  publishChatAbortControllerEntry,
   waitForChatAbortControllerRemoval,
 } from "./chat-abort-lifecycle-internal.js";
 import {
   abortChatRunById,
   registerChatAbortController,
   removeChatAbortControllerEntry,
+  type ChatAbortControllerEntry,
 } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
 
 function registeredRun() {
-  const entries = new ChatAbortControllerRegistry();
+  const entries = new Map<string, ChatAbortControllerEntry>();
   const runId = "terminal-drain";
   const registration = registerChatAbortController({
     chatAbortControllers: entries,
@@ -35,22 +34,6 @@ function registeredRun() {
     });
   return { entries, runId, entry, registration, drain };
 }
-
-it.each([false, true])(
-  "does not republish a retired registration with replacement=%s",
-  (replace) => {
-    const { entries, runId, entry, registration } = registeredRun();
-    registration.cleanup();
-    const successor = replace ? { ...entry, controller: new AbortController() } : undefined;
-    if (successor) {
-      entries.set(runId, successor);
-    }
-    entry.sessionId = "late-session";
-    publishChatAbortControllerEntry(entries, runId, entry);
-    expect(entries.get(runId)).toBe(successor);
-    expect(successor?.sessionId).not.toBe("late-session");
-  },
-);
 
 it.each(
   ["settled", "pending", "writing", "failed"].flatMap((state) =>

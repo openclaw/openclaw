@@ -42,7 +42,6 @@ import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import {
   bindChatAbortTerminalDispatch,
   markChatAbortTerminalPersistenceError,
-  publishChatAbortControllerEntry,
   type ChatAbortTerminalDispatch,
 } from "./chat-abort-lifecycle-internal.js";
 import {
@@ -199,7 +198,6 @@ export function startGatewayEventSubscriptions(params: {
         continue;
       }
       entry.projectSessionActive = false;
-      publishChatAbortControllerEntry(params.chatAbortControllers, candidateRunId, entry);
       queueMicrotask(() => {
         const current = params.chatAbortControllers.get(candidateRunId);
         if (
