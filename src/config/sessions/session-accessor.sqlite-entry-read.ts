@@ -32,7 +32,7 @@ import {
   canonicalSessionValidationQuery,
 } from "./session-canonical-key.js";
 import {
-  validateCanonicalSessionRow,
+  validateCanonicalSessionRowEntry,
   type CanonicalSessionValidationRow,
 } from "./session-canonical-row.js";
 import {
@@ -336,7 +336,7 @@ export function readExactSessionEntryRow(
     const entry = parseReadableSqliteSessionEntryRow(database, row, projection);
     if (canonicalRow) {
       // The guard and decoded entry share one statement snapshot, including cold handles.
-      validateCanonicalSessionRow(canonicalRow, "read");
+      validateCanonicalSessionRowEntry(canonicalRow, entry, "read");
     }
     return entry ? { entry, row } : undefined;
   });

@@ -131,6 +131,7 @@ async function clearPersistedRuntimeResumeState(params: {
   agentId: string;
   writeSessionMeta: WriteManagerSessionMeta;
   isCurrentActor: () => boolean;
+  discardPersistentState?: boolean;
 }): Promise<boolean> {
   const now = Date.now();
   const updated = await params.writeSessionMeta({
@@ -142,41 +143,48 @@ async function clearPersistedRuntimeResumeState(params: {
       if (!params.isCurrentActor()) {
         return undefined;
       }
-      if (!entry) {
+      if (!entry || !current) {
         return null;
       }
-      const base = current;
-      if (!base) {
-        return null;
+      const currentIdentity = resolveSessionIdentityFromMeta(current);
+      if (
+        !params.discardPersistentState &&
+        !currentIdentity?.acpxSessionId &&
+        !currentIdentity?.agentSessionId
+      ) {
+        return current;
       }
-      const currentIdentity = resolveSessionIdentityFromMeta(base);
-      if (!currentIdentity?.acpxSessionId && !currentIdentity?.agentSessionId) {
-        return base;
-      }
-      const nextIdentity = {
-        state: "pending" as const,
-        ...(currentIdentity.acpxRecordId ? { acpxRecordId: currentIdentity.acpxRecordId } : {}),
-        source: currentIdentity.source,
-        lastUpdatedAt: now,
-      };
+      const nextIdentity = currentIdentity
+        ? {
+            state: "pending" as const,
+            ...(currentIdentity.acpxRecordId ? { acpxRecordId: currentIdentity.acpxRecordId } : {}),
+            source: currentIdentity.source,
+            lastUpdatedAt: now,
+          }
+        : undefined;
       return {
-        backend: base.backend,
-        agent: base.agent,
-        runtimeSessionName: base.runtimeSessionName,
-        identity: nextIdentity,
-        mode: base.mode,
-        ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
-        ...(base.cwd ? { cwd: base.cwd } : {}),
-        state: base.state,
+        backend: current.backend,
+        agent: current.agent,
+        runtimeSessionName: current.runtimeSessionName,
+        ...(nextIdentity ? { identity: nextIdentity } : {}),
+        mode: current.mode,
+        ...(current.runtimeOptions ? { runtimeOptions: current.runtimeOptions } : {}),
+        ...(current.cwd ? { cwd: current.cwd } : {}),
+        state: params.discardPersistentState ? "idle" : current.state,
         lastActivityAt: now,
-        ...(base.lastError ? { lastError: base.lastError } : {}),
+        ...(!params.discardPersistentState && current.lastError
+          ? { lastError: current.lastError }
+          : {}),
       };
     },
+    ...(params.discardPersistentState ? { failOnError: true } : {}),
   });
   if (!updated) {
-    logVerbose(
-      `acp-manager: unable to clear persisted runtime resume state for ${params.sessionKey}`,
-    );
+    if (!params.discardPersistentState) {
+      logVerbose(
+        `acp-manager: unable to clear persisted runtime resume state for ${params.sessionKey}`,
+      );
+    }
     return false;
   }
   return true;
@@ -190,46 +198,7 @@ export async function discardPersistedManagerRuntimeState(params: {
   writeSessionMeta: WriteManagerSessionMeta;
   isCurrentActor: () => boolean;
 }): Promise<void> {
-  const now = Date.now();
-  await params.writeSessionMeta({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    isCurrentActor: params.isCurrentActor,
-    mutate: (current, entry) => {
-      if (!params.isCurrentActor()) {
-        return undefined;
-      }
-      if (!entry) {
-        return null;
-      }
-      const base = current;
-      if (!base) {
-        return null;
-      }
-      const currentIdentity = resolveSessionIdentityFromMeta(base);
-      const nextIdentity = currentIdentity
-        ? {
-            state: "pending" as const,
-            ...(currentIdentity.acpxRecordId ? { acpxRecordId: currentIdentity.acpxRecordId } : {}),
-            source: currentIdentity.source,
-            lastUpdatedAt: now,
-          }
-        : undefined;
-      return {
-        backend: base.backend,
-        agent: base.agent,
-        runtimeSessionName: base.runtimeSessionName,
-        ...(nextIdentity ? { identity: nextIdentity } : {}),
-        mode: base.mode,
-        ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
-        ...(base.cwd ? { cwd: base.cwd } : {}),
-        state: "idle",
-        lastActivityAt: now,
-      };
-    },
-    failOnError: true,
-  });
+  await clearPersistedRuntimeResumeState({ ...params, discardPersistentState: true });
 }
 
 /**

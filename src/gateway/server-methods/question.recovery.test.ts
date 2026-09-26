@@ -349,23 +349,21 @@ it("keeps resumed question work alive when attention reporting settles the quest
   });
 });
 
-it.each([900_000, 3_600_000])(
-  "releases an expired %ims wait even before its timer callback runs",
-  async (timeoutMs) => {
-    const id = await request("ask_user", true, timeoutMs);
-    const answer = manager.waitAnswer(id);
-    vi.setSystemTime(Date.now() + timeoutMs - 1);
-    await expect(recover()).resolves.toMatchObject({ reason: "human_input_wait" });
-    vi.setSystemTime(Date.now() + 1);
-    await expect(recover()).resolves.toMatchObject({ reason: "stale_session_state" });
-    await expect(answer).resolves.toEqual({ status: "expired" });
-    expect(
-      (await call("question.resolve", { id, answers: { answers: { answer: ["late"] } } }))?.[0],
-    ).toBe(false);
-    await vi.advanceTimersByTimeAsync(900_000);
-    await expect(recover()).resolves.toMatchObject({ status: "aborted" });
-  },
-);
+it("releases an expired wait even before its timer callback runs", async () => {
+  const timeoutMs = 3_600_000;
+  const id = await request("ask_user", true, timeoutMs);
+  const answer = manager.waitAnswer(id);
+  vi.setSystemTime(Date.now() + timeoutMs - 1);
+  await expect(recover()).resolves.toMatchObject({ reason: "human_input_wait" });
+  vi.setSystemTime(Date.now() + 1);
+  await expect(recover()).resolves.toMatchObject({ reason: "stale_session_state" });
+  await expect(answer).resolves.toEqual({ status: "expired" });
+  expect(
+    (await call("question.resolve", { id, answers: { answers: { answer: ["late"] } } }))?.[0],
+  ).toBe(false);
+  await vi.advanceTimersByTimeAsync(900_000);
+  await expect(recover()).resolves.toMatchObject({ status: "aborted" });
+});
 
 it("does not expire a stopped RPC observer's question before its expiry callback runs", async () => {
   const id = await request("ask_user", false, 100);

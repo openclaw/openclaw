@@ -67,21 +67,6 @@ describe("session discussion panel", () => {
     ).toBeNull();
   });
 
-  it("does not auto-open without operator write access", async () => {
-    const openDiscussion = vi.fn<SessionDiscussionOpener>();
-    const panel = mount({
-      loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
-      openDiscussion,
-      canOpen: false,
-    });
-
-    await vi.waitFor(async () => {
-      expect(await emptyStateText(panel)).toContain("Operator write access is required");
-    });
-    expect(openDiscussion).not.toHaveBeenCalled();
-    expect(panel.querySelector("button")).toBeNull();
-  });
-
   it("opens once write access is granted after the discussion resolved", async () => {
     const openDiscussion = vi.fn<SessionDiscussionOpener>().mockResolvedValue({
       state: "open",
@@ -96,6 +81,7 @@ describe("session discussion panel", () => {
       expect(await emptyStateText(panel)).toContain("Operator write access is required");
     });
     expect(openDiscussion).not.toHaveBeenCalled();
+    expect(panel.querySelector("button")).toBeNull();
 
     panel.canOpen = true;
 
