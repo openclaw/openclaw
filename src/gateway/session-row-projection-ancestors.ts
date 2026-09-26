@@ -41,17 +41,19 @@ export function createSessionRowRelationReads(owner: {
           cfg: owner.config(),
           agentId: query.agentId,
           sessionKey: query.key,
-          read: (agentId, key) => {
-            if (!isIncognitoSessionKey(key)) {
-              const row = owner.lookup({ ...query, agentId, key });
-              return row?.key === key ? row.sharingEntry : undefined;
+          read: (agentId, storedKey) => {
+            if (!isIncognitoSessionKey(storedKey)) {
+              const row = owner.lookup({ ...query, agentId, key: storedKey });
+              return row?.key === storedKey ? row.sharingEntry : undefined;
             }
             const database = getOpenIncognitoAgentDatabase(
               agentId,
               resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: owner.env }),
             );
             try {
-              return database && readCommittedIncognitoSessionSharing(database.db, key)?.entry;
+              return (
+                database && readCommittedIncognitoSessionSharing(database.db, storedKey)?.entry
+              );
             } catch {
               // A pending private write cannot supply optional display enrichment yet.
               return undefined;
