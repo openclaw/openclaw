@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fsSync from "node:fs";
 import fs, { mkdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -238,6 +239,67 @@ it.each([".git", "extensions/retired", "extensions/linked-residue"])(
     expect(await readFile(marker, "utf8")).toBe("unrelated checkout data");
   },
 );
+
+it("retains a directly linked module directory beneath a manifest-less host parent", async () => {
+  const root = await fixture(tempDirs.make("openclaw-retained-module-owner-"), "git");
+  const link = path.join(root, "node_modules/.pnpm/node_modules/@fixture/retired");
+  await fs.unlink(link);
+  await symlink(
+    path.join(root, "extensions/retired/node_modules"),
+    link,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
+  await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+    await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
+    const worker = captureRuntimeWorkerSource(
+      resolveRuntimeWorkerUrl({
+        currentModuleUrl: moduleUrl,
+        sourceWorkerName: "store",
+        distWorkerPath: "state/store.js",
+      }),
+    );
+    const retainedRoot = path.resolve(path.dirname(fileURLToPath(worker.moduleUrl)), "../..");
+    await rm(root, { recursive: true });
+    expect(
+      await readFile(
+        path.join(
+          retainedRoot,
+          "node_modules/.pnpm/node_modules/@fixture/retired/fixture/index.js",
+        ),
+        "utf8",
+      ),
+    ).toBe('export const generation = "retained";\n');
+  });
+});
+
+it("refuses files added between residue selection and inventory", async () => {
+  const root = await fixture(tempDirs.make("openclaw-retained-residue-inventory-"), "git");
+  const residue = path.join(root, "extensions/retired");
+  const marker = path.join(residue, "private.txt");
+  const reads = vi.spyOn(fs, "readdir");
+  let inserted = false;
+  try {
+    await expect(
+      withRetainedUpdateRuntime(pathToFileURL(path.join(root, "dist/updater.mjs")).href, (retain) =>
+        retain({
+          mutationRoots: [root],
+          timeoutMs: 30_000,
+          assertCurrent() {
+            if (!inserted && reads.mock.calls.some(([directory]) => directory === residue)) {
+              fsSync.writeFileSync(marker, "late unrelated host data");
+              inserted = true;
+            }
+          },
+        }),
+      ),
+    ).rejects.toThrow("Retired workspace changed during runtime retention");
+    expect(inserted).toBe(true);
+    expect(await readFile(marker, "utf8")).toBe("late unrelated host data");
+  } finally {
+    reads.mockRestore();
+  }
+});
 
 it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
   "retains %s worker chunks and dependencies through replacement and drains only its borrowers",

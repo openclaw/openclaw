@@ -64,31 +64,39 @@ export const UpdateCandidatePluginTreePlanSchema = z.object({
 });
 export type UpdateCandidatePluginTreePlan = z.infer<typeof UpdateCandidatePluginTreePlanSchema>;
 
-async function dependencyOwner(target: string, retainedHostRoot?: string): Promise<string> {
+async function dependencyOwner(
+  target: string,
+  withinRetainedHost = false,
+  retainedHost?: { root: string; moduleOnlyRoots: Set<string> },
+): Promise<string> {
   // A pnpm package resolves dependencies beside its package directory. Preserve
   // that Node lookup ancestry, including scoped packages and nested installs.
   const parts = target.split(path.sep);
   const store = parts.indexOf(".pnpm");
-  if (store >= 0 && !retainedHostRoot) {
+  if (store >= 0 && !withinRetainedHost) {
     return parts.slice(0, store + 1).join(path.sep);
   }
   const modules = parts.indexOf("node_modules");
-  if (modules >= 0 && !retainedHostRoot) {
+  if (modules >= 0 && !withinRetainedHost) {
     return parts.slice(0, modules + 1).join(path.sep);
   }
   const stat = await fs.stat(target);
   let directory = stat.isDirectory() ? target : path.dirname(target);
   const fallback = target;
   for (;;) {
-    if (directory === retainedHostRoot) {
+    if (directory === retainedHost?.root) {
       // A retired workspace can leave only ignored modules behind. Other host
       // contents still belong to the host and must reach the inferred-root refusal.
       const entries = stat.isDirectory() ? await fs.readdir(target) : [];
-      return entries.length === 1 &&
+      if (
+        entries.length === 1 &&
         entries[0] === "node_modules" &&
         (await fs.lstat(path.join(target, "node_modules"))).isDirectory()
-        ? target
-        : directory;
+      ) {
+        retainedHost.moduleOnlyRoots.add(target);
+        return target;
+      }
+      return directory;
     }
     if (
       await fs.stat(path.join(directory, "package.json")).then(
@@ -140,6 +148,9 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const moduleAliases = new Map<string, string>();
   const moduleOwners = new Set<string>();
   const retainedHostRoot = params.retainedHostRoot;
+  const retainedHost = retainedHostRoot
+    ? { root: retainedHostRoot, moduleOnlyRoots: new Set<string>() }
+    : undefined;
   const isOwnedHostEdge = (file: string) =>
     path.basename(file) === "openclaw" && moduleOwners.has(path.dirname(file));
   const lookupRoots = (values: Iterable<string>) =>
@@ -468,7 +479,8 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         (!retainedDependency ? store : undefined) ??
         (await dependencyOwner(
           real,
-          isRetainedDependency(real) ? retainedHostRoot : undefined,
+          retainedDependency,
+          isRetainedDependency(real) ? retainedHost : undefined,
         ).catch((cause: unknown) => {
           throw new Error(`Cannot privately copy plugin dependency ${file} -> ${real}`, { cause });
         }));
@@ -525,9 +537,23 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const hostLinks = new Set(
     [...hosts].filter((root) => root !== params.retainedHostRoot).map(projected),
   );
-  const entries = [...footprints.values()].filter(
-    (entry) => !insideHost(entry.path) && copyOwner(entry.path) !== undefined,
-  );
+  const entries = [...footprints.values()].filter((entry) => {
+    if (insideHost(entry.path) || copyOwner(entry.path) === undefined) {
+      return false;
+    }
+    // Owner selection precedes scanning; bind its exception to the actual inventory.
+    const moduleOnlyRoots = retainedHost?.moduleOnlyRoots;
+    if (
+      (moduleOnlyRoots?.has(entry.path) &&
+        (entry.kind !== "directory" ||
+          footprints.get(path.join(entry.path, "node_modules"))?.kind !== "directory")) ||
+      (moduleOnlyRoots?.has(path.dirname(entry.path)) &&
+        (path.basename(entry.path) !== "node_modules" || entry.kind !== "directory"))
+    ) {
+      throw new Error(`Retired workspace changed during runtime retention: ${entry.path}`);
+    }
+    return true;
+  });
   // Full lengths and entry metadata bound copies even when sources have sparse extents.
   const bytes = entries.reduce(
     (total, entry) => total + Math.max(4096, Math.ceil(entry.size / 4096) * 4096),
