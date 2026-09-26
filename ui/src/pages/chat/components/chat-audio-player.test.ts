@@ -14,9 +14,12 @@ function setMediaNumber(
   Object.defineProperty(media, property, { configurable: true, writable: true, value });
 }
 
-async function createPlayer(label: string): Promise<ChatAudioPlayer> {
+async function createPlayer(
+  label: string,
+  source = `https://example.com/${label}.mp3`,
+): Promise<ChatAudioPlayer> {
   const player = document.createElement("openclaw-chat-audio-player");
-  player.src = `https://example.com/${label}.mp3`;
+  player.src = source;
   player.sourceIdentity = `media://${label}`;
   player.label = `${label}.mp3`;
   document.body.append(player);
@@ -293,123 +296,195 @@ describe("ChatAudioPlayer", () => {
     );
   });
 
-  it("renders decoded waveform peaks and scopes waveform cache reuse to auth context", async () => {
-    const intersectionCallbacks: IntersectionObserverCallback[] = [];
+  it.each([
+    "https://example.com/remote-waveform.mp3",
+    "/api/chat/media/outgoing/agent%3Amain%3Amain/remote-waveform/full?mediaTicket=current",
+  ])("does not download %s just to draw a waveform", async (source) => {
+    vi.useFakeTimers();
+    let intersect: (() => void) | undefined;
     vi.stubGlobal(
       "IntersectionObserver",
-      class {
+      class implements IntersectionObserver {
+        readonly root = null;
+        readonly rootMargin = "240px 0px";
+        readonly scrollMargin = "0px";
+        readonly thresholds = [0];
         constructor(callback: IntersectionObserverCallback) {
-          intersectionCallbacks.push(callback);
+          intersect = () => callback([{ isIntersecting: true } as IntersectionObserverEntry], this);
         }
         observe() {}
+        unobserve() {}
         disconnect() {}
+        takeRecords() {
+          return [];
+        }
       },
     );
-    const samples = new Float32Array([0, 0.5, -1, 0.25]);
     const decodeAudioData = vi.fn(async () => ({
-      duration: 4,
-      length: samples.length,
+      duration: 1,
+      length: 4,
       numberOfChannels: 1,
-      getChannelData: () => samples,
+      getChannelData: () => new Float32Array([0, 1, 0, -1]),
     }));
-    const close = vi.fn(async () => undefined);
     vi.stubGlobal(
       "AudioContext",
       class {
         decodeAudioData = decodeAudioData;
-        close = close;
+        close = async () => undefined;
       },
     );
-    let resolveFetch: ((response: Response) => void) | undefined;
-    const fetchMock = vi.fn<typeof fetch>(
-      async () =>
-        await new Promise<Response>((resolve) => {
-          resolveFetch = resolve;
-        }),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1, 2, 3, 4])));
     vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:waveform-audio");
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:network-waveform-regression");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
-    const player = await createPlayer("waveform-reuse");
-    expect(player.querySelector(".chat-audio-player__waveform")).toBeNull();
-    player.serverDurationMs = 4_000;
+    const player = document.createElement("openclaw-chat-audio-player");
+    player.src = source;
+    player.sourceIdentity = source;
+    player.serverDurationMs = 1_000;
+    player.sizeBytes = 4;
+    document.body.append(player);
     await player.updateComplete;
-    expect(fetchMock).not.toHaveBeenCalled();
-    intersectionCallbacks.shift()?.(
-      [{ isIntersecting: true } as IntersectionObserverEntry],
-      {} as IntersectionObserver,
-    );
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const media = player.querySelector("audio")!;
-    let paused = true;
-    Object.defineProperty(media, "paused", { configurable: true, get: () => paused });
-    const play = vi.spyOn(media, "play").mockImplementation(async () => {
-      paused = false;
-      media.dispatchEvent(new Event("play"));
-    });
-    vi.spyOn(media, "pause").mockImplementation(() => {
-      paused = true;
-      media.dispatchEvent(new Event("pause"));
-    });
-
-    resolveFetch?.(
-      new Response(new Uint8Array([1, 2, 3, 4]), {
-        status: 200,
-        headers: { "Content-Type": "audio/mpeg", "Content-Length": "4" },
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(player.querySelectorAll(".chat-audio-player__waveform rect")).toHaveLength(96),
-    );
-    await player.updateComplete;
-    expect(
-      new Set(
-        Array.from(player.querySelectorAll(".chat-audio-player__waveform rect"), (rect) =>
-          rect.getAttribute("height"),
-        ),
-      ).size,
-    ).toBeGreaterThan(1);
-    player.voiceNote = true;
-    await player.updateComplete;
-    const voiceHeights = Array.from(
-      player.querySelectorAll(".chat-audio-player__waveform rect"),
-      (rect) => Number(rect.getAttribute("height")),
-    );
-    expect(Math.min(...voiceHeights)).toBeGreaterThanOrEqual(6);
-    expect(Math.max(...voiceHeights)).toBeLessThanOrEqual(14);
-    expect(new Set(voiceHeights).size).toBeGreaterThan(1);
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(decodeAudioData).toHaveBeenCalledOnce();
-    expect(media.getAttribute("src")).toBe("blob:waveform-audio");
-
+    const play = vi.spyOn(media, "play").mockResolvedValue();
+    intersect?.();
+    await vi.advanceTimersByTimeAsync(0);
     player.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
-    await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
-    expect(media.getAttribute("src")).toBe("blob:waveform-audio");
-    expect(fetchMock).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(0);
 
-    player.authToken = "new-principal";
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(decodeAudioData).not.toHaveBeenCalled();
+    expect(play).toHaveBeenCalledOnce();
+    expect(media.getAttribute("src")).toBe(source);
+    expect(player.querySelector(".chat-audio-player__waveform")).toBeNull();
+    setMediaNumber(media, "duration", 1);
+    media.dispatchEvent(new Event("loadedmetadata"));
     await player.updateComplete;
-    expect(media.getAttribute("src")).toBe("https://example.com/waveform-reuse.mp3");
-
-    player.remove();
-    const refreshed = document.createElement("openclaw-chat-audio-player");
-    refreshed.src = "https://example.com/waveform-reuse.mp3?mediaTicket=fresh";
-    refreshed.sourceIdentity = "media://waveform-reuse";
-    refreshed.authToken = "different-principal";
-    refreshed.label = "waveform-reuse.mp3";
-    refreshed.serverDurationMs = 4_000;
-    document.body.append(refreshed);
-    await refreshed.updateComplete;
-    intersectionCallbacks.shift()?.(
-      [{ isIntersecting: true } as IntersectionObserverEntry],
-      {} as IntersectionObserver,
-    );
-    const refreshedMedia = refreshed.querySelector("audio")!;
-    Object.defineProperty(refreshedMedia, "paused", { configurable: true, value: true });
-    vi.spyOn(refreshedMedia, "play").mockResolvedValue(undefined);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    resolveFetch?.(new Response(null, { status: 500 }));
+    const seek = player.querySelector<HTMLInputElement>(".chat-audio-player__seek")!;
+    seek.value = "0.5";
+    seek.dispatchEvent(new Event("input"));
+    expect(media.currentTime).toBe(0.5);
   });
+
+  it.each(["blob:waveform-input", "data:audio/mpeg;base64,AQIDBA=="])(
+    "renders local %s waveform peaks and scopes cache reuse to auth context",
+    async (source) => {
+      const intersectionCallbacks: IntersectionObserverCallback[] = [];
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class {
+          constructor(callback: IntersectionObserverCallback) {
+            intersectionCallbacks.push(callback);
+          }
+          observe() {}
+          disconnect() {}
+        },
+      );
+      const samples = new Float32Array([0, 0.5, -1, 0.25]);
+      const decodeAudioData = vi.fn(async () => ({
+        duration: 4,
+        length: samples.length,
+        numberOfChannels: 1,
+        getChannelData: () => samples,
+      }));
+      const close = vi.fn(async () => undefined);
+      vi.stubGlobal(
+        "AudioContext",
+        class {
+          decodeAudioData = decodeAudioData;
+          close = close;
+        },
+      );
+      let resolveFetch: ((response: Response) => void) | undefined;
+      const fetchMock = vi.fn<typeof fetch>(
+        async () =>
+          await new Promise<Response>((resolve) => {
+            resolveFetch = resolve;
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:waveform-audio");
+      vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+      const player = await createPlayer("waveform-reuse", source);
+      expect(player.querySelector(".chat-audio-player__waveform")).toBeNull();
+      player.serverDurationMs = 4_000;
+      await player.updateComplete;
+      expect(fetchMock).not.toHaveBeenCalled();
+      intersectionCallbacks.shift()?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      const media = player.querySelector("audio")!;
+      let paused = true;
+      Object.defineProperty(media, "paused", { configurable: true, get: () => paused });
+      const play = vi.spyOn(media, "play").mockImplementation(async () => {
+        paused = false;
+        media.dispatchEvent(new Event("play"));
+      });
+      vi.spyOn(media, "pause").mockImplementation(() => {
+        paused = true;
+        media.dispatchEvent(new Event("pause"));
+      });
+
+      resolveFetch?.(
+        new Response(new Uint8Array([1, 2, 3, 4]), {
+          status: 200,
+          headers: { "Content-Type": "audio/mpeg", "Content-Length": "4" },
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(player.querySelectorAll(".chat-audio-player__waveform rect")).toHaveLength(96),
+      );
+      await player.updateComplete;
+      expect(
+        new Set(
+          Array.from(player.querySelectorAll(".chat-audio-player__waveform rect"), (rect) =>
+            rect.getAttribute("height"),
+          ),
+        ).size,
+      ).toBeGreaterThan(1);
+      player.voiceNote = true;
+      await player.updateComplete;
+      const voiceHeights = Array.from(
+        player.querySelectorAll(".chat-audio-player__waveform rect"),
+        (rect) => Number(rect.getAttribute("height")),
+      );
+      expect(Math.min(...voiceHeights)).toBeGreaterThanOrEqual(6);
+      expect(Math.max(...voiceHeights)).toBeLessThanOrEqual(14);
+      expect(new Set(voiceHeights).size).toBeGreaterThan(1);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(decodeAudioData).toHaveBeenCalledOnce();
+      expect(media.getAttribute("src")).toBe("blob:waveform-audio");
+
+      player.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
+      await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+      expect(media.getAttribute("src")).toBe("blob:waveform-audio");
+      expect(fetchMock).toHaveBeenCalledOnce();
+
+      player.authToken = "new-principal";
+      await player.updateComplete;
+      expect(media.getAttribute("src")).toBe(source);
+
+      player.remove();
+      const refreshed = document.createElement("openclaw-chat-audio-player");
+      refreshed.src = source;
+      refreshed.sourceIdentity = "media://waveform-reuse";
+      refreshed.authToken = "different-principal";
+      refreshed.label = "waveform-reuse.mp3";
+      refreshed.serverDurationMs = 4_000;
+      document.body.append(refreshed);
+      await refreshed.updateComplete;
+      intersectionCallbacks.shift()?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      const refreshedMedia = refreshed.querySelector("audio")!;
+      Object.defineProperty(refreshedMedia, "paused", { configurable: true, value: true });
+      vi.spyOn(refreshedMedia, "play").mockResolvedValue(undefined);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      resolveFetch?.(new Response(null, { status: 500 }));
+    },
+  );
 
   it("recovers a waveform-backed source after a renewed media ticket", async () => {
     const intersectionCallbacks: IntersectionObserverCallback[] = [];
@@ -450,7 +525,7 @@ describe("ChatAudioPlayer", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:waveform-audio");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
-    const player = await createPlayer("waveform-recovery");
+    const player = await createPlayer("waveform-recovery", "blob:waveform-recovery-input");
     player.serverDurationMs = 4_000;
     await player.updateComplete;
     intersectionCallbacks.shift()?.(
@@ -495,7 +570,7 @@ describe("ChatAudioPlayer", () => {
     );
     const fetchMock = vi.fn<typeof fetch>();
     vi.stubGlobal("fetch", fetchMock);
-    const player = await createPlayer("unknown-duration");
+    const player = await createPlayer("unknown-duration", "blob:unknown-duration-input");
     const media = player.querySelector("audio")!;
     Object.defineProperty(media, "paused", { configurable: true, value: true });
     vi.spyOn(media, "play").mockResolvedValue(undefined);
@@ -534,7 +609,7 @@ describe("ChatAudioPlayer", () => {
       ),
     );
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:duration-mismatch");
-    const player = await createPlayer("duration-mismatch");
+    const player = await createPlayer("duration-mismatch", "blob:duration-mismatch-input");
     player.serverDurationMs = 100_000;
     const media = player.querySelector("audio")!;
     Object.defineProperty(media, "paused", { configurable: true, value: true });
@@ -580,7 +655,7 @@ describe("ChatAudioPlayer", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const createObjectURL = vi.spyOn(URL, "createObjectURL");
-    const player = await createPlayer("oversized-waveform");
+    const player = await createPlayer("oversized-waveform", "blob:oversized-waveform-input");
     player.serverDurationMs = 4_000;
     const media = player.querySelector("audio")!;
     Object.defineProperty(media, "paused", { configurable: true, value: true });
@@ -596,7 +671,7 @@ describe("ChatAudioPlayer", () => {
     expect(createObjectURL).not.toHaveBeenCalled();
     expect(decodeAudioData).not.toHaveBeenCalled();
     expect(player.querySelector(".chat-audio-player__waveform")).toBeNull();
-    expect(media.getAttribute("src")).toBe("https://example.com/oversized-waveform.mp3");
+    expect(media.getAttribute("src")).toBe("blob:oversized-waveform-input");
   });
 
   it("transfers Blob ownership when AudioContext construction fails", async () => {
@@ -615,7 +690,7 @@ describe("ChatAudioPlayer", () => {
       ),
     );
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:context-fallback");
-    const player = await createPlayer("context-fallback");
+    const player = await createPlayer("context-fallback", "blob:context-fallback-input");
     player.serverDurationMs = 4_000;
     const media = player.querySelector("audio")!;
     let paused = true;

@@ -21,7 +21,7 @@ export function appendChatMediaPlaybackParam(source: string): string {
   return appendAttachmentUrlSearchParam(source, "playback", "1");
 }
 
-export function buildChatMediaFetchHeaders(authToken: string | null | undefined): Headers {
+function buildChatMediaFetchHeaders(authToken: string | null | undefined): Headers {
   const headers = new Headers();
   const token = authToken?.trim();
   if (token) {

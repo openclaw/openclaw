@@ -27,7 +27,7 @@ import {
   shouldFetchChatAudioWaveform,
   type CachedChatAudioBlob,
 } from "./chat-audio-waveform.ts";
-import { buildChatMediaFetchHeaders, type ChatMediaPlaybackMode } from "./chat-media-playback.ts";
+import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
@@ -280,6 +280,11 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       this.applyPreparedAudio(cacheKey, cached);
       return;
     }
+    // Network media keeps the native seek bar; waveform rendering may only
+    // decode bytes already held by this browser.
+    if (!/^(?:blob:|data:audio\/)/i.test(source)) {
+      return;
+    }
     const durationSeconds =
       this.serverDurationMs !== undefined ? this.serverDurationMs / 1_000 : undefined;
     if (
@@ -294,8 +299,6 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     }
     this.waveformAttempted = true;
 
-    const headers = buildChatMediaFetchHeaders(this.authToken);
-    headers.set("Accept", "audio/*");
     const controller = new AbortController();
     this.waveformController = controller;
     const timeout = setTimeout(
@@ -305,12 +308,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     let response: Response;
     let bytes: ArrayBuffer;
     try {
-      response = await fetch(source, {
-        method: "GET",
-        headers,
-        credentials: "same-origin",
-        signal: controller.signal,
-      });
+      response = await fetch(source, { signal: controller.signal });
       if (!response.ok) {
         return;
       }
