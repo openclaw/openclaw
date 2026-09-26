@@ -136,7 +136,10 @@ function findStreamingCodeSpans(markdown: string, start: number): Array<[number,
 
 let streamingBlockParser: ReturnType<typeof createMarkdownParser> | undefined;
 
-function retainOpenList(markdown: string, start: number): number | null {
+function findCompletedStreamingListBoundary(
+  markdown: string,
+  start: number,
+): { boundary: number; firstListOffset: number | null } | undefined {
   // An unfinished line can still become another item or an indented continuation.
   const source = markdown.slice(start, markdown.lastIndexOf("\n") + 1);
   const parser = (streamingBlockParser ??= createMarkdownParser());
@@ -146,16 +149,13 @@ function retainOpenList(markdown: string, start: number): number | null {
   const first = blocks[0];
   const last = blocks.at(-1);
   if (!first?.type.endsWith("list_open") || !last?.map || first === last) {
-    return start;
-  }
-  if (!last.type.endsWith("list_open")) {
-    return null;
+    return undefined;
   }
   let offset = start;
   for (let line = 0; line < last.map[0]; line++) {
     offset = markdown.indexOf("\n", offset) + 1;
   }
-  return offset;
+  return { boundary: offset, firstListOffset: last.type.endsWith("list_open") ? offset : null };
 }
 
 function createStreamingRawHtmlScanner(
@@ -269,8 +269,8 @@ function scanStableStreamingMarkdown(
         LIST_ITEM_OPEN_RE.test(line) &&
         (!rawHtmlRange || rawHtmlRange[0] === index)
       ) {
-        // A list also retains the disclosure that contains it.
-        firstListOffset = detailsStack.length > 0 ? boundary : index;
+        // A list-looking line can belong to preceding prose or a disclosure.
+        firstListOffset = boundary;
       }
       if (rawHtmlLine) {
         lastLiteralOffset = lineEnd;
@@ -323,8 +323,16 @@ function scanStableStreamingMarkdown(
   }
 
   if (firstListOffset !== null && !hasLinkReferenceDefinition) {
-    firstListOffset = retainOpenList(markdownLocal, firstListOffset);
-    resumeCursor = { ...resumeCursor, firstListOffset };
+    const retired = findCompletedStreamingListBoundary(markdownLocal, firstListOffset);
+    if (retired) {
+      firstListOffset = retired.firstListOffset;
+      boundary = Math.max(boundary, retired.boundary);
+      resumeCursor = {
+        ...resumeCursor,
+        firstListOffset,
+        boundary: Math.max(resumeCursor.boundary, retired.boundary),
+      };
+    }
   }
 
   // A bracket-leading line can start a multiline or escaped reference label.

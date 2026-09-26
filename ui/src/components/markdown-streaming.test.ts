@@ -103,6 +103,34 @@ export function sample${index}(value: number): number {
     }
   });
 
+  it.each([
+    "- one\n\n  continuation\n",
+    "1. one\n\n   continuation\n",
+    "- one\n\n  - nested\n\n    continuation\n",
+    "Intro\n2. paragraph\n\n",
+  ])("keeps the whole container when later blocks retire %j", (prefix) => {
+    for (const suffix of [
+      "# Heading\n",
+      "---\n",
+      "> quote\n",
+      "```\ncode\n```\n",
+      "<details><summary>More</summary>body</details>\n",
+      "+ next\n",
+      "2. next\n",
+      "\nParagraph\n",
+    ]) {
+      const source = prefix + suffix;
+      const expected = toSanitizedMarkdownHtml(source);
+      for (const chunkSize of [1, 7, 24]) {
+        const key = `retired-container-${source}-${chunkSize}`;
+        for (let end = chunkSize; end < source.length; end += chunkSize) {
+          toStreamingMarkdownParts(source.slice(0, end), {}, key);
+        }
+        expect(toStreamingMarkdownParts(source, {}, key).join(""), key).toBe(expected);
+      }
+    }
+  });
+
   it("relabels earlier file links when later blocks introduce a basename collision", () => {
     const key = "streamed-file-labels";
     const source = "See src/one/index.ts.\n\n";
