@@ -217,57 +217,56 @@ describe("explicit copied shared-state preflight", () => {
     },
   );
 
-  it("classifies the same-version run-end cleanup column as startup-repairable without touching the source", async () => {
-    const sourcePath = createExplicitStateDatabase(
-      OPENCLAW_STATE_SCHEMA_SQL.replace(
-        "  removed_at INTEGER,\n  run_end_cleanup_json TEXT\n",
-        "  removed_at INTEGER\n",
-      ),
-    );
-    const snapshotPath = path.join(
-      tempDirs.make("openclaw-consolidated-state-preflight-"),
-      "candidate.sqlite",
-    );
-    const sqlite = requireNodeSqlite();
-    const writer = new sqlite.DatabaseSync(sourcePath);
-    try {
-      writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
-      writer
-        .prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('preflight.probe', '{}', 1)",
-        )
-        .run();
-      await sqlite.backup(writer, snapshotPath);
-      writer
-        .prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('preflight.after-backup', '{}', 2)",
-        )
-        .run();
-      expect(fs.existsSync(`${sourcePath}-wal`)).toBe(true);
-      expect(fs.existsSync(`${sourcePath}-shm`)).toBe(true);
-      for (const suffix of ["-wal", "-shm", "-journal"]) {
-        expect(fs.existsSync(`${snapshotPath}${suffix}`)).toBe(false);
+  it.each(["run_end_cleanup_json", "gc_protection_json"])(
+    "classifies the same-version %s column as startup-repairable without touching the source",
+    async (column) => {
+      const sourcePath = createExplicitStateDatabase(OPENCLAW_STATE_SCHEMA_SQL);
+      const snapshotPath = path.join(
+        tempDirs.make("openclaw-consolidated-state-preflight-"),
+        "candidate.sqlite",
+      );
+      const sqlite = requireNodeSqlite();
+      const writer = new sqlite.DatabaseSync(sourcePath);
+      try {
+        writer.exec(`ALTER TABLE worktrees DROP COLUMN ${column};`);
+        writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+        writer
+          .prepare(
+            "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('preflight.probe', '{}', 1)",
+          )
+          .run();
+        await sqlite.backup(writer, snapshotPath);
+        writer
+          .prepare(
+            "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('preflight.after-backup', '{}', 2)",
+          )
+          .run();
+        expect(fs.existsSync(`${sourcePath}-wal`)).toBe(true);
+        expect(fs.existsSync(`${sourcePath}-shm`)).toBe(true);
+        for (const suffix of ["-wal", "-shm", "-journal"]) {
+          expect(fs.existsSync(`${snapshotPath}${suffix}`)).toBe(false);
+        }
+        const before = snapshotSourceFamily(sourcePath);
+
+        const result = await preflightOpenClawStateDatabasePath(snapshotPath);
+
+        expect(result).toMatchObject({
+          foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+          status: "startup-repairable",
+          requiresWrite: true,
+          issues: [
+            {
+              code: "missing-column",
+              objectName: `worktrees.${column}`,
+            },
+          ],
+        });
+        expect(snapshotSourceFamily(sourcePath)).toEqual(before);
+      } finally {
+        writer.close();
       }
-      const before = snapshotSourceFamily(sourcePath);
-
-      const result = await preflightOpenClawStateDatabasePath(snapshotPath);
-
-      expect(result).toMatchObject({
-        foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-        status: "startup-repairable",
-        requiresWrite: true,
-        issues: [
-          {
-            code: "missing-column",
-            objectName: "worktrees.run_end_cleanup_json",
-          },
-        ],
-      });
-      expect(snapshotSourceFamily(sourcePath)).toEqual(before);
-    } finally {
-      writer.close();
-    }
-  });
+    },
+  );
 
   it("accepts first-use session group columns without requiring a startup write", async () => {
     const databasePath = createExplicitStateDatabase(

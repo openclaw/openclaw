@@ -6,6 +6,7 @@ import { resolveSessionStorePathForScope } from "../config/sessions/session-stor
 import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
@@ -52,11 +53,11 @@ import { createWorkerPlacementIdleSweep } from "./worker-environments/placement-
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
-import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/session-placement-lifecycle.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
+import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 
@@ -65,6 +66,7 @@ const WORKER_PLACEMENT_RECONCILE_INTERVAL_MS = 60_000;
 type WorkerPlacementSidecar = { stop: () => Promise<void> };
 
 export type GatewayWorkerPlacementRuntimeParams = {
+  scheduler: GatewayScheduler;
   placements: WorkerSessionPlacementStore;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   environments: WorkerEnvironmentService;
@@ -103,6 +105,7 @@ export function createGatewayWorkerPlacementRuntime(
     githubPublicationRuntime?: ReturnType<typeof createGitHubPublicationRuntime>;
   },
 ) {
+  const { scheduler } = params;
   let nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport | undefined;
   let stopped = false;
   const runtimeRefresh = createWorkerRuntimeRefreshWaiter({
@@ -322,15 +325,15 @@ export function createGatewayWorkerPlacementRuntime(
     }),
     publishPlacementChanges,
   );
-  const redispatchReclaimed = createReclaimedPlacementRedispatch({
-    environments: params.environments,
+  const redispatchPlacement = createWorkerPlacementRedispatch({
+    placements: params.placements,
     dispatch: dispatchService.dispatch,
     resolveDevicePlacementRequirement,
   });
   const prepareRequiredSession = createLazyRequiredWorkerSessionPreparer({
     ...params,
     getConfig: getRuntimeConfig,
-    redispatchReclaimed,
+    redispatchPlacement,
     dispatch: dispatchService,
   });
   const placementIdleSweep = createWorkerPlacementIdleSweep({
@@ -359,7 +362,7 @@ export function createGatewayWorkerPlacementRuntime(
     reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
     waitForAdmissionNode: runtimeRefresh.wait,
     waitForInitialPlacement: dispatchService.waitForInitialPlacement,
-    redispatchReclaimed,
+    redispatchPlacement,
     workspaceOperations,
     prepareAcceptedWorkspacePublication,
     publishAcceptedWorkspace,
@@ -374,7 +377,7 @@ export function createGatewayWorkerPlacementRuntime(
     }
     const uninstallPlacementAdmission = installSessionPlacementAdmissionProvider(admissionProvider);
     const unsubscribeMachineShape = subscribeGatewayWorkerMachineShapeChanges(params);
-    let placementReconcileInterval: ReturnType<typeof setInterval> | undefined;
+    const scheduledJobs: GatewayScheduledJob[] = [];
     const placementReconcile = { current: undefined as Promise<void> | undefined };
     const diskSpaceSweep = { current: undefined as Promise<void> | undefined };
     const placementIdleSuspend: { current: Promise<void> | undefined } = { current: undefined };
@@ -441,24 +444,21 @@ export function createGatewayWorkerPlacementRuntime(
       }
       return trackOperation(diskSpaceSweep, diskSpace.sweep(), "Worker disk-space sweep failed");
     };
-    const sweepActivePlacements = (): void => {
-      const reconciliation = reconcileActivePlacements();
-      void reconciliation.then(
-        () => {
-          if (stopped || placementIdleSuspend.current) {
-            return;
-          }
-          // Reclaim owns an exclusive placement fence and must run after reconciliation releases it.
-          void trackOperation(
-            placementIdleSuspend,
-            publishPlacementChanges(() => placementIdleSweep.sweep()),
-            "Worker placement auto-suspend sweep failed",
-          );
-        },
-        () => undefined,
-      );
-      // Session-lifetime sampling covers idle placements independently of provider health.
-      void sweepDiskSpace();
+    const sweepActivePlacements = async (): Promise<void> => {
+      try {
+        await reconcileActivePlacements();
+        if (stopped || placementIdleSuspend.current) {
+          return;
+        }
+        // Reclaim owns an exclusive placement fence after reconciliation releases it.
+        await trackOperation(
+          placementIdleSuspend,
+          publishPlacementChanges(() => placementIdleSweep.sweep()),
+          "Worker placement auto-suspend sweep failed",
+        );
+      } catch {
+        // Each operation reports its own failure before releasing its slot.
+      }
     };
     const uninstallSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
       const previousSessionId = mutation.previous.sessionId;
@@ -487,8 +487,7 @@ export function createGatewayWorkerPlacementRuntime(
           stopped = true;
           // Cancel enrollment; admitted recovery keeps its own bootstrap owner.
           params.environments.stopNodeEnrollmentWaits?.();
-          clearInterval(placementReconcileInterval);
-          placementReconcileInterval = undefined;
+          scheduledJobs.forEach((job) => job.cancel());
           uninstallSessionIdentityMutation();
           uninstallSessionMaintenancePreservation();
           uninstallPlacementAdmission();
@@ -563,11 +562,21 @@ export function createGatewayWorkerPlacementRuntime(
         "Worker placement reconcile sweep failed",
       );
       void sweepDiskSpace();
-      placementReconcileInterval = setInterval(
-        sweepActivePlacements,
-        WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
+      const atMs = scheduler.now() + WORKER_PLACEMENT_RECONCILE_INTERVAL_MS;
+      scheduledJobs.push(
+        scheduler.schedule({
+          id: "worker-placements:reconcile",
+          atMs,
+          everyMs: WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
+          run: sweepActivePlacements,
+        }),
+        scheduler.schedule({
+          id: "worker-placements:disk-space",
+          atMs,
+          everyMs: WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
+          run: () => sweepDiskSpace().catch(() => {}),
+        }),
       );
-      placementReconcileInterval.unref?.();
       return sidecar;
     } catch (error) {
       try {

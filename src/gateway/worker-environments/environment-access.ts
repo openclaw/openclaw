@@ -64,6 +64,7 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
 
 type WorkerEnvironmentAccessOptions = {
   store: WorkerEnvironmentStore;
+  getCleanupError: (record: WorkerEnvironmentRecord) => string | undefined;
   getConfig: () => OpenClawConfig;
   projectNamespace?: string;
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
@@ -148,6 +149,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const project = (record: WorkerEnvironmentRecord) => {
+    const cleanupError = options.getCleanupError(record);
     const desktopAvailable =
       options.getConfig().cloudWorkers?.desktop === true &&
       inState(record, "ready", "idle", "attached") &&
@@ -178,6 +180,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       ...((record.state === "failed" || record.state === "orphaned") && record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),
+      ...(cleanupError ? { error: cleanupError } : {}),
       desktopAvailable,
       desktopApps: desktopAvailable
         ? (record.desktop?.apps?.map((app) => app.id).toSorted() ?? [])

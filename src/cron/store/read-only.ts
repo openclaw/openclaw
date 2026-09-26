@@ -32,6 +32,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { cronStoreKey } from "./key.js";
 import { restoreCronLoadError } from "./load-error.js";
 import type { CronReadOnlyRequest, CronReadOnlyResult } from "./read-only.types.js";
+import type { CronRunRecord } from "./run-history.types.js";
 import type { LoadedCronStore } from "./types.js";
 
 function emptyLoadedCronStore(): LoadedCronStore {
@@ -65,9 +66,11 @@ export async function inspectCronJobsReadOnly(
 async function readCronState({
   storeKey,
   env,
+  history,
 }: {
   storeKey?: string;
   env: NodeJS.ProcessEnv;
+  history?: { jobId?: string };
 }): Promise<Extract<CronReadOnlyResult, { ok: true }>> {
   const statePath = resolveOpenClawStateSqlitePath(env);
   if (!fs.existsSync(statePath)) {
@@ -179,6 +182,7 @@ async function readCronState({
         {
           location,
           storeKey,
+          history,
           stagingRoot,
           coordinatorRuntime,
         },
@@ -187,6 +191,7 @@ async function readCronState({
           inputBytes:
             Buffer.byteLength(location) +
             Buffer.byteLength(storeKey ?? "") +
+            Buffer.byteLength(history?.jobId ?? "") +
             Buffer.byteLength(stagingRoot ?? "") +
             Buffer.byteLength(coordinatorRuntime.directory) +
             environmentBytes,
@@ -207,5 +212,20 @@ async function readCronState({
   };
   return await retainSnapshotWork(run(), () =>
     controller.abort(new Error("Cron read-only load closed")),
+  );
+}
+
+export async function readCronRunRecords(
+  storeKey: string,
+  jobId?: string,
+): Promise<CronRunRecord[]> {
+  return (
+    (
+      await readCronState({
+        storeKey: cronStoreKey(storeKey),
+        env: process.env,
+        history: { jobId },
+      })
+    ).history ?? []
   );
 }

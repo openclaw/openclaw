@@ -480,6 +480,172 @@ if (${JSON.stringify(command)} === 'git') {
       }
     },
   );
+  posixIt.each([
+    { runner: "cli", mode: "ready", exit: 0 },
+    { runner: "package", mode: "ready", exit: 49 },
+    { runner: "cli", mode: "pending", exit: 0 },
+    { runner: "package", mode: "stopped", exit: 1 },
+    { runner: "cli", mode: "exhausted", exit: 1 },
+    { runner: "package", mode: "exhausted", exit: 1 },
+    { runner: "cli", mode: "inspect-empty", exit: 1 },
+    { runner: "package", mode: "inspect-true", exit: 49 },
+    { runner: "cli", mode: "success-log-error", exit: 73 },
+    { runner: "package", mode: "failure-log-error", exit: 73 },
+  ])("preserves $runner proof settlement: $mode", ({ runner, mode, exit }) => {
+    const root = tempDirs.make("e2e-wait-");
+    const bin = path.join(root, "bin");
+    const log = path.join(root, "commands");
+    const packageDir = path.join(root, "package");
+    mkdirSync(bin);
+    mkdirSync(packageDir);
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.2.3" }),
+    );
+    const packageTgz = path.join(root, "candidate.tgz");
+    expect(spawnSync("tar", ["-czf", packageTgz, "-C", root, "package"]).status).toBe(0);
+    for (const [command, body] of Object.entries({
+      git: `if [[ "$*" == *rev-parse* ]]; then printf '%040d\\n' 0; fi`,
+      sleep: `printf 'sleep %s\\n' "$*" >> "$PROOF_TRACE"`,
+      docker: `
+case "$1" in
+  run)
+    shift
+    while (($#)); do
+      if [[ "$1" == --name ]]; then
+        printf 'start %s\\n' "\${2%-*}" >> "$PROOF_TRACE"
+        break
+      fi
+      shift
+    done
+    ;;
+  exec)
+    container="$2"
+    shift 2
+    if [[ "$*" != 'test -f /tmp/openclaw-proof-ready' ]]; then
+      printf 'identity %s %s\\n' "\${container%-*}" "$*" >> "$PROOF_TRACE"
+      echo 'fixture-stop at package identity boundary' >&2
+      exit 49
+    fi
+    printf 'probe %s\\n' "\${container%-*}" >> "$PROOF_TRACE"
+    count=0
+    if [[ -f "$PROOF_STATE/$container" ]]; then read -r count < "$PROOF_STATE/$container"; fi
+    count=$((count + 1))
+    printf '%s\\n' "$count" > "$PROOF_STATE/$container"
+    case "$PROOF_MODE" in
+      ready|success-log-error) exit 0 ;;
+      pending|inspect-true) if ((count > 1)); then exit 0; fi ;;
+    esac
+    exit 1
+    ;;
+  inspect)
+    printf 'inspect %s %s\\n' "\${4%-*}" "$2 $3" >> "$PROOF_TRACE"
+    case "$PROOF_MODE" in
+      stopped|failure-log-error) echo false ;;
+      inspect-empty) echo 'inspect-error' >&2; exit 72 ;;
+      inspect-true) echo true; echo 'inspect-error' >&2; exit 72 ;;
+      *) echo true ;;
+    esac
+    ;;
+  logs)
+    printf 'logs %s\\n' "\${2%-*}" >> "$PROOF_TRACE"
+    printf 'proof-out:%s\\n' "\${2%-*}"
+    printf 'proof-err:%s\\n' "\${2%-*}" >&2
+    case "$PROOF_MODE" in *log-error) exit 73 ;; esac
+    ;;
+  rm)
+    shift 2
+    for container in "$@"; do printf 'cleanup %s\\n' "\${container%-*}" >> "$PROOF_TRACE"; done
+    ;;
+esac
+`,
+    })) {
+      const file = path.join(bin, command);
+      writeFileSync(file, `#!/bin/bash\nset -eu\n${body}\n`);
+      chmodSync(file, 0o755);
+    }
+    const cli = runner === "cli";
+    const containers = cli
+      ? ["openclaw-hosted-installer-proof", "openclaw-source-installer-proof"]
+      : [
+          "openclaw-package-npm-proof",
+          "openclaw-package-pnpm-proof",
+          "openclaw-package-bun-proof",
+          "openclaw-package-musl-proof",
+        ];
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        path.join(
+          harness,
+          "scripts/e2e",
+          cli ? "cli-installer-distribution-docker.sh" : "docker-package-install.sh",
+        ),
+      ],
+      {
+        cwd: harness,
+        encoding: "utf8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+          TMPDIR: root,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
+          OPENCLAW_SKIP_DOCKER_BUILD: "1",
+          OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH: path.join(root, "identity.json"),
+          PROOF_TRACE: log,
+          PROOF_STATE: root,
+          PROOF_MODE: mode,
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(exit);
+    const calls = readFileSync(log, "utf8").trim().split("\n");
+    const expected = containers.map((container) => `start ${container}`);
+    const settled = exit === 0 || exit === 49;
+    for (const container of settled ? containers : containers.slice(0, 1)) {
+      const attempts = mode === "exhausted" ? (cli ? 1200 : 240) : 1;
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        expected.push(`probe ${container}`);
+        if (mode !== "ready" && mode !== "success-log-error") {
+          expected.push(`inspect ${container} --format {{.State.Running}}`);
+          if (["pending", "inspect-true", "exhausted"].includes(mode)) {
+            expected.push("sleep 1");
+          }
+        }
+      }
+      if (mode === "pending" || mode === "inspect-true") {
+        expected.push(`probe ${container}`);
+      }
+      if (cli || !settled) {
+        expected.push(`logs ${container}`);
+      }
+    }
+    if (exit === 49) {
+      // Waits completed; this fixture does not claim installed package acceptance.
+      expected.push("identity openclaw-package-pnpm-proof cat /tmp/openclaw-package-root");
+      expect(result.stderr).toContain("fixture-stop at package identity boundary");
+    }
+    expected.push(...containers.map((container) => `cleanup ${container}`));
+    expect(calls).toEqual(expected);
+    if (cli && (settled || mode === "success-log-error")) {
+      expect(result.stdout).toContain(`proof-out:${containers[0]}`);
+      expect(result.stderr).toContain(`proof-err:${containers[0]}`);
+      expect(result.stderr).not.toContain("proof-out:");
+    } else if (!settled) {
+      expect(result.stdout).not.toContain("proof-out:");
+      expect(result.stderr).toContain(`proof-out:${containers[0]}`);
+      expect(result.stderr).toContain(`proof-err:${containers[0]}`);
+    } else {
+      expect(result.stdout + result.stderr).not.toContain("proof-out:");
+    }
+    expect(result.stderr.includes("inspect-error")).toBe(mode.startsWith("inspect-"));
+    expect(result.stdout.includes("CLI installer distribution proof passed.")).toBe(
+      cli && exit === 0,
+    );
+    expect(result.stdout).not.toContain("npm, pnpm, and Bun package artifact proofs passed.");
+  });
   posixIt("packs candidate source through the sourced trusted package helper", () => {
     const root = tempDirs.make("e2e-pack-");
     const trusted = path.join(root, "trusted harness");

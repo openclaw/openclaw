@@ -215,6 +215,31 @@ describe("moonshot provider plugin", () => {
     },
   );
 
+  it.each(["constructor", "__proto__"])(
+    "keeps inherited object key %s outside the always-thinking model family",
+    async (modelId) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const capturedStream = createCapturedThinkingConfigStream();
+      expect(provider.isModernModelRef?.({ provider: "moonshot", modelId })).toBe(false);
+      expect(
+        provider.resolveThinkingProfile?.({ provider: "moonshot", modelId, reasoning: true }),
+      ).toEqual({
+        levels: [
+          { id: "off", label: "off" },
+          { id: "low", label: "on" },
+        ],
+        defaultLevel: "off",
+      });
+      expect(
+        provider.wrapSimpleCompletionStreamFn?.({
+          provider: "moonshot",
+          modelId,
+          streamFn: capturedStream.streamFn,
+        }),
+      ).toBe(capturedStream.streamFn);
+    },
+  );
+
   it("exposes Kimi K3 as an always-max-thinking modern model", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const capturedStream = createCapturedThinkingConfigStream();

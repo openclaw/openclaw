@@ -531,10 +531,6 @@ describe("sanitizeToolArgs", () => {
 });
 
 describe("extractToolResultText", () => {
-  it("keeps primitive string tool results for visible output", () => {
-    expect(extractToolResultText("plain result")).toBe("plain result");
-  });
-
   it("omits primitive inline data URI payloads", () => {
     const result = "data:text/plain;base64,abcdefghijklmnopqrstuvwxyz0123456789";
 

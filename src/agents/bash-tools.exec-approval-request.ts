@@ -126,10 +126,6 @@ function parseDecision(value: unknown): ParsedDecision {
   return { present: true, value: typeof decision === "string" ? decision : null };
 }
 
-function parseExpiresAtMs(value: unknown): number | undefined {
-  return asDateTimestampMs(value);
-}
-
 function resolveDefaultExecApprovalExpiresAtMs(): number {
   return resolveExpiresAtMsFromDurationMs(DEFAULT_APPROVAL_TIMEOUT_MS) ?? 0;
 }
@@ -168,7 +164,7 @@ async function registerExecApprovalRequest(
   const decision = parseDecision(registrationResult);
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
-    parseExpiresAtMs(registrationResult?.expiresAtMs) ?? resolveDefaultExecApprovalExpiresAtMs();
+    asDateTimestampMs(registrationResult?.expiresAtMs) ?? resolveDefaultExecApprovalExpiresAtMs();
   if (decision.present) {
     return { id, expiresAtMs, finalDecision: decision.value };
   }
@@ -206,35 +202,14 @@ export async function resolveRegisteredExecApprovalDecision(params: {
   }
 }
 
-type HostExecApprovalParams = {
+type HostExecApprovalParams = Omit<
+  RequestExecApprovalDecisionParams,
+  "id" | "cwd" | "deliverToApprovalClientsOnly"
+> & {
   approvalId: string;
-  command?: string;
-  commandArgv?: string[];
-  systemRunPlan?: SystemRunApprovalPlan;
-  env?: Record<string, string>;
   workdir: string | undefined;
-  host: "gateway" | "node";
-  nodeId?: string;
-  security: ExecSecurity;
-  ask: ExecAsk;
-  warningText?: string;
-  commandSpans?: ExecApprovalCommandSpan[];
-  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
   commandHighlighting?: boolean;
-  agentId?: string;
-  resolvedPath?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  runId?: string;
-  toolCallId?: string;
-  turnSourceChannel?: string;
-  turnSourceTo?: string;
-  turnSourceAccountId?: string;
-  turnSourceThreadId?: string | number;
-  approvalReviewerDeviceIds?: string[];
   trigger?: string;
-  requireDeliveryRoute?: boolean;
-  suppressDelivery?: boolean;
 };
 
 type ExecApprovalRequesterContext = {
@@ -362,19 +337,12 @@ async function buildHostApprovalDecisionParams(
   };
 }
 
-/** Registers a host/node approval request without waiting for a decision. */
-async function registerExecApprovalRequestForHost(
-  params: HostExecApprovalParams,
-): Promise<ExecApprovalRegistration> {
-  return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
-}
-
 /** Registers a host/node approval request and wraps failures for exec callers. */
 export async function registerExecApprovalRequestForHostOrThrow(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
   try {
-    return await registerExecApprovalRequestForHost(params);
+    return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
   } catch (err) {
     throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
   }

@@ -283,37 +283,9 @@ private object ChatMediaPlaybackArbiter {
   }
 }
 
-@Composable
-internal fun ChatAudioPlayerCard(
-  content: ChatMessageContent,
-  playbackBlocked: Boolean,
-  loadMedia: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
-) {
-  ChatMediaPlayerCard(
-    content = content,
-    kind = GatewayMediaKind.Audio,
-    playbackBlocked = playbackBlocked,
-    loadMedia = loadMedia,
-  )
-}
-
-@Composable
-internal fun ChatVideoPlayerCard(
-  content: ChatMessageContent,
-  playbackBlocked: Boolean,
-  loadMedia: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
-) {
-  ChatMediaPlayerCard(
-    content = content,
-    kind = GatewayMediaKind.Video,
-    playbackBlocked = playbackBlocked,
-    loadMedia = loadMedia,
-  )
-}
-
 @OptIn(UnstableApi::class)
 @Composable
-private fun ChatMediaPlayerCard(
+internal fun ChatMediaPlayerCard(
   content: ChatMessageContent,
   kind: GatewayMediaKind,
   playbackBlocked: Boolean,
@@ -615,7 +587,7 @@ private fun AudioPlayerSurface(
         value = positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L)).toFloat(),
         onValueChange = onSeek,
         valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
-        enabled = seekEnabled && durationMs > 0L && playerControlsAvailable(error, playbackBlocked),
+        enabled = seekEnabled && durationMs > 0L && error == null && !playbackBlocked,
       )
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(formatVoiceNoteDuration(positionMs), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
@@ -697,11 +669,6 @@ private fun VideoPlayerSurface(
     }
   }
 }
-
-private fun playerControlsAvailable(
-  error: String?,
-  playbackBlocked: Boolean,
-): Boolean = error == null && !playbackBlocked
 
 @OptIn(UnstableApi::class)
 private suspend fun prepareMediaSource(

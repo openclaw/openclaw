@@ -168,13 +168,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         return { changes, warnings };
       }
 
-      if (canAdoptLegacyGateway && canonicalGatewayInstanceId) {
-        await gatewayStore.register(ACPX_GATEWAY_INSTANCE_KEY, {
-          instanceId: canonicalGatewayInstanceId,
-          createdAt: Date.now(),
-        });
-        changes.push("Migrated ACPX gateway instance id -> plugin state");
-      } else if (canonicalGatewayInstanceId && !existingGateway) {
+      if (canonicalGatewayInstanceId && (canAdoptLegacyGateway || !existingGateway)) {
         await gatewayStore.register(ACPX_GATEWAY_INSTANCE_KEY, {
           instanceId: canonicalGatewayInstanceId,
           createdAt: Date.now(),
@@ -225,6 +219,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "ACP session owners",
     doctorOnly: true,
     phase: "after-session-repair",
+    async collectBackupResources(input) {
+      return (await import("./src/session-owner-migration.js")).acpxSessionOwnerMigration
+        .collectBackupResources!(input);
+    },
     async detectLegacyState(input) {
       return (
         await import("./src/session-owner-migration.js")

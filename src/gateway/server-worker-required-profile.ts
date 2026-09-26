@@ -40,8 +40,8 @@ export function createRequiredWorkerSessionPreparation(options: {
   placements: WorkerSessionPlacementStore;
   environments: WorkerEnvironmentService;
   warn: (message: string) => void;
-  redispatchReclaimed: ReturnType<
-    typeof import("./worker-environments/reclaimed-placement-redispatch.js").createReclaimedPlacementRedispatch
+  redispatchPlacement: ReturnType<
+    typeof import("./worker-environments/worker-placement-redispatch.js").createWorkerPlacementRedispatch
   >;
   onTransition?: Parameters<ReturnType<typeof coordinateWorkerPlacementDispatch>["dispatch"]>[1];
   dispatch: ReturnType<typeof coordinateWorkerPlacementDispatch>;
@@ -247,8 +247,11 @@ export function createRequiredWorkerSessionPreparation(options: {
             environmentService: options.environments,
           }));
       let current = validatePlacement();
-      if (current?.state === "reclaimed") {
-        await options.redispatchReclaimed(current, { assertCurrent, signal });
+      if (
+        current?.state === "reclaimed" ||
+        (current?.state === "failed" && current.activeOwnerEpoch !== null)
+      ) {
+        await options.redispatchPlacement(current, { assertCurrent, signal });
         assertReady();
         return;
       }

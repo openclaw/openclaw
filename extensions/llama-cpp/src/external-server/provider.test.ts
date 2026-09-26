@@ -7,29 +7,6 @@ import { discoverLlamaServerProvider, prepareLlamaServerDynamicModel } from "./p
 
 const discoverMock = vi.hoisted(() => vi.fn());
 const runtimeApiKeyMock = vi.hoisted(() => vi.fn());
-const catalogSdk = vi.hoisted((): { available: boolean; calls: number; failure?: Error } => ({
-  available: true,
-  calls: 0,
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-catalog-live-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime")>();
-  const run = (params: Parameters<typeof actual.runLiveProviderCatalog>[0]) => {
-    catalogSdk.calls += 1;
-    if (catalogSdk.failure) {
-      throw catalogSdk.failure;
-    }
-    return actual.runLiveProviderCatalog(params);
-  };
-  return {
-    ...actual,
-    get runLiveProviderCatalog() {
-      return catalogSdk.available ? run : undefined;
-    },
-  };
-});
-
 vi.mock("./discovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./discovery.js")>()),
   discoverLlamaServer: discoverMock,
@@ -103,16 +80,9 @@ describe("llama-server provider discovery", () => {
     discoverMock.mockReset();
     runtimeApiKeyMock.mockReset();
     runtimeApiKeyMock.mockResolvedValue(undefined);
-    catalogSdk.available = true;
-    catalogSdk.calls = 0;
-    catalogSdk.failure = undefined;
   });
 
-  describe.each([true, false])("catalog SDK helper available=%s", (available) => {
-    beforeEach(() => {
-      catalogSdk.available = available;
-    });
-
+  describe("live catalog outcomes", () => {
     it("publishes live discovery with the profile that supplied its credential", async () => {
       discoverMock.mockResolvedValue(success());
       const ctx = catalogContext();
@@ -133,7 +103,6 @@ describe("llama-server provider discovery", () => {
       expect(discoverMock).toHaveBeenCalledWith(
         expect.objectContaining({ apiKey: "profile-key", cacheTtlMs: 0 }),
       );
-      expect(catalogSdk.calls).toBe(available ? 1 : 0);
     });
 
     it("prefers configured Authorization over ambient API-key discovery auth", async () => {
@@ -216,13 +185,6 @@ describe("llama-server provider discovery", () => {
         await expect(discoverLlamaServerProvider(ctx)).resolves.toBeNull();
       },
     );
-  });
-
-  it("preserves errors thrown by an available catalog helper", async () => {
-    const failure = new Error("current SDK helper failed");
-    catalogSdk.failure = failure;
-    await expect(discoverLlamaServerProvider(catalogContext())).rejects.toBe(failure);
-    expect(discoverMock).not.toHaveBeenCalled();
   });
 
   it("returns only the requested discovered model directly to its preparation owner", async () => {

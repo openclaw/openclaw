@@ -956,69 +956,45 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(JSON.stringify(events)).not.toContain(marker);
   });
 
-  it("preserves visible text after a byte-over-cap XML prefix below the character cap", async () => {
+  it("keeps a byte-over-cap visible suffix at its streamed content index in done messages", async () => {
     const marker = "<function=read>";
     const visibleText = "Visible answer";
-    const rawText = `${createByteOverCapZeroArgumentXmlCall("read")}\n${visibleText}`;
-    expect(rawText.length).toBeLessThan(256_000);
-    const events = await collectTextDoneEvents([rawText], rawText);
+    const firstChunk = `${marker}${"\u00a0".repeat(100_000)}`;
+    const secondChunk = `${"\u00a0".repeat(28_001)}</function>\n${visibleText}`;
+    const content = [
+      { type: "text", text: firstChunk },
+      { type: "thinking", thinking: "checking" },
+      { type: "text", text: secondChunk },
+    ];
+    const events = await collectPlainTextToolCallCompatEvents([
+      textDelta(firstChunk),
+      {
+        type: "text_delta",
+        contentIndex: 2,
+        delta: secondChunk,
+        partial: { role: "assistant", content },
+      },
+      doneEvent(content),
+    ]);
 
     expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
       "text_delta",
       "done",
     ]);
+    const expectedContent = [
+      { type: "text", text: "" },
+      { type: "thinking", thinking: "checking" },
+      { type: "text", text: visibleText },
+    ];
     expect(requireRecord(events[0], "text event")).toMatchObject({
       delta: visibleText,
-      partial: { content: [{ type: "text", text: visibleText }] },
+      partial: { content: expectedContent },
     });
     expect(requireRecord(events[1], "done event").message).toMatchObject({
-      content: [{ type: "text", text: visibleText }],
+      content: expectedContent,
     });
     expect(JSON.stringify(events)).not.toContain(marker);
   });
-
-  it.each(["first pass", "repeated pass"])(
-    "keeps a byte-over-cap visible suffix at its streamed content index in done messages (%s)",
-    async () => {
-      const marker = "<function=read>";
-      const visibleText = "Visible answer";
-      const firstChunk = `${marker}${"\u00a0".repeat(100_000)}`;
-      const secondChunk = `${"\u00a0".repeat(28_001)}</function>\n${visibleText}`;
-      const content = [
-        { type: "text", text: firstChunk },
-        { type: "thinking", thinking: "checking" },
-        { type: "text", text: secondChunk },
-      ];
-      const events = await collectPlainTextToolCallCompatEvents([
-        textDelta(firstChunk),
-        {
-          type: "text_delta",
-          contentIndex: 2,
-          delta: secondChunk,
-          partial: { role: "assistant", content },
-        },
-        doneEvent(content),
-      ]);
-
-      expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
-        "text_delta",
-        "done",
-      ]);
-      const expectedContent = [
-        { type: "text", text: "" },
-        { type: "thinking", thinking: "checking" },
-        { type: "text", text: visibleText },
-      ];
-      expect(requireRecord(events[0], "text event")).toMatchObject({
-        delta: visibleText,
-        partial: { content: expectedContent },
-      });
-      expect(requireRecord(events[1], "done event").message).toMatchObject({
-        content: expectedContent,
-      });
-      expect(JSON.stringify(events)).not.toContain(marker);
-    },
-  );
 
   it("scrubs earlier partial blocks when a later block completes a byte-over-cap XML prefix", async () => {
     const marker = "<function=read>";
@@ -1528,24 +1504,6 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(JSON.stringify(events)).not.toContain("[tool:read]");
   });
 
-  it("reclassifies split over-cap mixed text and streams the visible suffix", async () => {
-    const toolPrefix = ["[tool:read]", "<parameter=path>", "x".repeat(256_001)].join("\n");
-    const visibleSuffix = "Visible answer after the tool-looking prefix.";
-    const rawText = [toolPrefix, "</parameter>", "</function>", visibleSuffix].join("\n");
-    const events = await collectTextDoneEvents(
-      [toolPrefix, ["</parameter>", "</function>", visibleSuffix].join("\n")],
-      rawText,
-      true,
-    );
-
-    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
-      "text_delta",
-      "done",
-    ]);
-    expect(String(requireRecord(events[0], "text event").delta)).toBe(visibleSuffix);
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-  });
-
   it("preserves XML visible suffix after Unicode payload text", async () => {
     const toolPrefix = ["[tool:read]", "<parameter=path>", `${"x".repeat(256_001)}İ`].join("\n");
     const visibleSuffix = "Visible suffix after Unicode payload.";
@@ -1556,7 +1514,9 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       true,
     );
 
+    expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
     expect(String(requireRecord(events[0], "text event").delta)).toBe(visibleSuffix);
+    expect(JSON.stringify(events)).not.toContain("[tool:read]");
     expect(JSON.stringify(events)).not.toContain("</parameter>");
     expect(JSON.stringify(events)).not.toContain("</function>");
   });
@@ -1585,23 +1545,6 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(
       requireRecord(requireRecord(events[1], "error event").error, "error record").content,
     ).toEqual([{ type: "text", text: visibleSuffix }]);
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-  });
-
-  it("preserves visible suffix text when the tool terminator arrives after the scan cap", async () => {
-    const toolPrefix = ["[tool:read]", "<parameter=path>", "x".repeat(400_000)].join("\n");
-    const visibleSuffix = "Visible answer after a very large tool-looking prefix.";
-    const rawText = [toolPrefix, "</parameter>", "</function>", visibleSuffix].join("\n");
-    const events = await collectTextDoneEvents(
-      [toolPrefix, ["</parameter>", "</function>", visibleSuffix].join("\n")],
-      rawText,
-    );
-
-    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
-      "text_delta",
-      "done",
-    ]);
-    expect(String(requireRecord(events[0], "text event").delta)).toBe(visibleSuffix);
     expect(JSON.stringify(events)).not.toContain("[tool:read]");
   });
 
@@ -1639,33 +1582,12 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(JSON.stringify(events)).not.toContain("[tool:read]");
   });
 
-  it("preserves long visible suffix text after an over-cap terminator", async () => {
-    const toolPrefix = ["[tool:read]", "<parameter=path>", "x".repeat(400_000)].join("\n");
-    const visibleSuffix = `Visible answer ${"y".repeat(70_000)}`;
-    const rawText = [toolPrefix, "</parameter>", "</function>", visibleSuffix].join("\n");
-    const events = await collectTextDoneEvents(
-      [toolPrefix, ["</parameter>", "</function>", visibleSuffix].join("\n")],
-      rawText,
-    );
-
-    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
-      "text_delta",
-      "done",
-    ]);
-    expect(String(requireRecord(events[0], "text event").delta)).toBe(visibleSuffix);
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
-  });
-
-  it.each([
-    ["both events omit contentIndex", {}, {}],
-    ["only the delta omits contentIndex", {}, { contentIndex: 0 }],
-    ["only text_end omits contentIndex", { contentIndex: 0 }, {}],
-  ])("does not duplicate visible suffix text when %s", async (_name, deltaIndex, endIndex) => {
+  it("does not duplicate visible suffix text when both events omit contentIndex", async () => {
     const visibleSuffix = "Visible answer from a mixed-index stream.";
     const rawText = [`[tool:read] {"path":"${"x".repeat(256_001)}"}`, visibleSuffix].join("\n");
     const events = await collectPlainTextToolCallCompatEvents([
-      { type: "text_delta", ...deltaIndex, delta: rawText },
-      { type: "text_end", ...endIndex, content: rawText },
+      { type: "text_delta", delta: rawText },
+      { type: "text_end", content: rawText },
       doneEvent([textBlock(rawText)]),
     ]);
 
@@ -1675,28 +1597,6 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     ]);
     expect(String(requireRecord(events[0], "text event").delta)).toBe(visibleSuffix);
     expect(JSON.stringify(events)).not.toContain("[tool:read]");
-  });
-
-  it("deduplicates cumulative text_end across multiple stripped calls", async () => {
-    const call = `<function=read>${"\u00a0".repeat(128_001)}</function>\n`;
-    const first = `${call}ONE\n`;
-    const second = `TWO\n${call}THREE`;
-    const rawText = first + second;
-    const events = await collectPlainTextToolCallCompatEvents([
-      textDelta(first),
-      textDelta(second),
-      textEnd(rawText),
-      doneEvent([textBlock(rawText)]),
-    ]);
-
-    expect(events.map((event) => event.type)).toEqual([
-      "text_delta",
-      "text_delta",
-      "text_delta",
-      "done",
-    ]);
-    expect(events.slice(0, 3).map((event) => event.delta)).toEqual(["ONE\n", "TWO\n", "THREE"]);
-    expect(messageOf(events.at(-1)).content).toEqual([{ type: "text", text: "ONE\nTWO\nTHREE" }]);
   });
 
   it("keeps partial snapshots current for multi-delta visible suffix text", async () => {

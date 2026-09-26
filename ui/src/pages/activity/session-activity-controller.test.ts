@@ -11,6 +11,7 @@ it.each([
   "paces continuous Activity invalidations after $duration ms reads settle",
   async ({ duration, requestsPerMinute }) => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.setSystemTime(0);
     const result = {
       ts: 1,

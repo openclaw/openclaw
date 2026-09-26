@@ -213,6 +213,7 @@ const FailedSessionPlacementSchema = closedObject({
   ...TerminalSessionPlacementProperties,
   recoveryError: NonEmptyString,
   recoveryAction: Type.Optional(Type.Enum(["restart", "stop-first"] as const, { type: "string" })),
+  retryOnSend: Type.Optional(Type.Literal(true)),
 });
 
 /** Gateway-visible placement projection; `state` remains the closed discriminator. */

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { MODEL_CATALOG_THINKING_LEVELS } from "@openclaw/model-catalog-core/model-catalog-types";
 import { z } from "zod";
+import { isNativeRuntimeEndpoint } from "./native-runtime-transport.js";
 const ThinkingSchema = z.enum(MODEL_CATALOG_THINKING_LEVELS);
 export const NativeRuntimeIdentifier = z.string().trim().min(1).max(256);
 const provider = NativeRuntimeIdentifier.refine(
@@ -10,17 +11,10 @@ const provider = NativeRuntimeIdentifier.refine(
 const baseUrl = z
   .string()
   .url()
-  .refine((value) => {
-    const url = new URL(value);
-    return (
-      ["http:", "https:"].includes(url.protocol) &&
-      !url.username &&
-      !url.password &&
-      !url.search &&
-      !url.hash &&
-      !/[{}]/.test(value)
-    );
-  }, "Expected an explicit HTTP(S) endpoint without credentials, query, or placeholders");
+  .refine(
+    isNativeRuntimeEndpoint,
+    "Expected HTTPS (or literal loopback HTTP) without credentials, query, or placeholders",
+  );
 
 /** Trusted local startup configuration, never a turn-wire configuration surface. */
 export const NativeRuntimeConfigSchema = z.strictObject({

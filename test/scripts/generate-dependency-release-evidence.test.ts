@@ -1,4 +1,3 @@
-// Generate Dependency Release Evidence tests cover generate dependency release evidence script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -295,107 +294,37 @@ describe("generate-dependency-release-evidence", () => {
   });
 
   it("rejects missing dependency evidence CLI option values", () => {
-    const requiredArgs = ["--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"];
-    expect(() =>
-      parseArgs(["--output-dir", "--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"]),
-    ).toThrow("Expected --output-dir <value>.");
-    expect(() => parseArgs(["--output-dir", "-h", ...requiredArgs])).toThrow(
-      "Expected --output-dir <value>.",
-    );
-    expect(() =>
-      parseArgs(["--output-dir", "evidence", "--release-ref", "--npm-dist-tag", "latest"]),
-    ).toThrow("Expected --release-ref <value>.");
-    expect(() =>
-      parseArgs(["--output-dir", "evidence", "--release-ref", "-h", "--npm-dist-tag", "latest"]),
-    ).toThrow("Expected --release-ref <value>.");
-    expect(() =>
-      parseArgs([
-        "--output-dir",
-        "evidence",
-        "--release-ref",
-        "v2026.5.13",
-        "--npm-dist-tag",
-        "-h",
-      ]),
-    ).toThrow("Expected --npm-dist-tag <value>.");
-    expect(() =>
-      parseArgs(["--output-dir", "evidence", "--release-ref", "v2026.5.13", "--base-ref"]),
-    ).toThrow("Expected --base-ref <value>.");
-    expect(() =>
-      parseArgs(["--output-dir", "evidence", ...requiredArgs, "--base-ref", "-h"]),
-    ).toThrow("Expected --base-ref <value>.");
-    expect(() =>
-      parseArgs([
-        "--output-dir",
-        "evidence",
-        "--release-ref",
-        "v2026.5.13",
-        "--npm-dist-tag",
-        "latest",
-        "--github-output",
-        "--github-step-summary",
-        "summary.md",
-      ]),
-    ).toThrow("Expected --github-output <value>.");
-    expect(() =>
-      parseArgs(["--output-dir", "evidence", ...requiredArgs, "--github-output", "-h"]),
-    ).toThrow("Expected --github-output <value>.");
+    const missingValues = [
+      ["--output-dir", "--release-ref"],
+      ["--output-dir", "-h"],
+      ["--release-ref", "--npm-dist-tag"],
+      ["--release-ref", "-h"],
+      ["--npm-dist-tag", "-h"],
+      ["--base-ref", undefined],
+      ["--base-ref", "-h"],
+      ["--github-output", "--github-step-summary"],
+      ["--github-output", "-h"],
+    ] satisfies Array<[string, string | undefined]>;
+    for (const [flag, value] of missingValues) {
+      expect(() => parseArgs(value === undefined ? [flag] : [flag, value])).toThrow(
+        `Expected ${flag} <value>.`,
+      );
+    }
   });
 
   it("rejects duplicate dependency evidence CLI options", () => {
-    const requiredArgs = ["--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"];
-    const artifactArgs = ["--output-dir", "evidence", ...requiredArgs];
-    const duplicateCases = [
-      ["--root", ["--root", "repo-a", "--root", "repo-b", ...artifactArgs]],
-      [
-        "--output-dir",
-        ["--output-dir", "evidence-a", "--output-dir", "evidence-b", ...requiredArgs],
-      ],
-      [
-        "--release-ref",
-        [
-          "--output-dir",
-          "evidence",
-          "--release-ref",
-          "v2026.5.13",
-          "--release-ref",
-          "v2026.5.14",
-          "--npm-dist-tag",
-          "latest",
-        ],
-      ],
-      [
-        "--npm-dist-tag",
-        [
-          "--output-dir",
-          "evidence",
-          "--release-ref",
-          "v2026.5.13",
-          "--npm-dist-tag",
-          "latest",
-          "--npm-dist-tag",
-          "beta",
-        ],
-      ],
-      ["--base-ref", [...artifactArgs, "--base-ref", "origin/main", "--base-ref", "HEAD~1"]],
-      [
-        "--github-output",
-        [...artifactArgs, "--github-output", "first.out", "--github-output", "second.out"],
-      ],
-      [
-        "--github-step-summary",
-        [
-          ...artifactArgs,
-          "--github-step-summary",
-          "first.md",
-          "--github-step-summary",
-          "second.md",
-        ],
-      ],
-    ] satisfies Array<[string, string[]]>;
-
-    for (const [flag, args] of duplicateCases) {
-      expect(() => parseArgs(args)).toThrow(`${flag} was provided more than once.`);
+    for (const flag of [
+      "--root",
+      "--output-dir",
+      "--release-ref",
+      "--npm-dist-tag",
+      "--base-ref",
+      "--github-output",
+      "--github-step-summary",
+    ]) {
+      expect(() => parseArgs([flag, "first", flag, "second"])).toThrow(
+        `${flag} was provided more than once.`,
+      );
     }
   });
 

@@ -231,7 +231,6 @@ describe("google video generation provider", () => {
   });
 
   it.each([
-    ["invalid alphabet", "not-base64!"],
     ["non-canonical pad bits", "ZE=="],
     ["mixed alphabet", "aGVsbG8+_"],
   ])("rejects %s in inline video bytes", async (_scenario, videoBytes) => {

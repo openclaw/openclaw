@@ -16,8 +16,9 @@ export function workerInferencePlacement(
   if (placement === undefined || placement === "gateway") {
     return "gateway";
   }
-  // Deployed snapshots retain this original spelling until their environments retire.
-  // Doctor migrates authored config; reading a snapshot must not rewrite it or change placement.
+  // Preserve opt-in snapshots from pre-release builds until their environments retire.
+  // This spelling was not a released contract. Doctor normalizes authored config; reading
+  // an existing snapshot must not rewrite it or silently change inference placement.
   if (
     (placement !== "worker" && placement !== "runtime-local") ||
     environment.providerId !== DEVICE_WORKER_PROVIDER_ID

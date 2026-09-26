@@ -87,8 +87,7 @@ export function restoreDraftPlaceSelections(
     (preferredWhere?.kind === "device" || preferredWhere?.kind === "auto-device") &&
     host.gateway.cloudProfilesReady
   ) {
-    const automatic = preferredWhere.kind === "auto-device";
-    state.autoDevice = automatic;
+    state.autoDevice = preferredWhere.kind === "auto-device";
     state.deviceId = preferredWhere.kind === "device" ? preferredWhere.id : "";
     state.profileId = "";
     host.repository.forceWorktree(host.remotePlacement());

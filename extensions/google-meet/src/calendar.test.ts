@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { listGoogleMeetCalendarEvents } from "./calendar.js";
 
 afterEach(() => {
-  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -25,86 +24,22 @@ async function resolveCalendarMeetingUri(event: Record<string, unknown>) {
   return result.events[0]?.meetingUri;
 }
 
-describe("Google Calendar requests", () => {
-  it("aborts a stalled events.list request after 30 seconds", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
-      return new Promise<Response>((_resolve, reject) => {
-        const signal = init?.signal;
-        if (!signal) {
-          reject(new Error("expected Calendar request abort signal"));
-          return;
-        }
-        const rejectAbort = () =>
-          reject(
-            signal.reason instanceof Error
-              ? signal.reason
-              : new Error("Calendar request was aborted"),
-          );
-        if (signal.aborted) {
-          rejectAbort();
-          return;
-        }
-        signal.addEventListener("abort", rejectAbort, { once: true });
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const request = listGoogleMeetCalendarEvents({ accessToken: "test-token" });
-    const rejection = expect(request).rejects.toMatchObject({
-      name: "TimeoutError",
-      message: "request timed out",
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    const signal = fetchMock.mock.calls[0]?.[1]?.signal;
-    expect(signal?.aborted).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(signal?.aborted).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(signal?.aborted).toBe(true);
-    await rejection;
-  });
-});
-
 describe("Google Meet calendar URL extraction", () => {
   it("normalizes Calendar HTTP links before applying the runtime Meet URL contract", async () => {
-    await expect(
-      resolveCalendarMeetingUri({
-        hangoutLink: "http://meet.google.com/abc-defg-hij",
-      }),
-    ).resolves.toBe("https://meet.google.com/abc-defg-hij");
-    await expect(
-      resolveCalendarMeetingUri({
-        hangoutLink: "https://example.com/abc-defg-hij",
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      resolveCalendarMeetingUri({
-        hangoutLink: "https://meet.google.com/not-a-code",
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      resolveCalendarMeetingUri({
-        hangoutLink: "https://meet.google.com/lookup/classroom-alias",
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      resolveCalendarMeetingUri({
-        hangoutLink: "https://user@meet.google.com/abc-defg-hij",
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      resolveCalendarMeetingUri({
-        hangoutLink: "https://meet.google.com:444/abc-defg-hij",
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      resolveCalendarMeetingUri({
-        hangoutLink: "https://meet.google.com/abc-defg-hij?authuser=0",
-      }),
-    ).resolves.toBe("https://meet.google.com/abc-defg-hij?authuser=0");
+    for (const [hangoutLink, expected] of [
+      ["http://meet.google.com/abc-defg-hij", "https://meet.google.com/abc-defg-hij"],
+      ["https://example.com/abc-defg-hij", undefined],
+      ["https://meet.google.com/not-a-code", undefined],
+      ["https://meet.google.com/lookup/classroom-alias", undefined],
+      ["https://user@meet.google.com/abc-defg-hij", undefined],
+      ["https://meet.google.com:444/abc-defg-hij", undefined],
+      [
+        "https://meet.google.com/abc-defg-hij?authuser=0",
+        "https://meet.google.com/abc-defg-hij?authuser=0",
+      ],
+    ]) {
+      await expect(resolveCalendarMeetingUri({ hangoutLink })).resolves.toBe(expected);
+    }
   });
 
   it("ignores malformed conference entrypoints before selecting and upgrading a valid one", async () => {

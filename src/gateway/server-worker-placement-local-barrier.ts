@@ -49,7 +49,7 @@ export function createGatewayWorkerPlacementLocalBarrier(
       exactRead: true,
     });
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
-    let placement: ReturnType<typeof startDispatch> | undefined;
+    let placement: Awaited<ReturnType<typeof startDispatch>> | undefined;
     await runExclusiveSessionLifecycleMutation({
       scope: target.storePath,
       identities: lifecycleIdentities,
@@ -101,10 +101,10 @@ export function createGatewayWorkerPlacementLocalBarrier(
           }
           // Initial placement belongs to this held input. There is no executing local
           // owner to revoke, and clearing queues would discard the pending first turn.
-          placement = startDispatch();
+          placement = await startDispatch();
           return;
         }
-        placement = startDispatch();
+        placement = await startDispatch();
         clearSessionQueues(lifecycleIdentities);
         params.revokeSessionAuthority({
           sessionId,

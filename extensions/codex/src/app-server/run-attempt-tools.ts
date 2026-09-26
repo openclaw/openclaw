@@ -2,12 +2,12 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type { CodexDynamicToolCallResponse } from "./protocol.js";
-import { sanitizeCodexToolResponse } from "./tool-progress-normalization.js";
+import { sanitizeCodexAgentEventRecord } from "./tool-progress-normalization.js";
 
 export function toTranscriptToolResult(
   response: CodexDynamicToolCallResponse,
 ): Record<string, unknown> {
-  const sanitized = sanitizeCodexToolResponse(response);
+  const sanitized = sanitizeCodexAgentEventRecord({ ...response });
   const contentItems = Array.isArray(sanitized.contentItems) ? sanitized.contentItems : [];
   const result: Record<string, unknown> = {
     ...sanitized,

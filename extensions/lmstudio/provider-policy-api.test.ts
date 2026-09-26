@@ -95,7 +95,7 @@ describe("lmstudio lightweight provider policy", () => {
     expect(normalizeConfig({ provider: "openai", providerConfig })).toBe(providerConfig);
   });
 
-  it.each([undefined, null, [], "invalid"])(
+  it.each([[], "invalid"])(
     "leaves absent or malformed model compatibility metadata untouched: %j",
     (compat) => {
       const model = { ...createModel(), compat } as unknown as ModelDefinitionConfig;

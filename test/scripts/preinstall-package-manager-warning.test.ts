@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createPackageManagerWarningMessage,
   detectLifecyclePackageManager,
   enforceSupportedNodeRuntime,
   nodeVersionSatisfiesPackageEngine,
@@ -488,16 +487,6 @@ describe("detectLifecyclePackageManager", () => {
   });
 });
 
-describe("createPackageManagerWarningMessage", () => {
-  it("returns null for pnpm", () => {
-    expect(createPackageManagerWarningMessage("pnpm")).toBeNull();
-  });
-
-  it("warns for npm installs", () => {
-    expect(createPackageManagerWarningMessage("npm")).toContain("prefer: corepack pnpm install");
-  });
-});
-
 describe("warnIfNonPnpmLifecycle", () => {
   it("warns once for npm lifecycle runs", () => {
     const warn = vi.fn();
@@ -512,6 +501,7 @@ describe("warnIfNonPnpmLifecycle", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     const [message] = expectDefined(warn.mock.calls[0], "package manager warning call");
     expect(message).toContain("detected npm");
+    expect(message).toContain("prefer: corepack pnpm install");
   });
 
   it("stays quiet for pnpm", () => {

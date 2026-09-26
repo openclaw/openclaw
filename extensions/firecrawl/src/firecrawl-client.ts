@@ -1,4 +1,3 @@
-// Firecrawl plugin module implements firecrawl client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseDateStringTimestampMs, parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -31,6 +30,8 @@ import {
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asRecord,
+  asOptionalObjectRecord,
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -238,9 +239,7 @@ async function postFirecrawlJson<T>(
           try {
             const body = await readResponseText(jsonResponse, { maxBytes: 64_000 });
             const payload = JSON.parse(body.text) as unknown;
-            return payload && typeof payload === "object" && !Array.isArray(payload)
-              ? (payload as Record<string, unknown>)
-              : null;
+            return asOptionalRecord(payload) ?? null;
           } catch {
             return null;
           }
@@ -564,25 +563,14 @@ export async function runFirecrawlSearch(
   return result;
 }
 
-function resolveScrapeData(payload: Record<string, unknown>): Record<string, unknown> {
-  const data = payload.data;
-  if (data && typeof data === "object") {
-    return data as Record<string, unknown>;
-  }
-  return {};
-}
-
 export function parseFirecrawlScrapePayload(params: {
   payload: Record<string, unknown>;
   url: string;
   extractMode: "markdown" | "text";
   maxChars: number;
 }): Record<string, unknown> {
-  const data = resolveScrapeData(params.payload);
-  const metadata =
-    data.metadata && typeof data.metadata === "object"
-      ? (data.metadata as Record<string, unknown>)
-      : undefined;
+  const data = asRecord(params.payload.data);
+  const metadata = asOptionalObjectRecord(data.metadata);
   const rawStatus = parseFiniteNumber(metadata?.statusCode) ?? parseFiniteNumber(data.statusCode);
   const status = rawStatus === undefined ? undefined : Math.floor(rawStatus);
   if (status !== undefined && (status < 200 || status >= 300)) {

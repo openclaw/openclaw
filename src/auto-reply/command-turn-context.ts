@@ -5,33 +5,14 @@ export type CommandTurnKind = "native" | "text-slash" | "normal";
 /** Transport-level source labels carried through auto-reply dispatch. */
 type CommandTurnSource = "native" | "text" | "message";
 
-type BaseCommandTurnContext = {
+export type CommandTurnContext = {
   commandName?: string;
   body?: string;
-};
-
-type NativeCommandTurnContext = BaseCommandTurnContext & {
-  kind: "native";
-  source: "native";
-  authorized: boolean;
-};
-
-type TextSlashCommandTurnContext = BaseCommandTurnContext & {
-  kind: "text-slash";
-  source: "text";
-  authorized: boolean;
-};
-
-type NormalCommandTurnContext = BaseCommandTurnContext & {
-  kind: "normal";
-  source: "message";
-  authorized: false;
-};
-
-export type CommandTurnContext =
-  | NativeCommandTurnContext
-  | TextSlashCommandTurnContext
-  | NormalCommandTurnContext;
+} & (
+  | { kind: "native"; source: "native"; authorized: boolean }
+  | { kind: "text-slash"; source: "text"; authorized: boolean }
+  | { kind: "normal"; source: "message"; authorized: false }
+);
 
 /** Loose inbound context shape accepted from channel adapters and tests before normalization. */
 export type CommandTurnContextInput = {
@@ -69,13 +50,7 @@ function parseCommandName(body: string | undefined): string | undefined {
 
 /** Maps the internal turn discriminator to the source value used by downstream routing. */
 export function commandTurnKindToSource(kind: CommandTurnKind): CommandTurnSource {
-  if (kind === "native") {
-    return "native";
-  }
-  if (kind === "text-slash") {
-    return "text";
-  }
-  return "message";
+  return kind === "native" ? "native" : kind === "text-slash" ? "text" : "message";
 }
 
 function normalizeCommandTurnKind(value: unknown): CommandTurnKind | undefined {
@@ -88,13 +63,7 @@ function normalizeCommandTurnSource(value: unknown): CommandTurnSource | undefin
 
 /** Maps source metadata back to the closed turn kind used by command checks. */
 function commandTurnSourceToKind(source: CommandTurnSource): CommandTurnKind {
-  if (source === "native") {
-    return "native";
-  }
-  if (source === "text") {
-    return "text-slash";
-  }
-  return "normal";
+  return source === "native" ? "native" : source === "text" ? "text-slash" : "normal";
 }
 
 /** Builds a normalized command-turn context and forces normal messages to unauthorized. */
@@ -178,9 +147,8 @@ export function resolveCommandTurnContext(input: CommandTurnContextInput): Comma
         ? "text"
         : "message";
   const body = resolveCommandBody(input);
-  const kind = commandTurnSourceToKind(source);
   return createCommandTurnContext(source, {
-    authorized: kind === "normal" ? false : input.CommandAuthorized === true,
+    authorized: input.CommandAuthorized === true,
     commandName: parseCommandName(body),
     body,
   });
@@ -210,17 +178,12 @@ export function isExplicitCommandTurn(commandTurn: CommandTurnContext | undefine
 }
 
 /** Resolves the target session override for trusted native or explicit steer command turns. */
-export function resolveCommandTurnTargetSessionKey(input: {
-  CommandTurn?: CommandTurnContext;
-  CommandSource?: unknown;
-  CommandAuthorized?: unknown;
-  CommandBody?: unknown;
-  BodyForCommands?: unknown;
-  RawBody?: unknown;
-  Body?: unknown;
-  commandText?: unknown;
-  CommandTargetSessionKey?: unknown;
-}): string | undefined {
+export function resolveCommandTurnTargetSessionKey(
+  input: Omit<CommandTurnContextInput, "CommandTurn" | "rawText" | "BotUsername"> & {
+    CommandTurn?: CommandTurnContext;
+    CommandTargetSessionKey?: unknown;
+  },
+): string | undefined {
   const commandTurn = resolveCommandTurnContext(input);
   const isExplicitTextSteer =
     isAuthorizedTextSlashCommandTurn(commandTurn) &&

@@ -37,8 +37,19 @@ the custodian. Native provider operations use their own transport policy rather
 than the Gateway's process-local secret-marker interpretation or guarded-fetch/SSRF
 policy, including when the embedded loop imports Gateway helpers. Gateway
 requests retain their existing policy. The provisioned endpoint and workload
-egress restrictions are therefore deployment trust decisions. Adapter-specific
+egress restrictions are therefore deployment trust decisions. Native provider requests require HTTPS, remain on the configured endpoint origin,
+and reject all redirects, including same-origin redirects. Provision the final
+endpoint URL. Plain HTTP is allowed only for literal loopback IP addresses (not
+DNS names such as localhost), for a trusted same-host hop or isolated wire proof.
+That exception is not an external credential-isolation boundary. Normal TLS
+certificate and hostname verification stays enabled. Adapter-specific
 authentication framing and HTTP header rules still apply. Do not provision actual provider keys on the node or worker.
+
+Startup checks transport policy and the presence of the named auth value; it
+cannot tell a raw provider key from an opaque token, attest a custodian, or enforce
+the workload's operating-system egress restrictions. Any nonempty named value
+would otherwise satisfy credential presence. The broker-only custody rule is a
+deployment requirement, not a claim that OpenClaw technically verifies key origin.
 
 The deployment owns isolation of the Gateway and custodian, workload egress,
 endpoint trust, token issuance, scope, expiry, revocation, and provider credential
@@ -251,8 +262,11 @@ Omitting `settings.inference`, or setting it to `gateway`, preserves the default
 ## Upgrade and downgrade
 
 The canonical profile values are `gateway` and `worker`; omission means `gateway`.
-`openclaw doctor --fix` renames the earlier device-profile spelling `runtime-local`
-to `worker`. Gateway startup uses that same shared migration when eligible;
+For operators who tried pre-release builds, `openclaw doctor --fix` renames the
+earlier device-profile spelling `runtime-local` to `worker`. This is compatibility
+for explicit pre-release opt-in state, not a migration from a published release.
+Upgrading a released installation does not enable worker inference or add native
+configuration. Gateway startup uses that same shared migration when eligible;
 [config migration safeguards](/gateway/doctor/config-migrations) still apply.
 Already allocated environments retain their original snapshots. Both recorded
 spellings mean worker inference until those environments retire; neither silently

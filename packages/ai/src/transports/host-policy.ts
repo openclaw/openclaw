@@ -16,6 +16,19 @@ export function buildGuardedModelFetch(
   return host.buildModelFetch(model) ?? globalThis.fetch;
 }
 
+/** SDKs keep their default transport unless their embedding owner requires an explicit one. */
+export function buildManagedModelFetch(model: Model): typeof fetch | undefined {
+  const host = getAiTransportHost();
+  if (!host.requiresManagedTransport(model)) {
+    return undefined;
+  }
+  const fetcher = host.buildModelFetch(model);
+  if (!fetcher) {
+    throw new Error("The embedding host requires a managed provider transport");
+  }
+  return fetcher;
+}
+
 export function resolveProviderEndpoint(model: { baseUrl?: string }): { endpointClass: string } {
   return {
     endpointClass: getAiTransportHost().resolveProviderRequestCapabilities({

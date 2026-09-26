@@ -419,7 +419,9 @@ export async function loadConfigSchema(state: RuntimeConfigState) {
     if (!isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
       return;
     }
-    applyConfigSchema(state, res);
+    state.configSchema = res.schema ?? null;
+    state.configUiHints = res.uiHints ?? {};
+    state.configSchemaVersion = res.version ?? null;
   } catch (err) {
     if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
       state.lastError = formatUiError(err);
@@ -432,12 +434,6 @@ export async function loadConfigSchema(state: RuntimeConfigState) {
       state.configSchemaLoading = false;
     }
   }
-}
-
-function applyConfigSchema(state: RuntimeConfigState, res: ConfigSchemaResponse) {
-  state.configSchema = res.schema ?? null;
-  state.configUiHints = res.uiHints ?? {};
-  state.configSchemaVersion = res.version ?? null;
 }
 
 export type ConfigSubmission = ConfigSubmittedDraft & {

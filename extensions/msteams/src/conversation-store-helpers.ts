@@ -6,10 +6,6 @@ import type {
   StoredConversationReference,
 } from "./conversation-store.js";
 
-export function normalizeStoredConversationId(raw: string): string {
-  return raw.split(";")[0] ?? raw;
-}
-
 export function toConversationStoreEntries(
   entries: Iterable<[string, StoredConversationReference]>,
 ): MSTeamsConversationStoreEntry[] {

@@ -122,7 +122,7 @@ type FileSidebarEdit = {
 
 export type FileSidebarNavigation = { line: number };
 
-type FileSidebarContent = {
+export type FileSidebarContent = {
   kind: "file";
   path: string;
   name: string;

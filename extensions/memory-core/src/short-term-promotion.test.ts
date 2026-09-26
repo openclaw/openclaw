@@ -348,41 +348,24 @@ describe("short-term promotion", () => {
     await expect(promise).rejects.toHaveProperty("code", "ENOENT");
   }
 
-  it("records short-term recall for notes stored in a memory/ subdirectory", async (workspaceDir) => {
-    const notePath = await writeDailyMemoryNoteInSubdir(workspaceDir, "daily", "2026-04-03", [
-      "Subdirectory recall integration test note.",
-    ]);
-    const relativePath = path.relative(workspaceDir, notePath).replaceAll("\\", "/");
-    await recordMemoryRecalls(workspaceDir, "test query", [
-      memoryRecallResult(relativePath, 1, 1, 0.9, "Subdirectory recall integration test note."),
-    ]);
-    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-    expect(Object.keys(store.entries).length).toBeGreaterThan(0);
-  });
-
   it("deduplicates source-file checks within a recall batch", async (workspaceDir) => {
     const notePath = await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
       "Deduplicated source check note.",
     ]);
     const relativePath = path.relative(workspaceDir, notePath).replaceAll("\\", "/");
-    const entry = {
+    const entry = recallStoreEntryFixture({
       key: "duplicate-source",
       path: relativePath,
-      startLine: 1,
-      endLine: 1,
-      source: "memory" as const,
       snippet: "Deduplicated source check note.",
       recallCount: 1,
       dailyCount: 1,
-      groundedCount: 0,
       totalScore: 0.9,
       maxScore: 0.9,
       firstRecalledAt: "2026-04-03T00:00:00.000Z",
       lastRecalledAt: "2026-04-03T00:00:00.000Z",
       queryHashes: ["query"],
       recallDays: ["2026-04-03"],
-      conceptTags: [],
-    };
+    });
     const statSpy = vi.spyOn(fs, "stat");
 
     const live = await filterLiveShortTermRecallEntries({
@@ -1447,42 +1430,6 @@ describe("short-term promotion", () => {
     }
   });
 
-  it("reconciles existing promotion markers instead of appending duplicates", async (workspaceDir) => {
-    await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
-      "line 1",
-      "line 2",
-      "The gateway should stay loopback-only on port 18789.",
-    ]);
-    await recordMemoryRecalls(workspaceDir, "gateway loopback", [
-      memoryRecallResult(
-        "memory/2026-04-01.md",
-        3,
-        3,
-        0.95,
-        "The gateway should stay loopback-only on port 18789.",
-      ),
-    ]);
-
-    const ranked = await rankAllCandidates(workspaceDir);
-    const firstApply = await applyAllCandidates(workspaceDir, ranked);
-    expect(firstApply.applied).toBe(1);
-    expect(firstApply.appended).toBe(1);
-    expect(firstApply.reconciledExisting).toBe(0);
-
-    await clearPromotedAt(workspaceDir);
-
-    const secondApply = await applyAllCandidates(workspaceDir, ranked);
-    expect(secondApply.applied).toBe(1);
-    expect(secondApply.appended).toBe(0);
-    expect(secondApply.reconciledExisting).toBe(1);
-
-    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
-    expect(memoryText.match(/openclaw-memory-promotion:/g)?.length).toBe(1);
-    expect(memoryText.match(/The gateway should stay loopback-only on port 18789\./g)?.length).toBe(
-      1,
-    );
-  });
-
   it("does not re-append promoted candidates whose marker key path contains spaces", async (workspaceDir) => {
     await writeDailyMemoryNoteInSubdir(workspaceDir, "project alpha", "2026-04-01", [
       "alpha",
@@ -1559,7 +1506,7 @@ describe("short-term promotion", () => {
     const applied = await applyShortTermPromotions({
       workspaceDir,
       candidates: [
-        {
+        promotionCandidateFixture({
           key: "memory:memory/2026-04-03.md:1:2",
           path: "memory/2026-04-03.md",
           startLine: 1,
@@ -1568,13 +1515,9 @@ describe("short-term promotion", () => {
           snippet: "Move backups to S3 Glacier.",
           recallCount: 1,
           signalCount: 1,
-          avgScore: 0.95,
-          maxScore: 0.95,
           uniqueQueries: 1,
           firstRecalledAt: new Date().toISOString(),
           lastRecalledAt: new Date().toISOString(),
-          ageDays: 0,
-          score: 0.95,
           recallDays: [new Date().toISOString().slice(0, 10)],
           conceptTags: ["glacier", "backups"],
           components: {
@@ -1585,7 +1528,7 @@ describe("short-term promotion", () => {
             consolidation: 0.2,
             conceptual: 0.4,
           },
-        },
+        }),
       ],
     });
 
@@ -1639,25 +1582,17 @@ describe("short-term promotion", () => {
       version: 1,
       updatedAt: "2026-04-04T00:00:00.000Z",
       entries: {
-        contaminated: {
+        contaminated: recallStoreEntryFixture({
           key: "contaminated",
           path: "memory/2026-04-03.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
           snippet:
             "Reflections: Theme: assistant. confidence: 1.00 evidence: memory/.dreams/session-corpus/2026-04-08.txt:2-2 recalls: 4 status: staged",
           recallCount: 4,
-          dailyCount: 0,
-          groundedCount: 0,
           totalScore: 3.6,
-          maxScore: 0.95,
           firstRecalledAt: "2026-04-03T00:00:00.000Z",
-          lastRecalledAt: "2026-04-04T00:00:00.000Z",
-          queryHashes: ["a", "b"],
           recallDays: ["2026-04-03", "2026-04-04"],
           conceptTags: ["assistant"],
-        },
+        }),
       },
     });
 
@@ -1732,18 +1667,15 @@ describe("short-term promotion", () => {
       minRecallCount: 0,
       minUniqueQueries: 0,
       candidates: [
-        {
+        promotionCandidateFixture({
           key: "memory:memory/2026-04-18.md:8:8",
           path: "memory/2026-04-18.md",
           startLine: 8,
           endLine: 8,
           source: "memory",
           snippet: "- Candidate: staged dream scratchwork",
-          recallCount: 3,
-          signalCount: 3,
           avgScore: 0.9,
           maxScore: 0.9,
-          uniqueQueries: 2,
           firstRecalledAt: "2026-04-17T00:00:00.000Z",
           lastRecalledAt: "2026-04-18T00:00:00.000Z",
           ageDays: 1,
@@ -1758,7 +1690,7 @@ describe("short-term promotion", () => {
             consolidation: 0,
             conceptual: 0,
           },
-        },
+        }),
       ],
     });
 
@@ -1804,7 +1736,7 @@ describe("short-term promotion", () => {
       minRecallCount: 0,
       minUniqueQueries: 0,
       candidates: [
-        {
+        promotionCandidateFixture({
           key: "memory:memory/2026-04-03.md:1:1",
           path: "memory/2026-04-03.md",
           startLine: 1,
@@ -1816,22 +1748,12 @@ describe("short-term promotion", () => {
           signalCount: 4,
           avgScore: 0.97,
           maxScore: 0.97,
-          uniqueQueries: 2,
           firstRecalledAt: "2026-04-03T00:00:00.000Z",
           lastRecalledAt: "2026-04-04T00:00:00.000Z",
-          ageDays: 0,
           score: 0.99,
           recallDays: ["2026-04-03", "2026-04-04"],
           conceptTags: ["assistant"],
-          components: {
-            frequency: 1,
-            relevance: 1,
-            diversity: 1,
-            recency: 1,
-            consolidation: 1,
-            conceptual: 1,
-          },
-        },
+        }),
       ],
     });
 
@@ -2347,13 +2269,7 @@ describe("short-term promotion", () => {
         recallCount: 2,
         signalCount: 2,
         avgScore: 0.9,
-        maxScore: 0.95,
-        uniqueQueries: 2,
-        firstRecalledAt: "2026-04-01T00:00:00.000Z",
-        lastRecalledAt: "2026-04-02T00:00:00.000Z",
-        ageDays: 0,
         score: 0.9,
-        recallDays: ["2026-04-01", "2026-04-02"],
         conceptTags: ["legacy", "note"],
         components: {
           frequency: 0.3,

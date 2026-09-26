@@ -50,7 +50,10 @@ const loadWorkerTurnExecution = createLazyRuntimeModule(() => import("./worker-t
 const loadRemoteExecTurn = createLazyRuntimeModule(() => import("./workspace-result-finalize.js"));
 const loadPlacementSandbox = createLazyRuntimeModule(() => import("./placement-sandbox.js"));
 
-type ReclaimedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
+type RedispatchableWorkerPlacement = Extract<
+  WorkerSessionPlacementRecord,
+  { state: "reclaimed" | "failed" }
+>;
 
 type WorkerTurnLauncherOptions = {
   prepareRequiredSession?: SessionPlacementAdmissionProvider["prepareRequiredSession"];
@@ -70,8 +73,8 @@ type WorkerTurnLauncherOptions = {
     placement: WorkerSessionPlacementRecord,
     signal?: AbortSignal,
   ) => Promise<WorkerSessionPlacementRecord>;
-  redispatchReclaimed: (
-    placement: ReclaimedWorkerPlacement,
+  redispatchPlacement: (
+    placement: RedispatchableWorkerPlacement,
     options: { assertCurrent: () => void; signal?: AbortSignal },
   ) => Promise<ActiveWorkerPlacement>;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
@@ -292,14 +295,17 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           routablePlacement = ready.placement;
           assertInitialSetupCurrent = ready.assertCurrent;
         }
-        if (routablePlacement.state === "reclaimed") {
+        if (
+          routablePlacement.state === "reclaimed" ||
+          (routablePlacement.state === "failed" && routablePlacement.activeOwnerEpoch !== null)
+        ) {
           emitAgentRunStatusEvent({
             runId: claim.runId,
             phase: "provisioning_environment",
             sessionKey: identity.sessionKey,
             agentId: identity.agentId,
           });
-          routablePlacement = await options.redispatchReclaimed(routablePlacement, {
+          routablePlacement = await options.redispatchPlacement(routablePlacement, {
             assertCurrent: assertAdmissionCurrent,
             signal: inputTurn.abortSignal,
           });

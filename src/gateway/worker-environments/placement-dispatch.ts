@@ -58,7 +58,7 @@ type WorkerLocalDispatchBarrier = (params: {
   authorize?: WorkerPlacementAuthorization;
   requiredProfile?: string;
   signal?: AbortSignal;
-  startDispatch: () => WorkerDispatchPlacement;
+  startDispatch: () => Promise<WorkerDispatchPlacement>;
 }) => Promise<WorkerDispatchPlacement>;
 
 type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
@@ -129,13 +129,19 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         authorize: assertCurrent,
         requiredProfile: request.requiredProfile,
         signal,
-        startDispatch: () => {
-          placement = placements.startDispatch({
-            sessionId: request.sessionId,
-            sessionKey: request.sessionKey,
-            agentId: request.agentId,
-            executionMode: request.executionMode,
-          });
+        startDispatch: async () => {
+          placement = await placements.startDispatch(
+            {
+              sessionId: request.sessionId,
+              sessionKey: request.sessionKey,
+              agentId: request.agentId,
+              executionMode: request.executionMode,
+              ...(request.expectedPlacement
+                ? { expectedPlacement: request.expectedPlacement }
+                : {}),
+            },
+            { assertCurrent },
+          );
           reportPlacementTransition(onTransition, placement);
           return placement;
         },

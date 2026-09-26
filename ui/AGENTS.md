@@ -38,8 +38,9 @@ This directory owns Control UI-specific guidance that should not live in the rep
   managed list membership. Fresh descriptor reads and Gateway events retain
   their authoritative invalidation paths.
 - `lib/sessions/event-refresh-coordinator.ts` owns automatic refresh pacing:
-  collect events in a fixed five-second window that subsequent events cannot
-  postpone, and after each automatic refresh wait three times its duration
+  collect events in a four-to-five-second window sampled once when armed so
+  browsers spread their reads and subsequent events cannot postpone them.
+  After each automatic refresh, wait three times its duration
   (at least five seconds, at most 15 seconds) before the next automatic read.
   Trailing invalidation stays with that owner, including while a request is pending.
 - Explicit refreshes, filter/agent changes, reconnects, and foreground replacements

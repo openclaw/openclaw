@@ -18,6 +18,19 @@ import {
 import { projectMcpCallToolResult } from "./mcp-content.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
 
+function createLimitsHarness(limits: { maxOutputBytes?: number; timeoutMs?: number }) {
+  const config = { tools: { codeMode: { enabled: true, ...limits } } };
+  const ctx = {
+    config,
+    runtimeConfig: config,
+    sessionId: "session-code-mode",
+    sessionKey: "agent:main:main",
+    runId: "run-code-mode",
+    catalogRef: createToolSearchCatalogRef(),
+  };
+  return { config, ctx, tools: createCodeModeTools(ctx) };
+}
+
 describe("Code Mode runtime and output limits", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -29,32 +42,8 @@ describe("Code Mode runtime and output limits", () => {
   });
 
   it("bounds oversized values on completed exec calls", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: {
-        codeMode: {
-          enabled: true,
-          maxOutputBytes: 1024,
-        },
-      },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const tools = createCodeModeTools(ctx);
-    applyCodeModeCatalog({
-      tools: [...tools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { ctx, config, tools } = createLimitsHarness({ maxOutputBytes: 1024 });
+    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, pluginTool("fake_noop", "Noop")] });
 
     const details = resultDetails(
       await expectDefined(tools[0], "tools[0] test invariant").execute("code-call-large", {
@@ -70,32 +59,8 @@ describe("Code Mode runtime and output limits", () => {
   });
 
   it("bounds oversized output before suspending runs", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: {
-        codeMode: {
-          enabled: true,
-          maxOutputBytes: 1024,
-        },
-      },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const tools = createCodeModeTools(ctx);
-    applyCodeModeCatalog({
-      tools: [...tools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { ctx, config, tools } = createLimitsHarness({ maxOutputBytes: 1024 });
+    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, pluginTool("fake_noop", "Noop")] });
 
     const beforeRunCount = testing.activeRuns.size;
     const details = resultDetails(
@@ -176,24 +141,7 @@ describe("Code Mode runtime and output limits", () => {
   );
 
   it("bounds output before auto-draining namespace calls", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: {
-        codeMode: {
-          enabled: true,
-          maxOutputBytes: 1024,
-        },
-      },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const tools = createCodeModeTools(ctx);
+    const { ctx, config, tools } = createLimitsHarness({ maxOutputBytes: 1024 });
     const executeListIssues = vi.fn(async () =>
       projectMcpCallToolResult({ content: [{ type: "text", text: '{"ok":true}' }] }),
     );
@@ -203,14 +151,7 @@ describe("Code Mode runtime and output limits", () => {
       toolName: "list",
       execute: executeListIssues,
     });
-    applyCodeModeCatalog({
-      tools: [...tools, listIssues],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, listIssues] });
 
     const details = resultDetails(
       await expectDefined(tools[0], "tools[0] test invariant").execute(
@@ -254,32 +195,8 @@ describe("Code Mode runtime and output limits", () => {
   });
 
   it("terminates hostile infinite loops outside the main event loop", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: {
-        codeMode: {
-          enabled: true,
-          timeoutMs: 100,
-        },
-      },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const tools = createCodeModeTools(ctx);
-    applyCodeModeCatalog({
-      tools: [...tools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { ctx, config, tools } = createLimitsHarness({ timeoutMs: 100 });
+    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, pluginTool("fake_noop", "Noop")] });
 
     const heartbeat = Promise.resolve("main-event-loop-alive");
     const details = resultDetails(

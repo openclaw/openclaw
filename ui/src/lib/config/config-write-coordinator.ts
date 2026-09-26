@@ -406,7 +406,7 @@ export function createConfigWriteCoordinator({
     state,
     serialize: (task) => afterPendingWritesSettled(task, () => false),
     readSnapshot: () => run(() => loadConfig(state, { draftWrites: writes }), "config"),
-    getLastSubmission: () => reconciliation.latestSubmission,
+    hasUnacknowledgedDraftWrite,
     holdAutoSave,
     isDisposed,
     publish,

@@ -7,7 +7,10 @@ import { initSessionState } from "../auto-reply/reply/session.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { prepareSqliteTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { createRequiredWorkerSessionPreparation } from "./server-worker-required-profile.js";
 import { controlUiClient } from "./server.sessions.create.projects.test-support.js";
@@ -18,6 +21,11 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import {
+  advancePlacementFixtureToActive,
+  writePlacementEnvironmentFixture,
+} from "./worker-environments/placement-test-fixtures.js";
+import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const ownedWorktrees = new Set<string>();
@@ -212,7 +220,7 @@ test.each(["channel", "incognito", "shared"] as const)(
       Parameters<typeof createRequiredWorkerSessionPreparation>[0]["dispatch"]["dispatch"]
     >(async (request, onTransition, assertCurrent) => {
       assertCurrent?.();
-      const requested = placements.startDispatch(request);
+      const requested = await placements.startDispatch(request);
       onTransition?.(requested);
       await finish.promise;
       const failed = placements.fail({
@@ -228,7 +236,7 @@ test.each(["channel", "incognito", "shared"] as const)(
       placements,
       warn,
       environments: { get: () => undefined } as never,
-      redispatchReclaimed: vi.fn(),
+      redispatchPlacement: vi.fn(),
       dispatch: { dispatch, waitForInitialPlacement: vi.fn() } as never,
     });
     try {
@@ -305,7 +313,7 @@ test.each(["missing", "different", "matching"] as const)(
       { sessionId: identity.sessionId, updatedAt: Date.now() },
     );
     const placements = createWorkerSessionPlacementStore();
-    const requested = placements.startDispatch({ ...identity, executionMode: "worker-turn" });
+    const requested = await placements.startDispatch({ ...identity, executionMode: "worker-turn" });
     const provisioning = placements.transition({
       sessionId: identity.sessionId,
       from: "requested",
@@ -338,7 +346,7 @@ test.each(["missing", "different", "matching"] as const)(
               },
       } as never,
       warn: vi.fn(),
-      redispatchReclaimed: vi.fn(),
+      redispatchPlacement: vi.fn(),
       dispatch: { dispatch, waitForInitialPlacement: vi.fn() } as never,
     });
     try {
@@ -369,5 +377,121 @@ test.each(["missing", "different", "matching"] as const)(
         ownedWorktrees.add(owned.id);
       }
     }
+  },
+);
+
+test.each(["failed", "reclaimed"] as const)(
+  "required %s recovery retains the recorded profile and exact placement fence",
+  async (state) => {
+    const { storePath } = await createSessionStoreDir();
+    const config = await getGatewayConfigModule();
+    await config.writeConfigFile({
+      cloudWorkers: {
+        requiredProfile: "dedicated-native",
+        profiles: {
+          "dedicated-native": { provider: "device", settings: { device: "new-node" } },
+        },
+      },
+    });
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:required-recovery",
+      sessionId: "required-recovery",
+    };
+    await upsertSessionEntryCore(
+      { ...identity, storePath },
+      { sessionId: identity.sessionId, updatedAt: Date.now() },
+    );
+    const database = openOpenClawStateDatabase();
+    const placements = createWorkerSessionPlacementStore({ database });
+    const profileSnapshot = { settings: { device: "original-node", inference: "worker" } };
+    const originalEnvironment = {
+      environmentId: "environment-placement-claim-close",
+      state: "attached" as const,
+      ownerEpoch: 7,
+      attachedSessionIds: [identity.sessionId],
+      leaseId: "retired-native-lease",
+      providerId: "device",
+      profileId: "dedicated-native",
+      nodeDeviceId: "original-node",
+      profileSnapshot,
+    };
+    // Allocation records the immutable profile before activation; later state updates
+    // deliberately cannot rewrite that snapshot to the currently configured device.
+    writePlacementEnvironmentFixture(database, originalEnvironment);
+    const active = await advancePlacementFixtureToActive(placements, database, identity);
+    const owner = {
+      sessionId: identity.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+    };
+    const draining = placements.startDrain({ ...owner, expectedGeneration: active.generation });
+    const reconciling = placements.startReconcile({
+      ...owner,
+      expectedGeneration: draining.generation,
+    });
+    if (state === "failed") {
+      placements.fail({
+        sessionId: identity.sessionId,
+        expectedGeneration: reconciling.generation,
+        recoveryError: "recoverable worker failure",
+      });
+    } else {
+      placements.transition({
+        sessionId: identity.sessionId,
+        from: "reconciling",
+        to: "reclaimed",
+        expectedGeneration: reconciling.generation,
+      });
+    }
+    const environment = {
+      ...originalEnvironment,
+      state: "destroyed" as const,
+      attachedSessionIds: [],
+    };
+    writePlacementEnvironmentFixture(database, environment);
+    const terminal = placements.get(identity.sessionId)!;
+    const reached = new Error("recorded recovery reached dispatch");
+    const recoveredDispatch = vi.fn(async () => {
+      throw reached;
+    });
+    const freshDispatch = vi.fn();
+    const prepare = createRequiredWorkerSessionPreparation({
+      getConfig: config.getRuntimeConfig,
+      placements,
+      environments: { get: () => environment } as never,
+      warn: vi.fn(),
+      redispatchPlacement: createWorkerPlacementRedispatch({
+        placements,
+        dispatch: recoveredDispatch,
+        resolveDevicePlacementRequirement: async () => ({
+          requiredNodeCommands: [],
+          consumesWorkerSlot: true,
+        }),
+      }),
+      dispatch: { dispatch: freshDispatch, waitForInitialPlacement: vi.fn() } as never,
+    });
+    await expect(prepare(identity)).rejects.toBe(reached);
+    expect(recoveredDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...identity,
+        profileId: "dedicated-native",
+        requiredProfile: "dedicated-native",
+        deviceId: "original-node",
+        inheritedProfile: { providerId: "device", profileSnapshot },
+        expectedPlacement: {
+          state,
+          generation: terminal.generation,
+          environmentId: terminal.environmentId,
+          activeOwnerEpoch: terminal.activeOwnerEpoch,
+        },
+      }),
+      undefined,
+      expect.any(Function),
+      expect.any(AbortSignal),
+    );
+    expect(freshDispatch).not.toHaveBeenCalled();
+    expect(managedWorktrees.findLiveByOwner("session", identity.sessionKey)).toBeUndefined();
+    expect(placements.get(identity.sessionId)).toEqual(terminal);
   },
 );

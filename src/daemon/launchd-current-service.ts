@@ -1,7 +1,9 @@
-/** Detects launchd service membership from environment markers or process ancestry. */
+/** Detects native launchd membership, including children reparented after ancestor exit. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { probeLaunchAgentState, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
+import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
 
 function hasNativeLaunchdServiceLabel(
   label: string,
@@ -34,31 +36,28 @@ function hasOpenClawServiceMarker(label: string, env: NodeJS.ProcessEnv): boolea
   );
 }
 
-/**
- * Native launchd labels are the fast path. OpenClaw markers can outlive the job
- * in an external terminal, so reconcile them with the running job's ancestry.
- * The detached update helper's recovery CLI inherits OPENCLAW_LAUNCHD_LABEL but
- * descends from no running Gateway, so it stays on the synchronous path.
- */
-export async function isCurrentProcessInsideLaunchdService(
-  label: string,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<boolean> {
-  if (hasNativeLaunchdServiceLabel(label, env)) {
-    return true;
-  }
-  // Preserve the in-service guard when launchd cannot supply authoritative facts.
+/** A completed parent walk alone cannot exclude reparented members of a launchd job. */
+export async function isCurrentProcessInsideLaunchdService(label: string): Promise<boolean> {
   const probe = await probeLaunchAgentState(`${resolveLaunchAgentGuiDomain()}/${label}`);
   if (probe.state === "running" && probe.runtime.pid !== undefined) {
     const ancestors = getSelfAndAncestorPidsSync();
-    // The ancestor walk is best-effort. Only reaching launchd (PID 1) proves
-    // an external shell; a failed ps hop must not disable the in-service guard.
-    return (
-      ancestors.has(probe.runtime.pid) ||
-      (hasOpenClawServiceMarker(label, env) && !ancestors.has(1))
-    );
+    if (ancestors.has(probe.runtime.pid)) {
+      return true;
+    }
+    const membership = inspectServiceProcessMembershipSync(probe.runtime.pid, "darwin");
+    if (membership === "inside") {
+      return true;
+    }
+    if (membership === "unknown") {
+      throw new ServiceInspectionError("service-membership-unverified");
+    }
+    if (!ancestors.has(1)) {
+      throw new ServiceInspectionError("service-ancestry-unverified");
+    }
+    return false;
   }
-  return (
-    (probe.state === "unknown" || probe.state === "running") && hasOpenClawServiceMarker(label, env)
-  );
+  if (probe.state === "unknown" || probe.state === "running") {
+    throw new ServiceInspectionError("service-membership-unverified");
+  }
+  return false;
 }

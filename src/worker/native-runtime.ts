@@ -17,6 +17,7 @@ import {
   NativeRuntimeIdentifier as id,
   type NativeRuntimeConfig,
 } from "./native-runtime-config.js";
+import { buildNativeRuntimeFetch } from "./native-runtime-transport.js";
 const BindingSchema = z.object({ workspaceId: id, workspacePath: z.string().optional() });
 
 type NativeRuntimeTurn = {
@@ -80,7 +81,12 @@ export async function createNativeRuntime(
   const parsed = NativeRuntimeConfigSchema.parse(config);
   // The embedded loop can import the Gateway facade. Keep its process policy
   // out of this runtime's provider requests without resetting anyone else's host.
-  const runtime = createLlmRuntime(undefined, { transportHost: {} });
+  const runtime = createLlmRuntime(undefined, {
+    transportHost: {
+      buildModelFetch: buildNativeRuntimeFetch,
+      requiresManagedTransport: () => true,
+    },
+  });
   registerBuiltInApiProviders(runtime.registry);
   const models = new Map<string, RegisteredModel>();
   const workspaces = new Map<string, Workspace>();

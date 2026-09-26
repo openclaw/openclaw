@@ -55,7 +55,7 @@ describe("cloud worker run ownership", () => {
     async ({ cancellation, firstToolDelayMs }) => {
       const turnStartedAtMs = Date.UTC(2026, 7, 29);
       vi.useFakeTimers({ toFake: ["Date"], now: turnStartedAtMs });
-      seedActivePlacement();
+      await seedActivePlacement();
       const launched = createDeferred();
       const finishLaunch = createDeferred();
       let workerSignal: AbortSignal | undefined;
@@ -256,7 +256,7 @@ describe("cloud worker run ownership", () => {
     async (closure) => {
       const { captureWorkerTurnLiveEventOwner, createWorkerTurnRunOwner } =
         await import("./worker-turn-run-owner.js");
-      seedActivePlacement();
+      await seedActivePlacement();
       const runId = "reused-worker-run";
       const claimInput = {
         sessionId: SESSION_ID,

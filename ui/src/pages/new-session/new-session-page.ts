@@ -42,11 +42,7 @@ import { renderNewSessionDraftView } from "./draft-view.ts";
 import { renderNewSessionIncognitoControl } from "./incognito-control.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import {
-  closeAgentPicker,
-  closeSessionMenus,
-  createControllerHost,
-} from "./new-session-runtime.ts";
+import { closeAgentPicker, closeSessionMenus } from "./new-session-runtime.ts";
 import { renderAgentSelect, renderNewSessionPlaceControls } from "./target-controls.ts";
 
 registerNewSessionSetupEnglish();
@@ -124,9 +120,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
 
   constructor() {
     super();
-    const host = createControllerHost(this);
     this.draft = new NewSessionDraftController(
-      host,
+      this,
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
         requestUpdate: () => this.requestUpdate(),

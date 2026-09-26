@@ -349,6 +349,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       bytes,
     );
   }
+  if (command.type === "tasks.retentionSource") {
+    return bytes + Buffer.byteLength(command.taskId, "utf8");
+  }
   if (
     command.type === "githubPublication.request" ||
     command.type === "githubRepository.request" ||

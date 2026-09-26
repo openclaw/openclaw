@@ -189,6 +189,10 @@ export type WorkerPlacementDispatchRequest = {
   executionMode: WorkerPlacementExecutionMode;
   /** Initial mandatory admission cannot cancel the input it is preparing. Never exposed over RPC. */
   requiredProfile?: string;
+  expectedPlacement?: Pick<
+    WorkerSessionPlacementRecord,
+    "state" | "generation" | "environmentId" | "activeOwnerEpoch"
+  >;
   /** Current dispatch caller's setup authority; never inherited by a new caller. */
   runSetupScript?: boolean;
   devicePlacement?: DevicePlacementRequirement;

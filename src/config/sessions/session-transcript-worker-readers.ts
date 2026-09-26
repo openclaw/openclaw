@@ -35,6 +35,16 @@ export function createSessionHistoryWorkerReaders(
   runRequest: SessionHistoryWorkerRequestRunner,
 ): Omit<SessionHistoryWorkerDatabase, "generation" | "assertCurrent"> {
   return {
+    readPendingArchives: async (input, signal) =>
+      await runRequest(
+        () => ({ kind: "session-pending-archives", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          assertResultKind(value, "session-pending-archives", "pending archives");
+          return value.pending;
+        },
+        signal,
+      ),
     findTranscriptEvent: async (request) =>
       await runRequest(
         () => ({ kind: "transcript-match", request }),
@@ -113,6 +123,11 @@ export function createSessionHistoryWorkerReaders(
           typeof value === "boolean" ||
           Array.isArray(value) ||
           (value.kind !== "transcript-binding" &&
+            value.kind !== "artifacts" &&
+            value.kind !== "message-page" &&
+            value.kind !== "around-id" &&
+            value.kind !== "source-messages" &&
+            value.kind !== "recent-page" &&
             value.kind !== "rpc" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&

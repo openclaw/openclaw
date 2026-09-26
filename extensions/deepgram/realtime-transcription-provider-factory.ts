@@ -1,5 +1,4 @@
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
-// Deepgram provider module implements model/runtime integration.
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
@@ -166,10 +165,6 @@ function readErrorDetail(value: unknown): string {
   return message ?? code ?? "Deepgram realtime transcription error";
 }
 
-function readTranscriptText(event: DeepgramRealtimeTranscriptionEvent): string | undefined {
-  return normalizeOptionalString(event.channel?.alternatives?.[0]?.transcript);
-}
-
 function createDeepgramRealtimeTranscriptionSession(
   config: DeepgramRealtimeTranscriptionSessionConfig,
   createRealtimeTranscriptionWebSocketSession: PluginCapabilityCatalogContext["createRealtimeTranscriptionWebSocketSession"],
@@ -223,16 +218,8 @@ function createDeepgramRealtimeTranscriptionSession(
     return true;
   };
 
-  const flushTurn = () => {
-    const full = joinTranscript(finalizedTranscript, pendingPartial);
-    clearTurn();
-    if (full) {
-      config.onTranscript?.(full);
-    }
-  };
-
-  const flushFinalizedTurn = () => {
-    const full = collapseWhitespace(finalizedTranscript);
+  const flushTurn = (includePartial = true) => {
+    const full = joinTranscript(finalizedTranscript, includePartial ? pendingPartial : "");
     clearTurn();
     if (full) {
       config.onTranscript?.(full);
@@ -248,7 +235,7 @@ function createDeepgramRealtimeTranscriptionSession(
         if (finalizeFallbackFired) {
           return;
         }
-        const text = readTranscriptText(event);
+        const text = normalizeOptionalString(event.channel?.alternatives?.[0]?.transcript);
         if (text && !speechStarted) {
           speechStarted = true;
           config.onSpeechStart?.();
@@ -311,7 +298,7 @@ function createDeepgramRealtimeTranscriptionSession(
       if (openedOnce) {
         // The replacement stream cannot replay confirmed text from the old
         // connection. Emit it as an interrupted turn, but discard its partial tail.
-        flushFinalizedTurn();
+        flushTurn(false);
       } else {
         openedOnce = true;
         clearTurn();
@@ -334,7 +321,7 @@ function createDeepgramRealtimeTranscriptionSession(
           finalizeFallbackTimer = undefined;
           finalizeFallbackFired = true;
           try {
-            flushFinalizedTurn();
+            flushTurn(false);
           } catch (error) {
             try {
               config.onError?.(error instanceof Error ? error : new Error(String(error)));
@@ -346,7 +333,7 @@ function createDeepgramRealtimeTranscriptionSession(
       }
       transport.sendJson({ type: "Finalize" });
     },
-    onMessage: (event, transport) => handleEvent(event, transport),
+    onMessage: handleEvent,
   });
 }
 
