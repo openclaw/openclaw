@@ -72,9 +72,9 @@ export type PluginStateWorkerRequests = {
 };
 
 export type PluginStateWorkerOperations = {
-  [Key in keyof PluginStateWorkerRequests]: {
-    input: PluginStateWorkerRequests[Key]["input"];
-    output: Result<PluginStateWorkerRequests[Key]["output"], PluginStateWorkerFailure>;
+  [Request in keyof PluginStateWorkerRequests]: {
+    input: PluginStateWorkerRequests[Request]["input"];
+    output: Result<PluginStateWorkerRequests[Request]["output"], PluginStateWorkerFailure>;
   };
 };
 
