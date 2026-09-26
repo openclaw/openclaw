@@ -28,6 +28,7 @@ async function createPage(context: ApplicationContext): Promise<TestSessionsPage
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -106,6 +107,7 @@ describe("sessions page managed roster", () => {
   );
 
   it("appends the next matched server page through the managed owner", async () => {
+    vi.useFakeTimers();
     const rows = Array.from({ length: 57 }, (_, index) => ({
       key: `agent:main:row-${index}`,
       kind: "direct" as const,
@@ -137,20 +139,20 @@ describe("sessions page managed roster", () => {
       const input = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
       input.value = "server-only metadata";
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      await vi.waitFor(() =>
-        expect(request).toHaveBeenCalledWith(
-          "sessions.list",
-          expect.objectContaining({ search: "server-only metadata", limit: 50 }),
-        ),
+      await vi.advanceTimersByTimeAsync(200);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ search: "server-only metadata", limit: 50 }),
       );
-      await vi.waitFor(() => expect(page.result?.sessions).toHaveLength(50));
+      expect(page.result?.sessions).toHaveLength(50);
       await page.updateComplete;
       const button = (name: string) =>
         [...page.querySelectorAll<HTMLButtonElement>(".data-table-pagination button")].find(
           (entry) => entry.textContent?.trim() === name,
         )!;
       button("Load more sessions").click();
-      await vi.waitFor(() => expect(page.result?.sessions).toHaveLength(57));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(page.result?.sessions).toHaveLength(57);
       expect(request).toHaveBeenCalledWith(
         "sessions.list",
         expect.objectContaining({ search: "server-only metadata", offset: 50, limit: 50 }),

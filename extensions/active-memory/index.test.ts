@@ -4416,17 +4416,20 @@ describe("active-memory plugin", () => {
   });
 
   it("allows a configured custom tool to succeed after a failed attempt", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     setMinimumTimeoutMsForTests(1);
     setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 1_000, toolsAllow: ["memory_lookup_custom"], logging: true });
     const sessionKey = "agent:main:custom-tool-retry";
     seedSession(sessionKey, "s-custom-tool-retry", 0);
+    const transcriptWritten = createDeferred<void>();
     const failedResult = memoryToolRecord("memory_lookup_custom", {
       status: "failed",
       error: "query was too broad",
     });
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await writeTranscriptJsonl(params.sessionFile, [failedResult]);
+      transcriptWritten.resolve();
       await new Promise((resolve) => {
         setTimeout(resolve, 75);
       });
@@ -4441,10 +4444,13 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "User usually orders ramen." }] };
     });
 
-    const result = await runPromptBuild(
+    const resultPromise = runPromptBuild(
       { prompt: "what food do i usually order? custom retry" },
       { sessionKey },
     );
+    await transcriptWritten.promise;
+    await vi.advanceTimersByTimeAsync(75);
+    const result = await resultPromise;
 
     expectPrependContextContains(result, "User usually orders ramen.");
     expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
@@ -4474,6 +4480,7 @@ describe("active-memory plugin", () => {
       status: "ok",
     },
   ])("classifies grounded harness-native recall: $name", async (testCase) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     setMinimumTimeoutMsForTests(1);
     setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 1_000, toolsAllow: ["memory_search"], logging: true });
@@ -4541,6 +4548,7 @@ describe("active-memory plugin", () => {
   });
 
   it("rejects completed output after a configured custom tool reports a content-only timeout", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     setMinimumTimeoutMsForTests(1);
     setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 1_000, toolsAllow: ["memory_lookup_custom"], logging: true });

@@ -3,9 +3,10 @@ import "./system-agent.mocks.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { applyWizardMetadata } from "../../commands/onboard-helpers.js";
+import { createConfigIO, readConfigFileSnapshot } from "../../config/config.js";
 import {
   hashRuntimeConfigValue,
   setRuntimeConfigAppliedHash,
@@ -13,6 +14,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
+import { detectSetupInference } from "../../system-agent/setup-inference-detect.js";
 import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -238,6 +240,17 @@ describe("openclaw.setup", () => {
 });
 
 describe("openclaw.chat", () => {
+  let pendingDiscovery: Promise<void> | undefined;
+
+  afterEach(async () => {
+    // A timeout does not cancel the body. Join it before the outer fixture resets
+    // mocks and env, so its lazy RPC import cannot overlap the next case's import.
+    if (pendingDiscovery) {
+      await Promise.allSettled([pendingDiscovery]);
+      pendingDiscovery = undefined;
+    }
+  });
+
   it("refuses to create a session before inference is available", async () => {
     inferenceFallbackMocks.verify.mockResolvedValueOnce({
       ok: false,
@@ -295,53 +308,71 @@ describe("openclaw.chat", () => {
 
   it.each(["none", "doctor"])(
     "returns unchecked discovery through selected-agent detection after %s metadata",
-    async (metadataCommand) => {
-      const stateDir = systemAgentTempDirs.make("openclaw-native-catalog-consent-");
-      const configPath = path.join(stateDir, "openclaw.json");
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-      const { createConfigIO } = await import("../../config/io.factory.js");
-      const io = createConfigIO({
-        env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_STATE_DIR: stateDir },
-        homedir: () => stateDir,
-      });
-      const { applyWizardMetadata } = await import("../../commands/onboard-helpers.js");
-      const initialConfig = { agents: { entries: { main: { default: true }, research: {} } } };
-      await io.writeConfigFile(
-        metadataCommand === "doctor"
-          ? applyWizardMetadata(initialConfig, { command: "doctor", mode: "local" })
-          : initialConfig,
-      );
-      const before = fs.readFileSync(configPath, "utf8");
-      const { detectSetupInference } = await import("../../system-agent/setup-inference-detect.js");
-      setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(async (params) =>
-        detectSetupInference(
+    (metadataCommand) => {
+      pendingDiscovery = (async () => {
+        const stateDir = systemAgentTempDirs.make("openclaw-native-catalog-consent-");
+        const configPath = path.join(stateDir, "openclaw.json");
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+        const io = createConfigIO({
+          env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_STATE_DIR: stateDir },
+          homedir: () => stateDir,
+        });
+        // Exercise first-write privacy separately from roster arrangement: the
+        // ownership-transition writer also runs unrelated legacy cron migration.
+        await io.writeConfigFile(
+          metadataCommand === "doctor"
+            ? applyWizardMetadata({}, { command: "doctor", mode: "local" })
+            : {},
+        );
+        const { sourceConfig } = await io.readConfigFileSnapshot();
+        fs.writeFileSync(
+          configPath,
+          JSON.stringify({
+            ...sourceConfig,
+            agents: {
+              ...sourceConfig.agents,
+              ownership: "explicit",
+              entries: { main: {}, research: {} },
+            },
+          }),
+        );
+        const before = fs.readFileSync(configPath, "utf8");
+        const detectInferenceBackends = vi.fn(async () => []);
+        setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(
+          async (params) =>
+            detectSetupInference(
+              {
+                detectInferenceBackends,
+                resolveManifestProviderAuthChoices: () => [],
+              },
+              params?.agentId,
+            ),
+        );
+        const { calls, respond } = makeRespond();
+        await systemAgentHandler("openclaw.setup.detect")({
+          params: { agentId: "research" },
+          respond,
+        } as never);
+        expect(calls).toMatchObject([
           {
-            detectInferenceBackends: async () => [],
-            resolveManifestProviderAuthChoices: () => [],
+            ok: true,
+            payload: {
+              nativeSessionCatalogPreferenceRequired: true,
+              nativeSessionCatalogs: expect.arrayContaining([
+                expect.objectContaining({ pluginId: "anthropic" }),
+                expect.objectContaining({ pluginId: "codex" }),
+              ]),
+            },
           },
-          params?.agentId,
-        ),
-      );
-      const { calls, respond } = makeRespond();
-      await systemAgentHandler("openclaw.setup.detect")({
-        params: { agentId: "research" },
-        respond,
-      } as never);
-      expect(calls).toMatchObject([
-        {
-          ok: true,
-          payload: {
-            nativeSessionCatalogPreferenceRequired: true,
-            nativeSessionCatalogs: expect.arrayContaining([
-              expect.objectContaining({ pluginId: "anthropic" }),
-              expect.objectContaining({ pluginId: "codex" }),
-            ]),
-          },
-        },
-      ]);
-      expect(fs.readFileSync(configPath, "utf8")).toBe(before);
-      expect(setupInferenceMocks.activateSetupInference).not.toHaveBeenCalled();
+        ]);
+        expect(detectInferenceBackends).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "research" }),
+        );
+        expect(fs.readFileSync(configPath, "utf8")).toBe(before);
+        expect(setupInferenceMocks.activateSetupInference).not.toHaveBeenCalled();
+      })();
+      return pendingDiscovery;
     },
   );
 

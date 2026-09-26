@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookSkillProposalEvaluateEvent } from "../../plugins/hook-types.js";
 import {
@@ -306,7 +307,8 @@ describe("Skill Workshop proposal evaluation", () => {
       content: "# Existing\n\nUpdated.\n",
       supportFiles: [{ path: "references/replace.txt", content: "after\n" }],
     });
-    let release: (() => void) | undefined;
+    const entered = createDeferred();
+    const release = createDeferred();
     hookMocks.evaluate.mockImplementation(async (event: PluginHookSkillProposalEvaluateEvent) => {
       expect(event.baseline?.files).toEqual(
         expect.arrayContaining([
@@ -320,9 +322,8 @@ describe("Skill Workshop proposal evaluation", () => {
           expect.objectContaining({ path: "references/replace.txt", content: "after\n" }),
         ]),
       );
-      await new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      entered.resolve();
+      await release.promise;
       return [];
     });
 
@@ -332,15 +333,20 @@ describe("Skill Workshop proposal evaluation", () => {
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,
     });
-    await vi.waitFor(() => expect(hookMocks.evaluate).toHaveBeenCalledOnce());
-    await reviseSkillProposal({
-      workspaceDir,
-      agentId: "main",
-      proposalId: proposal.record.id,
-      expectedRevisionHash: proposal.revisionHash,
-      content: "# Existing\n\nConcurrent revision.\n",
-    });
-    release?.();
+    try {
+      await Promise.race([entered.promise, evaluating]);
+      expect(hookMocks.evaluate).toHaveBeenCalledOnce();
+      await reviseSkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+        content: "# Existing\n\nConcurrent revision.\n",
+      });
+    } finally {
+      release.resolve();
+      await evaluating.catch(() => undefined);
+    }
 
     await expect(evaluating).rejects.toThrow("changed while evaluation was running");
     await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
@@ -565,11 +571,11 @@ describe("Skill Workshop proposal evaluation", () => {
       description: "Reject evaluator results for replaced candidate bytes",
       content: "# Concurrent Drift\n",
     });
-    let release: (() => void) | undefined;
+    const entered = createDeferred();
+    const release = createDeferred();
     hookMocks.evaluate.mockImplementation(async () => {
-      await new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      entered.resolve();
+      await release.promise;
       return [];
     });
 
@@ -579,18 +585,23 @@ describe("Skill Workshop proposal evaluation", () => {
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,
     });
-    await vi.waitFor(() => expect(hookMocks.evaluate).toHaveBeenCalledOnce());
-    await fs.writeFile(
-      path.join(
-        testState.stateDir,
-        "skill-workshop",
-        "proposals",
-        proposal.record.id,
-        proposal.record.draftFile,
-      ),
-      "# Concurrent Drift\n\nReplaced while evaluating.\n",
-    );
-    release?.();
+    try {
+      await Promise.race([entered.promise, evaluating]);
+      expect(hookMocks.evaluate).toHaveBeenCalledOnce();
+      await fs.writeFile(
+        path.join(
+          testState.stateDir,
+          "skill-workshop",
+          "proposals",
+          proposal.record.id,
+          proposal.record.draftFile,
+        ),
+        "# Concurrent Drift\n\nReplaced while evaluating.\n",
+      );
+    } finally {
+      release.resolve();
+      await evaluating.catch(() => undefined);
+    }
 
     await expect(evaluating).rejects.toThrow("changed while evaluation was running");
     expect((await inspectSkillProposal(proposal.record.id))!.record.evaluation).toBeUndefined();
@@ -610,11 +621,11 @@ describe("Skill Workshop proposal evaluation", () => {
       skillName: "baseline-drift",
       content: "# Existing\n\nUpdated.\n",
     });
-    let release: (() => void) | undefined;
+    const entered = createDeferred();
+    const release = createDeferred();
     hookMocks.evaluate.mockImplementation(async () => {
-      await new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      entered.resolve();
+      await release.promise;
       return [];
     });
 
@@ -624,12 +635,17 @@ describe("Skill Workshop proposal evaluation", () => {
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,
     });
-    await vi.waitFor(() => expect(hookMocks.evaluate).toHaveBeenCalledOnce());
-    await fs.writeFile(
-      skillFile,
-      "---\nname: baseline-drift\ndescription: Existing skill\n---\n\n# Concurrent update\n",
-    );
-    release?.();
+    try {
+      await Promise.race([entered.promise, evaluating]);
+      expect(hookMocks.evaluate).toHaveBeenCalledOnce();
+      await fs.writeFile(
+        skillFile,
+        "---\nname: baseline-drift\ndescription: Existing skill\n---\n\n# Concurrent update\n",
+      );
+    } finally {
+      release.resolve();
+      await evaluating.catch(() => undefined);
+    }
 
     await expect(evaluating).rejects.toThrow("changed while evaluation was running");
     expect((await inspectSkillProposal(proposal.record.id))!.record.evaluation).toBeUndefined();
@@ -644,11 +660,11 @@ describe("Skill Workshop proposal evaluation", () => {
       description: "Reject evaluator results after the target appears",
       content: "# Create Drift\n",
     });
-    let release: (() => void) | undefined;
+    const entered = createDeferred();
+    const release = createDeferred();
     hookMocks.evaluate.mockImplementation(async () => {
-      await new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      entered.resolve();
+      await release.promise;
       return [];
     });
 
@@ -658,13 +674,18 @@ describe("Skill Workshop proposal evaluation", () => {
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,
     });
-    await vi.waitFor(() => expect(hookMocks.evaluate).toHaveBeenCalledOnce());
-    await fs.mkdir(proposal.record.target.skillDir, { recursive: true });
-    await fs.writeFile(
-      proposal.record.target.skillFile,
-      "---\nname: create-drift\ndescription: Concurrent skill\n---\n\n# Concurrent\n",
-    );
-    release?.();
+    try {
+      await Promise.race([entered.promise, evaluating]);
+      expect(hookMocks.evaluate).toHaveBeenCalledOnce();
+      await fs.mkdir(proposal.record.target.skillDir, { recursive: true });
+      await fs.writeFile(
+        proposal.record.target.skillFile,
+        "---\nname: create-drift\ndescription: Concurrent skill\n---\n\n# Concurrent\n",
+      );
+    } finally {
+      release.resolve();
+      await evaluating.catch(() => undefined);
+    }
 
     await expect(evaluating).rejects.toThrow("changed while evaluation was running");
     expect((await inspectSkillProposal(proposal.record.id))!.record.evaluation).toBeUndefined();
