@@ -1259,6 +1259,7 @@ src/state/openclaw-agent-db-identity.ts
 src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
 src/state/openclaw-agent-db-read-error.ts
+src/state/openclaw-agent-db-resources.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-validation-cache.ts
 src/state/openclaw-agent-db.paths.ts

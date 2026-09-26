@@ -417,6 +417,7 @@ describe("registered worker workspace recovery target binding", () => {
       await runtime.dispatchService.reconcile("startup");
 
       expect(onReconcile).toHaveBeenCalledOnce();
+      await expect(onReconcile.mock.results[0]?.value).resolves.toBeUndefined();
       expect(observed).toEqual({ stableReads: 0, returnedTextBytes: 0 });
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
     });

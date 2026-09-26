@@ -10,6 +10,7 @@ import {
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { joinOwnedWorkerTasks } from "../../infra/worker-task-pool-owned.js";
 import {
   createOwnedWorkerTaskPool,
   WorkerTaskError,
@@ -24,6 +25,7 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   sessionHistoryCleanupError,
   decodeSessionTranscriptWorkerReadError,
@@ -155,6 +157,23 @@ const databaseWorkerLanes = [historyLane, maintenanceLane, costReadLane, costRef
 const memoryPressure = channel("openclaw.memory.critical");
 let pressureSubscribed = false;
 
+registerOpenClawStateDatabaseAsyncResource({
+  phase: "after-resources",
+  async close(identity) {
+    if (identity) {
+      return;
+    }
+    // Per-database closes retain execution; whole-runtime close owns its final retirement.
+    await joinOwnedWorkerTasks(
+      databaseWorkerLanes.map(async (lane) => {
+        historyClearTimeout(lane.idleTimer);
+        lane.idleTimer = undefined;
+        await rotateDatabaseWorkers(lane);
+      }),
+    );
+  },
+});
+
 function retireIdleDatabaseWorkers(): void {
   for (const lane of databaseWorkerLanes) {
     if (lane.pending > 0 || lane.rotation || lane.nativeSequence <= lane.retiredSequence) {
@@ -260,6 +279,40 @@ export function clearClosedDatabaseCustody(
   }
 }
 
+async function closeDatabaseWorkerResource(
+  resource: HistoryDatabaseResource,
+  lane: SessionDatabaseWorkerLane,
+  idle: boolean,
+): Promise<void> {
+  const pool =
+    lane === historyLane
+      ? historyLane.pool
+      : lane === maintenanceLane
+        ? maintenanceLane.pool
+        : undefined;
+  // Active reads and Bun retain native-exit custody. Idle Node readers can
+  // release the exact database while retaining the worker's loaded code.
+  if (!idle || process.versions.bun || !pool) {
+    await rotateDatabaseWorkers(lane);
+    return;
+  }
+  const through = lane.nativeSequence;
+  try {
+    await pool.closeResources(JSON.stringify([{ path: resource.database.path }]));
+  } catch (error) {
+    try {
+      await rotateDatabaseWorkers(lane);
+    } catch (retirementError) {
+      throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
+    }
+    throw error;
+  }
+  const sequence = resource.nativeSequences.get(lane);
+  if (sequence !== undefined && sequence <= through) {
+    resource.nativeSequences.delete(lane);
+  }
+}
+
 export function acquireHistoryDatabaseResource(
   options: OpenClawAgentDatabaseOptions,
 ): HistoryDatabaseResource {
@@ -283,8 +336,13 @@ export function acquireHistoryDatabaseResource(
     };
     const close = () => {
       if (!owned.closing) {
+        const idle = owned.pending === 0;
         owned.closing = (async () => {
-          await Promise.all([...owned.nativeSequences.keys()].map(rotateDatabaseWorkers));
+          await Promise.all(
+            [...owned.nativeSequences.keys()].map((lane) =>
+              closeDatabaseWorkerResource(owned, lane, idle),
+            ),
+          );
           await Promise.allSettled(owned.hostEffects);
           for (const cleanup of owned.cleanups) {
             await cleanup.run();
