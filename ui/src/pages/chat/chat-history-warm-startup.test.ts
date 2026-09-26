@@ -40,9 +40,9 @@ function mountPane(
   key = sessionKey,
   connectedAtMount = false,
   snapshotStore?: SessionSnapshotStore,
+  memory: ChatMessageCache = new Map(),
 ) {
   const read = createDeferred<ChatSessionSnapshot | null>();
-  const memory: ChatMessageCache = new Map();
   const store = snapshotStore ?? new SessionSnapshotStore(memory);
   if (!snapshotStore) {
     vi.spyOn(store, "read").mockReturnValue(read.promise);
@@ -134,6 +134,51 @@ afterEach(() => {
 });
 
 describe("first chat startup snapshot ordering", () => {
+  it.each([false, true])(
+    "hydrates each split before cursor revalidation (sibling refreshed: %s)",
+    async (siblingRefreshed) => {
+      const memory: ChatMessageCache = new Map();
+      const store = new SessionSnapshotStore(memory);
+      const firstRead = createDeferred<ChatSessionSnapshot | null>();
+      const secondRead = createDeferred<ChatSessionSnapshot | null>();
+      vi.spyOn(store, "read")
+        .mockReturnValueOnce(firstRead.promise)
+        .mockReturnValueOnce(secondRead.promise);
+      const first = mountPane(true, sessionKey, false, store, memory);
+      const second = mountPane(true, sessionKey, false, store, memory);
+      const delta = {
+        kind: "delta",
+        messages: [],
+        deltaCursor: siblingRefreshed ? first.liveResult.deltaCursor : stored.deltaCursor,
+        sessionInfo: first.liveResult.sessionInfo,
+      };
+      first.request.mockResolvedValue(siblingRefreshed ? first.liveResult : delta);
+      second.request.mockResolvedValue(delta);
+      first.connect();
+      second.connect();
+      const loading = [first.start(), second.start()];
+      firstRead.resolve(stored);
+      if (siblingRefreshed) {
+        await loading[0];
+      }
+      secondRead.resolve(siblingRefreshed ? null : stored);
+      await Promise.all(loading);
+      const expectedMessages = siblingRefreshed ? liveMessages : stored.messages;
+      expect(first.state.chatMessages).toEqual(expectedMessages);
+      expect(second.state.chatMessages).toEqual(expectedMessages);
+      for (const pane of [first, second]) {
+        expect(pane.request).toHaveBeenCalledExactlyOnceWith(
+          "chat.startup",
+          expect.objectContaining({
+            sessionKey,
+            cursor: pane === second ? delta.deltaCursor : stored.deltaCursor,
+          }),
+          { signal: expect.any(AbortSignal) },
+        );
+      }
+    },
+  );
+
   it("waits for hydration after a long offline mount and shares the cursor startup between callers", async () => {
     const h = mountPane();
     await vi.advanceTimersByTimeAsync(1_000);
