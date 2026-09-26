@@ -86,7 +86,7 @@ export type ControlUiSessionPullRequestCheckDetails = {
   retryAfterMs?: number;
 };
 
-/** A working-branch PR or a same-repository PR linked in recent assistant replies. */
+/** A pull request associated with the session's working branch. */
 export type ControlUiSessionPullRequest = {
   number: number;
   /**

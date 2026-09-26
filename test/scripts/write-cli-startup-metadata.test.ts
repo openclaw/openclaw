@@ -767,7 +767,9 @@ def threads(pid):
     for entry in entries:
         try:
             fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
+            # Linux procfs can report ENOENT or ESRCH as a helper thread exits.
+            # A vanished process leader still invalidates the owned snapshot.
             if entry.name == str(pid):
                 raise
             continue
