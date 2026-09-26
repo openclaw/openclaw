@@ -1264,31 +1264,34 @@ export class RealtimeCallHandler {
           return;
         }
         const pendingCallerTurn = this.takeCallerTurnCommitText(callId, userTranscriptOwner);
+        // Settle any earlier rejection before chaining this independent event, so one failed
+        // write cannot skip every later caller/assistant write for the rest of the call.
         transcriptPersistence = transcriptPersistence
-          .then(() => {
-            if (!pendingCallerTurn) {
-              return undefined;
+          .catch(reportTranscriptFailure)
+          .then(async () => {
+            if (pendingCallerTurn) {
+              await this.manager.processEvent({
+                id: `realtime-caller-turn-${callSid}-${randomUUID()}`,
+                type: "call.speech",
+                callId,
+                providerCallId: callSid,
+                timestamp: Date.now(),
+                transcript: pendingCallerTurn,
+                isFinal: true,
+              });
+              // Only mark committed after the write succeeds; a failed write leaves the text
+              // available to the provider's end-of-call flush instead of dropping it.
+              this.recordCommittedCallerTurn(callId, pendingCallerTurn);
             }
-            return this.manager.processEvent({
-              id: `realtime-caller-turn-${callSid}-${randomUUID()}`,
-              type: "call.speech",
-              callId,
-              providerCallId: callSid,
-              timestamp: Date.now(),
-              transcript: pendingCallerTurn,
-              isFinal: true,
-            });
-          })
-          .then(() =>
-            this.manager.processEvent({
+            await this.manager.processEvent({
               id: `realtime-bot-${callSid}-${randomUUID()}`,
               type: "call.assistant-speech",
               callId,
               providerCallId: callSid,
               timestamp: Date.now(),
               transcript: text,
-            }),
-          )
+            });
+          })
           .then(() => {});
         void transcriptPersistence.catch(reportTranscriptFailure);
       },
@@ -1759,8 +1762,9 @@ export class RealtimeCallHandler {
 
   /**
    * Take the caller's pending partial turn text to persist as a committed caller
-   * entry, subtracting it from the live partial buffer and folding it into the
-   * per-call committed-caller aggregate (used for end-of-call dedupe).
+   * entry, subtracting it from the live partial buffer. The committed-caller
+   * ledger (used for end-of-call dedupe) is advanced only once the write
+   * succeeds, via {@link recordCommittedCallerTurn}.
    */
   private takeCallerTurnCommitText(callId: string, owner: UserTranscriptState): string | undefined {
     const state = this.getUserTranscriptState(callId, owner);
@@ -1771,9 +1775,18 @@ export class RealtimeCallHandler {
     if (state?.partial) {
       this.consumePartialUserTranscript(callId, owner, state.partial);
     }
-    const committed = this.callerTurnCommitsByCallId.get(callId) ?? "";
-    this.callerTurnCommitsByCallId.set(callId, appendTranscriptText(committed, pending));
     return pending;
+  }
+
+  /**
+   * Fold a caller turn into the per-call committed-caller ledger. Turns are
+   * concatenated verbatim rather than overlap-deduplicated: a caller may repeat
+   * the same short phrase ("yes", "yes") and both turns must remain, otherwise
+   * the end-of-call flush would re-append the second phrase as a duplicate.
+   */
+  private recordCommittedCallerTurn(callId: string, text: string): void {
+    const committed = this.callerTurnCommitsByCallId.get(callId) ?? "";
+    this.callerTurnCommitsByCallId.set(callId, committed ? `${committed} ${text}` : text);
   }
 
   private clearUserTranscriptState(callId: string, owner: UserTranscriptState): void {
