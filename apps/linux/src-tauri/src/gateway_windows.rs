@@ -1325,7 +1325,7 @@ impl GatewayWindows {
         let profile_data = match profile_revision {
             Some(_) => Some(private_profile_dir(
                 self.profiles
-                    .browser_data_dir(&profile_browser_root(app)?, target_id),
+                    .browser_data_dir(&profile_browser_root(app)?, target_id)?,
             )?),
             None => None,
         };
@@ -3731,6 +3731,7 @@ mod tests {
                 remote_port: None,
                 tls_fingerprint: None,
             },
+            browser_storage: None,
         };
         let intent = state.begin(
             "main",

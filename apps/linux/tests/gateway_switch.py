@@ -462,18 +462,41 @@ class GatewaySwitchFixture(GatewayFixture):
         record("Primary RPC client never connects to a secondary Gateway", {"paths": sorted(set(self.websocket_paths))})
         storage = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "ai.openclaw.linux/gateway-profiles"
 
-        def removed():
-            return [path for scope in storage.iterdir() for path in scope.iterdir()] if storage.is_dir() else []
+        def stored():
+            return {path for scope in storage.iterdir() for path in scope.iterdir()} if storage.is_dir() else set()
 
-        if not removed():
+        removed = stored()
+        if not removed:
             raise RuntimeError("Saved Gateway dashboards did not keep private storage")
-        if any(path.stat().st_mode & 0o077 for path in [storage, *storage.iterdir(), *removed()]):
+        removed_device = studio[-1]["device"]
+        before_readd = set(self.reports)
+        self.open_native_menu(app, "Manage Gateways…")
+        wait("Manage Gateways", "heading")
+        click("Add Gateway")
+        wait("Add Gateway", "heading")
+        fill("Name", "Studio Gateway")
+        fill("Gateway URL", f"http://127.0.0.1:{self.server_port}/secondary/")
+        select_auth("token")
+        fill("Gateway token (optional)", "synthetic-gateway-token")
+        click("Save Gateway")
+        wait("Saved Studio Gateway.")
+        select("Studio Gateway", main)
+        readded = self.chrome.until(lambda: next((report for key, report in self.reports.items()
+                                                  if key not in before_readd and report["page"] == "secondary"), None),
+                                    "re-added Studio dashboard report")
+        if readded["device"] in (None, removed_device):
+            raise RuntimeError("A removed Gateway saved again reused its previous dashboard storage")
+        record("removed Gateway saved again starts with fresh dashboard storage")
+        fresh = stored() - removed
+        if len(fresh) != 1:
+            raise RuntimeError(f"Expected one fresh storage directory, found {len(fresh)}")
+        if any(path.stat().st_mode & 0o077 for path in [storage, *storage.iterdir(), *stored()]):
             raise RuntimeError("Saved Gateway dashboard storage is readable by other users")
         # WebKitGTK keeps a data directory in use until exit, so removal completes on the next launch.
         app = restart()
-        wait("Primary Gateway", "heading")
-        self.chrome.until(lambda: not removed(), "removed Gateway dashboard storage to be deleted")
-        record("next launch deletes removed Gateways' dashboard storage")
+        wait("Studio Gateway", "heading")
+        self.chrome.until(lambda: stored() == fresh, "removed Gateway dashboard storage to be deleted")
+        record("next launch deletes removed Gateways' dashboard storage and keeps saved ones")
         self.passed = True
         print("PASS: native Gateway selection, credential persistence, focus/new windows and removal", flush=True)
 

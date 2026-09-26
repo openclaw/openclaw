@@ -2,6 +2,7 @@ use crate::remote_gateway::{self, RemoteGatewayRequest};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+#[cfg(any(target_os = "linux", test))]
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use zeroize::Zeroizing;
@@ -32,9 +33,23 @@ pub(crate) struct SavedGateway {
     pub revision: String,
     pub name: String,
     pub request: RemoteGatewayRequest,
+    /// Names this profile's dashboard storage. Saving a removed endpoint again
+    /// issues a new one, so it never inherits the removed profile's pairing.
+    /// Profiles saved before dashboards kept storage have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_storage: Option<String>,
 }
 
 impl SavedGateway {
+    #[cfg(any(target_os = "linux", test))]
+    fn browser_storage_key(&self) -> String {
+        digest(&format!(
+            "{}\n{}",
+            self.id,
+            self.browser_storage.as_deref().unwrap_or_default()
+        ))
+    }
+
     fn summary(&self) -> GatewayProfileSummary {
         GatewayProfileSummary {
             id: self.id.clone(),
@@ -131,6 +146,7 @@ pub(crate) struct GatewayProfiles {
     registry: Mutex<Option<Registry>>,
     // Scopes browser data like the credential record, so named app profiles and
     // debug builds never share a saved Gateway's WebKit storage.
+    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
     browser_scope: String,
 }
 
@@ -150,11 +166,13 @@ impl GatewayProfiles {
         }
     }
 
-    /// Browser storage for one saved Gateway. The id is derived from the
-    /// canonical endpoint, so renames and credential edits keep the dashboard's
-    /// device identity while a different endpoint starts clean.
-    pub fn browser_data_dir(&self, root: &Path, id: &str) -> PathBuf {
-        root.join(&self.browser_scope).join(digest(id))
+    /// Browser storage for one saved Gateway. Renames and credential edits keep
+    /// the dashboard's device identity; a different endpoint, or an endpoint
+    /// saved again after removal, starts clean.
+    #[cfg(any(target_os = "linux", test))]
+    pub fn browser_data_dir(&self, root: &Path, id: &str) -> Result<PathBuf, String> {
+        let key = self.get(id)?.browser_storage_key();
+        Ok(root.join(&self.browser_scope).join(key))
     }
 
     /// Deletes browser storage whose Gateway is no longer saved. WebKitGTK keeps
@@ -162,6 +180,7 @@ impl GatewayProfiles {
     /// a session is cleaned up at the next launch. Saved profiles are never
     /// touched, and holding the registry lock keeps a concurrent save from
     /// losing the directory of the profile it adds.
+    #[cfg(any(target_os = "linux", test))]
     pub fn prune_browser_data(&self, root: &Path) -> Result<(), String> {
         let scope = root.join(&self.browser_scope);
         // Without saved-Gateway storage there is nothing to prune; skip the
@@ -176,7 +195,7 @@ impl GatewayProfiles {
             .load(&mut cache)?
             .profiles
             .iter()
-            .map(|profile| digest(&profile.id))
+            .map(SavedGateway::browser_storage_key)
             .collect();
         let entries = std::fs::read_dir(&scope)
             .map_err(|_| "Could not read saved Gateway browser storage.")?;
@@ -244,17 +263,23 @@ impl GatewayProfiles {
                 return Err("That Gateway is already saved. Edit its existing entry.".to_string());
             }
         }
+        let existing = next.profiles.iter().find(|profile| profile.id == id);
         if request.token.is_none() && request.password.is_none() {
-            if let Some(saved) = next.profiles.iter().find(|profile| profile.id == id) {
+            if let Some(saved) = existing {
                 request.token = saved.request.token.clone();
                 request.password = saved.request.password.clone();
             }
         }
+        let browser_storage = match existing {
+            Some(saved) => saved.browser_storage.clone(),
+            None => Some(uuid::Uuid::new_v4().to_string()),
+        };
         let saved = SavedGateway {
             id,
             revision: uuid::Uuid::new_v4().to_string(),
             name,
             request,
+            browser_storage,
         };
         let summary = saved.summary();
         next.profiles
@@ -351,6 +376,10 @@ impl GatewayProfiles {
                             canonical_request(saved.request.clone()).map_err(|_| CORRUPT)?;
                         if saved.id != format!("manual-{}", digest(&endpoint))
                             || uuid::Uuid::parse_str(&saved.revision).is_err()
+                            || saved
+                                .browser_storage
+                                .as_deref()
+                                .is_some_and(|key| uuid::Uuid::parse_str(key).is_err())
                             || !ids.insert(saved.id.as_str())
                         {
                             return Err(CORRUPT.to_string());
@@ -865,7 +894,6 @@ mod tests {
     #[test]
     fn browser_storage_follows_the_endpoint_and_prunes_only_removed_gateways() {
         let root = browser_root("prune");
-        let outside = browser_root("outside");
         let profiles = store(&MemoryCredential::default());
         let studio = profiles
             .save("Studio", None, request("https://studio.example", Some("a")))
@@ -873,8 +901,8 @@ mod tests {
         let desk = profiles
             .save("Desk", None, request("https://desk.example", None))
             .unwrap();
-        let studio_dir = profiles.browser_data_dir(&root, &studio.id);
-        let desk_dir = profiles.browser_data_dir(&root, &desk.id);
+        let studio_dir = profiles.browser_data_dir(&root, &studio.id).unwrap();
+        let desk_dir = profiles.browser_data_dir(&root, &desk.id).unwrap();
         assert_ne!(studio_dir, desk_dir);
         let renamed = profiles
             .save(
@@ -883,29 +911,131 @@ mod tests {
                 request("wss://studio.example/", Some("rotated")),
             )
             .unwrap();
-        assert_eq!(profiles.browser_data_dir(&root, &renamed.id), studio_dir);
+        assert_eq!(
+            profiles.browser_data_dir(&root, &renamed.id).unwrap(),
+            studio_dir
+        );
 
         let other_app_profile = root.join("other-scope").join("kept");
-        for dir in [&studio_dir, &desk_dir, &other_app_profile, &outside] {
+        for dir in [&studio_dir, &desk_dir, &other_app_profile] {
             std::fs::create_dir_all(dir.join("storage")).unwrap();
         }
-        let scope = studio_dir.parent().unwrap();
-        let stray = scope.join("stray");
+        let stray = studio_dir.parent().unwrap().join("stray");
         std::fs::write(&stray, b"fixture").unwrap();
-        let link = scope.join("linked");
-        std::os::unix::fs::symlink(&outside, &link).unwrap();
 
         profiles.remove(&desk.id).unwrap();
         profiles.prune_browser_data(&root).unwrap();
         assert!(studio_dir.join("storage").is_dir());
         assert!(!desk_dir.exists());
         assert!(!stray.exists());
-        assert!(std::fs::symlink_metadata(&link).is_err());
-        assert!(outside.join("storage").is_dir(), "links are never followed");
         assert!(
             other_app_profile.is_dir(),
             "other app profiles keep storage"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn removed_endpoint_saved_again_never_reuses_browser_storage() {
+        let root = browser_root("readd");
+        let vault = MemoryCredential::default();
+        let profiles = store(&vault);
+        let saved = profiles
+            .save("Studio", None, request("https://studio.example", Some("a")))
+            .unwrap();
+        let removed_dir = profiles.browser_data_dir(&root, &saved.id).unwrap();
+        profiles.remove(&saved.id).unwrap();
+        assert!(profiles.browser_data_dir(&root, &saved.id).is_err());
+        let again = profiles
+            .save("Studio", None, request("https://studio.example", Some("a")))
+            .unwrap();
+        assert_eq!(again.id, saved.id);
+        let fresh_dir = profiles.browser_data_dir(&root, &again.id).unwrap();
+        assert_ne!(fresh_dir, removed_dir);
+
+        std::fs::create_dir_all(&removed_dir).unwrap();
+        std::fs::create_dir_all(&fresh_dir).unwrap();
+        profiles.prune_browser_data(&root).unwrap();
+        assert!(!removed_dir.exists());
+        assert!(fresh_dir.is_dir());
+        // The storage id is durable: a restarted app resolves the same directory.
+        assert_eq!(
+            store(&vault).browser_data_dir(&root, &again.id).unwrap(),
+            fresh_dir
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn profiles_saved_before_browser_storage_keep_a_stable_directory() {
+        let root = browser_root("legacy");
+        let vault = MemoryCredential::default();
+        let saved = store(&vault)
+            .save("Studio", None, request("https://studio.example", Some("a")))
+            .unwrap();
+        {
+            let mut state = vault.0.lock().unwrap();
+            let mut record: serde_json::Value =
+                serde_json::from_slice(state.value.as_ref().unwrap()).unwrap();
+            record["profiles"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("browserStorage")
+                .expect("new profiles record their storage id");
+            state.value = Some(serde_json::to_vec(&record).unwrap());
+        }
+        let legacy = store(&vault);
+        let dir = legacy.browser_data_dir(&root, &saved.id).unwrap();
+        assert_eq!(
+            store(&vault).browser_data_dir(&root, &saved.id).unwrap(),
+            dir
+        );
+        legacy
+            .save(
+                "Studio desk",
+                Some(&saved.id),
+                request("https://studio.example", None),
+            )
+            .unwrap();
+        assert_eq!(legacy.browser_data_dir(&root, &saved.id).unwrap(), dir);
+    }
+
+    #[test]
+    fn malformed_browser_storage_ids_are_rejected_without_rewriting() {
+        let vault = MemoryCredential::default();
+        store(&vault)
+            .save("Studio", None, request("https://studio.example", Some("a")))
+            .unwrap();
+        let original = {
+            let mut state = vault.0.lock().unwrap();
+            let mut record: serde_json::Value =
+                serde_json::from_slice(state.value.as_ref().unwrap()).unwrap();
+            record["profiles"][0]["browserStorage"] = serde_json::json!("../escape");
+            state.value = Some(serde_json::to_vec(&record).unwrap());
+            state.value.clone().unwrap()
+        };
+        let profiles = store(&vault);
+        assert!(profiles.list().is_err());
+        assert_eq!(vault.0.lock().unwrap().value.as_ref(), Some(&original));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pruning_never_follows_links_out_of_browser_storage() {
+        let root = browser_root("links");
+        let outside = browser_root("outside");
+        let profiles = store(&MemoryCredential::default());
+        let saved = profiles
+            .save("Studio", None, request("https://studio.example", None))
+            .unwrap();
+        let dir = profiles.browser_data_dir(&root, &saved.id).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(outside.join("storage")).unwrap();
+        let link = dir.parent().unwrap().join("linked");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        profiles.prune_browser_data(&root).unwrap();
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert!(outside.join("storage").is_dir());
         std::fs::remove_dir_all(&root).unwrap();
         std::fs::remove_dir_all(&outside).unwrap();
     }
@@ -918,7 +1048,7 @@ mod tests {
         let profiles = store(&vault);
         // Without storage on disk the credential store is never read.
         assert!(profiles.prune_browser_data(&root).is_ok());
-        let dir = profiles.browser_data_dir(&root, "manual-fixture");
+        let dir = root.join("fixture-scope").join("unknown");
         std::fs::create_dir_all(&dir).unwrap();
         assert!(profiles.prune_browser_data(&root).is_err());
         assert!(dir.is_dir());

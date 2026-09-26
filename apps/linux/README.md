@@ -307,8 +307,9 @@ selection is remembered across app restarts. Removing a selected Gateway returns
 the main window to Primary and closes that Gateway's other windows.
 
 Each saved Gateway keeps its own dashboard storage, so an approved device pairing
-survives switching and restarts. Removing a saved Gateway deletes that storage the
-next time the app starts.
+survives switching and restarts. Removing a saved Gateway retires that storage:
+saving the same address again starts a new dashboard session that pairs again,
+and the old storage is deleted the next time the app starts.
 
 If a saved Gateway cannot load, its window returns to the local connection editor
 so you can correct the address or credentials. An edited endpoint becomes the
