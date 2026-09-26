@@ -17,22 +17,21 @@ function hasRetiredQueueModeByChannel(value: unknown): boolean {
   return Boolean(byChannel && Object.values(byChannel).some(isRetiredQueueMode));
 }
 
-function migrateQueueMode(params: {
-  owner: Record<string, unknown>;
-  key: string;
-  path: string;
-  changes: string[];
-}): boolean {
-  const value = params.owner[params.key];
+function migrateQueueMode(
+  owner: Record<string, unknown>,
+  key: string,
+  path: string,
+  changes: string[],
+): void {
+  const value = owner[key];
   if (!isRetiredQueueMode(value)) {
-    return false;
+    return;
   }
   const replacement = value === "queue" ? "steer" : "followup";
-  params.owner[params.key] = replacement;
-  params.changes.push(
-    `Moved deprecated ${params.path} "${value}" → "${replacement}"; use "steer" for default active-run steering.`,
+  owner[key] = replacement;
+  changes.push(
+    `Moved deprecated ${path} "${value}" → "${replacement}"; use "steer" for default active-run steering.`,
   );
-  return true;
 }
 
 const QUEUE_MODE_RULES: LegacyConfigRule[] = [
@@ -62,22 +61,12 @@ export const LEGACY_CONFIG_MIGRATIONS_QUEUE: LegacyConfigMigrationSpec[] = [
         return;
       }
 
-      migrateQueueMode({
-        owner: queue,
-        key: "mode",
-        path: "messages.queue.mode",
-        changes,
-      });
+      migrateQueueMode(queue, "mode", "messages.queue.mode", changes);
 
       const byChannel = getRecord(queue.byChannel);
       if (byChannel) {
-        for (const [channelId, _value] of Object.entries(byChannel)) {
-          migrateQueueMode({
-            owner: byChannel,
-            key: channelId,
-            path: `messages.queue.byChannel.${channelId}`,
-            changes,
-          });
+        for (const channelId of Object.keys(byChannel)) {
+          migrateQueueMode(byChannel, channelId, `messages.queue.byChannel.${channelId}`, changes);
         }
       }
     },

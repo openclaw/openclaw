@@ -139,7 +139,6 @@ function archivePathForSource(agentId: string, sha256: string, env: NodeJS.Proce
 }
 
 type HeartbeatSourceClaim = {
-  claimPath: string;
   restore(cause: unknown): Promise<void>;
   retain(): Promise<void>;
   release(params: { archivePath: string }): Promise<void>;
@@ -330,7 +329,6 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
     }
   };
   return {
-    claimPath,
     restore,
     retain: async () => {
       await restore(undefined);
@@ -566,25 +564,13 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       continue;
     }
 
-    if (!keepSource) {
-      // Archive before the claim rename: if doctor dies mid-claim, the content is
-      // already durable under the state backups instead of only at a hidden
-      // .doctor-importing-* path nothing rescans.
-      try {
-        await archiveSource({ agentId: importAgents[0]![0], source, env });
-      } catch (error) {
-        warnings.push(
-          `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
-        );
-        continue;
-      }
-    }
-
-    // Claim before committing: once the file is renamed aside and hash-verified,
-    // no concurrent editor can change the bytes that reach scratch. Retained
-    // shared files are restored after the same verified import boundary.
     let claim: HeartbeatSourceClaim;
     try {
+      if (!keepSource) {
+        // Preserve the backup before claiming so interrupted claims remain recoverable.
+        await archiveSource({ agentId: importAgents[0]![0], source, env });
+      }
+      // Claim and verify before copying; retained shared files use the same boundary.
       claim = await claimHeartbeatSource(source);
     } catch (error) {
       warnings.push(
@@ -649,37 +635,27 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     // or a future migration retry treats the rolled-back import as explicitly unset.
     const rollbackCommitted = () => {
       for (const commit of committedThisRun.toReversed()) {
-        if (!commit.previous) {
-          // Revision-guarded atomic delete restores the pre-migration no-row
-          // state so a future migration retry can import it. Accepted
-          // tradeoff: this resets the revision counter to 0, so a writer still
-          // holding a pre-migration expectedRevision:0 token could CAS through
-          // after the rollback; that requires a third concurrent writer racing
-          // doctor and is preferred over permanently blocking migration.
-          const deleted = deleteCronJobScratch(
-            storePath,
-            commit.monitor.id,
-            { env },
-            {
+        // Deleting a newly created row resets its revision to 0 so migration can retry.
+        // A third writer retaining an earlier revision-0 token may race after rollback;
+        // this is preferable to a tombstone permanently blocking future migration.
+        const reverted = commit.previous
+          ? writeCronJobScratch({
+              storePath,
+              jobId: commit.monitor.id,
+              content: commit.previous.content,
               expectedRevision: commit.newRevision,
-            },
-          );
-          if (!deleted) {
-            warnings.push(
-              `Agent "${commit.agentId}" scratch changed before the migration rollback; leaving current scratch in place.`,
+              sourceSha256: commit.previous.sourceSha256,
+              options: { env },
+            }).ok
+          : deleteCronJobScratch(
+              storePath,
+              commit.monitor.id,
+              { env },
+              {
+                expectedRevision: commit.newRevision,
+              },
             );
-          }
-          continue;
-        }
-        const revert = writeCronJobScratch({
-          storePath,
-          jobId: commit.monitor.id,
-          content: commit.previous.content,
-          expectedRevision: commit.newRevision,
-          sourceSha256: commit.previous.sourceSha256,
-          options: { env },
-        });
-        if (!revert.ok) {
+        if (!reverted) {
           warnings.push(
             `Agent "${commit.agentId}" scratch changed before the migration rollback; leaving current scratch in place.`,
           );

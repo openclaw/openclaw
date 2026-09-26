@@ -21,8 +21,6 @@ import {
 } from "../../cli/error-format.js";
 import { isTerminalInteractive } from "../../cli/terminal-interactivity.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
@@ -31,13 +29,14 @@ import { normalizeExternalChannelSetupConfig } from "../channel-setup/config-com
 import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
 import { withCommandPluginMetadata, type ConfigWriteSnapshot } from "../config-validation.js";
 import { parseAccountSelector } from "./account-selector.js";
+import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { requireValidConfigForWrite } from "./shared.js";
 
 const loadChannelSetupPluginInstall = createLazyPromise(
   () => import("../channel-setup/plugin-install.js"),
 );
-const loadOnboardChannels = createLazyPromise(() => import("../onboard-channels.js"));
+const loadOnboardChannels = createLazyPromise(() => import("../../flows/channel-setup.js"));
 
 export type ChannelsAddOptions = {
   agent?: string;
@@ -307,18 +306,13 @@ async function configureChannelAccount(
       });
 
       await params?.beforePersistentEffect?.();
-      const committed = await commitConfigWithPendingPluginInstalls({
-        sourceConfig: nextConfig,
+      const committed = await persistChannelPluginConfig({
+        cfg: nextConfig,
+        pluginInstalled: pluginRegistrySourceChanged,
         writeOptions: writeSnapshot.writeOptions,
         baseHash: writeSnapshot.snapshot.hash,
+        runtime,
       });
-      if (committed.movedInstallRecords || pluginRegistrySourceChanged) {
-        await refreshPluginRegistryAfterConfigMutation({
-          reason: "source-changed",
-          ...(committed.movedInstallRecords ? { installRecords: committed.installRecords } : {}),
-          logger: { warn: (message) => runtime.log(message) },
-        });
-      }
       runtime.log(
         `Added ${plugin.meta.label ?? channelLabel(selectedChannel)} account "${applied.accountId}".`,
       );

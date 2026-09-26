@@ -8,6 +8,8 @@ import {
   type DoctorSessionSqliteRestoreConflict,
 } from "../infra/session-sqlite-migration-issues.js";
 import type { SessionSqliteMigrationTargetInput } from "../infra/session-sqlite-migration-manifest.js";
+import type { readOnlySqliteDbStats } from "../infra/session-sqlite-migration-readers.js";
+import type { moveSqliteFilesAside } from "../infra/sqlite-recovery-files.js";
 import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
 
 export type LegacyArchiveTarget = {
@@ -49,20 +51,6 @@ export type DoctorSessionSqliteRestoreReport = {
   skippedFiles: string[];
 };
 
-type DoctorSessionSqliteLargestSession = {
-  events: number;
-  rowBytes: number;
-  sessionId: string;
-};
-
-type DoctorSessionSqliteDbStats = {
-  dbSizeBytes: number;
-  integrityCheck?: string;
-  largestSessions: DoctorSessionSqliteLargestSession[];
-  totalTranscriptRowBytes: number;
-  walSizeBytes: number;
-};
-
 export type DoctorSessionSqliteCompactReport = {
   dbSizeAfterBytes: number;
   dbSizeBeforeBytes: number;
@@ -73,11 +61,6 @@ export type DoctorSessionSqliteCompactReport = {
   skipped: boolean;
   walSizeAfterBytes: number;
   walSizeBeforeBytes: number;
-};
-
-type DoctorSessionSqliteCorruptRecovery = {
-  movedFiles: string[];
-  skippedFiles: string[];
 };
 
 export type SessionSqliteMigrationFailureIssue = {
@@ -114,7 +97,7 @@ export type DoctorSessionSqliteTargetReport = {
   archivedLegacyStoreFiles?: string[];
   archivedTranscriptFiles: string[];
   archivedUnreferencedJsonlFiles: string[];
-  dbStats?: DoctorSessionSqliteDbStats;
+  dbStats?: Extract<ReturnType<typeof readOnlySqliteDbStats>, { ok: true }>["stats"];
   importedEntries: number;
   importedTranscriptEvents: number;
   issues: DoctorSessionSqliteIssue[];
@@ -127,7 +110,7 @@ export type DoctorSessionSqliteTargetReport = {
   validatedEntries: number;
   validatedTranscriptEvents: number;
   compact?: DoctorSessionSqliteCompactReport;
-  corruptRecovery?: DoctorSessionSqliteCorruptRecovery;
+  corruptRecovery?: ReturnType<typeof moveSqliteFilesAside>;
   restore?: DoctorSessionSqliteRestoreReport;
 };
 

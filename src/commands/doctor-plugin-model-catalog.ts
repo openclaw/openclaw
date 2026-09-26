@@ -18,16 +18,16 @@ function resolveMigrationAgentDirs(params: {
   env?: NodeJS.ProcessEnv;
   agentDirs?: readonly string[];
 }): string[] {
-  if (params.agentDirs) {
-    return [...new Set(params.agentDirs)].toSorted((left, right) => left.localeCompare(right));
-  }
+  let agentDirs = params.agentDirs;
   const env = params.env ?? process.env;
-  const agentIds = listAgentIds(params.cfg);
-  const configuredAgentDirs =
-    agentIds.length > 0
-      ? agentIds.map((agentId) => resolveAgentDir(params.cfg, agentId, env))
-      : [resolveDefaultAgentDir(params.cfg, env)];
-  return [...new Set(configuredAgentDirs)].toSorted((left, right) => left.localeCompare(right));
+  if (!agentDirs) {
+    const agentIds = listAgentIds(params.cfg);
+    agentDirs =
+      agentIds.length > 0
+        ? agentIds.map((agentId) => resolveAgentDir(params.cfg, agentId, env))
+        : [resolveDefaultAgentDir(params.cfg, env)];
+  }
+  return [...new Set(agentDirs)].toSorted((left, right) => left.localeCompare(right));
 }
 
 /** Imports released sidecars and repairs persisted SQLite catalogs only with Doctor authority. */

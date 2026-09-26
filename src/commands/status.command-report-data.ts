@@ -1,6 +1,3 @@
-// Builds the data model for the standard `openclaw status` text report.
-// It converts scan/runtime state into table rows and section lines before rendering.
-
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import type { ConnectPairingRequiredReason } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { renderTable, type TableColumn } from "../../packages/terminal-core/src/table.js";
@@ -28,7 +25,6 @@ import {
 } from "./status-all/channels-table.js";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
-import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
@@ -50,7 +46,6 @@ import {
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 import { formatUpdateAvailableHint } from "./status.update.js";
 
-/** Builds all table rows, section lines, and footer data needed by the status report renderer. */
 export async function buildStatusCommandReportData(params: {
   env: NodeJS.ProcessEnv;
   opts: {
@@ -64,12 +59,7 @@ export async function buildStatusCommandReportData(params: {
   health?: HealthSummary;
   usageLines?: string[];
   lastHeartbeat: HeartbeatEventPayload | null;
-  agentStatus: {
-    defaultId?: string | null;
-    bootstrapPendingCount: number;
-    totalSessions: number;
-    agents: AgentLocalStatus[];
-  };
+  agentStatus: Parameters<typeof buildStatusCommandOverviewRows>[0]["agentStatus"];
   channels: {
     rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
   };

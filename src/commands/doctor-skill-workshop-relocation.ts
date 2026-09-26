@@ -25,7 +25,7 @@ import {
   resolveSkillProposalTarget,
 } from "../skills/workshop/store.js";
 import type { SkillProposalRecord } from "../skills/workshop/types.js";
-import { inferWorkspaceOwnerAgentId } from "./doctor-skill-workshop-collection-backups.js";
+import { listWorkspaceOwnerAgentIds } from "./doctor-skill-workshop-collection-backups.js";
 
 const INVALID_LEGACY_SKILL_REASON =
   "Skill Workshop could not load the applied legacy skill; the path stays in place and the proposal is stale.";
@@ -85,19 +85,16 @@ export function inferOwnerAgentId(params: {
   workspaceDir: string | undefined;
   rowOwnerAgentId?: string | null;
 }): OwnerAgentInference {
-  let ownerAgentId: string | undefined;
-  if (params.rowOwnerAgentId) {
-    ownerAgentId = normalizeAgentId(params.rowOwnerAgentId);
-  } else if (params.record.origin?.agentId) {
-    ownerAgentId = normalizeAgentId(params.record.origin.agentId);
-  } else if (params.record.origin?.sessionKey) {
-    const sessionAgentId = parseAgentSessionKey(params.record.origin.sessionKey)?.agentId;
-    if (sessionAgentId) {
-      ownerAgentId = normalizeAgentId(sessionAgentId);
-    }
-  }
+  const recordedOwner =
+    params.rowOwnerAgentId ||
+    params.record.origin?.agentId ||
+    (params.record.origin?.sessionKey
+      ? parseAgentSessionKey(params.record.origin.sessionKey)?.agentId
+      : undefined);
+  let ownerAgentId = recordedOwner ? normalizeAgentId(recordedOwner) : undefined;
   if (!ownerAgentId && params.workspaceDir) {
-    ownerAgentId = inferWorkspaceOwnerAgentId(params.config, params.env, params.workspaceDir);
+    const matches = listWorkspaceOwnerAgentIds(params.config, params.env, params.workspaceDir);
+    ownerAgentId = matches.length === 1 ? matches[0] : undefined;
   }
   if (!ownerAgentId) {
     return {};
@@ -158,21 +155,6 @@ async function verifyRelocationDestination(params: {
     }
   }
   return false;
-}
-
-function retargetWorkshopProposal(
-  record: SkillProposalRecord,
-  target: ReturnType<typeof resolveSkillProposalTarget>,
-): SkillProposalRecord {
-  return {
-    ...record,
-    target: {
-      ...record.target,
-      skillDir: target.skillDir,
-      skillFile: target.skillFile,
-      source: "openclaw-workshop",
-    },
-  };
 }
 
 function staleWorkshopProposal(record: SkillProposalRecord, reason: string): SkillProposalRecord {
@@ -551,10 +533,18 @@ export async function planWorkshopRelocation(
       (!move && record.kind === "update"
         ? "Skill Workshop no longer edits skills outside its own directory."
         : undefined);
-    const update = {
+    const update: WorkshopProposalUpdate = {
       record: staleReason
         ? staleWorkshopProposal(record, staleReason)
-        : retargetWorkshopProposal(record, target),
+        : {
+            ...record,
+            target: {
+              ...record.target,
+              skillDir: target.skillDir,
+              skillFile: target.skillFile,
+              source: "openclaw-workshop",
+            },
+          },
       ...(ownerAgentId ? { ownerAgentId } : {}),
     };
     (move && !staleReason ? move.updates : updates).push(update);

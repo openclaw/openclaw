@@ -15,6 +15,7 @@ import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
+import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
@@ -38,10 +39,6 @@ export {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteLegacyWhatsAppCrontabHealthCheck,
 } from "./warnings.js";
-
-function pluralize(count: number, noun: string) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
 
 function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
   return (cfg.cron as (NonNullable<OpenClawConfig["cron"]> & { store?: string }) | undefined)
@@ -414,6 +411,23 @@ export async function maybeRepairLegacyCronStore(params: {
       "Cron",
     );
   }
+  const storagePreviewLines: string[] = [];
+  if (legacyRunLogDetected) {
+    storagePreviewLines.push("- legacy JSON cron run logs will be imported into SQLite");
+  }
+  if (legacyQuarantine) {
+    storagePreviewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
+  }
+  if (invalidConfigRows.length > 0) {
+    storagePreviewLines.push(
+      `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
+    );
+  }
+  if (revalidatableQuarantineCount > 0) {
+    storagePreviewLines.push(
+      `- ${pluralize(revalidatableQuarantineCount, "quarantined automation")} will be revalidated and restored only if current validation passes`,
+    );
+  }
   if (rawJobs.length === 0) {
     if (
       !legacyStoreDetected &&
@@ -428,22 +442,7 @@ export async function maybeRepairLegacyCronStore(params: {
     if (legacyStoreDetected) {
       previewLines.push("- legacy JSON cron store will be archived after SQLite migration");
     }
-    if (legacyRunLogDetected) {
-      previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
-    }
-    if (legacyQuarantine) {
-      previewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
-    }
-    if (invalidConfigRows.length > 0) {
-      previewLines.push(
-        `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
-      );
-    }
-    if (revalidatableQuarantineCount > 0) {
-      previewLines.push(
-        `- ${pluralize(revalidatableQuarantineCount, "quarantined automation")} will be revalidated and restored only if current validation passes`,
-      );
-    }
+    previewLines.push(...storagePreviewLines);
     const noteHeading =
       legacyStoreDetected || legacyRunLogDetected || legacyQuarantine
         ? `Legacy cron storage detected at ${shortenHomePath(storePath)}.`
@@ -606,22 +605,7 @@ export async function maybeRepairLegacyCronStore(params: {
         : "- legacy JSON cron store will be archived after SQLite migration",
     );
   }
-  if (legacyRunLogDetected) {
-    previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
-  }
-  if (legacyQuarantine) {
-    previewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
-  }
-  if (invalidConfigRows.length > 0) {
-    previewLines.push(
-      `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
-    );
-  }
-  if (revalidatableQuarantineCount > 0) {
-    previewLines.push(
-      `- ${pluralize(revalidatableQuarantineCount, "quarantined automation")} will be revalidated and restored only if current validation passes`,
-    );
-  }
+  previewLines.push(...storagePreviewLines);
   if (notifyCount > 0) {
     previewLines.push(
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,

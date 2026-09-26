@@ -2,21 +2,10 @@ import {
   defineLegacyConfigMigration,
   getRecord,
   type LegacyConfigMigrationSpec,
-  type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { normalizeExactAllowedHost } from "../../../secrets/exact-hostname.js";
 
 const HOST_KEYS = ["bypassHosts", "allowedHosts"] as const;
-
-const rule = (
-  path: string[],
-  message: string,
-  match?: LegacyConfigRule["match"],
-): LegacyConfigRule => ({
-  path,
-  message: `${message} Run "openclaw doctor --fix".`,
-  ...(match ? { match } : {}),
-});
 
 function isValidExactHostname(value: string): boolean {
   try {
@@ -31,15 +20,13 @@ export const LEGACY_CONFIG_MIGRATION_RUNTIME_SECRETS_EGRESS: LegacyConfigMigrati
   defineLegacyConfigMigration({
     id: "runtime.secrets-egress-proxy-hosts",
     describe: "Drop unusable secret egress proxy host entries",
-    legacyRules: HOST_KEYS.map((key) =>
-      rule(
-        ["secrets", "egressProxy", key],
-        `secrets.egressProxy.${key} contains entries that are not usable hostnames.`,
-        (value) =>
-          Array.isArray(value) &&
-          value.some((entry) => typeof entry !== "string" || !isValidExactHostname(entry)),
-      ),
-    ),
+    legacyRules: HOST_KEYS.map((key) => ({
+      path: ["secrets", "egressProxy", key],
+      message: `secrets.egressProxy.${key} contains entries that are not usable hostnames. Run "openclaw doctor --fix".`,
+      match: (value) =>
+        Array.isArray(value) &&
+        value.some((entry) => typeof entry !== "string" || !isValidExactHostname(entry)),
+    })),
     apply(raw, changes) {
       const egressProxy = getRecord(getRecord(raw.secrets)?.egressProxy);
       if (!egressProxy) {

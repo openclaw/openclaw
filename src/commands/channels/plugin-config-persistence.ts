@@ -10,7 +10,7 @@ export async function persistChannelPluginConfig(params: {
   baseHash?: string;
   writeOptions?: ConfigWriteOptions;
   runtime: RuntimeEnv;
-}): Promise<void> {
+}) {
   const committed = await commitConfigWithPendingPluginInstalls({
     sourceConfig: params.cfg,
     baseHash: params.baseHash,
@@ -23,4 +23,5 @@ export async function persistChannelPluginConfig(params: {
       logger: { warn: (message) => params.runtime.log(message) },
     });
   }
+  return committed;
 }

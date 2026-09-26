@@ -36,12 +36,7 @@ export function isKeepCurrentAuthChoice(value: unknown): value is KeepCurrentAut
   return value === KEEP_CURRENT_AUTH_CHOICE;
 }
 
-function resolveConfiguredModelRef(config?: OpenClawConfig): string | undefined {
-  return resolveAgentModelPrimaryValue(config?.agents?.defaults?.model);
-}
-
-function resolveConfiguredProvider(config?: OpenClawConfig): string | undefined {
-  const modelRef = resolveConfiguredModelRef(config);
+function resolveConfiguredProvider(modelRef: string | undefined): string | undefined {
   const slashIndex = modelRef?.indexOf("/") ?? -1;
   if (!modelRef || slashIndex <= 0) {
     return undefined;
@@ -118,9 +113,9 @@ export async function promptAuthChoiceGrouped(
   const moreGroups = availableBuiltInGroups
     .filter((group) => !isDetectedGroup(group) && !isFeaturedAuthChoiceGroup(group))
     .toSorted(compareAuthChoiceGroups);
-  const configuredModelRef = resolveConfiguredModelRef(params.config);
+  const configuredModelRef = resolveAgentModelPrimaryValue(params.config?.agents?.defaults?.model);
   const configuredProvider = params.allowKeepCurrentProvider
-    ? resolveConfiguredProvider(params.config)
+    ? resolveConfiguredProvider(configuredModelRef)
     : undefined;
 
   const pickMethod = async (group: AuthChoiceGroup): Promise<AuthChoiceOrBack> => {
@@ -134,14 +129,14 @@ export async function promptAuthChoiceGrouped(
     if (group.options.length === 1 && !keepCurrentOption) {
       return expectDefined(group.options[0], "options entry at 0").value;
     }
-    return (await params.prompter.select({
+    return await params.prompter.select({
       message: group.methodMessage ?? `${group.label} auth method`,
       options: [
         ...(keepCurrentOption ? [keepCurrentOption] : []),
         ...group.options,
         { value: BACK_VALUE, label: "Back" },
       ],
-    })) as AuthChoiceOrBack;
+    });
   };
 
   // Without featured providers, the searchable catalog is the root page.

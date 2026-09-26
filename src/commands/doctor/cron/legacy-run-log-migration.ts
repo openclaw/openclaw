@@ -10,6 +10,14 @@ import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-
 
 const LEGACY_CRON_RUN_LOG_ARCHIVE_SUFFIX = ".migrated";
 
+async function listLegacyCronRunLogFiles(storePath: string): Promise<string[]> {
+  const runsDir = path.resolve(path.dirname(path.resolve(storePath)), "runs");
+  const files = await fs.readdir(runsDir, { withFileTypes: true }).catch(() => []);
+  return files
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+    .map((entry) => path.join(runsDir, entry.name));
+}
+
 function parseCronRunLogEntriesFromJsonl(
   raw: string,
   opts?: { jobId?: string },
@@ -49,16 +57,10 @@ export async function migrateLegacyCronRunLogsToSqlite(
   storePath: string,
 ): Promise<{ importedFiles: number }> {
   const resolvedStorePath = path.resolve(storePath);
-  const runsDir = path.resolve(path.dirname(resolvedStorePath), "runs");
-  const files = await fs.readdir(runsDir, { withFileTypes: true }).catch(() => []);
-  const jsonlFiles = files.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"));
-  if (jsonlFiles.length === 0) {
-    return { importedFiles: 0 };
-  }
+  const jsonlFiles = await listLegacyCronRunLogFiles(resolvedStorePath);
 
-  for (const file of jsonlFiles) {
-    const filePath = path.join(runsDir, file.name);
-    const jobId = path.basename(file.name, ".jsonl");
+  for (const filePath of jsonlFiles) {
+    const jobId = path.basename(filePath, ".jsonl");
     const entries = parseCronRunLogEntriesFromJsonl(fsSync.readFileSync(filePath, "utf-8"), {
       jobId,
     });
@@ -93,8 +95,5 @@ export async function migrateLegacyCronRunLogsToSqlite(
 
 /** Return true when legacy cron JSONL run log files exist next to a store path. */
 export async function legacyCronRunLogFilesExist(storePath: string): Promise<boolean> {
-  const resolvedStorePath = path.resolve(storePath);
-  const runsDir = path.resolve(path.dirname(resolvedStorePath), "runs");
-  const files = await fs.readdir(runsDir, { withFileTypes: true }).catch(() => []);
-  return files.some((entry) => entry.isFile() && entry.name.endsWith(".jsonl"));
+  return (await listLegacyCronRunLogFiles(storePath)).length > 0;
 }

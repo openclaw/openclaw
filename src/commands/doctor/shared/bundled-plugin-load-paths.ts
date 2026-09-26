@@ -93,26 +93,19 @@ export function scanBundledPluginLoadPathMigrations(
     ) {
       continue;
     }
-    const match = bundledPathMap.get(normalized);
+    let match = bundledPathMap.get(normalized);
     if (!match) {
       const oldPackaged = parsePackagedBundledPluginPath(normalized);
       const oldLegacy = oldPackaged ? null : parseLegacyBundledPluginPath(normalized);
       const oldPackageRoot = oldPackaged?.packageRoot ?? oldLegacy?.packageRoot;
       const oldBundledLeaf = oldPackaged?.bundledLeaf ?? oldLegacy?.bundledLeaf;
-      const oldPackageMatch =
+      match =
         // Only rewrite paths rooted in the installed OpenClaw package; user plugin paths stay intact.
         oldPackageRoot && oldBundledLeaf && isOpenClawNodeModulesPackageRoot(oldPackageRoot)
           ? packagedBundledLeafMap.get(normalizeBundledLookupPath(oldBundledLeaf))
           : undefined;
-      if (!oldPackageMatch) {
-        continue;
-      }
-      hits.push({
-        pluginId: oldPackageMatch.pluginId,
-        fromPath: rawPath,
-        toPath: oldPackageMatch.toPath,
-        pathLabel: "plugins.load.paths",
-      });
+    }
+    if (!match) {
       continue;
     }
     hits.push({
@@ -164,24 +157,15 @@ export function maybeRepairBundledPluginLoadPaths(
   const removable = new Set(
     hits.map((hit) => normalizeBundledLookupPath(resolveUserPath(hit.fromPath, env))),
   );
-  const rewritten: Array<(typeof paths)[number]> = [];
-  for (const entry of paths) {
-    if (typeof entry !== "string") {
-      rewritten.push(entry);
-      continue;
-    }
-    const resolved = normalizeBundledLookupPath(resolveUserPath(entry, env));
-    if (removable.has(resolved)) {
-      continue;
-    }
-    rewritten.push(entry);
-  }
-
   next.plugins = {
     ...next.plugins,
     load: {
       ...next.plugins?.load,
-      paths: rewritten,
+      paths: Array.from(paths).filter(
+        (entry) =>
+          typeof entry !== "string" ||
+          !removable.has(normalizeBundledLookupPath(resolveUserPath(entry, env))),
+      ),
     },
   };
 

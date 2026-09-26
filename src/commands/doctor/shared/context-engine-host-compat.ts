@@ -1,3 +1,4 @@
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 // Doctor checks for context engine host requirements against configured agent runtimes.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -62,27 +63,6 @@ function parseModelRef(value: unknown): { provider: string; modelId: string } | 
   return typeof value === "string" ? (parseModelCatalogRef(value) ?? undefined) : undefined;
 }
 
-function listModelRefs(value: unknown): string[] {
-  if (typeof value === "string" && value.trim()) {
-    return [value.trim()];
-  }
-  if (!isRecord(value)) {
-    return [];
-  }
-  const refs: string[] = [];
-  if (typeof value.primary === "string" && value.primary.trim()) {
-    refs.push(value.primary.trim());
-  }
-  if (Array.isArray(value.fallbacks)) {
-    for (const fallback of value.fallbacks) {
-      if (typeof fallback === "string" && fallback.trim()) {
-        refs.push(fallback.trim());
-      }
-    }
-  }
-  return refs;
-}
-
 function collectExplicitRuntimeRefs(
   cfg: OpenClawConfig,
 ): Array<{ runtimeId: string; path: string }> {
@@ -124,8 +104,11 @@ function collectSelectedModelRefs(
 ): Array<{ modelRef: string; path: string; agentId?: string }> {
   const refs: Array<{ modelRef: string; path: string; agentId?: string }> = [];
   const pushModel = (value: unknown, path: string, agentId?: string) => {
-    for (const modelRef of listModelRefs(value)) {
-      refs.push({ modelRef, path, ...(agentId ? { agentId } : {}) });
+    for (const ref of listModelRefsFromConfigValue(value)) {
+      const modelRef = ref.trim();
+      if (modelRef) {
+        refs.push({ modelRef, path, ...(agentId ? { agentId } : {}) });
+      }
     }
   };
   const pushModelMap = (models: unknown, path: string, agentId?: string) => {

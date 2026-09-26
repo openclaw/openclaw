@@ -21,6 +21,7 @@ import {
   collectStringModelConfigRef,
   collectStringModelSlot,
   recordCodexModelHit,
+  visitChannelModelSlots,
 } from "./codex-route-model-slots.js";
 import type {
   CodexRouteHit,
@@ -168,21 +169,9 @@ export function collectConfigModelRefs(
     });
   }
 
-  const channelsModelByChannel = asMutableRecord(cfg.channels?.modelByChannel);
-  for (const [channelId, channelMap] of Object.entries(channelsModelByChannel ?? {})) {
-    const targets = asMutableRecord(channelMap);
-    if (!targets) {
-      continue;
-    }
-    for (const [targetId, model] of Object.entries(targets)) {
-      collectStringModelSlot({
-        hits,
-        path: `channels.modelByChannel.${channelId}.${targetId}`,
-        value: model,
-        blockedModelIdentities,
-      });
-    }
-  }
+  visitChannelModelSlots(cfg, ({ container, key, path }) => {
+    collectStringModelSlot({ hits, path, value: container[key], blockedModelIdentities });
+  });
 
   for (const [index, mapping] of (cfg.hooks?.mappings ?? []).entries()) {
     collectStringModelSlot({
@@ -448,19 +437,8 @@ function collectChannelAgentRuntimeModelRefs(
   cfg: OpenClawConfig,
 ): Array<{ path: string; modelRef: string }> {
   const refs: Array<{ path: string; modelRef: string }> = [];
-  const channelsModelByChannel = asMutableRecord(cfg.channels?.modelByChannel);
-  for (const [channelId, channelMapValue] of Object.entries(channelsModelByChannel ?? {})) {
-    const channelMap = asMutableRecord(channelMapValue);
-    if (!channelMap) {
-      continue;
-    }
-    for (const [targetId, modelRef] of Object.entries(channelMap)) {
-      collectStringModelConfigRef({
-        refs,
-        path: `channels.modelByChannel.${channelId}.${targetId}`,
-        value: modelRef,
-      });
-    }
-  }
+  visitChannelModelSlots(cfg, ({ container, key, path }) => {
+    collectStringModelConfigRef({ refs, path, value: container[key] });
+  });
   return refs;
 }

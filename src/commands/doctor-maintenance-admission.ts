@@ -20,18 +20,17 @@ export function resolveDoctorUpdateAdmission(env: NodeJS.ProcessEnv): () => void
     return admission;
   };
   const admission = readAdmission();
-  let assertUpdateAdmissionCurrent = () => {
-    readAdmission();
-  };
   const continuation =
     admission.kind === "continuation"
       ? admission.run
       : admission.runs.find((run) => run.runId === inheritedRunId);
-  if (continuation?.steps.some((step) => step.step === "finalize:repair-continuation")) {
-    assertUpdateAdmissionCurrent = () => {
-      readAdmission();
+  const recordContinuation = continuation?.steps.some(
+    (step) => step.step === "finalize:repair-continuation",
+  );
+  return () => {
+    readAdmission();
+    if (continuation && recordContinuation) {
       recordUpdateRunRepairContinuation(continuation.runId, inheritedRunId, { env });
-    };
-  }
-  return assertUpdateAdmissionCurrent;
+    }
+  };
 }

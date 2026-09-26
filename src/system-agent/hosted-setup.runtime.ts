@@ -94,8 +94,7 @@ export async function runHostedChannelSetup(
   runtime?: RuntimeEnv,
   assertPersistentEffectCurrent?: () => void,
 ): Promise<HostedSetupCompletion> {
-  const { createChannelSetupHooks, setupChannels } =
-    await import("../commands/onboard-channels.js");
+  const { createChannelSetupHooks, setupChannels } = await import("../flows/channel-setup.js");
   let channelSetup: ReturnType<typeof createChannelSetupHooks>;
   return await runHostedSetup({
     label: "Channel setup",

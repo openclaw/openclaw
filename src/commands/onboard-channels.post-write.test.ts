@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createExitThrowingRuntime } from "../../test/helpers/auth-wizard.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 import {
   createChannelOnboardingPostWriteHook,
   createChannelSetupHooks,
-} from "./onboard-channels.js";
+} from "../flows/channel-setup.js";
+import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 
 describe("setupChannels post-write hooks", () => {
   it.each(["plugin", "wizard"] as const)(

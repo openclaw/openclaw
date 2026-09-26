@@ -584,8 +584,7 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
-    const { createChannelSetupHooks, setupChannels } =
-      await import("../commands/onboard-channels.js");
+    const { createChannelSetupHooks, setupChannels } = await import("../flows/channel-setup.js");
     const channelSetup = createChannelSetupHooks({ runtime });
     const quickstartAllowFromChannels =
       flow === "quickstart"

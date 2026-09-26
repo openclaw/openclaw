@@ -21,6 +21,7 @@ import {
   recordCodexModelHit,
   rewriteModelConfigSlot,
   rewriteModelsMap,
+  visitChannelModelSlots,
 } from "./codex-route-model-slots.js";
 import {
   clearConfigLegacyAgentRuntimePolicies,
@@ -307,24 +308,9 @@ function rewriteNonAgentModelRefs(params: {
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   env?: NodeJS.ProcessEnv;
 }): void {
-  const channelsModelByChannel = asMutableRecord(params.cfg.channels?.modelByChannel);
-  for (const [channelId, channelMap] of Object.entries(channelsModelByChannel ?? {})) {
-    const targets = asMutableRecord(channelMap);
-    if (!targets) {
-      continue;
-    }
-    for (const targetId of Object.keys(targets)) {
-      rewriteStringModelSlotIfCanonicalCodexRuntime({
-        cfg: params.cfg,
-        hits: params.hits,
-        container: targets,
-        key: targetId,
-        path: `channels.modelByChannel.${channelId}.${targetId}`,
-        blockedModelIdentities: params.blockedModelIdentities,
-        env: params.env,
-      });
-    }
-  }
+  visitChannelModelSlots(params.cfg, (slot) => {
+    rewriteStringModelSlotIfCanonicalCodexRuntime({ ...params, ...slot });
+  });
   for (const [index, mapping] of (params.cfg.hooks?.mappings ?? []).entries()) {
     rewriteStringModelSlotIfCanonicalCodexRuntime({
       cfg: params.cfg,
