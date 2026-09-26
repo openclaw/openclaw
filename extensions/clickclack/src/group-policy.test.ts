@@ -127,7 +127,12 @@ describe("resolveClickClackGroupPolicy", () => {
       },
       channelId: "chn_two",
     });
-    expect(result).toEqual({ requireMention: false, mentionPatterns: [] });
+    expect(result).toEqual({
+      requireMention: false,
+      mentionPatterns: [],
+      allowBots: false,
+      botLoopProtection: undefined,
+    });
   });
 
   it("does not apply group policy to direct messages", () => {

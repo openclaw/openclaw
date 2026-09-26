@@ -6,9 +6,9 @@ import {
   attachBindingToCurrentActiveSession,
   getClickClackDiscussionBindingStore,
 } from "./binding-store.js";
-import { createDiscussionMemoryStore } from "./service-test-support.js";
 import { discussionSessionKey } from "./naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
+import { createDiscussionMemoryStore } from "./service-test-support.js";
 import { enforceClickClackDiscussionToolTarget } from "./tool-policy.js";
 
 function setup() {
