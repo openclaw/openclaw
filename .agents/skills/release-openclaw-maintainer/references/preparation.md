@@ -46,7 +46,7 @@ macOS needs a strictly higher numeric `APP_BUILD`.
 
 Android is independently pinned in `apps/android/version.json`. If the stable
 release should include its APK, prepare it before tagging with `--android` or
-`scripts/mobile-release-version.ts --prepare --version YYYY.M.PATCH --write`.
+`pnpm android:version:pin -- --version YYYY.M.PATCH`.
 An older pin causes candidate/publish to skip Android; an immutable tag cannot
 be repaired later to add that platform.
 

@@ -115,6 +115,7 @@ describe("check-extension-package-tsc-boundary", () => {
     write("scripts/prepare-extension-package-boundary-artifacts.mts", "export {};\n");
     for (const file of [
       "check-extension-package-tsc-boundary.mts",
+      "compile-extension-boundary.mts",
       "check-file-utils.ts",
       "tsx.mjs",
       "windows-cmd-helpers.mjs",
@@ -155,13 +156,11 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(cold.stdout.indexOf("] larger")).toBeLessThan(cold.stdout.indexOf("] demo"));
     const receipt = JSON.parse(
       fs.readFileSync(
-        path.join(root, ".artifacts/extension-package-boundary/compile/demo.tsbuildinfo"),
+        path.join(root, ".artifacts/extension-package-boundary/compile/demo.inputs.json"),
         "utf8",
       ),
     );
-    expect(receipt.fileNames.some((file: string) => file.endsWith("/demo/src/worker.ts"))).toBe(
-      true,
-    );
+    expect(receipt.inputs.some((file: string) => file.endsWith("/demo/src/worker.ts"))).toBe(true);
     const warm = run();
     expect(warm.status, warm.stdout + warm.stderr).toBe(0);
     expect(warm.stdout).toContain("compiled plugins: 0");

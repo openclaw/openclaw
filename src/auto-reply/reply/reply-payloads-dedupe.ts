@@ -226,13 +226,6 @@ function resolveOriginThreadIdForPayload(params: {
   return originThreadId;
 }
 
-/** Returns true when message-tool route evidence says source replies should be deduped. */
-export function shouldDedupeMessagingToolRepliesForRoute(
-  params: MessagingToolDedupeRouteParams,
-): boolean {
-  return getMatchingMessagingToolReplyTargets(params).length > 0;
-}
-
 /** Finds message-tool sends that target the same channel/account/thread as the source reply. */
 function getMatchingMessagingToolReplyTargets(
   params: MessagingToolDedupeRouteParams,

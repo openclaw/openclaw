@@ -21,7 +21,7 @@ import {
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
-import { isRegularFileStat, writeGuardedVaultPage } from "./vault-page-write.js";
+import { writeGuardedVaultPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const OKF_RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
@@ -182,35 +182,20 @@ function parseOkfMarkdown(
 }
 
 async function readOkfTextFile(params: {
-  bundlePath: string;
+  bundleRoot: Awaited<ReturnType<typeof fsRoot>>;
   relativePath: string;
   warnings: ImportMemoryWikiOkfWarning[];
 }): Promise<string | null> {
-  const root = await fsRoot(params.bundlePath);
-  const stat = await root.stat(params.relativePath).catch((err: unknown) => {
+  return await params.bundleRoot.readText(params.relativePath).catch((err: unknown) => {
     params.warnings.push({
       code: "unreadable-entry",
       path: params.relativePath,
-      message: err instanceof Error ? err.message : "Unable to read OKF concept.",
-    });
-    return null;
-  });
-  if (!stat) {
-    return null;
-  }
-  if (!isRegularFileStat(stat)) {
-    params.warnings.push({
-      code: "unreadable-entry",
-      path: params.relativePath,
-      message: "Refusing to import OKF concept through non-regular or hardlinked file.",
-    });
-    return null;
-  }
-  return await root.readText(params.relativePath).catch((err: unknown) => {
-    params.warnings.push({
-      code: "unreadable-entry",
-      path: params.relativePath,
-      message: err instanceof Error ? err.message : "Unable to read OKF concept.",
+      message:
+        err instanceof FsSafeError && err.code === "not-file"
+          ? "Refusing to import OKF concept through non-regular or hardlinked file."
+          : err instanceof Error
+            ? err.message
+            : "Unable to read OKF concept.",
     });
     return null;
   });
@@ -554,6 +539,7 @@ export async function importMemoryWikiOkfBundle(params: {
   if (!stat.isDirectory()) {
     throw new Error("wiki okf import expects an unpacked OKF bundle directory.");
   }
+  const bundleRoot = await fsRoot(bundlePath);
 
   const warnings: ImportMemoryWikiOkfWarning[] = [];
   const markdownFiles = await collectOkfMarkdownFiles(bundlePath, warnings);
@@ -563,12 +549,12 @@ export async function importMemoryWikiOkfBundle(params: {
   for (const relativePath of markdownFiles) {
     if (relativePath === "index.md") {
       rootIndexContent =
-        (await readOkfTextFile({ bundlePath, relativePath, warnings })) ?? undefined;
+        (await readOkfTextFile({ bundleRoot, relativePath, warnings })) ?? undefined;
     }
     if (OKF_RESERVED_FILENAMES.has(path.posix.basename(relativePath))) {
       continue;
     }
-    const content = await readOkfTextFile({ bundlePath, relativePath, warnings });
+    const content = await readOkfTextFile({ bundleRoot, relativePath, warnings });
     if (content === null) {
       continue;
     }

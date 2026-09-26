@@ -16,6 +16,7 @@ import { buildLearnPrompt, DEFAULT_LEARN_REQUEST } from "../../skills/workshop/l
 import { resolveSkillWorkshopToolPolicyAvailability } from "../../skills/workshop/tool-policy-diagnostic.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
@@ -27,14 +28,8 @@ const PERSONAL_WORKSHOP_LEARN_REPLY =
   "This turn cannot stage a pending workspace proposal, so /learn made no change. Ordinary explicit personal skill creation publishes a revision. Ask for that directly if intended, or use the existing administrator UI or openclaw skills workshop CLI for workspace proposal review.";
 
 function parseLearnRequest(raw: string): string | null {
-  const trimmed = raw.trim();
-  const commandEnd = trimmed.search(/\s/);
-  const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
-  if (commandToken.toLowerCase() !== LEARN_COMMAND_PREFIX) {
-    return null;
-  }
-  const request = commandEnd === -1 ? "" : trimmed.slice(commandEnd).trim();
-  return request || DEFAULT_LEARN_REQUEST;
+  const request = matchSlashCommandToken(raw, LEARN_COMMAND_PREFIX);
+  return request === null ? null : request || DEFAULT_LEARN_REQUEST;
 }
 
 function resolveWorkshopSurface(

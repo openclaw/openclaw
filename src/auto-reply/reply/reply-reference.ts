@@ -37,23 +37,14 @@ export function createReplyReferencePlanner(options: {
   const startId = normalizeOptionalString(options.startId);
 
   const resolve = (): string | undefined => {
-    if (!allowReference) {
+    if (
+      !allowReference ||
+      options.replyToMode === "off" ||
+      (isSingleUseReplyToMode(options.replyToMode) && hasReplied)
+    ) {
       return undefined;
     }
-    if (options.replyToMode === "off") {
-      return undefined;
-    }
-    const id = existingId ?? startId;
-    if (!id) {
-      return undefined;
-    }
-    if (options.replyToMode === "all") {
-      return id;
-    }
-    if (isSingleUseReplyToMode(options.replyToMode) && hasReplied) {
-      return undefined;
-    }
-    return id;
+    return existingId ?? startId;
   };
 
   const use = (): string | undefined => {
