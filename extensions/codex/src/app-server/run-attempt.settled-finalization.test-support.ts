@@ -1,11 +1,14 @@
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
+  createCodexRuntimePlanFixture,
   createParams,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   tempDir,
   threadStartResult,
   userMessage,
@@ -223,6 +226,70 @@ export function registerSettledFinalizationTests({
         ]);
         expect(Object.isFrozen(context)).toBe(true);
       }
+    },
+  );
+  // A detected yield is an intentional pause, so every incomplete-turn consumer of the
+  // captured context already returns early on it. Both terminal outcomes are covered:
+  // failure finalization stays excluded for a yield exactly as recovery treats it.
+  it.each([
+    { label: "completed turn", failure: undefined },
+    {
+      label: "provider overload after the yield",
+      failure: {
+        message: "Selected model is at capacity. Please try a different model.",
+        codexErrorInfo: "serverOverloaded",
+      },
+    },
+  ])(
+    "skips settled-turn finalization context capture for a sessions_yield turn ($label)",
+    async ({ failure }) => {
+      const storePath = path.join(tempDir, "settled-finalization-yield.sqlite");
+      const sessionId = "session-settled-finalization-yield";
+      const sessionFile = `agent:main:${sessionId}`;
+      const workspaceDir = path.join(tempDir, "workspace-settled-finalization-yield");
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      setCodexTestModelSupportsTools(params, true);
+      // A subagent requester is the production shape in which the real sessions_yield tool
+      // claims an intentional pause, so attempt-local yield state comes from the real tool
+      // and dynamic-tool bridge rather than a synthetic flag.
+      await attachSqliteSessionTarget(params, storePath, sessionId, {
+        sessionKey: `agent:main:subagent:${sessionId}`,
+      });
+      params.prompt = "Wait for the pending child result.";
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      const yielded = await harness.handleServerRequest({
+        id: "request-settled-finalization-yield",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-settled-finalization-yield",
+          namespace: null,
+          tool: "sessions_yield",
+          arguments: { waitFor: "message", message: "Waiting for the child result." },
+        },
+      });
+      expect(yielded).toMatchObject({ success: true });
+      await (failure
+        ? harness.notify(turnCompleted({ id: "turn-1", status: "failed", error: failure }))
+        : harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" }));
+      const result = await run;
+      expect(result.yieldDetected).toBe(true);
+      // The yielded turn still has the silent tool-result shape the predicate accepts.
+      expect(result.assistantTexts.every((text) => !text.trim())).toBe(true);
+      expect(result.messagesSnapshot.some((message) => message.role === "toolResult")).toBe(true);
+      expect(Boolean(readAttemptTerminal(result).promptError)).toBe(Boolean(failure));
+      expect(result.settledTurnFinalizationContext).toBeUndefined();
+      expect(
+        warn.mock.calls.some(([message]) =>
+          message.includes("codex settled-turn finalization context is unavailable"),
+        ),
+      ).toBe(false);
     },
   );
   it("captures settled tool evidence when an active native compaction fails terminally", async () => {

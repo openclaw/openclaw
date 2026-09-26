@@ -468,7 +468,12 @@ export async function finalizeCodexAttempt(
     const shouldCaptureSettledTurnFinalizationContext =
       result.assistantTexts.every((text) => !text.trim()) &&
       result.messagesSnapshot.some((message) => message.role === "toolResult") &&
-      (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
+      (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed) &&
+      // A detected yield is an intentional pause, not an unfinished turn, for either
+      // terminal outcome: incomplete-turn recovery already returns early on a yield, so
+      // nothing consumes this context. Capturing it anyway can fail closed and report a
+      // healthy yield as a finalization failure.
+      !toolState.yieldDetected;
     // Supervised auth belongs to its native connection, which has no generic stock
     // tool-free summary operation. Retain fallback eligibility instead of selecting host auth.
     const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext

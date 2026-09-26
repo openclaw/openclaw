@@ -10,9 +10,10 @@ export async function attachSqliteSessionTarget(
   params: EmbeddedRunAttemptParams,
   storePath: string,
   sessionId: string,
+  options: { sessionKey?: string } = {},
 ): Promise<void> {
   params.sessionId = sessionId;
-  params.sessionKey = `agent:main:${sessionId}`;
+  params.sessionKey = options.sessionKey ?? `agent:main:${sessionId}`;
   params.sessionTarget = {
     agentId: "main",
     sessionId,
