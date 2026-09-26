@@ -67,6 +67,11 @@ is required.
               enabled: true,
               mode: "full",
               allowLocalBinding: true,
+              readOnlyPaths: [
+                "/app/node_modules/openclaw",
+                "/opt/oce/repository-credentials",
+                "/run/oce/repository-credentials",
+              ],
               domains: {
                 "git.openclaw-system.svc": "allow",
                 "api.openai.com": "allow",
@@ -95,6 +100,11 @@ to prevent approval-based exceptions. Native system requirements can contribute
 allowed domains or select a managed allowlist, so this map does not replace the
 system's network policy. Explicit denies in the effective policy take precedence
 over overlapping allows and cannot be approved.
+
+`readOnlyPaths` adds literal absolute filesystem paths as read-only entries in
+the same generated Codex permissions profile. OpenClaw rejects relative paths,
+root directories, special profile keys, globs, control characters, and traversal
+segments before starting the app-server.
 
 Use `*.example.com` for subdomains or `**.example.com` for both the apex domain
 and subdomains. These restrictions apply to commands run through the Codex

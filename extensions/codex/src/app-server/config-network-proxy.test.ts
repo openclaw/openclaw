@@ -88,6 +88,39 @@ describe("Codex network proxy config admission", () => {
     );
   });
 
+  it.each([
+    { name: "relative path", readOnlyPaths: ["app/node_modules/openclaw"] },
+    { name: "root path", readOnlyPaths: ["/"] },
+    { name: "special profile key", readOnlyPaths: [":minimal"] },
+    { name: "glob path", readOnlyPaths: ["/app/*"] },
+    { name: "traversal path", readOnlyPaths: ["/app/../etc"] },
+    { name: "control character", readOnlyPaths: ["/app/node_modules/openclaw\n"] },
+  ])("rejects malformed network proxy read-only paths: $name", ({ readOnlyPaths }) => {
+    const pluginConfig = {
+      appServer: {
+        networkProxy: {
+          enabled: true,
+          domains: { "example.com": "allow" },
+          readOnlyPaths,
+        },
+      },
+    };
+    const validated = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      value: pluginConfig,
+      applyDefaults: true,
+    });
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      throw new Error("Expected manifest-valid read-only path config");
+    }
+    expect(() => resolveRuntimeForTest({ pluginConfig: validated.value })).toThrow(
+      new Error(
+        'Invalid plugins.entries.codex.config.appServer.networkProxy.readOnlyPaths; fix this field before starting Codex with network restrictions. Run "openclaw doctor --fix" for supported repairs.',
+      ),
+    );
+  });
+
   it("admits a stock Codex repository broker network profile", () => {
     const pluginConfig = {
       appServer: {
@@ -96,6 +129,11 @@ describe("Codex network proxy config admission", () => {
           profileName: "repository-broker-test",
           mode: "full",
           allowLocalBinding: true,
+          readOnlyPaths: [
+            "/app/node_modules/openclaw",
+            "/opt/oce/repository-credentials",
+            "/run/oce/repository-credentials",
+          ],
           domains: {
             "git.123-control.svc": "allow",
             "api.openai.com": "allow",
@@ -121,6 +159,11 @@ describe("Codex network proxy config admission", () => {
     ).toMatchObject({
       permissions: {
         "repository-broker-test": {
+          filesystem: {
+            "/app/node_modules/openclaw": "read",
+            "/opt/oce/repository-credentials": "read",
+            "/run/oce/repository-credentials": "read",
+          },
           network: {
             mode: "full",
             allow_local_binding: true,

@@ -149,6 +149,11 @@ describe("Codex app-server config", () => {
               " /tmp/mock-proxy.sock ": "allow",
               "/tmp/blocked.sock": "none",
             },
+            readOnlyPaths: [
+              "/opt/openclaw/repository-credentials",
+              "/app/node_modules/openclaw",
+              "/app/node_modules/openclaw/",
+            ],
             proxyUrl: "http://127.0.0.1:3128",
             socksUrl: "socks5h://127.0.0.1:8081",
             enableSocks5: true,
@@ -174,6 +179,8 @@ describe("Codex app-server config", () => {
           "mock-proxy": {
             filesystem: {
               ":minimal": "read",
+              "/app/node_modules/openclaw": "read",
+              "/opt/openclaw/repository-credentials": "read",
               ":project_roots": {
                 ".": "write",
               },

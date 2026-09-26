@@ -165,6 +165,11 @@ required.
               enabled: true,
               mode: "full",
               allowLocalBinding: true,
+              readOnlyPaths: [
+                "/app/node_modules/openclaw",
+                "/opt/oce/repository-credentials",
+                "/run/oce/repository-credentials",
+              ],
               domains: {
                 "git.openclaw-system.svc": "allow",
                 "api.openai.com": "allow",
@@ -185,6 +190,10 @@ Hosts absent from the effective native allowlist are denied. The example's
 requirements can still contribute allowed domains. These restrictions apply to
 Codex sandbox commands. See the [network proxy configuration reference](/plugins/codex-harness/config-fields)
 for matching, policy inheritance, scope, and explicit Doctor repair of blank optional fields after updates.
+`readOnlyPaths` adds literal absolute filesystem paths as read-only entries in
+the same generated Codex permissions profile. OpenClaw rejects relative paths,
+root directories, special profile keys, globs, control characters, and traversal
+segments before starting the app-server.
 Repository broker access uses the same stock Codex domain policy. A
 repository-bound Agent should allow the exact broker DNS host, keep explicit
 denies such as link-local metadata addresses, use `mode: "full"`, and set
