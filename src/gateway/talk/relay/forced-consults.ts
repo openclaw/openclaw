@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   buildRealtimeVoiceAgentConsultWorkingResponse,
@@ -14,8 +15,7 @@ import {
   completeAfterToolResultSubmissions,
   submitFinalProviderToolResult,
   suppressedToolResultOptions,
-  trackAgentFinalToolResult,
-  trackPendingWorkingToolResult,
+  trackToolResultCompletion,
 } from "./provider-results.js";
 import {
   broadcastToOwner,
@@ -30,15 +30,6 @@ import {
 
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
-
-function isWorkingToolResult(result: unknown): boolean {
-  return (
-    Boolean(result) &&
-    typeof result === "object" &&
-    !Array.isArray(result) &&
-    (result as Record<string, unknown>).status === "working"
-  );
-}
 
 function buildForcedConsultCheckingPrompt(): string {
   return [
@@ -124,7 +115,11 @@ export function submitRelayAgentControlProviderResults(
         clearTerminal();
         finalizeAgentCall(callId, forcedConsult);
       });
-      const tracked = trackAgentFinalToolResult(session, callId, completed?.finally(clearTerminal));
+      const tracked = trackToolResultCompletion(
+        session.pendingFinalToolResults,
+        callId,
+        completed?.finally(clearTerminal),
+      );
       submissions.push(tracked);
       continue;
     }
@@ -136,7 +131,7 @@ export function submitRelayAgentControlProviderResults(
       options: toolResultOptions,
       onAccepted: () => finalizeAgentCall(callId),
     });
-    submissions.push(trackAgentFinalToolResult(session, callId, submitted));
+    submissions.push(trackToolResultCompletion(session.pendingFinalToolResults, callId, submitted));
   }
   const completion = completeAfterToolResultSubmissions(session, submissions, () => {});
   return {
@@ -301,7 +296,7 @@ export function submitRealtimeAgentConsultWorkingResponse(
       }),
     });
   });
-  return trackPendingWorkingToolResult(session, callId, completion);
+  return trackToolResultCompletion(session.pendingWorkingToolResults, callId, completion);
 }
 
 export function submitForcedTalkRealtimeRelayToolResult(
@@ -364,12 +359,16 @@ export function submitForcedTalkRealtimeRelayToolResult(
         final: true,
       });
     });
-    return trackAgentFinalToolResult(session, params.callId, completion?.finally(clearTerminal));
+    return trackToolResultCompletion(
+      session.pendingFinalToolResults,
+      params.callId,
+      completion?.finally(clearTerminal),
+    );
   }
   const suppressResponse = params.options?.suppressResponse === true;
   const final = params.options?.willContinue !== true;
   if (!final) {
-    if (!suppressResponse && isWorkingToolResult(params.result)) {
+    if (!suppressResponse && asOptionalRecord(params.result)?.status === "working") {
       session.bridge.sendUserMessage(buildForcedConsultCheckingPrompt());
     }
     broadcastToolResultToOwner(session, {
@@ -422,5 +421,9 @@ export function submitForcedTalkRealtimeRelayToolResult(
     });
   });
   const trackedCompletion = completion?.finally(clearTerminal);
-  return trackAgentFinalToolResult(session, params.callId, trackedCompletion);
+  return trackToolResultCompletion(
+    session.pendingFinalToolResults,
+    params.callId,
+    trackedCompletion,
+  );
 }

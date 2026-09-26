@@ -1,6 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Gateway node command policy.
-// Computes per-platform allowlists from built-in, plugin, runtime, and config inputs.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -394,9 +392,10 @@ function resolveNodeCommandAllowlistInternal(
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
   const base = filterDesktopHostCommandDefaults({
     platformId,
-    commands:
-      expectDefined(PLATFORM_DEFAULTS[platformId], "platform defaults entry at platform id") ??
-      PLATFORM_DEFAULTS.unknown,
+    commands: expectDefined(
+      PLATFORM_DEFAULTS[platformId],
+      "platform defaults entry at platform id",
+    ),
     includeDesktopHostCommands: options?.includeDesktopHostCommands,
   });
   const watchRelayCommands =

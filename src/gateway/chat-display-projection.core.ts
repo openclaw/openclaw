@@ -389,19 +389,17 @@ function projectEmptyAssistantErrorMessages(
     if (message.role !== "assistant" || message.stopReason !== "error") {
       return message;
     }
+    changed = true;
     const hasDisplayableStructuredContent =
       hasAssistantDisplayableNonTextContent(message) || hasTranscriptMediaFacts(message);
     if (hasDisplayableStructuredContent) {
-      changed = true;
       return sanitizeAssistantErrorDisplayMessage(message);
     }
     const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER)
       .message as Record<string, unknown>;
     if (!shouldDropAssistantHistoryMessage(sanitized) && hasVisibleAssistantReplyText(sanitized)) {
-      changed = true;
       return sanitizeAssistantErrorDisplayMessage(message);
     }
-    changed = true;
     const next: Record<string, unknown> = {
       ...sanitized,
       content: [{ type: "text", text: getAssistantErrorFallbackText(message) }],
@@ -459,11 +457,9 @@ export function prepareChatHistoryRecoveryMessages(
       content: [call, sanitized],
     };
   });
-  const source =
-    options?.stripEnvelope === false
-      ? projectedMessages
-      : stripEnvelopeFromMessages(projectedMessages);
-  return source;
+  return options?.stripEnvelope === false
+    ? projectedMessages
+    : stripEnvelopeFromMessages(projectedMessages);
 }
 
 export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecoveryOptions) {
@@ -483,9 +479,7 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
     get pending() {
       return recovery.pending;
     },
-    result() {
-      return recovery.result();
-    },
+    result: recovery.result.bind(recovery),
   };
 }
 

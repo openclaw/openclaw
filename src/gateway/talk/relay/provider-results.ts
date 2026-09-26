@@ -61,7 +61,7 @@ export function completeAfterToolResultSubmissions(
   return Promise.all(pending).then(complete);
 }
 
-function trackToolResultCompletion(
+export function trackToolResultCompletion(
   pending: Map<string, Promise<void>>,
   callId: string,
   completion: void | Promise<void>,
@@ -168,22 +168,6 @@ export function submitFinalProviderToolResult(params: {
     params.callId,
     completion,
   );
-}
-
-export function trackAgentFinalToolResult(
-  session: RelaySession,
-  callId: string,
-  completion: void | Promise<void>,
-): void | Promise<void> {
-  return trackToolResultCompletion(session.pendingFinalToolResults, callId, completion);
-}
-
-export function trackPendingWorkingToolResult(
-  session: RelaySession,
-  callId: string,
-  completion: void | Promise<void>,
-): void | Promise<void> {
-  return trackToolResultCompletion(session.pendingWorkingToolResults, callId, completion);
 }
 
 export function clearRelayAgentToolCall(session: RelaySession, callId: string): void {

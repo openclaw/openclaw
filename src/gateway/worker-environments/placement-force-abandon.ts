@@ -1,7 +1,10 @@
-import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR, placementTurnOwner } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-dispatch-pending-results.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  placementTurnOwner,
+  type WorkerSessionPlacementIdentity,
+} from "./placement-record.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
-import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,
@@ -21,16 +24,12 @@ export function reportWorkerAbandonmentCleanupError(
   }
 }
 
-export async function forceAbandonWorkerEnvironment(params: {
-  placements: WorkerDispatchPlacementStore;
-  environmentId: string;
-  resolveWorkspace: (placement: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<WorkerSessionWorkspace>;
-  onCleanupError?: (error: unknown) => void;
-}): Promise<void> {
+export async function forceAbandonWorkerEnvironment(
+  params: Pick<PlacementRecoveryDeps, "placements" | "resolveWorkspace"> & {
+    environmentId: string;
+    onCleanupError?: (error: unknown) => void;
+  },
+): Promise<void> {
   const { environmentId, placements } = params;
   const recoveryError = FORCED_WORKER_ABANDONMENT_ERROR;
   const journalOwners = params.placements
@@ -38,7 +37,7 @@ export async function forceAbandonWorkerEnvironment(params: {
     .filter((owner) => owner.environmentId === environmentId);
   const journalCleanups: Array<{
     owner: (typeof journalOwners)[number];
-    placement: { sessionId: string; sessionKey: string; agentId: string };
+    placement: WorkerSessionPlacementIdentity;
     journal: NonNullable<ReturnType<typeof placements.loadWorkspaceReconciliation>>;
   }> = [];
   const retainedJournalSessions = new Set<string>();
@@ -72,7 +71,7 @@ export async function forceAbandonWorkerEnvironment(params: {
     }
   }
   const stagedResultCleanups: Array<{
-    placement: { sessionId: string; sessionKey: string; agentId: string };
+    placement: WorkerSessionPlacementIdentity;
     refs: string[];
     repositoryWorkspaceId?: string;
   }> = [];

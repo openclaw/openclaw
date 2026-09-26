@@ -3,6 +3,7 @@ import {
   parseFiniteNumber as readFiniteNumber,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../../plugins/types.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
 import { recordTalkObservabilityEvent } from "../../talk/observability.js";
@@ -13,7 +14,6 @@ import {
   createTalkSessionController,
 } from "../../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "../server-methods/shared-types.js";
-import { formatError } from "../server-utils.js";
 import { decodeTalkRelayAudioBase64 } from "./relay-audio-base64.js";
 import {
   closeExpiredTalkRelaySessions,

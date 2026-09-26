@@ -1,9 +1,6 @@
-// Gateway HTTP auth helpers.
-// Authenticates HTTP endpoints and derives trusted operator scopes.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
-import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
@@ -64,10 +61,8 @@ import {
   authorizeOperatorScopesForMethod,
 } from "./method-scopes.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
-import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
-import type { GatewayClient } from "./server-methods/shared-types.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
@@ -75,17 +70,14 @@ const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 export { getBearerToken, getHeader } from "./http-header-value.js";
 
-export type AuthorizedGatewayHttpRequest = {
+export type AuthorizedGatewayHttpRequest = AuthenticatedHttpUserProfile & {
   authMethod?: GatewayAuthResult["method"];
   user?: string;
   trustDeclaredOperatorScopes: boolean;
   deviceOperatorScopes?: string[];
   revalidate?: () => Promise<void>;
   hasCurrentClientAuthority?: () => boolean;
-  authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
-  operatorRolePolicy?: GatewayOperatorRoleDefinition;
   operatorRoleActor?: { kind: "system" };
-  operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
   controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
   controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
 };

@@ -45,7 +45,7 @@ const DEFAULT_AVAILABILITY_TIMEOUT_MS = 10_000;
 const MAX_ADMISSION_ATTEMPTS = 5;
 const ADMISSION_REARM_BACKOFF = { initialMs: 1_000, maxMs: 30_000, factor: 2, jitter: 0.1 };
 
-const RETRYABLE_TRANSPORT_CODES = new Set([
+export const RETRYABLE_NODE_WORKER_TRANSPORT_CODES: ReadonlySet<string> = new Set([
   "DISCONNECTED",
   "NOT_CONNECTED",
   "PAIRING_CHANGED",
@@ -444,7 +444,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           }
           if (
             !(error instanceof NodeWorkerLaunchTransportError) ||
-            !RETRYABLE_TRANSPORT_CODES.has(error.code)
+            !RETRYABLE_NODE_WORKER_TRANSPORT_CODES.has(error.code)
           ) {
             throw error;
           }
@@ -581,7 +581,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           }
           if (
             !(error instanceof NodeWorkerLaunchTransportError) ||
-            !RETRYABLE_TRANSPORT_CODES.has(error.code)
+            !RETRYABLE_NODE_WORKER_TRANSPORT_CODES.has(error.code)
           ) {
             throw error;
           }

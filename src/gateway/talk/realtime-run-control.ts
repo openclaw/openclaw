@@ -1,3 +1,4 @@
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { BoundedSerialQueue } from "../../shared/bounded-serial-queue.js";
 import { REALTIME_VOICE_AGENT_CONTROL_FAILURE_MESSAGE } from "../../talk/agent-run-control-shared.js";
 import {
@@ -5,7 +6,6 @@ import {
   resolveRealtimeVoiceAgentControlIntent,
   type RealtimeVoiceAgentControlResult,
 } from "../../talk/agent-run-control.js";
-import { formatError } from "../server-utils.js";
 
 const REALTIME_CONTROL_MAX_PENDING = 8;
 

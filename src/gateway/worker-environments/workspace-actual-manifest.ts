@@ -276,13 +276,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       scanSignal,
     );
     if (snapshot.type === "file") {
-      addEntry({
-        path: relative,
-        type: "file",
-        mode: snapshot.mode,
-        size: snapshot.size,
-        sha256: snapshot.sha256,
-      });
+      addEntry({ path: relative, ...snapshot });
       return;
     }
     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");

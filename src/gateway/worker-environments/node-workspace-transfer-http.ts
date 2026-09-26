@@ -58,49 +58,33 @@ function parseNodeWorkspaceTransferHttpRoute(
     return undefined;
   }
   const segments = pathname.slice(NODE_WORKSPACE_TRANSFER_PATH.length + 1).split("/");
-  const environmentId = segments[1] ? decodeEnvironmentId(segments[1]) : undefined;
-  if (!environmentId) {
+  const [resource, rawEnvironmentId, collection, digest, part] = segments;
+  const environmentId = rawEnvironmentId ? decodeEnvironmentId(rawEnvironmentId) : undefined;
+  if (!environmentId || resource !== "environments" || !digest || !SHA256_PATTERN.test(digest)) {
     return undefined;
   }
   if (
     method === "GET" &&
     segments.length === 5 &&
-    segments[0] === "environments" &&
-    segments[2] === "snapshots" &&
-    segments[3] !== undefined &&
-    SHA256_PATTERN.test(segments[3]) &&
-    (segments[4] === "manifest" || segments[4] === "pack")
+    collection === "snapshots" &&
+    (part === "manifest" || part === "pack")
   ) {
     return {
-      kind: segments[4],
+      kind: part,
       direction: "download",
       environmentId,
-      manifestRef: `sha256:${segments[3]}`,
+      manifestRef: `sha256:${digest}`,
     };
   }
-  if (
-    method === "GET" &&
-    segments.length === 4 &&
-    segments[0] === "environments" &&
-    segments[2] === "blobs" &&
-    segments[3] !== undefined &&
-    SHA256_PATTERN.test(segments[3])
-  ) {
-    return { kind: "blob", direction: "download", environmentId, sha256: segments[3] };
+  if (method === "GET" && segments.length === 4 && collection === "blobs") {
+    return { kind: "blob", direction: "download", environmentId, sha256: digest };
   }
-  if (
-    method === "POST" &&
-    segments.length === 4 &&
-    segments[0] === "environments" &&
-    segments[2] === "reconciliations" &&
-    segments[3] !== undefined &&
-    SHA256_PATTERN.test(segments[3])
-  ) {
+  if (method === "POST" && segments.length === 4 && collection === "reconciliations") {
     return {
       kind: "reconcile",
       direction: "upload",
       environmentId,
-      baseManifestRef: `sha256:${segments[3]}`,
+      baseManifestRef: `sha256:${digest}`,
     };
   }
   return undefined;

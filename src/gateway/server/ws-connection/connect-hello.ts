@@ -13,6 +13,7 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
+import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
@@ -40,7 +41,6 @@ import {
   TICK_INTERVAL_MS,
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";
-import { formatError } from "../../server-utils.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";

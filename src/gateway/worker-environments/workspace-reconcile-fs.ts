@@ -75,16 +75,7 @@ export async function localWorkspaceNode(root: string, entryPath: string): Promi
     MAX_RECONCILIATION_FILE_BYTES,
     root,
   );
-  if (snapshot.type === "unsupported") {
-    return { path: entryPath, type: "unsupported" };
-  }
-  return {
-    path: entryPath,
-    type: "file",
-    mode: snapshot.mode,
-    size: snapshot.size,
-    sha256: snapshot.sha256,
-  };
+  return { path: entryPath, ...snapshot };
 }
 
 async function fileEntryMatches(

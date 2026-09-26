@@ -1,5 +1,6 @@
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../../infra/node-commands.js";
 import { BoundedBuffer } from "../../shared/bounded-buffer.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 import type { NodeRegistry, NodeInvokeResult } from "../node-registry.js";
 import type { TerminalBackend, TerminalBackendExit } from "./backend.js";
@@ -44,10 +45,7 @@ export async function createNodeRelayBackend(params: {
   command: string;
   params: Record<string, unknown>;
 }): Promise<TerminalBackend> {
-  let resolveDispatchReady!: (invokeId: string) => void;
-  const dispatchReady = new Promise<string>((resolve) => {
-    resolveDispatchReady = resolve;
-  });
+  const dispatchReady = createDeferredCore<string>();
   let dataCallback: ((data: string) => void) | undefined;
   let exitCallback: ((exit: TerminalBackendExit) => void) | undefined;
   const pendingData = new BoundedBuffer<string>(
@@ -70,7 +68,7 @@ export async function createNodeRelayBackend(params: {
       timeoutMs: 0,
       idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
       signal: abort.signal,
-      onDispatchReady: resolveDispatchReady,
+      onDispatchReady: dispatchReady.resolve,
       onProgress: (chunk) => {
         if (!chunk) {
           return;
@@ -98,7 +96,7 @@ export async function createNodeRelayBackend(params: {
   // Pairing-generation validation is asynchronous. Open only after the exact
   // admitted connection is dispatch-ready; a pre-dispatch failure wins instead.
   const activeInvokeId = await Promise.race([
-    dispatchReady,
+    dispatchReady.promise,
     result.then((exit) => {
       throw new Error(exit.error ?? "failed to start node terminal invoke");
     }),

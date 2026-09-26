@@ -170,7 +170,6 @@ export async function applyWorkspaceDirectoryChanges(params: {
   for (const entryPath of removedDirectoryPaths.toSorted((left, right) =>
     right.localeCompare(left),
   )) {
-    const baseDirectory = baseNodes.get(entryPath);
     let directoryState;
     try {
       directoryState = await workspaceRoot.stat(entryPath);
@@ -180,8 +179,8 @@ export async function applyWorkspaceDirectoryChanges(params: {
       }
       throw error;
     }
-    if (!directoryState.isDirectory || baseDirectory?.type !== "directory") {
-      // A concurrent local replacement or chmod wins and becomes a conflict.
+    if (!directoryState.isDirectory) {
+      // A concurrent local replacement wins and becomes a conflict.
       continue;
     }
     await removeEmptyWorkspaceDirectory(workspaceRoot, entryPath);

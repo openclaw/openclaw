@@ -1,5 +1,3 @@
-// Gateway talk-capable node detection.
-// Accepts explicit talk caps and legacy talk.* command declarations.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { NodeRegistry, NodeSession } from "../node-registry.js";
 
@@ -8,7 +6,6 @@ import type { NodeRegistry, NodeSession } from "../node-registry.js";
 const TALK_CAPABILITY = "talk";
 const TALK_COMMAND_PREFIX = "talk.";
 
-/** Returns true when any connected node can handle talk routing. */
 export async function hasConnectedTalkNode(registry: NodeRegistry): Promise<boolean> {
   return (await registry.listCurrentConnected()).some(isTalkCapableNode);
 }

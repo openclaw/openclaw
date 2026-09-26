@@ -1,10 +1,9 @@
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import {
   isUnavailableEnvironment,
-  type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
-  type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
+import type { PlacementRecoveryDeps } from "./placement-dispatch-pending-results.js";
 import {
   forceAbandonWorkerEnvironment,
   reportWorkerAbandonmentCleanupError,
@@ -20,26 +19,17 @@ import type {
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
-import type { WorkerSessionWorkspace } from "./session-workspace.js";
-import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
-export function createWorkerPlacementMoveAbandonment(options: {
-  placements: WorkerDispatchPlacementStore;
-  environments: WorkerDispatchEnvironmentService;
-  runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
-  workspaceOperations: WorkerWorkspaceOperationCoordinator;
-  resolveWorkspace: (placement: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<WorkerSessionWorkspace>;
-  prepareGatewayMove?: (params: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-    assertCurrent: () => void;
-  }) => Promise<void>;
-}) {
+export function createWorkerPlacementMoveAbandonment(
+  options: Pick<
+    PlacementRecoveryDeps,
+    | "placements"
+    | "environments"
+    | "workspaceOperations"
+    | "resolveWorkspace"
+    | "prepareGatewayMove"
+  > & { runnerAvailability: WorkerPlacementRunnerAvailabilityReader },
+) {
   const { environments, placements } = options;
   const forceDestroyEnvironment = async (
     environmentId: string,

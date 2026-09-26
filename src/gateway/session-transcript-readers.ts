@@ -70,65 +70,45 @@ export async function readSessionMessagesAsync(
   return (await readSessionMessagesWithSourceAsync(...args)).messages;
 }
 
-export async function readSessionMessagesWithSourceAsync(
-  scope: SessionTranscriptReadScope,
-  inputOptions: Parameters<typeof sessionTranscriptReader.readSessionMessagesWithSourceAsync>[1],
+function createHistoryPageReader<Options, Result>(
+  readLocal: (target: SessionTranscriptReadScope, options: Options) => Promise<Result>,
+  readWorker: (
+    read: typeof import("../config/sessions/session-history-worker-runtime.js").readSessionHistoryPageInWorker,
+    target: SessionTranscriptReadScope,
+    options: Options,
+  ) => Promise<Result>,
 ) {
-  const target = captureHistoryReadScope(scope);
-  const options = structuredClone(inputOptions);
-  if (usesProcessHeldTranscript(target)) {
-    return sessionTranscriptReader.readSessionMessagesWithSourceAsync(target, options);
-  }
-  const { readSessionHistoryPageInWorker } =
-    await import("../config/sessions/session-history-worker-runtime.js");
-  return readSessionHistoryPageInWorker({ kind: "source-messages", params: { target, options } });
+  return async (scope: SessionTranscriptReadScope, inputOptions: Options): Promise<Result> => {
+    const target = captureHistoryReadScope(scope);
+    const options = structuredClone(inputOptions);
+    if (usesProcessHeldTranscript(target)) {
+      return readLocal(target, options);
+    }
+    const { readSessionHistoryPageInWorker } =
+      await import("../config/sessions/session-history-worker-runtime.js");
+    return readWorker(readSessionHistoryPageInWorker, target, options);
+  };
 }
 
-export async function readRecentSessionMessagesWithStatsAsync(
-  scope: SessionTranscriptReadScope,
-  inputOptions: Parameters<
-    typeof sessionTranscriptReader.readRecentSessionMessagesWithStatsAsync
-  >[1],
-) {
-  const target = captureHistoryReadScope(scope);
-  const options = structuredClone(inputOptions);
-  if (usesProcessHeldTranscript(target)) {
-    return sessionTranscriptReader.readRecentSessionMessagesWithStatsAsync(target, options);
-  }
-  const { readSessionHistoryPageInWorker } =
-    await import("../config/sessions/session-history-worker-runtime.js");
-  return readSessionHistoryPageInWorker({ kind: "recent-page", params: { target, options } });
-}
+export const readSessionMessagesWithSourceAsync = createHistoryPageReader(
+  sessionTranscriptReader.readSessionMessagesWithSourceAsync,
+  (read, target, options) => read({ kind: "source-messages", params: { target, options } }),
+);
 
-export async function readSessionMessagesPageWithStatsAsync(
-  scope: SessionTranscriptReadScope,
-  inputOptions: Parameters<typeof sessionTranscriptReader.readSessionMessagesPageWithStatsAsync>[1],
-) {
-  const target = captureHistoryReadScope(scope);
-  const options = structuredClone(inputOptions);
-  if (usesProcessHeldTranscript(target)) {
-    return sessionTranscriptReader.readSessionMessagesPageWithStatsAsync(target, options);
-  }
-  const { readSessionHistoryPageInWorker } =
-    await import("../config/sessions/session-history-worker-runtime.js");
-  return readSessionHistoryPageInWorker({ kind: "message-page", params: { target, options } });
-}
+export const readRecentSessionMessagesWithStatsAsync = createHistoryPageReader(
+  sessionTranscriptReader.readRecentSessionMessagesWithStatsAsync,
+  (read, target, options) => read({ kind: "recent-page", params: { target, options } }),
+);
 
-export async function readSessionMessagesAroundIdWithStatsAsync(
-  scope: SessionTranscriptReadScope,
-  inputOptions: Parameters<
-    typeof sessionTranscriptReader.readSessionMessagesAroundIdWithStatsAsync
-  >[1],
-) {
-  const target = captureHistoryReadScope(scope);
-  const options = structuredClone(inputOptions);
-  if (usesProcessHeldTranscript(target)) {
-    return sessionTranscriptReader.readSessionMessagesAroundIdWithStatsAsync(target, options);
-  }
-  const { readSessionHistoryPageInWorker } =
-    await import("../config/sessions/session-history-worker-runtime.js");
-  return readSessionHistoryPageInWorker({ kind: "around-id", params: { target, options } });
-}
+export const readSessionMessagesPageWithStatsAsync = createHistoryPageReader(
+  sessionTranscriptReader.readSessionMessagesPageWithStatsAsync,
+  (read, target, options) => read({ kind: "message-page", params: { target, options } }),
+);
+
+export const readSessionMessagesAroundIdWithStatsAsync = createHistoryPageReader(
+  sessionTranscriptReader.readSessionMessagesAroundIdWithStatsAsync,
+  (read, target, options) => read({ kind: "around-id", params: { target, options } }),
+);
 
 export function readSessionArtifacts(
   scope: SessionTranscriptReadScope,

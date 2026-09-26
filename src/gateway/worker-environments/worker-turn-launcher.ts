@@ -17,6 +17,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
+import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import {
@@ -557,14 +558,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               requireActivePlacement(reconciled);
             }
           }
-          const pendingWorkspaceResult = options.placements
-            .listPendingWorkspaceResults(turnClaim.sessionId)
-            .find(
-              (pending) =>
-                pending.sessionId === turnClaim.sessionId &&
-                pending.claimId === turnClaim.claimId &&
-                pending.runId === turnClaim.runId,
-            );
+          const pendingWorkspaceResult = findPendingWorkerWorkspaceResult(
+            options.placements,
+            turnClaim,
+          );
           if (pendingWorkspaceResult) {
             if (turnClaim.owner.kind === "local") {
               // The Gateway-owned run is already terminal. Atomically record the

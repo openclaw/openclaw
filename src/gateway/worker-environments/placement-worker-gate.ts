@@ -10,6 +10,7 @@ import {
   getWorkerTurnExecutionIdentityCapability,
   type WorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
+import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 
 type WorkerPlacementBinding = Readonly<{
   sessionId: string;
@@ -82,7 +83,7 @@ export function createWorkerSessionPlacementGate(
         })
       : [],
   );
-  const isOperational = (claim: WorkerSessionTurnClaim) =>
+  const validateWorkerTurn = (claim: WorkerSessionTurnClaim) =>
     !recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(claim)) &&
     store.validateTurnClaim(claim);
 
@@ -90,8 +91,6 @@ export function createWorkerSessionPlacementGate(
     const claim = claimForBinding(store.get(binding.sessionId), binding);
     return claim && store.validateTurnClaim(claim) ? claim : undefined;
   };
-
-  const validateWorkerTurn = (claim: WorkerSessionTurnClaim) => isOperational(claim);
 
   return {
     assertWorkerRuntimeRefresh(binding): number {
@@ -149,14 +148,7 @@ export function createWorkerSessionPlacementGate(
       if (!claim) {
         return;
       }
-      const pending = store
-        .listPendingWorkspaceResults(claim.sessionId)
-        .find(
-          (candidate) =>
-            candidate.sessionId === claim.sessionId &&
-            candidate.claimId === claim.claimId &&
-            candidate.runId === claim.runId,
-        );
+      const pending = findPendingWorkerWorkspaceResult(store, claim);
       if (!pending) {
         return;
       }

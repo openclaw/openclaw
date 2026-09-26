@@ -1,12 +1,12 @@
 // Physical WebSocket ingress adapts into the shared Gateway connection owner.
 import type { WebSocketServer } from "ws";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/index.js";
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { touchPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
 import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
 import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
-import { formatError } from "../server-utils.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { attachGatewayConnection, type GatewayConnectionOptions } from "./connection.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";

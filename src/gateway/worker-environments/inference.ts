@@ -215,12 +215,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
         try {
           const begin = await entry.begun;
           assertKnownTurn(entry.storeKey);
-          if (!begin || begin.kind === "rejected") {
-            entry.settled = true;
-            forget(entry);
-            return;
-          }
-          if (begin.kind === "replay") {
+          if (!begin || begin.kind === "rejected" || begin.kind === "replay") {
             entry.settled = true;
             forget(entry);
             return;

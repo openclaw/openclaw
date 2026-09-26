@@ -1,6 +1,4 @@
-// Resolves where an operator terminal session should start and whether the
-// target agent's workspace isolation permits a host shell.
-import { existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -14,14 +12,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isTerminalConfigEnabled } from "./enabled.js";
 
-/** Why a terminal cannot open, or `null` when it can. */
 type TerminalLaunchBlock =
   | { kind: "disabled" }
   | { kind: "owner-required"; message: string }
   | { kind: "unknown-agent"; agentId: string }
   | { kind: "sandboxed"; agentId: string; mode: "all" };
 
-/** Resolved plan for a host terminal session. */
 export type TerminalLaunchPlan = {
   agentId: string;
   cwd: string;
@@ -33,7 +29,6 @@ export type TerminalLaunchPlan = {
 
 export type TerminalSpawnPlan = Pick<TerminalLaunchPlan, "agentId" | "shell" | "args" | "cwd">;
 
-/** Terminal launch resolution result: either a runnable plan or a block reason. */
 export type TerminalLaunchResolution =
   | { ok: true; plan: TerminalLaunchPlan }
   | { ok: false; block: TerminalLaunchBlock };
@@ -46,7 +41,6 @@ type TerminalLaunchPolicy = {
   acceptConfig: (options: { retireRejectedRestart: boolean }) => void;
 };
 
-/** Picks the interactive shell: explicit config, then the host login shell. */
 function resolveTerminalShell(params: {
   configuredShell?: string;
   platform?: NodeJS.Platform;
@@ -63,22 +57,12 @@ function resolveTerminalShell(params: {
   }
   const loginShell = env.SHELL?.trim();
   if (loginShell) {
-    // Login flag so the operator lands in the same environment their terminal
-    // app would give them (profile-sourced PATH, aliases, prompt).
+    // Load the operator's login profile, including its PATH and prompt.
     return { shell: loginShell, args: ["-l"] };
   }
   return { shell: "/bin/bash", args: ["-l"] };
 }
 
-/**
- * Resolves the terminal launch plan for one agent.
- *
- * The terminal always starts in the agent workspace. When the agent runs fully
- * sandboxed (`sandbox.mode: "all"`), a host shell would escape the isolation the
- * agent itself is under, so this returns a `sandboxed` block rather than silently
- * handing back an unconfined shell — fail-closed. `"non-main"` keeps the agent's
- * main session on the host, so a host terminal is allowed there.
- */
 function resolveTerminalLaunch(params: {
   config: OpenClawConfig;
   agentId?: string;
@@ -97,18 +81,12 @@ function resolveTerminalLaunch(params: {
     }
     return { ok: false, block: { kind: "owner-required", message: error.message } };
   }
-  // Fail closed on unknown ids: they would resolve against the *global*
-  // sandbox defaults and an invented workspace, sidestepping a per-agent
-  // `sandbox.mode: "all"` refusal below.
+  // Unknown IDs would bypass per-agent isolation through the global defaults.
   if (requested && !listAgentIds(params.config).includes(agentId)) {
     return { ok: false, block: { kind: "unknown-agent", agentId } };
   }
   const sandbox = resolveSandboxConfigForAgent(params.config, agentId);
-  // Only "all" sandboxes every session. Under "non-main" the agent's main
-  // session still runs on the host, so a host terminal there is consistent with
-  // how the agent already runs (and an admin already has that host access via
-  // the main session). Block only the fully-sandboxed case; in-sandbox terminals
-  // are a tracked follow-up.
+  // "non-main" already permits host execution; "all" must not gain a host shell.
   if (sandbox.mode === "all") {
     return { ok: false, block: { kind: "sandboxed", agentId, mode: "all" } };
   }
@@ -252,7 +230,6 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
   };
 }
 
-/** Builds the child environment for a host terminal from the gateway env. */
 export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(baseEnv)) {
@@ -306,7 +283,7 @@ function existingDirOrHome(dir: string, env: NodeJS.ProcessEnv): string {
     return home;
   }
   try {
-    if (existsSync(trimmed) && statSync(trimmed).isDirectory()) {
+    if (statSync(trimmed).isDirectory()) {
       return trimmed;
     }
   } catch {
