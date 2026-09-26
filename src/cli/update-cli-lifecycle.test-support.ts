@@ -386,7 +386,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
         ? { status: "running", pid: gatewayFixturePid, state: "running" }
         : { status: "stopped", state: "stopped", missingUnit: true },
     );
-    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 1]));
     inspectPortUsage.mockResolvedValue({
       port: 18789,
       status: "busy",

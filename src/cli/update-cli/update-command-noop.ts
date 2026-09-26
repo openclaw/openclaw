@@ -191,7 +191,11 @@ export async function finishAlreadyCurrentUpdate(
             stopState.blockFailureFacts ??
             collectServiceInspectionFailureFacts(stopState.serviceUpdateVerdict),
         }
-      : mutableUpdateGatewayServiceBlock({ preManagedServiceStop: stopState });
+      : await mutableUpdateGatewayServiceBlock({
+          preManagedServiceStop: stopState,
+          root: params.root,
+          runId: params.opts.run?.runId,
+        });
     if (block) {
       throw new UpdatePreMutationError(
         "managed-service-preflight",

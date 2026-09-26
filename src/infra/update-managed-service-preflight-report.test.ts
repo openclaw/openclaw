@@ -5,6 +5,8 @@ import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 it.each([
+  ["inside-gateway-service", "independent terminal outside the service"],
+  ["service-membership-unverified", "restoring native process inspection"],
   ["inside-gateway-process-tree", "a terminal outside the Gateway process tree"],
   ["service-not-offline", "Stop it through its service owner"],
   ["service-definition-not-writable", "writable service definition"],

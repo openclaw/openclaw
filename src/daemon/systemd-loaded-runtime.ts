@@ -184,23 +184,25 @@ export async function readLoadedSystemdServiceRuntime(
       );
     const before = await readUnit();
     const [id, load, active, sub, burst, entered, left] = before;
-    const [result, restarts, pid, exitStatus, exitCode, killMode, tasks, memory] = await query(
-      [
-        "get-property",
-        owner,
-        unitPath,
-        `${MANAGER}.Service`,
-        "Result",
-        "NRestarts",
-        "MainPID",
-        "ExecMainStatus",
-        "ExecMainCode",
-        "KillMode",
-        "TasksCurrent",
-        "MemoryCurrent",
-      ],
-      ["s", "u", "u", "i", "i", "s", "t", "t"],
-    );
+    const [result, restarts, pid, exitStatus, exitCode, killMode, tasks, memory, controlGroup] =
+      await query(
+        [
+          "get-property",
+          owner,
+          unitPath,
+          `${MANAGER}.Service`,
+          "Result",
+          "NRestarts",
+          "MainPID",
+          "ExecMainStatus",
+          "ExecMainCode",
+          "KillMode",
+          "TasksCurrent",
+          "MemoryCurrent",
+          "ControlGroup",
+        ],
+        ["s", "u", "u", "i", "i", "s", "t", "t", "s"],
+      );
     let drained = optionalCounter(tasks) === 0;
     if (
       (active === "inactive" || active === "failed") &&
@@ -254,6 +256,7 @@ export async function readLoadedSystemdServiceRuntime(
       !isUint32(pid) ||
       !isInt32(exitStatus) ||
       !isInt32(exitCode) ||
+      typeof controlGroup !== "string" ||
       typeof killMode !== "string"
     ) {
       throw unavailable();
@@ -280,6 +283,7 @@ export async function readLoadedSystemdServiceRuntime(
         result,
         nRestarts: restarts,
         startLimitBurst: burst,
+        controlGroup: controlGroup || undefined,
         killMode,
         tasksCurrent: optionalCounter(tasks),
         memoryCurrent: optionalCounter(memory),

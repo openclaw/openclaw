@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as serviceMembership from "../../daemon/service-process-membership.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import * as ancestry from "../../infra/restart-stale-pids.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -198,7 +199,12 @@ describe("gatewayMaintenanceBlock", () => {
     expect(message).not.toContain("openclaw update");
   });
 
-  it("returns undefined when the pid is not an ancestor", () => {
+  it("allows a caller with verified external ancestry and native membership", () => {
+    vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue("outside");
+    vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+      pids: new Set([process.pid, 1]),
+      complete: true,
+    });
     expect(
       gatewayMaintenanceBlock(
         { ...callerService, runtime: { status: "running", pid: 2 } },

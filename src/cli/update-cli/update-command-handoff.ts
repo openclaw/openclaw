@@ -1,6 +1,7 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV, isGatewayServiceEnv } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { inspectServiceProcessMembershipSync } from "../../daemon/service-process-membership.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceState,
@@ -52,19 +53,48 @@ const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
 const GATEWAY_ANCESTRY_SHELL_GUIDANCE =
   "Run this command from a shell outside the gateway service.";
 
-export function gatewayAncestryBlock(
+export function gatewayServiceMembershipBlock(
   pid: unknown,
   ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true }),
+  systemdControlGroup?: string,
 ) {
   const gatewayPid = parsePositivePid(pid);
   if (gatewayPid === null) {
-    return undefined;
+    // Scheduled Tasks retain the ancestry fallback until their owner exposes Job membership.
+    return process.platform === "win32"
+      ? undefined
+      : createUpdatePreflightFailure(
+          "service-membership-unverified",
+          undefined,
+          "managed-service-preflight",
+        );
   }
   if (!ancestry.pids.has(gatewayPid)) {
-    return !ancestry.complete &&
-      isGatewayServiceEnv(process.env) &&
-      parsePositivePid(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]) === gatewayPid &&
-      isPidAlive(gatewayPid)
+    const membership =
+      process.platform === "win32"
+        ? "outside"
+        : inspectServiceProcessMembershipSync(gatewayPid, process.platform, systemdControlGroup);
+    if (membership === "inside") {
+      return createUpdatePreflightFailure(
+        "inside-gateway-service",
+        undefined,
+        "managed-service-preflight",
+      );
+    }
+    if (membership === "unknown") {
+      return createUpdatePreflightFailure(
+        "service-membership-unverified",
+        undefined,
+        "managed-service-preflight",
+      );
+    }
+    const unverified =
+      !ancestry.complete &&
+      (process.platform !== "win32" ||
+        (isGatewayServiceEnv(process.env) &&
+          parsePositivePid(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]) === gatewayPid &&
+          isPidAlive(gatewayPid)));
+    return unverified
       ? createUpdatePreflightFailure(
           "service-ancestry-unverified",
           undefined,
@@ -135,7 +165,14 @@ export function gatewayMaintenanceBlock(
       "managed-service-preflight",
     );
   }
-  return operation === "handoff" ? undefined : gatewayAncestryBlock(state.runtime?.pid, ancestry);
+  return operation === "handoff" ||
+    (!state.running && parsePositivePid(state.runtime?.pid) === null)
+    ? undefined
+    : gatewayServiceMembershipBlock(
+        state.runtime?.pid,
+        ancestry,
+        state.runtime?.systemd?.controlGroup,
+      );
 }
 
 export async function handoffUpdateFromGateway(params: {

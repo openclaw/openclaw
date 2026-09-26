@@ -16,8 +16,12 @@ export const UPDATE_PREFLIGHT_DETAILS = {
     "The cached Git target differs from the current remote target. A dry-run leaves local refs unchanged, so the target remains unresolved. A real openclaw update will fetch and validate the current remote target.",
   "inside-gateway-process-tree":
     "The update is running inside the Gateway process tree. Use the Gateway update action for a managed handoff, or run openclaw update from a terminal outside the Gateway process tree.",
+  "inside-gateway-service":
+    "The update is running inside the Gateway's native service membership. Stopping the service would terminate this command. Run openclaw update from an independent terminal outside the service, or use the Gateway update action for a managed handoff.",
+  "service-membership-unverified":
+    "Native Gateway service membership could not be verified. No service teardown was attempted. Retry from an independent terminal after restoring native process inspection, or use the Gateway update action for a managed handoff.",
   "service-ancestry-unverified":
-    "Process ancestry could not be fully inspected while Gateway service markers are present. Use the Gateway update action for a managed handoff, or retry from an independent terminal without inherited service markers.",
+    "Process ancestry could not be fully inspected. Use the Gateway update action for a managed handoff, or retry from an independent terminal without inherited service markers.",
   "inside-triage-process-tree":
     "This maintenance command cannot stop the Gateway from inside its automatic triage process tree: stopping the service would cancel this repair. Use read-only diagnosis or safe offline artifact repair followed by an atomic `openclaw gateway restart`, or run stop-requiring maintenance from a shell outside automatic triage. Report this blocker if repair cannot proceed safely.",
   "foreground-handoff-unverified":

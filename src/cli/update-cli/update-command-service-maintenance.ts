@@ -22,12 +22,17 @@ import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { admitSystemdUpdate } from "../../infra/update-managed-service-handoff-service.js";
 import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
-import { gatewayAncestryBlock, gatewayMaintenanceBlock } from "./update-command-handoff.js";
+import {
+  gatewayServiceMembershipBlock,
+  gatewayMaintenanceBlock,
+} from "./update-command-handoff.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
   ManagedGatewayUpdateVerdict,
@@ -211,13 +216,28 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(
   if (expected?.kind === "unavailable") {
     return unavailableServiceState(expected);
   }
-  if (params.phase === "inspect") {
-    return await stopManagedServiceBeforeMutableUpdate(params);
+  try {
+    if (params.phase === "inspect") {
+      return await stopManagedServiceBeforeMutableUpdate(params);
+    }
+    return await withGatewayServiceOperationLock(
+      params.expectedService?.serviceEnv ?? process.env,
+      (assertNative) => stopManagedServiceBeforeMutableUpdate(params, assertNative),
+    );
+  } catch (error) {
+    if (
+      error instanceof ServiceInspectionError &&
+      (error.reason === "service-membership-unverified" ||
+        error.reason === "service-ancestry-unverified")
+    ) {
+      throw new UpdatePreMutationError(
+        "managed-service-preflight",
+        error.message,
+        createUpdatePreflightFailure(error.reason, undefined, "managed-service-preflight"),
+      );
+    }
+    throw error;
   }
-  return await withGatewayServiceOperationLock(
-    params.expectedService?.serviceEnv ?? process.env,
-    (assertNative) => stopManagedServiceBeforeMutableUpdate(params, assertNative),
-  );
 }
 
 async function stopManagedServiceBeforeMutableUpdate(
@@ -377,6 +397,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     ...(typeof serviceState.runtime?.pid === "number"
       ? { servicePid: serviceState.runtime.pid }
       : {}),
+    serviceControlGroup: serviceState.runtime?.systemd?.controlGroup,
     offline: await withCommandProcessScope(() => isManagedGatewayServiceOffline(serviceState)),
     serviceEnv: serviceState.env,
     serviceDefinitionEnv:
@@ -659,22 +680,34 @@ async function stopManagedServiceBeforeMutableUpdate(
   };
 }
 
-export function mutableUpdateGatewayServiceBlock(params: {
+export async function mutableUpdateGatewayServiceBlock(params: {
   preManagedServiceStop: PreManagedServiceStop | undefined;
+  root: string;
+  runId?: string;
 }) {
   const stopState = params.preManagedServiceStop;
-  if (!isGatewayServiceEnv(process.env)) {
-    return undefined;
-  }
   const ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
-  const inheritedPid = parseStrictPositiveInteger(
-    process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] ?? "",
-  );
+  const inheritedPid = isGatewayServiceEnv(process.env)
+    ? parseStrictPositiveInteger(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] ?? "")
+    : undefined;
   // Another service's stopped state cannot authorize replacing the caller's Gateway.
-  return (
-    gatewayAncestryBlock(inheritedPid, ancestry) ??
+  const block =
+    (inheritedPid && (ancestry.pids.has(inheritedPid) || isPidAlive(inheritedPid))
+      ? gatewayServiceMembershipBlock(
+          inheritedPid,
+          ancestry,
+          inheritedPid === stopState?.servicePid ? stopState.serviceControlGroup : undefined,
+        )
+      : undefined) ??
     (stopState?.running && !stopState.stopped
-      ? gatewayAncestryBlock(stopState.servicePid, ancestry)
-      : undefined)
-  );
+      ? gatewayServiceMembershipBlock(stopState.servicePid, ancestry, stopState.serviceControlGroup)
+      : undefined);
+  return block &&
+    !(await isCurrentManagedServiceUpdateHandoffProcess({
+      root: params.root,
+      runId: params.runId,
+      env: process.env,
+    }))
+    ? block
+    : undefined;
 }

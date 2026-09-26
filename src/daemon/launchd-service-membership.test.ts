@@ -4,7 +4,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
-  state,
+  nativeServiceMembership,
   getSelfAndAncestorPidsSync,
   launchdCallerPids,
   launchdRestartHandoffState,
@@ -14,9 +14,11 @@ import {
 } from "./launchd-ancestry.test-support.js";
 import {
   createDefaultLaunchdEnv,
+  createTestLaunchAgentPlist,
   defaultProgramArguments,
   launchAgentControlFixture,
 } from "./launchd-install.test-support.js";
+import { launchdTestState as state } from "./launchd-state.test-support.js";
 import {
   parkCurrentLaunchAgentForMaintenance,
   resolveLaunchAgentPlistPath,
@@ -28,6 +30,57 @@ import {
 registerLaunchdAncestryTests();
 
 describe("LaunchAgent service membership", () => {
+  it("surfaces detached handoff failures", async () => {
+    const env = createDefaultLaunchdEnv();
+    nativeServiceMembership.mockReturnValue("inside");
+    launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
+      ok: false,
+      error: "spawn failed",
+    });
+
+    await expect(
+      withEnvAsync({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
+        restartLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+        }),
+      ),
+    ).rejects.toThrow("launchd restart handoff failed: spawn failed");
+  });
+
+  it.each(["inside", "unknown"] as const)(
+    "refuses reinstall after reparenting to launchd when native membership is %s",
+    async (membership) => {
+      const env = createDefaultLaunchdEnv();
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      state.serviceStates.set(`${domain}/ai.openclaw.gateway`, "running");
+      getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 1]));
+      nativeServiceMembership.mockReturnValue(membership);
+      state.files.set(
+        resolveLaunchAgentPlistPath(env),
+        createTestLaunchAgentPlist({
+          label: "ai.openclaw.gateway",
+          programArguments: defaultProgramArguments,
+        }),
+      );
+      await withEnvAsync({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () => {
+        await expect(
+          installLaunchAgent({
+            env,
+            stdout: new PassThrough(),
+            programArguments: defaultProgramArguments,
+          }),
+        ).rejects.toThrow(
+          membership === "inside"
+            ? "Refusing to install LaunchAgent"
+            : "Native Gateway service membership could not be verified",
+        );
+      });
+      expect(state.fileWrites).toEqual([]);
+      expect(state.launchctlCalls).toEqual([["print", `${domain}/ai.openclaw.gateway`]]);
+    },
+  );
+
   it("refuses an in-band uninstall before bootout or plist removal", async () => {
     const env = createDefaultLaunchdEnv();
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";

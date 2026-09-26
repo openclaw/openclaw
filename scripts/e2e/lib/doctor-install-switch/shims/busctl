@@ -151,11 +151,13 @@ if (
   ]);
   process.exit(0);
 }
+const runtimeProperties =
+  "Result NRestarts MainPID ExecMainStatus ExecMainCode KillMode TasksCurrent MemoryCurrent";
+const includeControlGroup =
+  invocation.length === 13 && requestedProperties === `${runtimeProperties} ControlGroup`;
 if (
   invocation[3] === `${manager}.Service` &&
-  invocation.length === 12 &&
-  requestedProperties ===
-    "Result NRestarts MainPID ExecMainStatus ExecMainCode KillMode TasksCurrent MemoryCurrent"
+  ((invocation.length === 12 && requestedProperties === runtimeProperties) || includeControlGroup)
 ) {
   writeProperties([
     { type: "s", data: "success" },
@@ -166,6 +168,8 @@ if (
     { type: "s", data: "control-group" },
     { type: "t", data: 0 },
     { type: "t", data: 0 },
+    // This stopped fixture owns no native systemd cgroup.
+    ...(includeControlGroup ? [{ type: "s", data: "" }] : []),
   ]);
   process.exit(0);
 }

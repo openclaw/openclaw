@@ -55,6 +55,9 @@ const mocks = vi.hoisted(() => ({
   suspend: vi.fn(),
   resume: vi.fn(),
 }));
+vi.mock("../../daemon/service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
+}));
 vi.mock("../../daemon/schtasks.js", async (original) => ({
   ...(await original<typeof import("../../daemon/schtasks.js")>()),
   suspendScheduledTaskAutoStartForUpdate: mocks.suspend,
@@ -184,6 +187,7 @@ beforeEach(async () => {
     inspected: true,
     runtimeInspected: true,
     running: true,
+    servicePid: serviceState.runtime?.pid,
     serviceEnv: state.env,
     serviceNodeRunner: process.execPath,
     serviceManagerUid: process.getuid?.() ?? 501,

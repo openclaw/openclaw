@@ -1434,7 +1434,7 @@ describe("readSystemdServiceRuntime", () => {
           GATEWAY_SERVICE,
           "--no-page",
           "--property",
-          "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+          "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent,ControlGroup",
         ),
       );
     const runtime = await readSystemdServiceRuntime(

@@ -45,6 +45,9 @@ describe("isCurrentProcessLaunchdServiceLabel", () => {
 });
 
 const probe = vi.hoisted(() => vi.fn());
+vi.mock("./service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: () => "outside",
+}));
 const ancestors = vi.hoisted(() => vi.fn<() => Set<number>>());
 vi.mock("../infra/restart-stale-pids.js", () => ({ getSelfAndAncestorPidsSync: ancestors }));
 vi.mock("./launchd-runtime.js", () => ({
@@ -58,37 +61,28 @@ describe("launchd membership with unavailable process evidence", () => {
     ancestors.mockReset();
   });
   it.each([
-    { pids: [900, 901], inside: true },
+    { pids: [900, 901], inside: undefined },
     { pids: [900, 901, 1], inside: false },
     { pids: [900, 901, 4242], inside: true },
   ])("keeps partial ancestry conservative: $pids", async ({ pids, inside }) => {
     probe.mockResolvedValue({ state: "running", runtime: { pid: 4242 } });
     ancestors.mockReturnValue(new Set(pids));
-    expect(
-      await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway", {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-      }),
-    ).toBe(inside);
+    const inspection = isCurrentProcessInsideLaunchdService("ai.openclaw.gateway");
+    if (inside === undefined) {
+      await expect(inspection).rejects.toMatchObject({ reason: "service-ancestry-unverified" });
+    } else {
+      await expect(inspection).resolves.toBe(inside);
+    }
   });
   it.each([{ state: "unknown" }, { state: "running", runtime: {} }])(
     "preserves managed-wrapper protection when launchd reports %j",
     async (result) => {
       probe.mockResolvedValue(result);
-      expect(
-        await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway", {
-          XPC_SERVICE_NAME: "0",
-          OPENCLAW_SERVICE_MARKER: "openclaw",
-          OPENCLAW_SERVICE_KIND: "gateway",
-          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        }),
-      ).toBe(true);
-      expect(
-        await isCurrentProcessInsideLaunchdService("ai.openclaw.gateway", {
-          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-        }),
-      ).toBe(false);
+      await expect(
+        isCurrentProcessInsideLaunchdService("ai.openclaw.gateway"),
+      ).rejects.toMatchObject({
+        reason: "service-membership-unverified",
+      });
     },
   );
 });

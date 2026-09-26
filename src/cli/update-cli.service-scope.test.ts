@@ -363,7 +363,7 @@ describe("update-cli", () => {
     vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
     mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway"]);
     const mutationAdmitted = mockGitUpdateAfterMutation(makeOkUpdateResult({ mode: "git", root }));
-    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 1]));
     const runningRuntime = { status: "running", pid: gatewayFixturePid, state: "running" };
     // The final reread follows the ancestry check immediately before shutdown.
     // Additional schema inspections must not move this fault into handoff selection.
@@ -433,6 +433,9 @@ describe("update-cli", () => {
       });
       if (scenario === "unavailable") {
         serviceReadRuntime.mockRejectedValue(new Error("fixture service manager unavailable"));
+      }
+      if (scenario === "dead inherited PID") {
+        serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
       }
       mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
 

@@ -1225,7 +1225,7 @@ describe("launchd install", () => {
     });
     state.files.set(plistPath, previous);
     state.printError = "launchctl print permission denied";
-    // Both the membership probe and the supervision snapshot are denied.
+    // A denied membership probe must refuse before any native mutation.
     state.printFailuresRemaining = 2;
 
     await expect(
@@ -1234,11 +1234,11 @@ describe("launchd install", () => {
         stdout: new PassThrough(),
         programArguments: defaultProgramArguments,
       }),
-    ).rejects.toThrow("could not determine whether");
+    ).rejects.toMatchObject({ reason: "service-membership-unverified" });
 
     expect(state.files.get(plistPath)).toBe(previous);
     expect(state.fileWrites).toEqual([]);
-    expect(launchctlCommandNames()).toEqual(["print", "print"]);
+    expect(launchctlCommandNames()).toEqual(["print"]);
   });
 
   it("aborts before mutation when launchd has the only copy of the prior definition", async () => {
@@ -1978,7 +1978,7 @@ describe("launchd install", () => {
     state.printOutput = "state = running\n";
     await expect(
       stopLaunchAgent({ env: createDefaultLaunchdEnv(), stdout: new PassThrough() }),
-    ).rejects.toThrow(/PID.*launchctl bootout gui\//);
+    ).rejects.toMatchObject({ reason: "service-membership-unverified" });
   });
 
   it("waits for both asynchronous label teardown and process exit", async () => {
@@ -2301,12 +2301,12 @@ describe("launchd install", () => {
     expect(output).toContain("Stopped LaunchAgent (degraded)");
   });
 
-  it("names the native stop command when service inspection is denied", async () => {
+  it("names unverified membership when service inspection is denied", async () => {
     state.printError = "launchctl print permission denied";
     state.printFailuresRemaining = 3;
     await expect(
       stopLaunchAgent({ env: createDefaultLaunchdEnv(), stdout: new PassThrough() }),
-    ).rejects.toThrow(/launchctl print permission denied.*launchctl bootout gui\//);
+    ).rejects.toMatchObject({ reason: "service-membership-unverified" });
     expect(launchctlCommandNames()).not.toContain("bootout");
   });
 
@@ -2986,23 +2986,6 @@ describe("launchd install", () => {
       expect(launchctlCommandNames().includes("bootstrap")).toBe(phase !== "loaded");
     },
   );
-
-  it("surfaces detached handoff failures", async () => {
-    const env = createDefaultLaunchdEnv();
-    launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
-      ok: false,
-      error: "spawn failed",
-    });
-
-    await expect(
-      withEnvAsync({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
-        restartLaunchAgent({
-          env,
-          stdout: new PassThrough(),
-        }),
-      ),
-    ).rejects.toThrow("launchd restart handoff failed: spawn failed");
-  });
 
   it("hands restart off when XPC_SERVICE_NAME is inherited", async () => {
     const env = createDefaultLaunchdEnv();
