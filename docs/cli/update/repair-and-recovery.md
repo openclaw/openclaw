@@ -68,6 +68,11 @@ history; replacing the code alone cannot undo a migration. The original
 failed update still exits nonzero after the agent finishes, even if the repair
 succeeds.
 
+After activation succeeds, a failure to read or publish update reporting leaves
+the updated installation in place. Reporting failures do not trigger package
+rollback. The command still exits nonzero when required finalization cannot
+complete; follow its recovery guidance after the owning updater exits.
+
 Dry runs and commands rejected by the initial argument, external-supervisor,
 state-store ownership, handoff identity, or immutable-config checks do not
 collect diagnostics or start an agent. Once those checks pass, failed metadata,

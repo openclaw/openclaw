@@ -7,6 +7,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { CronService, type CronEvent } from "../service.js";
@@ -51,6 +52,7 @@ function makeService(
   onEvent?: ConstructorParameters<typeof CronService>[0]["onEvent"],
 ) {
   return new CronService({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log: logger,
@@ -85,6 +87,7 @@ describe("cron run receipt settlement", () => {
         return { status: "ok" as const };
       };
       const service = new CronService({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         cronEnabled: true,
         log: logger,

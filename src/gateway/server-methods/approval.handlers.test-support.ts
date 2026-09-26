@@ -17,6 +17,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { ExecApprovalManagerOptions } from "../exec-approval-manager.types.js";
 import { getOperatorApprovalDetailed } from "../operator-approval-store.js";
@@ -47,8 +48,10 @@ export function createDatabaseOptions(): OpenClawStateDatabaseOptions {
 }
 
 export function createManagers(databaseOptions: OpenClawStateDatabaseOptions) {
+  const scheduler = createTestGatewayScheduler();
   const persistence = { runtimeEpoch: "approval-handler-test", databaseOptions };
   const execOptions: ExecApprovalManagerOptions<ExecApprovalRequestPayload> = {
+    scheduler,
     approvalKind: "exec",
     persistence,
     resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
@@ -57,12 +60,14 @@ export function createManagers(databaseOptions: OpenClawStateDatabaseOptions) {
   const managers = {
     exec: new ExecApprovalManager(execOptions),
     plugin: new ExecApprovalManager<PluginApprovalRequestPayload>({
+      scheduler,
       approvalKind: "plugin",
       persistence,
       resolveAllowedDecisions: resolvePluginApprovalRequestAllowedDecisions,
       resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
     }),
     systemAgent: new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      scheduler,
       approvalKind: "system-agent",
       persistence,
       resolveAllowedDecisions: (request) => request.allowedDecisions,

@@ -425,285 +425,304 @@ export async function finishUpdate(
     }
   };
 
-  try {
-    if (params.result.status === "error" || params.result.recovery?.serviceRestartSafe === false) {
-      const reported = await reportResult(
-        { ...params.result, status: "error" },
-        params.result.recovery?.serviceRestartSafe === true,
-      );
-      throw createFailure(
-        reported,
-        resolveManagedServiceUpdateFailureExitCode(reported),
-        params.failure?.detail,
-        params.failure,
-      );
-    }
-
-    if (params.result.status === "skipped" && !params.coreAlreadyCurrent) {
-      const reported = await reportResult(
-        params.result,
-        params.result.recovery?.serviceRestartSafe === true,
-      );
-      throw createFailure(
-        reported,
-        classifyUpdateOutcome(reported) === "failed"
-          ? resolveManagedServiceUpdateFailureExitCode(reported)
-          : 0,
-      );
-    }
-
-    const postUpdateRoot = params.result.root ?? params.root;
-    const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
-      const pluginParams = {
-        ...params,
-        beforeDoctor: beforeDoctor ?? parkForegroundOrigin,
-        beforeRuntimePublication: parkForegroundOrigin,
-        assertCurrent,
-        candidateRuntime,
-      };
-      const convergence = await convergeUpdatePlugins(pluginParams);
-      if (convergence.resultWithPostUpdate.status === "error") {
-        triageAllowed = !convergence.cancelled;
-        const reported = await reportResult(convergence.resultWithPostUpdate);
+  const runPostUpdate = async (): Promise<UpdateRunResult> => {
+    try {
+      if (
+        params.result.status === "error" ||
+        params.result.recovery?.serviceRestartSafe === false
+      ) {
+        const reported = await reportResult(
+          { ...params.result, status: "error" },
+          params.result.recovery?.serviceRestartSafe === true,
+        );
         throw createFailure(
           reported,
           resolveManagedServiceUpdateFailureExitCode(reported),
-          convergence.detail,
+          params.failure?.detail,
+          params.failure,
         );
       }
-      return convergence;
-    };
-    // A current core may converge plugins online, parking before fresh Doctor.
-    // A replaced core keeps convergence in its original stopped interval.
-    const deferPluginConvergence =
-      shouldRestart &&
-      params.preManagedServiceStop?.serviceMutationAllowed !== false &&
-      params.coreAlreadyCurrent === true &&
-      params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
-    let resultWithPostUpdate = params.result;
-    let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
-    if (!deferPluginConvergence) {
-      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
-      if (params.coreAlreadyCurrent) {
-        if (
-          params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "absent" &&
-          params.preManagedServiceStop.serviceMutationSkipMessage
-        ) {
-          // An absent service needs no repair. Keep the explanation without
-          // reporting a service-install command as completed maintenance.
-          defaultRuntime.error(params.preManagedServiceStop.serviceMutationSkipMessage);
-        } else if (params.preManagedServiceStop?.serviceMutationSkipMessage) {
-          recordServiceReconciliationWarning(
-            resultWithPostUpdate,
-            params.preManagedServiceStop.serviceEnv ?? process.env,
-            params.preManagedServiceStop.serviceMutationSkipMessage,
+
+      if (params.result.status === "skipped" && !params.coreAlreadyCurrent) {
+        const reported = await reportResult(
+          params.result,
+          params.result.recovery?.serviceRestartSafe === true,
+        );
+        throw createFailure(
+          reported,
+          classifyUpdateOutcome(reported) === "failed"
+            ? resolveManagedServiceUpdateFailureExitCode(reported)
+            : 0,
+        );
+      }
+
+      const postUpdateRoot = params.result.root ?? params.root;
+      const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
+        const pluginParams = {
+          ...params,
+          beforeDoctor: beforeDoctor ?? parkForegroundOrigin,
+          beforeRuntimePublication: parkForegroundOrigin,
+          assertCurrent,
+          candidateRuntime,
+        };
+        const convergence = await convergeUpdatePlugins(pluginParams);
+        if (convergence.resultWithPostUpdate.status === "error") {
+          triageAllowed = !convergence.cancelled;
+          const reported = await reportResult(convergence.resultWithPostUpdate);
+          throw createFailure(
+            reported,
+            resolveManagedServiceUpdateFailureExitCode(reported),
+            convergence.detail,
           );
         }
-        return await reportResult(resultWithPostUpdate);
+        return convergence;
+      };
+      // A current core may converge plugins online, parking before fresh Doctor.
+      // A replaced core keeps convergence in its original stopped interval.
+      const deferPluginConvergence =
+        shouldRestart &&
+        params.preManagedServiceStop?.serviceMutationAllowed !== false &&
+        params.coreAlreadyCurrent === true &&
+        params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
+      let resultWithPostUpdate = params.result;
+      let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
+      if (!deferPluginConvergence) {
+        ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
+        if (params.coreAlreadyCurrent) {
+          if (
+            params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "absent" &&
+            params.preManagedServiceStop.serviceMutationSkipMessage
+          ) {
+            // An absent service needs no repair. Keep the explanation without
+            // reporting a service-install command as completed maintenance.
+            defaultRuntime.error(params.preManagedServiceStop.serviceMutationSkipMessage);
+          } else if (params.preManagedServiceStop?.serviceMutationSkipMessage) {
+            recordServiceReconciliationWarning(
+              resultWithPostUpdate,
+              params.preManagedServiceStop.serviceEnv ?? process.env,
+              params.preManagedServiceStop.serviceMutationSkipMessage,
+            );
+          }
+          return resultWithPostUpdate;
+        }
       }
-    }
-    const restartConfigSnapshot =
-      postUpdateConfigSnapshot ??
-      (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
-        readConfigFileSnapshot({
-          observe: false,
-          skipPluginValidation: true,
-          suppressFutureVersionWarning: true,
-        }),
-      ));
-    let restartContext: Awaited<ReturnType<typeof prepareUpdateRestart>>;
-    try {
-      restartContext = await prepareUpdateRestart(
-        { ...params, shouldRestart, result: resultWithPostUpdate },
-        restartConfigSnapshot,
+      const restartConfigSnapshot =
+        postUpdateConfigSnapshot ??
+        (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
+          readConfigFileSnapshot({
+            observe: false,
+            skipPluginValidation: true,
+            suppressFutureVersionWarning: true,
+          }),
+        ));
+      let restartContext: Awaited<ReturnType<typeof prepareUpdateRestart>>;
+      try {
+        restartContext = await prepareUpdateRestart(
+          { ...params, shouldRestart, result: resultWithPostUpdate },
+          restartConfigSnapshot,
+        );
+      } catch (error) {
+        const message =
+          error instanceof GatewayServiceUpdateOwnershipError
+            ? error.message
+            : formatErrorMessage(error);
+        defaultRuntime.error(message);
+        const reported = await reportResult({
+          ...resultWithPostUpdate,
+          status: "error",
+          reason: "service-revalidation-failed",
+        });
+        throw createFailure(
+          reported,
+          resolveManagedServiceUpdateFailureExitCode(reported),
+          message,
+          {
+            cause: error,
+          },
+        );
+      }
+      const notifyRestart = () =>
+        writeRestartSentinel(
+          buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
+        );
+      if (!params.coreAlreadyCurrent) {
+        await notifyRestart();
+        await restoreWindowsAutoStart(resultWithPostUpdate);
+      }
+      let verificationFailure = "restart-unhealthy";
+      const restart = async () => {
+        const restarted = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
+          maybeRestartService({
+            onGatewayStartAttempted,
+            originalManagedServiceRuntime: params.originalManagedServiceRuntime,
+            shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,
+            result: resultWithPostUpdate,
+            opts: params.opts,
+            refreshServiceEnv: restartContext.refreshGatewayServiceEnv,
+            definitionRecovery,
+            serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
+            serviceManagerUid: restartContext.serviceManagerUid,
+            serviceRuntimeRefreshRequired: params.serviceRuntimeRefreshRequired,
+            serviceEnv: restartContext.gatewayServiceEnv,
+            serviceInstallEnv: restartContext.gatewayServiceInstallEnv,
+            gatewayPort: restartContext.gatewayPort,
+            invocationCwd: params.invocationCwd,
+            nodeRunner: params.packageUpdateNodeRunner,
+            skipLegacyServiceRestart: restartContext.skipLegacyServiceRestart,
+            requireRunningServiceAfterRestart: currentServiceStop()?.stopped === true,
+            serviceMutationSkipMessage: restartContext.serviceMutationSkipMessage,
+            timeoutMs: params.updateStepTimeoutMs,
+            onVerificationFailure: (reason) => {
+              verificationFailure = reason;
+            },
+            onPluginWarnings: (warnings) => {
+              resultWithPostUpdate = appendPluginUpdateWarnings(resultWithPostUpdate, warnings);
+            },
+            onVerified: recordVerifiedDowntime,
+          }),
+        );
+        if (restarted !== "failed" && restarted !== "restart-health-failed") {
+          return restarted === "ok";
+        }
+        triageAllowed = restartContext.serviceMutationAllowed;
+        if (
+          restarted === "restart-health-failed" &&
+          params.shouldRestart &&
+          restartContext.serviceMutationAllowed &&
+          (params.preManagedServiceStop?.running !== false ||
+            params.preManagedServiceStop.stopped) &&
+          !restartContext.skipLegacyServiceRestart
+        ) {
+          gateway = "verify-running";
+        }
+        const failure: UpdateRunResult = {
+          ...resultWithPostUpdate,
+          status: "error",
+          reason: verificationFailure,
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        };
+        const recovered = await recoverFailedResult(failure, false);
+        if (recovered.result.status !== "ok") {
+          // The Gateway may have consumed its sentinel. Update only the existing
+          // receipt so the terminal failure cannot deliver a duplicate notification.
+          await markControlPlaneUpdateRestartSentinelFailureBestEffort({
+            ...sentinelOptions,
+            reason: recovered.result.reason ?? verificationFailure,
+          });
+          const reported = await reportResult(recovered.result, false, undefined, false);
+          throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
+        }
+        resultWithPostUpdate = recovered.result;
+        return true;
+      };
+      if (!params.coreAlreadyCurrent) {
+        await restart();
+      }
+      if (deferPluginConvergence) {
+        ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
+          const before = currentServiceStop();
+          if (!before) {
+            throw new Error("Plugin maintenance lost its update service owner.");
+          }
+          await before.windowsTaskAutoStartRecovery?.complete(true);
+          // Package work finished online. Full Doctor owns state migrations, so
+          // park only now and retain this suspension through verified activation.
+          const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
+            updateRun: params.opts.run,
+            updateInstallKind: resultWithPostUpdate.mode === "git" ? "git" : "package",
+            root: postUpdateRoot,
+            shouldRestart: true,
+            jsonMode: Boolean(params.opts.json),
+            expectedService: before,
+            phase: "prepare",
+            timeoutMs: params.updateStepTimeoutMs,
+            onStopped: (state) => {
+              rollbackStopState = state;
+              pendingRestartAtMs ??= state.stoppedAtMs;
+            },
+          });
+          rollbackStopState = stopped;
+          before.windowsTaskAutoStartRecovery = stopped.windowsTaskAutoStartRecovery;
+          if (stopped.blockMessage || !stopped.stopped) {
+            throw new Error(
+              stopped.blockMessage ?? "Gateway could not be parked for plugin maintenance.",
+            );
+          }
+          stopped.windowsTaskAutoStartRecovery?.beginMutation();
+          pendingRestartAtMs ??= stopped.stoppedAtMs;
+        }));
+        const requiresInstallRootRefresh =
+          restartContext.serviceUpdateVerdict?.kind === "owned" &&
+          restartContext.serviceUpdateVerdict.requiresInstallRootRefresh;
+        if (
+          resultWithPostUpdate.postUpdate?.plugins?.changed ||
+          params.serviceRuntimeRefreshRequired ||
+          requiresInstallRootRefresh
+        ) {
+          // Installation-only repair keeps the old Gateway serving; the native
+          // installer owns replacement and rollback with its actual running state.
+          // Convergence awaited package managers and plugin hooks. Revalidate the
+          // exact native owner before activating plugins or the selected Node runtime.
+          restartContext = await prepareUpdateRestart(
+            {
+              ...params,
+              result: resultWithPostUpdate,
+              shouldRestart,
+              preManagedServiceStop: currentServiceStop(),
+            },
+            postUpdateConfigSnapshot ?? restartConfigSnapshot,
+          );
+          pendingRestartAtMs ??= Date.now();
+          if (!params.serviceRuntimeRefreshRequired && !requiresInstallRootRefresh) {
+            restartContext.refreshGatewayServiceEnv = false;
+          }
+          await notifyRestart();
+          await restoreWindowsAutoStart(resultWithPostUpdate);
+          const reconciled = await restart();
+          if (
+            requiresInstallRootRefresh &&
+            reconciled &&
+            resultWithPostUpdate.status === "skipped"
+          ) {
+            resultWithPostUpdate.status = "ok";
+            delete resultWithPostUpdate.reason;
+          }
+        }
+        return resultWithPostUpdate;
+      }
+      const maintenanceFailure = await completePostUpdateMaintenance(
+        params,
+        resultWithPostUpdate,
+        assertCurrent,
+        { root: postUpdateRoot, sentinel: sentinelOptions },
       );
+      if (maintenanceFailure) {
+        const reported = await reportResult(maintenanceFailure.result, false, undefined, false);
+        throw createFailure(reported, 1, maintenanceFailure.detail);
+      }
+
+      return resultWithPostUpdate;
     } catch (error) {
-      const message =
-        error instanceof GatewayServiceUpdateOwnershipError
-          ? error.message
-          : formatErrorMessage(error);
-      defaultRuntime.error(message);
-      const reported = await reportResult({
-        ...resultWithPostUpdate,
-        status: "error",
-        reason: "service-revalidation-failed",
-      });
+      if (
+        params.originalManagedServiceRuntime &&
+        error instanceof UpdateCommandRecoveryPendingError
+      ) {
+        throw new UpdateCommandPendingRecoveryFailure(pendingResult, formatErrorMessage(error), {
+          cause: error,
+        });
+      }
+      if (error instanceof UpdateCommandFailure || hasCommandProcessCleanupError(error)) {
+        // Unsettled commands may still change files. Keep intent/material for fenced reconciliation.
+        throw error;
+      }
+      const { result, message } = createPostUpdateFailureResult(params, error);
+      defaultRuntime.error(`Post-update verification failed: ${message}`);
+      const reported = await reportResult(result);
       throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
         cause: error,
       });
     }
-    const notifyRestart = () =>
-      writeRestartSentinel(buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate));
-    if (!params.coreAlreadyCurrent) {
-      await notifyRestart();
-      await restoreWindowsAutoStart(resultWithPostUpdate);
-    }
-    let verificationFailure = "restart-unhealthy";
-    const restart = async () => {
-      const restarted = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
-        maybeRestartService({
-          onGatewayStartAttempted,
-          originalManagedServiceRuntime: params.originalManagedServiceRuntime,
-          shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,
-          result: resultWithPostUpdate,
-          opts: params.opts,
-          refreshServiceEnv: restartContext.refreshGatewayServiceEnv,
-          definitionRecovery,
-          serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
-          serviceManagerUid: restartContext.serviceManagerUid,
-          serviceRuntimeRefreshRequired: params.serviceRuntimeRefreshRequired,
-          serviceEnv: restartContext.gatewayServiceEnv,
-          serviceInstallEnv: restartContext.gatewayServiceInstallEnv,
-          gatewayPort: restartContext.gatewayPort,
-          invocationCwd: params.invocationCwd,
-          nodeRunner: params.packageUpdateNodeRunner,
-          skipLegacyServiceRestart: restartContext.skipLegacyServiceRestart,
-          requireRunningServiceAfterRestart: currentServiceStop()?.stopped === true,
-          serviceMutationSkipMessage: restartContext.serviceMutationSkipMessage,
-          timeoutMs: params.updateStepTimeoutMs,
-          onVerificationFailure: (reason) => {
-            verificationFailure = reason;
-          },
-          onPluginWarnings: (warnings) => {
-            resultWithPostUpdate = appendPluginUpdateWarnings(resultWithPostUpdate, warnings);
-          },
-          onVerified: recordVerifiedDowntime,
-        }),
-      );
-      if (restarted !== "failed" && restarted !== "restart-health-failed") {
-        return restarted === "ok";
-      }
-      triageAllowed = restartContext.serviceMutationAllowed;
-      if (
-        restarted === "restart-health-failed" &&
-        params.shouldRestart &&
-        restartContext.serviceMutationAllowed &&
-        (params.preManagedServiceStop?.running !== false || params.preManagedServiceStop.stopped) &&
-        !restartContext.skipLegacyServiceRestart
-      ) {
-        gateway = "verify-running";
-      }
-      const failure: UpdateRunResult = {
-        ...resultWithPostUpdate,
-        status: "error",
-        reason: verificationFailure,
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      };
-      const recovered = await recoverFailedResult(failure, false);
-      if (recovered.result.status !== "ok") {
-        // The Gateway may have consumed its sentinel. Update only the existing
-        // receipt so the terminal failure cannot deliver a duplicate notification.
-        await markControlPlaneUpdateRestartSentinelFailureBestEffort({
-          ...sentinelOptions,
-          reason: recovered.result.reason ?? verificationFailure,
-        });
-        const reported = await reportResult(recovered.result, false, undefined, false);
-        throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
-      }
-      resultWithPostUpdate = recovered.result;
-      return true;
-    };
-    if (!params.coreAlreadyCurrent) {
-      await restart();
-    }
-    if (deferPluginConvergence) {
-      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
-        const before = currentServiceStop();
-        if (!before) {
-          throw new Error("Plugin maintenance lost its update service owner.");
-        }
-        await before.windowsTaskAutoStartRecovery?.complete(true);
-        // Package work finished online. Full Doctor owns state migrations, so
-        // park only now and retain this suspension through verified activation.
-        const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
-          updateRun: params.opts.run,
-          updateInstallKind: resultWithPostUpdate.mode === "git" ? "git" : "package",
-          root: postUpdateRoot,
-          shouldRestart: true,
-          jsonMode: Boolean(params.opts.json),
-          expectedService: before,
-          phase: "prepare",
-          timeoutMs: params.updateStepTimeoutMs,
-          onStopped: (state) => {
-            rollbackStopState = state;
-            pendingRestartAtMs ??= state.stoppedAtMs;
-          },
-        });
-        rollbackStopState = stopped;
-        before.windowsTaskAutoStartRecovery = stopped.windowsTaskAutoStartRecovery;
-        if (stopped.blockMessage || !stopped.stopped) {
-          throw new Error(
-            stopped.blockMessage ?? "Gateway could not be parked for plugin maintenance.",
-          );
-        }
-        stopped.windowsTaskAutoStartRecovery?.beginMutation();
-        pendingRestartAtMs ??= stopped.stoppedAtMs;
-      }));
-      const requiresInstallRootRefresh =
-        restartContext.serviceUpdateVerdict?.kind === "owned" &&
-        restartContext.serviceUpdateVerdict.requiresInstallRootRefresh;
-      if (
-        resultWithPostUpdate.postUpdate?.plugins?.changed ||
-        params.serviceRuntimeRefreshRequired ||
-        requiresInstallRootRefresh
-      ) {
-        // Installation-only repair keeps the old Gateway serving; the native
-        // installer owns replacement and rollback with its actual running state.
-        // Convergence awaited package managers and plugin hooks. Revalidate the
-        // exact native owner before activating plugins or the selected Node runtime.
-        restartContext = await prepareUpdateRestart(
-          {
-            ...params,
-            result: resultWithPostUpdate,
-            shouldRestart,
-            preManagedServiceStop: currentServiceStop(),
-          },
-          postUpdateConfigSnapshot ?? restartConfigSnapshot,
-        );
-        pendingRestartAtMs ??= Date.now();
-        if (!params.serviceRuntimeRefreshRequired && !requiresInstallRootRefresh) {
-          restartContext.refreshGatewayServiceEnv = false;
-        }
-        await notifyRestart();
-        await restoreWindowsAutoStart(resultWithPostUpdate);
-        const reconciled = await restart();
-        if (requiresInstallRootRefresh && reconciled && resultWithPostUpdate.status === "skipped") {
-          resultWithPostUpdate.status = "ok";
-          delete resultWithPostUpdate.reason;
-        }
-      }
-      return await reportResult(resultWithPostUpdate);
-    }
-    const maintenanceFailure = await completePostUpdateMaintenance(
-      params,
-      resultWithPostUpdate,
-      assertCurrent,
-      { root: postUpdateRoot, sentinel: sentinelOptions },
-    );
-    if (maintenanceFailure) {
-      const reported = await reportResult(maintenanceFailure.result, false, undefined, false);
-      throw createFailure(reported, 1, maintenanceFailure.detail);
-    }
-
-    return await reportResult(resultWithPostUpdate);
-  } catch (error) {
-    if (
-      params.originalManagedServiceRuntime &&
-      error instanceof UpdateCommandRecoveryPendingError
-    ) {
-      throw new UpdateCommandPendingRecoveryFailure(pendingResult, formatErrorMessage(error), {
-        cause: error,
-      });
-    }
-    if (error instanceof UpdateCommandFailure || hasCommandProcessCleanupError(error)) {
-      // Unsettled commands may still change files. Keep intent/material for fenced reconciliation.
-      throw error;
-    }
-    const { result, message } = createPostUpdateFailureResult(params, error);
-    defaultRuntime.error(`Post-update verification failed: ${message}`);
-    const reported = await reportResult(result);
-    throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
-      cause: error,
-    });
-  }
+  };
+  // Reporting cannot revoke verified activation or authorize another native rollback.
+  return await reportResult(await runPostUpdate());
 }

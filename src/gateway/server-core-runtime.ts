@@ -316,6 +316,7 @@ export async function startGatewayCoreRuntime(input: {
       await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
     return {
       ...createGatewayAuxHandlers({
+        scheduler: runtime.scheduler,
         log,
         chatAbortControllers,
         hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
