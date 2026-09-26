@@ -125,7 +125,6 @@ export TEST_RUNNER_OPENCLAW_MAC_PROOF_STATE="$state"
 export TEST_RUNNER_OPENCLAW_MAC_PROOF_CONFIG="$state/openclaw.json"
 export TEST_RUNNER_OPENCLAW_MAC_PROOF_STAGE="$stage"
 export TEST_RUNNER_OPENCLAW_MAC_PROOF_PRODUCTS="$products"
-export TEST_RUNNER_OPENCLAW_MAC_PROOF_TOOL_IMAGE="$output/live-tool.png"
 args=(-project "$test_project/NativeNarrationProof.xcodeproj" -scheme NativeNarrationProof
   -destination 'platform=macOS' -derivedDataPath "$scratch/derived" -parallel-testing-enabled NO)
 if ! xcodebuild "${args[@]}" build-for-testing > "$output/ui-build.log" 2>&1; then
@@ -146,6 +145,18 @@ git -C "$checkout" diff --exit-code -- apps/macos/Sources apps/shared/OpenClawKi
 test "$(git -C "$checkout" write-tree)" = "$expected_tree"
 test -z "$(git -C "$checkout" ls-files --others --exclude-standard -- apps/macos/Sources apps/shared/OpenClawKit/Sources apps/shared/OpenClawKit/Tests)"
 [[ "$status" -eq 0 ]]
+# XCTest owns capture writes; the external driver reads its exported attachment.
+node - "$output" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const output = process.argv[2];
+const images = path.join(output, "images");
+const manifest = JSON.parse(fs.readFileSync(path.join(images, "manifest.json"), "utf8"));
+const matches = manifest.flatMap(test => test.attachments).filter(attachment =>
+  attachment.suggestedHumanReadableName.startsWith("mac-live-tool_"));
+if (matches.length !== 1) throw new Error("Expected exactly one live tool screenshot");
+fs.copyFileSync(path.join(images, matches[0].exportedFileName), path.join(output, "live-tool.png"));
+NODE
 # Check the exact live row, not fixture payloads; both arguments and active status must render.
 tesseract "$output/live-tool.png" "$output/live-tool" -l eng --psm 6
 grep -Fq 'Layout.swift' "$output/live-tool.txt"

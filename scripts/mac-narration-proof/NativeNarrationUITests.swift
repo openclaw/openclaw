@@ -74,8 +74,7 @@ final class NativeNarrationUITests: XCTestCase {
         XCTAssertTrue(liveRead.waitForExistence(timeout: 5), "Pending tool must be visible")
         // macOS omits AXValue for this row. The driver checks its actual pixels
         // with CPU-based OCR after XCTest, avoiding unavailable VM Vision engines.
-        let toolImagePath = try XCTUnwrap(environment["OPENCLAW_MAC_PROOF_TOOL_IMAGE"])
-        try liveRead.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: toolImagePath))
+        self.attachScreenshot(liveRead, name: "mac-live-tool")
         if stage == "after" {
             XCTAssertLessThan(first.frame.minY, liveRead.frame.minY)
             XCTAssertLessThan(liveRead.frame.minY, second.frame.minY)

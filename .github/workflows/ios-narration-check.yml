@@ -34,8 +34,13 @@ jobs:
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(shasum -a 256 .proof/scripts/ios-agent-grouping.patch | awk '{print $1}')" = "$GROUPING_PATCH_SHA256"
           git apply --index .proof/scripts/ios-agent-grouping.patch
+          # Neutral relocation exposes the existing display merger; it does not repair it.
+          cp .proof/scripts/native-grouping-regressions/ChatTranscriptRows.swift apps/shared/OpenClawKit/Sources/OpenClawChatUI/
+          git add apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatTranscriptRows.swift
           mkdir -p "$RUNNER_TEMP/grouping-regressions"
           { git rev-parse HEAD; git write-tree; } > "$RUNNER_TEMP/grouping-regressions/source-identity.txt"
+          cp .proof/scripts/native-grouping-regressions/ChatAssistantRunGroupTests.swift apps/shared/OpenClawKit/Tests/OpenClawKitTests/
+          git add --intent-to-add apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatAssistantRunGroupTests.swift
           git apply .proof/scripts/native-grouping-regressions/settlement-test.patch
           git diff --exit-code -- apps/shared/OpenClawKit/Sources
           git diff -- apps/shared/OpenClawKit/Tests > "$RUNNER_TEMP/grouping-regressions/tests-only.patch"
@@ -52,15 +57,19 @@ jobs:
         run: |
           pnpm install --frozen-lockfile --prefer-offline --optional --filter '@openclaw/mermaid-renderer...' --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
           node scripts/prepare-apple-mermaid.mjs
-      - name: Require settlement regression to fail on the original prototype
+      - name: Require settlement and display regressions to fail on the original prototype
         run: |
           set -euo pipefail
           status=0
-          /usr/bin/time -p swift test --package-path apps/shared/OpenClawKit --filter ChatStreamReplayTests > "$RUNNER_TEMP/grouping-regressions/red-tests.log" 2>&1 || status=$?
+          /usr/bin/time -p swift test --package-path apps/shared/OpenClawKit --filter 'ChatAssistantRunGroupTests|ChatStreamReplayTests' > "$RUNNER_TEMP/grouping-regressions/red-tests.log" 2>&1 || status=$?
           tail -n 150 "$RUNNER_TEMP/grouping-regressions/red-tests.log"
           test "$status" -ne 0
           grep -F 'settled history retires unsaved narration without erasing live or lagging work' "$RUNNER_TEMP/grouping-regressions/red-tests.log"
-          grep -E 'Expectation failed: !.*hasNarration' "$RUNNER_TEMP/grouping-regressions/red-tests.log"
+          grep -E 'recorded tool results merge across narration.*Expectation failed:.*rows.count' "$RUNNER_TEMP/grouping-regressions/red-tests.log"
+          boundary_line="$(awk '/#expect\(groups.contains/ {print NR}' apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatAssistantRunGroupTests.swift)"
+          [[ "$boundary_line" =~ ^[0-9]+$ ]]
+          grep -E "input boundaries split repeated run IDs.*ChatAssistantRunGroupTests.swift:${boundary_line}:[0-9]+: Expectation failed:" "$RUNNER_TEMP/grouping-regressions/red-tests.log"
+          grep -E 'settled history retires unsaved narration.*Expectation failed: !.*hasNarration' "$RUNNER_TEMP/grouping-regressions/red-tests.log"
           git diff --exit-code -- apps/shared/OpenClawKit/Sources
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
