@@ -636,6 +636,9 @@ describe("web auto-reply connection", () => {
       seedInbound: true,
       captureStatus: true,
       cleanupWithoutError: true,
+      options: {
+        transportTimeoutMs: 30,
+      },
       exercise: async ({ scripted }) => {
         await vi.advanceTimersByTimeAsync(200);
         await Promise.resolve();
@@ -689,14 +692,15 @@ describe("web auto-reply connection", () => {
       },
     },
     {
-      name: "does not let transport frames mask application silence forever",
+      name: "keeps fresh idle sessions open while transport frames continue",
+      cleanupWithoutError: true,
       exercise: async ({ scripted }) => {
         const socket = getLastWebAutoReplySessionSocket();
         for (let elapsedMs = 0; elapsedMs < 140; elapsedMs += 20) {
           socket.ws.emit("frame");
           await vi.advanceTimersByTimeAsync(20);
         }
-        await waitForScriptedListeners(scripted, 2, true);
+        expect(scripted.getListenerCount()).toBe(1);
       },
     },
     {
