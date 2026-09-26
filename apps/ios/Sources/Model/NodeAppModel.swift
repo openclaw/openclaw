@@ -3054,18 +3054,17 @@ extension NodeAppModel {
             }
         }
 
-        func register<Params: Decodable & Sendable, Payload: Encodable & Sendable>(
+        func register<Params: Decodable & Sendable>(
             _ command: String,
             params: Params.Type = Params.self,
             fallback: Params? = nil,
-            handler: @escaping @MainActor @Sendable (NodeAppModel, Params) async throws -> Payload)
+            handler: @escaping @MainActor @Sendable (NodeAppModel, Params) async throws -> some Encodable & Sendable)
         {
             register([command]) { model, request in
-                let decoded: Params
-                if let fallback {
-                    decoded = (try? Self.decodeParams(params, from: request.paramsJSON)) ?? fallback
+                let decoded: Params = if let fallback {
+                    (try? Self.decodeParams(params, from: request.paramsJSON)) ?? fallback
                 } else {
-                    decoded = try Self.decodeParams(params, from: request.paramsJSON)
+                    try Self.decodeParams(params, from: request.paramsJSON)
                 }
                 return try await Self.successfulInvokeResponse(request, payload: handler(model, decoded))
             }
