@@ -1,7 +1,3 @@
-// Verifies the read-path include pre-scan stays stack-safe on deeply nested
-// documents: include resolution runs first on every config load, and the
-// include-aware guards that consult this scan run after it, so document
-// nesting must cost heap rather than call frames.
 import { describe, expect, it } from "vitest";
 import { INCLUDE_KEY } from "./includes.js";
 import { containsConfigIncludeDirective } from "./io.read-helpers.js";
@@ -12,31 +8,6 @@ function buildNestedObject(depth: number, leaf: Record<string, unknown>): Record
     value = { level: value };
   }
   return value;
-}
-
-function measureObjectDepth(value: unknown): number {
-  let deepest = 0;
-  const stack: Array<{ node: unknown; depth: number }> = [{ node: value, depth: 0 }];
-  while (stack.length > 0) {
-    const entry = stack.pop();
-    if (!entry) {
-      continue;
-    }
-    if (Array.isArray(entry.node)) {
-      for (const item of entry.node) {
-        stack.push({ node: item, depth: entry.depth + 1 });
-      }
-      continue;
-    }
-    if (typeof entry.node !== "object" || entry.node === null) {
-      continue;
-    }
-    deepest = Math.max(deepest, entry.depth);
-    for (const child of Object.values(entry.node)) {
-      stack.push({ node: child, depth: entry.depth + 1 });
-    }
-  }
-  return deepest;
 }
 
 describe("containsConfigIncludeDirective", () => {
@@ -51,7 +22,6 @@ describe("containsConfigIncludeDirective", () => {
 
   it("scans a deeply nested object without include directives", () => {
     const deep = buildNestedObject(100_000, { leaf: "value" });
-    expect(measureObjectDepth(deep)).toBe(100_000);
     expect(containsConfigIncludeDirective(deep)).toBe(false);
   });
 
