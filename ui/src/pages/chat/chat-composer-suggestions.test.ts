@@ -134,8 +134,13 @@ describe("chat composer suggestion accessibility", () => {
     expect(options[1]?.getAttribute("aria-selected")).toBe("true");
 
     keydownComposer(container, "Enter");
+    const textarea = getComposerTextarea(container);
+    expect(textarea.value).toBe("/pair-device ");
+    inputDraftAtEnd(container, `${textarea.value}phone`);
     container = harness.renderCurrent();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/pair-device ");
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+      "/pair-device phone",
+    );
     expect(container.querySelector(".slash-menu")).toBeNull();
   });
 

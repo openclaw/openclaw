@@ -320,6 +320,14 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     return this.announcement.text;
   }
 
+  get isRestoringReaderPosition(): boolean {
+    return (
+      this.prependAnchor.messageKey !== null &&
+      !this.offsetState.touching &&
+      !this.offsetState.touchScrolling
+    );
+  }
+
   requestUpdate = () => this.host.requestUpdate();
 
   addController(controller: ReactiveController): void {

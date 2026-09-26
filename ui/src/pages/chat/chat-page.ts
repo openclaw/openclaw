@@ -253,10 +253,22 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       this.retainedSessions.settleRoute();
     }
     if (data && routeHandoffRendered) {
-      queueMicrotask(() => {
+      const pane = this.retainedSessions.findPane(layout.activePaneId, data.sessionKey);
+      if (!pane) {
+        return;
+      }
+      // A retained pane can defer its commit beyond the page's update. Keep
+      // the one-shot properties until that pane has consumed them.
+      void Promise.resolve(pane.updateComplete).then(() => {
         if (
           this.isConnected &&
           this.presented &&
+          pane.active &&
+          pane.presented &&
+          this.retainedSessions.findPane(
+            (this.layout ?? this.classicLayout()).activePaneId,
+            data.sessionKey,
+          ) === pane &&
           this.paneData === data &&
           this.consumedDraftData !== data
         ) {

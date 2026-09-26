@@ -304,8 +304,10 @@ describe("chat page retained sessions", () => {
       const pane = expectDefined(paneFor(retainedSessionKey), "retained main chat pane");
       const receivedDrafts: Array<string | undefined> = [];
       const focusRequests: boolean[] = [];
+      const paneCommit = createDeferred<void>();
 
       Object.defineProperties(pane, {
+        updateComplete: { configurable: true, value: paneCommit.promise },
         draft: {
           configurable: true,
           get: () => receivedDrafts.at(-1),
@@ -324,6 +326,11 @@ describe("chat page retained sessions", () => {
         focusComposer: true,
       };
       await page.updateComplete;
+      await Promise.resolve();
+      expect(pane.draft).toBe("What can you do?");
+      expect(pane.focusComposer).toBe(true);
+      expect(navigation.replace).not.toHaveBeenCalled();
+      paneCommit.resolve();
       await Promise.resolve();
       await page.updateComplete;
 

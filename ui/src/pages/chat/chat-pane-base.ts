@@ -113,6 +113,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     // synchronous. Initial and detached updates cannot wait for a visible frame.
     if (this.hasUpdated && this.isConnected) {
       do {
+        // Finish a prepend's measured corrections before painting its provisional geometry.
+        if (document.visibilityState !== "hidden" && this.transcript.isRestoringReaderPosition) {
+          break;
+        }
         await new Promise<void>((resolve) => {
           let frame: number | null = null;
           let channel: MessageChannel | undefined;
