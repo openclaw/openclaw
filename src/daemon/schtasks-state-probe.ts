@@ -6,6 +6,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode, isErrno } from "../infra/errno.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
+import { awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import {
   ServiceInspectionError,
   type ServiceInspectionDiagnostic,
@@ -233,13 +234,20 @@ export async function isScheduledTaskDefinitionAbsent({
     if (expired()) {
       return false;
     }
-    try {
-      await fs.lstat(pathname);
+    const absent = await awaitWithinDeadline(
+      async () => {
+        try {
+          await fs.lstat(pathname);
+          return false;
+        } catch (error) {
+          return hasErrnoCode(error, "ENOENT");
+        }
+      },
+      deadline,
+      () => performance.now(),
+    );
+    if (absent !== true) {
       return false;
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        return false;
-      }
     }
   }
   if (expired()) {

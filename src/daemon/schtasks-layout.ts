@@ -8,15 +8,13 @@ import { normalizeProfileName } from "../cli/profile-utils.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
-import {
-  decodeWindowsLauncherScript,
-  encodeWindowsLauncherScript,
-} from "../infra/windows-launcher-encoding.js";
+import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { normalizeWindowsTaskIdentity, resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayTaskScriptPath as resolveTaskScriptPath } from "./paths.js";
+import { assertTaskInspectionDeadline, readTaskFile } from "./schtasks-inspection-deadline.js";
 import {
   isScheduledTaskDefinitionAbsent,
   probeScheduledTaskState,
@@ -319,7 +317,9 @@ async function readTaskLauncher(
   launcherPath: string,
   onLauncherContent?: (content: string) => void,
   startup = false,
+  deadline?: number,
 ): Promise<{ scriptPath: string; content?: string }> {
+  assertTaskInspectionDeadline(deadline);
   assertStaticTaskPath(launcherPath);
   if (/\.cmd$/i.test(launcherPath) && !startup) {
     return { scriptPath: launcherPath };
@@ -327,7 +327,7 @@ async function readTaskLauncher(
   if (!/\.(?:vbs|cmd)$/i.test(launcherPath)) {
     throw new Error("Unsupported Scheduled Task action");
   }
-  const content = decodeWindowsLauncherScript({ buffer: await fs.readFile(launcherPath) });
+  const content = await readTaskFile(launcherPath, deadline);
   onLauncherContent?.(content);
   const cmd = /\.cmd$/i.test(launcherPath);
   const lines = content
@@ -378,13 +378,19 @@ async function readTaskLaunchers(
   env: GatewayServiceEnv,
   actionPath?: string,
   onLauncherContent?: (content: string) => void,
+  deadline?: number,
 ) {
   const launchers: Array<{ pathname: string; scriptPath: string; content?: string }> = [];
   for (const pathname of actionPath === undefined ? resolveStartupEntryPaths(env) : [actionPath]) {
     try {
       launchers.push({
         pathname,
-        ...(await readTaskLauncher(pathname, onLauncherContent, actionPath === undefined)),
+        ...(await readTaskLauncher(
+          pathname,
+          onLauncherContent,
+          actionPath === undefined,
+          deadline,
+        )),
       });
     } catch (error) {
       if (actionPath !== undefined || !hasErrnoCode(error, "ENOENT")) {
@@ -407,24 +413,24 @@ export async function readScheduledTaskCommand(
     onLauncherContent?: (content: string) => void;
     /** Inventory reads a Task's profile without admitting it as the caller's selected service. */
     profileScope?: "registered";
+    /** Shared monotonic deadline for aggregate Windows inventory. */
+    deadline?: number;
   },
 ): Promise<GatewayServiceCommandConfig | null> {
   const requireEffective = options?.requireEffective || options?.requireLoaded;
-  const deadline =
+  const timeoutDeadline =
     options?.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs;
+  const deadline =
+    options?.deadline === undefined
+      ? timeoutDeadline
+      : timeoutDeadline === undefined
+        ? options.deadline
+        : Math.min(options.deadline, timeoutDeadline);
   const remainingTimeout = () =>
     deadline === undefined ? undefined : deadline - performance.now();
-  const assertInspectionDeadline = () => {
-    if (deadline !== undefined && performance.now() >= deadline) {
-      throw new ScheduledTaskInspectionError({
-        status: "unknown",
-        detail: "Scheduled Task inspection deadline expired.",
-        timeoutMs: 0,
-        diagnostic: { kind: "timeout", timeoutMs: 0 },
-      });
-    }
-  };
+  const assertInspectionDeadline = () => assertTaskInspectionDeadline(deadline);
   try {
+    assertInspectionDeadline();
     const taskName = resolveTaskName(env);
     const registered = options?.requireLoaded
       ? probeScheduledTaskState(taskName, remainingTimeout())
@@ -468,20 +474,23 @@ export async function readScheduledTaskCommand(
     }
     const launchers =
       registered && !directExecutable
-        ? await readTaskLaunchers(env, action?.path, options?.onLauncherContent)
+        ? await readTaskLaunchers(env, action?.path, options?.onLauncherContent, deadline)
         : undefined;
     const assertRegistrationCurrent = async (source?: { path: string; content: string }) => {
       if (!registered) {
         return;
       }
       if (
-        (launchers && !isDeepStrictEqual(await readTaskLaunchers(env, action?.path), launchers)) ||
-        (source &&
-          decodeWindowsLauncherScript({ buffer: await fs.readFile(source.path) }) !==
-            source.content)
+        (launchers &&
+          !isDeepStrictEqual(
+            await readTaskLaunchers(env, action?.path, undefined, deadline),
+            launchers,
+          )) ||
+        (source && (await readTaskFile(source.path, deadline)) !== source.content)
       ) {
         throw new Error("Task launcher changed during inspection");
       }
+      assertInspectionDeadline();
       const current = probeScheduledTaskState(taskName, remainingTimeout());
       if (current.status === "unknown") {
         throw new ScheduledTaskInspectionError(current);
@@ -523,7 +532,7 @@ export async function readScheduledTaskCommand(
       return null;
     }
     const scriptPath = launchers?.[0]?.scriptPath ?? resolveTaskScriptPath(env);
-    const content = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
+    const content = await readTaskFile(scriptPath, deadline);
     options?.onLauncherContent?.(content);
     let workingDirectory = action?.workingDirectory ?? "";
     let commandLine = "";
