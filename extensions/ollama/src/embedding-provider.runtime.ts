@@ -1,4 +1,5 @@
 import type { EmbeddingProvider } from "openclaw/plugin-sdk/embedding-providers";
+import { MEMORY_SEARCH_DEADLINE_CONTROL } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   isKnownEnvApiKeyMarker,
@@ -35,6 +36,8 @@ type MemoryCoreAcquireLocalService = (
     providerId: string;
     baseUrl: string;
     headers?: HeadersInit;
+    /** Pause/resume the managed-readiness search deadline during local service startup. */
+    onReadinessWait?: (waiting: boolean) => void;
   },
   signal?: AbortSignal | null,
 ) => Promise<{ release: () => void } | undefined>;
@@ -386,10 +389,17 @@ export async function createOllamaEmbeddingProvider(
   const client = await resolveOllamaEmbeddingClient(options);
   const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embed`;
 
-  const embedMany = async (input: string | string[], signal?: AbortSignal): Promise<number[][]> => {
+  const embedMany = async (
+    input: string | string[],
+    signal?: AbortSignal,
+    onReadinessWait?: (waiting: boolean) => void,
+  ): Promise<number[][]> => {
     const localServiceLease =
       client.localServiceTarget && client.acquireLocalService
-        ? await client.acquireLocalService(client.localServiceTarget, signal)
+        ? await client.acquireLocalService(
+            { ...client.localServiceTarget, onReadinessWait },
+            signal,
+          )
         : undefined;
     let json: Awaited<ReturnType<typeof readOllamaEmbeddingJsonResponse>>;
     try {
@@ -440,8 +450,12 @@ export async function createOllamaEmbeddingProvider(
     });
   };
 
-  const embedOne = async (text: string, signal?: AbortSignal): Promise<number[]> => {
-    const [embedding] = await embedMany(text, signal);
+  const embedOne = async (
+    text: string,
+    signal?: AbortSignal,
+    onReadinessWait?: (waiting: boolean) => void,
+  ): Promise<number[]> => {
+    const [embedding] = await embedMany(text, signal, onReadinessWait);
     if (!embedding) {
       throw new Error("Ollama embed response returned no embedding");
     }
@@ -450,18 +464,36 @@ export async function createOllamaEmbeddingProvider(
 
   const embedQuery = async (
     text: string,
-    optionsValue?: { signal?: AbortSignal },
-  ): Promise<number[]> =>
-    await embedOne(applyQueryInstructionTemplate(client.model, text), optionsValue?.signal);
+    optionsValue?: { signal?: AbortSignal; [key: symbol]: unknown },
+  ): Promise<number[]> => {
+    const deadlineControl = optionsValue?.[MEMORY_SEARCH_DEADLINE_CONTROL] as
+      | { report: (action: "pause" | "resume") => void }
+      | undefined;
+    const onReadinessWait = deadlineControl
+      ? (waiting: boolean) => deadlineControl.report(waiting ? "pause" : "resume")
+      : undefined;
+    return await embedOne(
+      applyQueryInstructionTemplate(client.model, text),
+      optionsValue?.signal,
+      onReadinessWait,
+    );
+  };
 
   const provider: OllamaEmbeddingProvider = {
     id: "ollama",
     model: client.model,
     embed: async (input, optionsValue) => {
       const text = typeof input === "string" ? input : input.text;
-      return optionsValue?.inputType === "query"
-        ? await embedQuery(text, optionsValue)
-        : ((await embedMany([text], optionsValue?.signal))[0] ?? []);
+      if (optionsValue?.inputType === "query") {
+        return await embedQuery(text, optionsValue);
+      }
+      const deadlineControl = (optionsValue as Record<symbol, unknown> | undefined)?.[MEMORY_SEARCH_DEADLINE_CONTROL] as
+        | { report: (action: "pause" | "resume") => void }
+        | undefined;
+      const onReadinessWait = deadlineControl
+        ? (waiting: boolean) => deadlineControl.report(waiting ? "pause" : "resume")
+        : undefined;
+      return (await embedMany([text], optionsValue?.signal, onReadinessWait))[0] ?? [];
     },
     embedBatch: async (inputs, optionsLocal) => {
       const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
