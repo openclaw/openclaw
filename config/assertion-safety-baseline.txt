@@ -668,15 +668,14 @@ extensions/memory-lancedb/lancedb-store.ts	12
 extensions/memory-lancedb/memory-cli.ts	7
 extensions/memory-wiki/doctor-contract-api.ts	1
 extensions/memory-wiki/index.ts	1
-extensions/memory-wiki/src/apply.ts	3
+extensions/memory-wiki/src/apply.ts	1
 extensions/memory-wiki/src/bounded-walk.ts	1
-extensions/memory-wiki/src/cli.ts	4
+extensions/memory-wiki/src/cli.ts	3
 extensions/memory-wiki/src/compiled-cache.ts	1
 extensions/memory-wiki/src/gateway.ts	3
 extensions/memory-wiki/src/ingest.ts	2
 extensions/memory-wiki/src/log.ts	1
 extensions/memory-wiki/src/mutation-coordinator.ts	1
-extensions/memory-wiki/src/okf.ts	1
 extensions/memory-wiki/src/source-sync-state.ts	1
 extensions/memory-wiki/src/tool.ts	2
 extensions/microsoft-foundry/cli.ts	7
