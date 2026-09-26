@@ -1,15 +1,19 @@
 use super::{
     AppView,
-    theme::Palette,
-    transcript_state::{code_markdown_extensions, transcript_text_style},
+    theme::{Palette, TranscriptTokens as T},
 };
-use crate::model::chat::{Message, now_ms};
+use crate::model::{
+    attachments::Attachment,
+    avatars,
+    chat::{Message, MessageContent, ReplyTarget, exact_time, relative_timestamp},
+    people::Person,
+};
 use gpui_kit::{
+    assets::IconName,
     component::{
-        IconName, Sizable, StyledExt,
+        Sizable, StyledExt,
         button::{Button, ButtonVariants},
-        text::TextView,
-        tooltip::Tooltip,
+        popover::Popover,
     },
     prelude::FluentBuilder,
     *,
@@ -18,6 +22,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     sync::Arc,
+    time::Duration,
 };
 
 impl AppView {
@@ -31,219 +36,109 @@ impl AppView {
     ) -> AnyElement {
         let p = Palette::get(cx);
         let key = message_key(message, index, streaming);
-        if message.system {
-            return div()
-                .w_full()
-                .py_5()
-                .h_flex()
-                .gap_3()
-                .text_xs()
-                .text_color(p.muted)
-                .child(div().flex_1().h(px(1.)).bg(p.border))
-                .child(div().max_w(px(600.)).child(message.text.clone()))
-                .child(div().flex_1().h(px(1.)).bg(p.border))
-                .into_any_element();
+        if message.system || message.notice.is_some() {
+            return self.render_system_notice(index, &key, message, cx);
         }
         let user = message.role == "user";
-        let author = message.sender.clone().unwrap_or_else(|| {
-            if user {
-                "You".into()
-            } else {
-                self.selected_agent_name()
-            }
-        });
-        let timestamp = relative_time(message.timestamp);
-        let exact = message
-            .timestamp
-            .map(exact_time)
-            .unwrap_or_else(|| "Current response".into());
-        let info = format!(
-            "{author} · {exact}\n{}\n{} input · {} output tokens",
-            message.model.as_deref().unwrap_or("Default model"),
-            message.usage.input,
-            message.usage.output
-        );
-        let link_view = cx.entity().downgrade();
-        let media_view = link_view.clone();
-        let markdown = self.markdown_state(key.clone(), &message.text, cx);
-        let thinking_key = format!("{key}:thinking");
-        let thinking_open = streaming || self.transcript_state.expanded.contains(&thinking_key);
+        let peer = message.is_peer(self.sidebar_state.people.self_user.as_ref());
+        let own = user && !peer;
+        let author = self.message_author(message);
+        let source_label = message.source_label();
+        let persistent_identity =
+            user && (message.sender_person.is_some() || !source_label.is_empty());
+        let bubble = message
+            .sender_person
+            .as_ref()
+            .filter(|person| !person.id.is_empty())
+            .map(|person| {
+                T::sender_bubble(
+                    p,
+                    (avatars::fnv1a_utf16(&person.id) % 360) as u16,
+                    gpui_kit::component::Theme::global(cx).is_dark(),
+                )
+            })
+            .unwrap_or(p.user_bubble);
         let mut content = div()
             .group(SharedString::from(key.clone()))
             .relative()
             .v_flex()
             .w_full()
             .min_w_0()
-            .gap_2()
-            .text_size(px(14.))
-            .line_height(relative(1.6))
-            .pb_1()
-            .when(user, |this| this.max_w(relative(0.68)).items_end());
-        if !message.thinking.is_empty() {
-            let toggle = thinking_key.clone();
-            let thinking = self.markdown_state(thinking_key.clone(), &message.thinking, cx);
+            .gap(px(T::MESSAGE_GAP))
+            .text_size(px(T::TEXT_SIZE))
+            .line_height(relative(T::LINE_HEIGHT))
+            .when(user, |this| this.max_w(relative(T::USER_MAX_WIDTH)))
+            .when(own, |this| this.items_end());
+        if let Some(reply) = self.resolve_message_reply(message) {
+            let target = reply.id.clone();
             content = content.child(
                 div()
-                    .v_flex()
-                    .gap_2()
+                    .id(SharedString::from(format!("{key}:reply-preview")))
+                    .w_full()
+                    .border_l_2()
+                    .border_color(p.accent)
+                    .pl_3()
+                    .py_1()
+                    .text_size(px(T::META_SIZE))
                     .text_color(p.muted)
-                    .child(
-                        Button::new(SharedString::from(thinking_key))
-                            .ghost()
-                            .small()
-                            .label(if thinking_open {
-                                "⌄ Thinking"
-                            } else {
-                                "› Thinking"
-                            })
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(reply.sender))
+                    .child(div().truncate().child(reply.text))
+                    .when_some(target, |this, target| {
+                        this.cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.transcript_state.expanded.remove(&toggle) {
-                                    this.transcript_state.expanded.insert(toggle.clone());
-                                }
-                                this.transcript_list.remeasure_items(index..index + 1);
-                                cx.notify();
-                            })),
-                    )
-                    .when(thinking_open, |this| {
-                        this.child(
-                            div()
-                                .border_l_2()
-                                .border_color(p.border)
-                                .pl_3()
-                                .text_sm()
-                                .child(
-                                    TextView::new(&thinking)
-                                        .style(transcript_text_style(p))
-                                        .markdown_extensions(code_markdown_extensions())
-                                        .selectable(true)
-                                        .scrollable(false),
-                                ),
-                        )
+                                this.sidebar_state.search_target = Some(target.clone());
+                                this.reveal_search_target(cx);
+                            }))
                     }),
             );
+        }
+        if !message.thinking.is_empty() {
+            content = content.child(self.render_reasoning(&key, index, &message.thinking, cx));
         }
         if !message.tools.is_empty() {
             content =
                 content.child(self.render_tool_group(&key, index, &message.tools, streaming, cx));
         }
-        if !message.text.is_empty() {
-            content = content.child(
-                div()
-                    .max_w_full()
-                    .when(user, |this| this.bg(p.user_bubble).rounded(px(8.)).p_4())
-                    .when(!user, |this| this.w_full().py_1())
-                    .child(
-                        TextView::new(&markdown)
-                            .style(transcript_text_style(p))
-                            .markdown_extensions(code_markdown_extensions())
-                            .selectable(true)
-                            .scrollable(false)
-                            .stream_fade(streaming)
-                            .on_link_click(move |url, _, _, cx| {
-                                let _ = link_view
-                                    .update(cx, |this, cx| this.open_transcript_link(url, cx));
-                            }),
-                    ),
-            );
-        }
-        if !message.attachments.is_empty() {
-            content = content.child(div().flex().flex_wrap().gap_2().children(
-                message.attachments.iter().map(|attachment| {
-                    let mut chip = div()
-                        .h_flex()
-                        .gap_2()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(p.border)
-                        .bg(p.card)
-                        .p_2();
-                    let format = match attachment.mime_type.as_str() {
-                        "image/png" => Some(ImageFormat::Png),
-                        "image/jpeg" => Some(ImageFormat::Jpeg),
-                        "image/gif" => Some(ImageFormat::Gif),
-                        "image/webp" => Some(ImageFormat::Webp),
-                        _ => None,
-                    };
-                    if let Some(format) = format {
-                        chip = chip.child(
-                            img(self
-                                .transcript_state
-                                .images
-                                .entry(attachment.id.clone())
-                                .or_insert_with(|| {
-                                    Arc::new(Image::from_bytes(format, attachment.bytes.to_vec()))
-                                })
-                                .clone())
-                            .size(px(56.))
-                            .object_fit(ObjectFit::Cover)
-                            .rounded_md(),
-                        );
-                    } else {
-                        chip = chip.child(div().text_size(px(22.)).child("▤"));
-                    }
-                    chip.child(
+        for (part_index, part) in message.ordered_content().into_iter().enumerate() {
+            match part {
+                MessageContent::Text(text) if !text.is_empty() => {
+                    let markdown = self.render_message_markdown(
+                        format!("{key}:text:{part_index}"),
+                        index,
+                        &text,
+                        user,
+                        streaming,
+                        cx,
+                    );
+                    content = content.child(
                         div()
-                            .v_flex()
-                            .gap_1()
-                            .child(div().text_sm().child(attachment.file_name.clone()))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(p.muted)
-                                    .child(attachment.size_label()),
-                            ),
-                    )
-                }),
-            ));
-        }
-        if !message.media.is_empty() && message.attachments.is_empty() {
-            content = content.child(div().flex().flex_wrap().gap_2().children(
-                message.media.iter().map(|media| {
-                    let name = media
-                        .file_name
-                        .clone()
-                        .or_else(|| {
-                            media
-                                .path
-                                .as_deref()
-                                .and_then(|path| path.rsplit('/').next())
-                                .map(str::to_owned)
-                        })
-                        .unwrap_or_else(|| "Attachment".into());
-                    let size = media
-                        .size_bytes
-                        .map(|size| format!(" · {:.1} KB", size as f64 / 1024.))
-                        .unwrap_or_default();
-                    div()
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(p.border)
-                        .bg(p.card)
-                        .text_sm()
-                        .child(format!("▤ {name}{size}"))
-                        .when_some(
-                            media.url.clone().filter(|url| {
-                                url.starts_with("https://") || url.starts_with("http://")
-                            }),
-                            |this, url| {
-                                let view = media_view.clone();
-                                this.child(
-                                    Button::new(SharedString::from(format!("media-{url}")))
-                                        .ghost()
-                                        .xsmall()
-                                        .label("Open")
-                                        .on_click(move |_, _, cx| {
-                                            let _ = view.update(cx, |this, cx| {
-                                                this.open_transcript_link(&url, cx)
-                                            });
-                                        }),
-                                )
-                            },
-                        )
-                }),
-            ));
+                            .max_w_full()
+                            .when(user, |this| {
+                                this.bg(bubble)
+                                    .rounded(px(T::BUBBLE_RADIUS))
+                                    .px(px(T::BUBBLE_PADDING_X))
+                                    .py(px(T::BUBBLE_PADDING_Y))
+                            })
+                            .when(!user, |this| this.w_full().py_1())
+                            .child(markdown),
+                    );
+                }
+                MessageContent::Attachment(attachment) => {
+                    if let Some(attachment) = message.attachments.get(attachment) {
+                        content = content.child(self.render_message_attachment(attachment, cx));
+                    }
+                }
+                MessageContent::Media(media) => {
+                    if let Some(media) = message.media.get(media) {
+                        content = content.child(self.render_message_media(
+                            &format!("{key}:media:{part_index}"),
+                            media,
+                            cx,
+                        ));
+                    }
+                }
+                _ => {}
+            }
         }
         if message.pending {
             content = content.child(div().text_xs().text_color(p.muted).child("Sending…"));
@@ -285,91 +180,500 @@ impl AppView {
                 .get(index + 1..)
                 .and_then(|remaining| remaining.iter().find(|next| next.visible()))
                 .is_none_or(|next| crate::model::grouping::starts_group(Some(message), next));
+            let focus = self
+                .transcript_state
+                .footer_focus
+                .entry(key.clone())
+                .or_insert_with(|| cx.focus_handle())
+                .clone();
+            let copy_key = key.clone();
             let source = message.text.clone();
+            let copied = self
+                .transcript_state
+                .copied
+                .get(&key)
+                .map(|(copied, _)| *copied);
+            let metadata_key = format!("{key}:metadata");
+            let details_open = self.transcript_state.expanded.contains(&metadata_key);
+            let feedback = copied.is_some() || details_open;
+            let reply = ReplyTarget {
+                id: message.entry_id.clone().or_else(|| message.id.clone()),
+                text: source.clone(),
+                sender: author.clone(),
+            };
+            let mut actions = div()
+                .h_flex()
+                .gap_1()
+                .child(
+                    Button::new(SharedString::from(format!("reply-{key}")))
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Reply)
+                        .accessibility_label("Reply to message")
+                        .tooltip("Reply to message")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.start_message_reply(reply.clone(), window, cx)
+                        })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("copy-{key}")))
+                        .ghost()
+                        .xsmall()
+                        .icon(if copied == Some(true) {
+                            IconName::Check
+                        } else {
+                            IconName::Copy
+                        })
+                        .text_color(match copied {
+                            Some(true) => p.ok,
+                            Some(false) => p.danger,
+                            None => p.muted,
+                        })
+                        .tooltip(match copied {
+                            Some(true) => "Copied",
+                            Some(false) => "Copy failed — try again",
+                            None => "Copy message",
+                        })
+                        .accessibility_label(match copied {
+                            Some(true) => "Copied",
+                            Some(false) => "Copy failed — try again",
+                            None => "Copy message",
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.copy_transcript_text(copy_key.clone(), source.clone(), cx)
+                        })),
+                );
+            if let Some(entry) = message.entry_id.clone().filter(|_| user) {
+                actions = actions.child(
+                    Button::new(SharedString::from(format!("fork-{key}")))
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::GitFork)
+                        .accessibility_label("Fork from here")
+                        .tooltip("Fork from here")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.fork_message(entry.clone(), window, cx)
+                        })),
+                );
+            }
+            let info = self.message_metadata(index, message);
+            let details = cx.entity().downgrade();
+            let timestamp = Popover::new(SharedString::from(format!("{key}:timestamp")))
+                .anchor(Anchor::BottomLeft)
+                .open(details_open)
+                .on_open_change(move |open, _, cx| {
+                    let _ = details.update(cx, |this, cx| {
+                        if *open {
+                            this.transcript_state.expanded.insert(metadata_key.clone());
+                        } else {
+                            this.transcript_state.expanded.remove(&metadata_key);
+                        }
+                        cx.notify();
+                    });
+                })
+                .trigger(
+                    Button::new(SharedString::from(format!("{key}:timestamp-button")))
+                        .ghost()
+                        .xsmall()
+                        .text_color(p.muted)
+                        .label(relative_timestamp(message.timestamp))
+                        .tooltip(info.clone()),
+                )
+                .child(
+                    div()
+                        .max_w(px(T::DETAIL_WIDTH))
+                        .text_size(px(T::META_SIZE))
+                        .child(info),
+                );
+            let controls = div()
+                .id(SharedString::from(format!("{key}:controls")))
+                .track_focus(&focus)
+                .h_flex()
+                .flex_wrap()
+                .gap(px(T::FOOTER_GAP))
+                .opacity(if feedback { 1. } else { 0. })
+                .hover(|this| this.opacity(1.))
+                .in_focus(|this| this.opacity(1.))
+                .group_hover(SharedString::from(key.clone()), |this| this.opacity(1.))
+                .when(ends_group && !user, |this| {
+                    this.child(
+                        div()
+                            .text_size(px(T::META_SIZE))
+                            .text_color(p.muted)
+                            .child(author.clone()),
+                    )
+                })
+                .child(actions)
+                .when(ends_group, |this| this.child(timestamp));
             content = content.child(
                 div()
-                    .id(SharedString::from(format!("{key}:actions")))
-                    .absolute()
+                    .id(SharedString::from(format!("{key}:footer")))
+                    .w_full()
                     .h_flex()
-                    .h(px(24.))
-                    .gap_1()
-                    .rounded_sm()
-                    .bg(p.bg)
-                    .when(ends_group, |this| {
-                        this.bottom(px(-24.))
-                            .when(user, |this| this.right_0())
-                            .when(!user, |this| this.left_0())
-                    })
-                    .when(!ends_group, |this| this.top_0().right_0())
-                    .opacity(0.)
-                    .hover(|this| this.opacity(1.))
-                    .group_hover(SharedString::from(key.clone()), |this| this.opacity(1.))
-                    .child(
-                        Button::new(SharedString::from(format!("copy-{key}")))
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Copy)
-                            .tooltip("Copy message")
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(source.clone()))
-                            }),
-                    )
-                    .when_some(message.entry_id.clone().filter(|_| user), |this, entry| {
+                    .flex_wrap()
+                    .gap(px(T::FOOTER_GAP))
+                    .min_h(px(T::FOOTER_HEIGHT))
+                    .when(own, |this| this.justify_end())
+                    .when(ends_group && !own && persistent_identity, |this| {
                         this.child(
-                            Button::new(SharedString::from(format!("fork-{key}")))
-                                .ghost()
-                                .xsmall()
-                                .label("Fork from here")
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.fork_message(entry.clone(), window, cx)
-                                })),
+                            div()
+                                .text_size(px(T::META_SIZE))
+                                .text_color(p.muted)
+                                .child(author.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(T::META_SIZE))
+                                .text_color(p.muted)
+                                .child(source_label.clone()),
                         )
                     })
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("{key}:timestamp")))
-                            .text_xs()
-                            .text_color(p.muted)
-                            .child(timestamp)
-                            .tooltip(move |window, cx| {
-                                Tooltip::new(info.clone()).build(window, cx)
-                            }),
-                    ),
+                    .child(controls)
+                    .when(ends_group && own && persistent_identity, |this| {
+                        this.child(
+                            div()
+                                .text_size(px(T::META_SIZE))
+                                .text_color(p.muted)
+                                .child(author),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(T::META_SIZE))
+                                .text_color(p.muted)
+                                .child(source_label),
+                        )
+                    }),
             );
         }
         div()
             .w_full()
             .flex()
             .items_start()
-            .pl(px(4.))
-            .pr(px(if user { 16. } else { 62. }))
-            .gap(px(10.))
-            .pt(if group { px(28.) } else { px(2.) })
-            .when(user, |this| this.justify_end())
-            .when(!user, |this| {
-                this.child(div().w(px(36.)).flex_shrink_0().when(group, |this| {
-                    this.child(
-                        div()
-                            .size(px(36.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .border_1()
-                            .border_color(p.border)
-                            .bg(p.panel_strong)
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(p.strong)
-                            .child(self.selected_agent_avatar()),
-                    )
-                }))
+            .pl(px(T::ROW_INSET))
+            .pr(px(if own {
+                T::OWN_TRAILING_INSET
+            } else {
+                T::ASSISTANT_TRAILING_INSET
+            }))
+            .gap(px(T::AVATAR_GAP))
+            .pt(px(if index == 0 {
+                T::FIRST_TURN_INSET
+            } else if group {
+                T::TURN_GAP
+            } else {
+                T::MESSAGE_GAP
+            }))
+            .when(own, |this| this.justify_end())
+            .when(!own, |this| {
+                this.child(self.render_message_avatar_slot(message, group, cx))
             })
             .child(content)
-            .when(user, |this| this.child(div().w(px(36.)).flex_shrink_0()))
+            .when(own, |this| {
+                this.child(self.render_message_avatar_slot(message, group, cx))
+            })
             .into_any_element()
     }
+
+    fn render_message_avatar_slot(&self, message: &Message, show: bool, cx: &App) -> AnyElement {
+        div()
+            .w(px(T::AVATAR))
+            .flex_shrink_0()
+            .when(show, |this| {
+                this.child(self.render_message_avatar(message, cx))
+            })
+            .into_any_element()
+    }
+
+    fn render_message_avatar(&self, message: &Message, cx: &App) -> AnyElement {
+        if message.role == "user" {
+            if message.sender_person.is_none()
+                && message.sender.is_none()
+                && message
+                    .source_clients
+                    .as_array()
+                    .is_some_and(|sources| !sources.is_empty())
+            {
+                return div().into_any_element();
+            }
+            let fallback = Person {
+                name: Some("You".into()),
+                ..Default::default()
+            };
+            return self.render_person_avatar(
+                message
+                    .sender_person
+                    .as_ref()
+                    .or(self.sidebar_state.people.self_user.as_ref())
+                    .unwrap_or(&fallback),
+                T::AVATAR,
+                cx,
+            );
+        }
+        let agent_id = message
+            .sender_agent
+            .as_deref()
+            .or(self.chat.selected_agent.as_deref());
+        if let Some(agent) = self
+            .sidebar_state
+            .agents
+            .iter()
+            .find(|agent| Some(agent.id.as_str()) == agent_id)
+        {
+            return self.render_agent_avatar(agent, T::AVATAR, cx);
+        }
+        if message.sender_agent.is_some() {
+            return div().into_any_element();
+        }
+        self.render_avatar_spec(
+            &avatars::AvatarSpec {
+                url: None,
+                fallback: avatars::AvatarFallback::Text(self.selected_agent_avatar()),
+            },
+            T::AVATAR,
+            cx,
+        )
+    }
+
+    pub(super) fn render_message_attachment(
+        &mut self,
+        attachment: &Attachment,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = Palette::get(cx);
+        if let Some(format) = ImageFormat::from_mime_type(&attachment.mime_type) {
+            let image = self
+                .transcript_state
+                .images
+                .entry(attachment.id.clone())
+                .or_insert_with(|| Arc::new(Image::from_bytes(format, attachment.bytes.to_vec())))
+                .clone();
+            return img(image)
+                .max_w(px(T::MEDIA_IMAGE_MAX))
+                .max_h(px(T::MEDIA_IMAGE_MAX))
+                .object_fit(ObjectFit::Contain)
+                .rounded(px(T::BUBBLE_RADIUS))
+                .into_any_element();
+        }
+        div()
+            .h_flex()
+            .gap_2()
+            .rounded_md()
+            .border_1()
+            .border_color(p.border)
+            .bg(p.card)
+            .p_2()
+            .child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .child(div().text_sm().child(attachment.file_name.clone()))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(p.muted)
+                            .child(attachment.size_label()),
+                    ),
+            )
+            .child(self.render_attachment_download(attachment, cx))
+            .into_any_element()
+    }
+
+    fn message_author(&self, message: &Message) -> String {
+        message
+            .sender
+            .clone()
+            .or_else(|| {
+                message
+                    .sender_person
+                    .as_ref()
+                    .map(|person| person.label().to_owned())
+            })
+            .unwrap_or_else(|| {
+                if message.role == "user" {
+                    self.sidebar_state
+                        .people
+                        .self_user
+                        .as_ref()
+                        .map(|person| person.label().to_owned())
+                        .unwrap_or_else(|| "You".into())
+                } else if let Some(agent) = message.sender_agent.as_deref().and_then(|id| {
+                    self.sidebar_state
+                        .agents
+                        .iter()
+                        .find(|agent| agent.id == id)
+                }) {
+                    agent.name.clone().unwrap_or_else(|| agent.id.clone())
+                } else {
+                    self.selected_agent_name()
+                }
+            })
+    }
+
+    fn resolve_message_reply(&self, message: &Message) -> Option<ReplyTarget> {
+        let id = message.reply_to.as_ref()?;
+        self.chat
+            .messages
+            .iter()
+            .find(|source| source.entry_id.as_ref().or(source.id.as_ref()) == Some(id))
+            .map(|source| ReplyTarget {
+                id: Some(id.clone()),
+                text: source.text.clone(),
+                sender: self.message_author(source),
+            })
+            .or_else(|| message.reply_preview.clone())
+            .or_else(|| {
+                Some(ReplyTarget {
+                    id: Some(id.clone()),
+                    text: "View original message".into(),
+                    sender: "Reply".into(),
+                })
+            })
+    }
+
+    fn message_metadata(&self, index: usize, message: &Message) -> String {
+        let mut first = index;
+        while first > 0
+            && !crate::model::grouping::starts_group(
+                self.chat.messages.get(first - 1),
+                &self.chat.messages[first],
+            )
+        {
+            first -= 1;
+        }
+        let meta = crate::model::grouping::GroupMetadata::from_messages(
+            self.chat.messages.get(first..=index).unwrap_or_default(),
+        );
+        let mut parts = vec![
+            message
+                .timestamp
+                .map(exact_time)
+                .unwrap_or_else(|| "Current response".into()),
+        ];
+        for (count, label) in [
+            (meta.input, "input"),
+            (meta.output, "output"),
+            (meta.cache_read, "cache read"),
+            (meta.cache_write, "cache write"),
+        ] {
+            if count > 0 {
+                parts.push(format!("{count} {label} tokens"));
+            }
+        }
+        if meta.cost > 0. {
+            parts.push(format!("${:.4}", meta.cost));
+        }
+        if let Some(capacity) = self
+            .chat
+            .session_info
+            .context_tokens
+            .or_else(|| {
+                self.selected_row()
+                    .and_then(|row| row.context_tokens)
+                    .filter(|capacity| capacity.is_finite() && *capacity > 0.)
+                    .map(|capacity| capacity as u64)
+            })
+            .filter(|capacity| *capacity > 0)
+            && meta.prompt > 0
+        {
+            parts.push(format!(
+                "{}% context",
+                (100. * meta.prompt as f64 / capacity as f64)
+                    .round()
+                    .min(100.)
+            ));
+        }
+        if let Some(model) = meta.model {
+            parts.push(model.to_owned());
+        }
+        parts.join("\n")
+    }
+
+    pub(super) fn copy_transcript_text(
+        &mut self,
+        key: String,
+        source: String,
+        cx: &mut Context<Self>,
+    ) {
+        cx.write_to_clipboard(ClipboardItem::new_string(source.clone()));
+        let copied = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref()
+            == Some(source.as_str());
+        let feedback = (copied, std::time::Instant::now());
+        self.transcript_state.copied.insert(key.clone(), feedback);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(if copied {
+                    T::COPY_FEEDBACK_MS
+                } else {
+                    T::COPY_FAILURE_MS
+                }))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.transcript_state.copied.get(&key) == Some(&feedback) {
+                    this.transcript_state.copied.remove(&key);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn start_message_reply(
+        &mut self,
+        target: ReplyTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer_state.reply = Some(target);
+        self.composer_save_draft(cx);
+        self.composer
+            .update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
+    }
+
+    pub(super) fn render_reply_preview(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let target = self.composer_state.reply.as_ref()?;
+        let p = Palette::get(cx);
+        Some(
+            div()
+                .h_flex()
+                .gap_2()
+                .px_4()
+                .py_2()
+                .border_t_1()
+                .border_color(p.border)
+                .bg(p.bg)
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .v_flex()
+                        .text_size(px(T::META_SIZE))
+                        .text_color(p.muted)
+                        .child(format!("Replying to {}", target.sender))
+                        .child(div().truncate().child(target.text.clone())),
+                )
+                .child(
+                    Button::new("cancel-message-reply")
+                        .ghost()
+                        .small()
+                        .icon(IconName::X)
+                        .accessibility_label("Cancel reply")
+                        .tooltip("Cancel reply")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.composer_state.reply = None;
+                            this.composer_save_draft(cx);
+                            cx.notify();
+                        })),
+                )
+                .into_any_element(),
+        )
+    }
 }
+
 fn message_key(message: &Message, index: usize, streaming: bool) -> String {
     if streaming {
         return format!("stream:{}", message.run_id.as_deref().unwrap_or_default());
@@ -382,42 +686,4 @@ fn message_key(message: &Message, index: usize, streaming: bool) -> String {
     message.role.hash(&mut hasher);
     message.timestamp.hash(&mut hasher);
     format!("message:{index}:{}", hasher.finish())
-}
-fn relative_time(timestamp: Option<u64>) -> String {
-    let Some(timestamp) = timestamp else {
-        return String::new();
-    };
-    let seconds = now_ms().saturating_sub(timestamp) / 1000;
-    match seconds {
-        0..60 => "Just now".into(),
-        60..3600 => format!("{}m ago", seconds / 60),
-        3600..86400 => format!("{}h ago", seconds / 3600),
-        86400..604800 => format!("{}d ago", seconds / 86400),
-        _ => exact_time(timestamp)
-            .split(' ')
-            .next()
-            .unwrap_or_default()
-            .to_owned(),
-    }
-}
-
-fn exact_time(timestamp: u64) -> String {
-    // Gregorian civil date from Unix days, with no locale or process timezone mutation.
-    let seconds = timestamp / 1000;
-    let days = (seconds / 86400) as i64 + 719468;
-    let era = days / 146097;
-    let day_of_era = days - era * 146097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
-        seconds / 3600 % 24,
-        seconds / 60 % 60,
-        seconds % 60
-    )
 }

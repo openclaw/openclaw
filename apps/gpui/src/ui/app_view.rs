@@ -431,6 +431,7 @@ impl Render for AppView {
             .v_flex()
             .relative()
             .bg(p.bg)
+            .child(super::components::transcript_background::transcript_background(cx))
             .text_color(p.text)
             .text_size(px(14.))
             .on_action(cx.listener(|this, _: &crate::Refresh, _, cx| this.manual_refresh(cx)))

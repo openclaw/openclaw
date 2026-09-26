@@ -1,211 +1,26 @@
 #[path = "transcript_markdown.rs"]
-mod image_policy;
-use super::{AppView, theme::Palette};
+mod markdown;
+use super::AppView;
 use crate::gateway::chat_rpc::{ForkParams, ForkResult, HistoryParams};
 use crate::model::attachments::{Attachment, AttachmentOrigin};
+pub(super) use crate::model::markdown::fenced_code;
+use crate::model::markdown::transcript_source;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gpui_kit::{
-    component::{
-        IconName, Sizable, StyledExt,
-        button::{Button, ButtonVariants},
-        text::{MarkdownExtensions, MarkdownNode, TextView, TextViewState, TextViewStyle},
-    },
+    component::text::{MarkdownExtensions, TextViewState},
     *,
 };
-use image_policy::unloaded_images;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::OnceLock,
-};
-
-pub(super) fn transcript_text_style(p: Palette) -> TextViewStyle {
-    TextViewStyle::default()
-        .paragraph_gap(rems(0.875))
-        .heading_font_size(|level, base| {
-            // Chat headings inherit the browser's heading scale at a 14px base.
-            base * match level {
-                1 => 2.,
-                2 => 1.5,
-                3 => 1.17,
-                4 => 1.,
-                5 => 0.83,
-                _ => 0.67,
-            }
-        })
-        .table(
-            StyleRefinement::default()
-                .border_0()
-                .rounded_none()
-                .bg(transparent_black())
-                .text_size(px(13.)),
-        )
-        .table_head(
-            StyleRefinement::default()
-                .bg(transparent_black())
-                .text_color(p.strong)
-                .font_weight(FontWeight::SEMIBOLD)
-                .border_color(p.border_strong),
-        )
-        .table_cell(
-            StyleRefinement::default()
-                .border_r_0()
-                .px(px(12.))
-                .py(px(12.)),
-        )
-}
-
-pub(super) fn code_markdown_extensions() -> MarkdownExtensions {
-    // Reuse one parser configuration so cached messages are not reparsed on each frame.
-    static EXTENSIONS: OnceLock<MarkdownExtensions> = OnceLock::new();
-    EXTENSIONS
-        .get_or_init(|| {
-            MarkdownExtensions::default()
-                .block_parser(|node, _| code_block_node(node))
-                .block_renderer("transcript-code", |node, _, cx| {
-                    let p = Palette::get(cx);
-                    let language = node
-                        .data::<Option<String>>()
-                        .and_then(Option::as_deref)
-                        .unwrap_or("text")
-                        .to_lowercase();
-                    let code = node.as_text().to_owned();
-                    let offset = node.source_range().map_or(0, |range| range.start);
-                    div()
-                        .id(("transcript-code", offset))
-                        .w_full()
-                        .min_w_0()
-                        .rounded(px(8.))
-                        .border_1()
-                        .border_color(Hsla { a: 0.22, ..p.text })
-                        .overflow_hidden()
-                        .child(
-                            div()
-                                .h_flex()
-                                .justify_between()
-                                .gap_2()
-                                .min_h(px(36.))
-                                .pl(px(14.))
-                                .pr(px(8.))
-                                .pt(px(8.))
-                                .pb(px(4.))
-                                .text_size(px(11.))
-                                .line_height(px(11.))
-                                .text_color(p.muted)
-                                .child(div().font_family("monospace").child(language))
-                                .child(
-                                    Button::new("copy-code")
-                                        .ghost()
-                                        .small()
-                                        .icon(IconName::Copy)
-                                        .tooltip("Copy code")
-                                        .on_click(move |_, _, cx| {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                code.clone(),
-                                            ));
-                                        }),
-                                ),
-                        )
-                        .child(
-                            TextView::markdown("code-body", node.as_markdown().to_owned())
-                                .style(
-                                    TextViewStyle::default().code_block(
-                                        StyleRefinement::default()
-                                            .bg(transparent_black())
-                                            .rounded_none()
-                                            .px(px(14.))
-                                            .pt(px(4.))
-                                            .pb(px(14.))
-                                            .text_size(px(12.))
-                                            .line_height(px(18.)),
-                                    ),
-                                )
-                                .selectable(true)
-                                .scrollable(false),
-                        )
-                })
-        })
-        .clone()
-}
-
-pub(super) fn fenced_code(language: &str, source: &str) -> String {
-    let longest = source
-        .split(|ch| ch != '~')
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
-    let fence = "~".repeat(3.max(longest + 1));
-    format!("{fence}{language}\n{source}\n{fence}")
-}
-
-fn code_block_node(node: &markdown::mdast::Node) -> Option<MarkdownNode> {
-    let markdown::mdast::Node::Code(code) = node else {
-        return None;
-    };
-    // Parsed code excludes quote/list prefixes; keep literal embedded fences intact.
-    let source = fenced_code(code.lang.as_deref().unwrap_or_default(), &code.value);
-    Some(
-        MarkdownNode::new("transcript-code", code.lang.clone())
-            .text(code.value.clone())
-            .markdown(source),
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{code_block_node, fenced_code};
-    use markdown::{ParseOptions, mdast::Node};
-
-    #[test]
-    fn tool_output_keeps_embedded_markdown_fences_literal() {
-        let output =
-            "before\n```\n# not a heading\n![literal](https://example.invalid/image)\n~~~~~\nafter";
-        let projected = fenced_code("text", output);
-        let parsed = markdown::to_mdast(&projected, &ParseOptions::gfm()).unwrap();
-        let blocks = parsed.children().unwrap();
-        assert_eq!(blocks.len(), 1);
-        let Node::Code(code) = &blocks[0] else {
-            panic!("output stays literal code")
-        };
-        assert_eq!(code.value, output);
-    }
-
-    #[test]
-    fn code_toolbar_preserves_nested_code_and_literal_fences() {
-        fn visit(node: &Node) -> usize {
-            if let Node::Code(original) = node {
-                let projected = code_block_node(node).expect("code toolbar node");
-                let parsed =
-                    markdown::to_mdast(projected.as_markdown(), &ParseOptions::gfm()).unwrap();
-                let children = parsed.children().unwrap();
-                assert_eq!(children.len(), 1, "code stays one literal block");
-                let Node::Code(rendered) = &children[0] else {
-                    panic!("code must not become ordinary Markdown");
-                };
-                assert_eq!(rendered.value, original.value);
-                assert_eq!(rendered.lang, original.lang);
-                assert_eq!(projected.as_text(), original.value);
-                return 1;
-            }
-            node.children().into_iter().flatten().map(visit).sum()
-        }
-        for source in [
-            "> ```rust\n> let answer = 42;\n> ```",
-            "- Example:\n\n  ```markdown\n  ~~~\n  ![literal](https://example.invalid/image.png)\n  ~~~\n  ```",
-            "    plain indented code\n    with another line",
-            "````markdown\n```\n~~~~~~~\n````",
-            "```text\nline with a trailing blank line\n\n```",
-        ] {
-            let parsed = markdown::to_mdast(source, &ParseOptions::gfm()).unwrap();
-            assert_eq!(visit(&parsed), 1, "fixture contains one code block");
-        }
-    }
-}
+pub(super) use markdown::{code_markdown_extensions, transcript_text_style};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
 pub(super) struct TranscriptUi {
     pub markdown: HashMap<String, CachedMarkdown>,
     pub images: HashMap<String, std::sync::Arc<Image>>,
+    pub media: super::transcript_media::TranscriptMedia,
     pub expanded: HashSet<String>,
+    pub copied: HashMap<String, (bool, std::time::Instant)>,
+    pub footer_focus: HashMap<String, FocusHandle>,
     pub show_all: HashSet<String>,
     pub error_expanded: bool,
     pub fork_request: u64,
@@ -215,6 +30,7 @@ pub(super) struct TranscriptUi {
 pub(super) struct CachedMarkdown {
     pub source: String,
     pub state: Entity<TextViewState>,
+    pub extensions: Option<(bool, MarkdownExtensions)>,
 }
 
 impl AppView {
@@ -267,6 +83,7 @@ impl AppView {
                         });
                     }
                     this.sync_transcript();
+                    this.refresh_sidebar_avatars(cx);
                     if !older {
                         this.transcript_list.remeasure();
                     }
@@ -296,16 +113,20 @@ impl AppView {
     }
     pub(super) fn sync_transcript(&mut self) {
         if self.transcript_state.owner != self.chat.scope() {
+            self.reset_transcript_media();
             self.transcript_state.markdown.clear();
             self.transcript_state.images.clear();
             self.transcript_state.expanded.clear();
+            self.transcript_state.copied.clear();
+            self.transcript_state.footer_focus.clear();
             self.transcript_state.show_all.clear();
             self.transcript_state.owner = self.chat.scope();
             self.transcript_state.error_expanded = false;
         }
         let count = self.chat.messages.len()
             + usize::from(self.chat.active_run.is_some())
-            + usize::from(self.chat.note.is_some());
+            + usize::from(self.chat.turn_recap.is_some())
+            + usize::from(self.chat.note.as_ref().is_some_and(|note| !note.error));
         let old = self.transcript_list.item_count();
         if count != old {
             self.transcript_list
@@ -354,20 +175,21 @@ impl AppView {
         if let Some(cached) = self.transcript_state.markdown.get_mut(&key) {
             if cached.source != source {
                 cached.source = source.to_owned();
-                let safe = unloaded_images(source);
+                let safe = transcript_source(source);
                 cached
                     .state
                     .update(cx, |state, cx| state.set_text(&safe, cx));
             }
             return cached.state.clone();
         }
-        let safe = unloaded_images(source);
+        let safe = transcript_source(source);
         let state = cx.new(|cx| TextViewState::markdown(&safe, cx));
         self.transcript_state.markdown.insert(
             key,
             CachedMarkdown {
                 source: source.to_owned(),
                 state: state.clone(),
+                extensions: None,
             },
         );
         state

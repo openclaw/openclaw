@@ -4,6 +4,7 @@ pub mod chat;
 pub mod commands;
 pub mod composer;
 pub mod grouping;
+pub mod markdown;
 pub mod panels;
 pub mod questions;
 pub mod sessions;

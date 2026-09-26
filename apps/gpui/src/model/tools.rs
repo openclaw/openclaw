@@ -1,3 +1,6 @@
+#[path = "tool_presentation.rs"]
+mod presentation;
+pub use presentation::{DiffKind, ToolKind, group_summary};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -9,6 +12,7 @@ pub struct ToolCall {
     pub name: String,
     pub args: Value,
     pub output: String,
+    pub result: Value,
     pub complete: bool,
     pub inactive: bool,
     pub is_error: bool,
@@ -61,7 +65,7 @@ impl ToolCall {
             "Running"
         } else if self.interrupted() {
             "Interrupted"
-        } else if self.is_error {
+        } else if self.failed() {
             "Error"
         } else {
             "Done"
@@ -100,12 +104,32 @@ impl ToolCall {
         };
         let (label, detail) = match name.to_lowercase().as_str() {
             "read" | "read_file" | "readfile" | "notebook_read" => ("Read", path().map(basename)),
-            "write" | "write_file" | "create_file" => ("Wrote", path().map(basename)),
-            "edit" | "edit_file" | "multiedit" | "multi_edit" => ("Edited", path().map(basename)),
-            "exec" | "bash" | "shell" | "run_command" | "run_terminal_cmd" => (
-                "Ran",
-                arg(&["command", "cmd"]).map(|command| format!("`{}`", compact(command))),
+            "write" | "write_file" | "create_file" => (
+                if self.running() {
+                    "Writing"
+                } else if self.failed() || self.interrupted() {
+                    "Write"
+                } else {
+                    "Wrote"
+                },
+                path().map(basename),
             ),
+            "edit" | "edit_file" | "multiedit" | "multi_edit" => (
+                if self.running() {
+                    "Editing"
+                } else if self.failed() || self.interrupted() {
+                    "Edit"
+                } else {
+                    "Edited"
+                },
+                path().map(basename),
+            ),
+            "exec" | "bash" | "shell" | "run_command" | "run_terminal_cmd" | "exec_command" => {
+                if let Some(title) = arg(&["title"]).filter(|title| !title.trim().is_empty()) {
+                    return compact(title);
+                }
+                ("$", arg(&["command", "cmd"]).map(compact))
+            }
             "ls" | "list" | "list_dir" => ("Listed", path().map(basename)),
             "grep" | "search" | "find" | "glob" | "codebase_search" => (
                 "Searched",
@@ -230,12 +254,6 @@ fn matches_bridge_child(parent: &ToolCall, child: &ToolCall) -> bool {
         })
 }
 
-pub fn tools_elapsed_ms(calls: &[ToolCall]) -> Option<u64> {
-    let first = calls.iter().filter_map(|call| call.started_at).min()?;
-    let last = calls.iter().filter_map(|call| call.ended_at).max()?;
-    Some(last.saturating_sub(first))
-}
-
 pub fn apply_tool_event(calls: &mut Vec<ToolCall>, event: &ToolEvent, receipt: u64) -> bool {
     let data = &event.data;
     if event.stream != "tool"
@@ -279,17 +297,16 @@ pub fn apply_tool_event(calls: &mut Vec<ToolCall>, event: &ToolEvent, receipt: u
             call.inactive = false;
             call.started_at = Some(event.ts);
         }
-        "update" => call.output = output_text(&data.partial_result),
+        "update" => {
+            call.output = output_text(&data.partial_result);
+            call.result = data.partial_result.clone();
+        }
         "result" => {
             call.output = output_text(&data.result);
+            call.result = data.result.clone();
             call.complete = true;
             call.inactive = false;
-            call.is_error = data.is_error
-                || data
-                    .result
-                    .get("exitCode")
-                    .and_then(Value::as_i64)
-                    .is_some_and(|code| code != 0);
+            call.is_error = data.is_error || call.exit_code().is_some_and(|code| code != 0);
             call.ended_at = Some(event.ts);
         }
         _ => unreachable!(),
@@ -392,6 +409,7 @@ pub fn history_call(
             .to_owned(),
         args,
         complete: result,
+        result: if result { block.clone() } else { Value::Null },
         output: if result {
             output_text(block)
         } else {
@@ -428,6 +446,7 @@ fn merge_call(held: &mut ToolCall, next: &ToolCall, prefer_next_on_tie: bool) {
     if !held.complete && next.complete || newer && held.complete == next.complete {
         if !next.output.is_empty() || next.complete {
             held.output = next.output.clone();
+            held.result = next.result.clone();
         }
         held.complete = next.complete;
         held.is_error = next.is_error;
@@ -560,12 +579,8 @@ mod tests {
                 json!({"filePath":"/tmp/proof.txt","newText":"body"}),
                 "Edited proof.txt",
             ),
-            (
-                "exec",
-                json!({"command":"echo hi\necho bye"}),
-                "Ran `echo hi`",
-            ),
-            ("bash", json!({"command":"echo hi"}), "Ran `echo hi`"),
+            ("exec", json!({"command":"echo hi\necho bye"}), "$ echo hi"),
+            ("bash", json!({"command":"echo hi"}), "$ echo hi"),
             ("ls", json!({"path":"/tmp/project"}), "Listed project"),
             (
                 "grep",
@@ -626,6 +641,7 @@ mod tests {
             let tool = ToolCall {
                 name: name.into(),
                 args,
+                complete: true,
                 ..Default::default()
             };
             assert_eq!(tool.summary(), expected, "{name}");
@@ -659,21 +675,12 @@ mod tests {
         assert_eq!(calls[0].name, "read");
         assert_eq!(calls[0].summary(), "Read sample");
         assert_eq!(calls[0].output, "complete");
+        assert_eq!(
+            calls[0].result,
+            json!({"content":[{"type":"text","text":"complete"}]})
+        );
         assert!(calls[0].is_error);
         assert_eq!(calls[0].duration_ms(), Some(200));
-        let overlapping = [
-            ToolCall {
-                started_at: Some(100),
-                ended_at: Some(2400),
-                ..calls[0].clone()
-            },
-            ToolCall {
-                started_at: Some(200),
-                ended_at: Some(2300),
-                ..calls[0].clone()
-            },
-        ];
-        assert_eq!(tools_elapsed_ms(&overlapping), Some(2300));
     }
 
     #[test]
@@ -681,7 +688,7 @@ mod tests {
         let fixtures = [
             json!({"role":"assistant","runId":"one","content":[{"type":"toolCall","id":"call","name":"read","arguments":{"path":"a"}}]}),
             json!({"role":"assistant","runId":"two","content":[{"type":"toolUse","id":"call","name":"read","input":{"path":"b"}}]}),
-            json!({"role":"toolResult","runId":"two","toolCallId":"call","toolName":"read","content":[{"type":"text","text":"result b"}]}),
+            json!({"role":"toolResult","runId":"two","toolCallId":"call","toolName":"read","content":[{"type":"text","text":"result b"}],"details":{"retained":true}}),
             json!({"role":"toolResult","toolCallId":"unknown","content":"unmatched"}),
         ];
         let mut messages = fixtures
@@ -692,6 +699,7 @@ mod tests {
         assert_eq!(messages.len(), 3);
         assert!(!messages[0].tools[0].complete);
         assert_eq!(messages[1].tools[0].output, "result b");
+        assert_eq!(messages[1].tools[0].result["details"]["retained"], true);
         assert_eq!(messages[2].tools[0].output, "unmatched");
     }
 }

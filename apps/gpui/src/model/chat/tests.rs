@@ -485,3 +485,59 @@ fn reopened_history_only_shows_unfinished_tools_running_for_the_current_run() {
         "Interrupted"
     );
 }
+
+#[test]
+fn successful_turn_recap_survives_history_and_accepts_only_its_late_usage() {
+    let mut chat = chat();
+    chat.apply_event(
+        &json!({"sessionKey":"main","runId":"run","state":"delta","seq":1,"deltaText":"Answer"}),
+    );
+    chat.apply_agent_event(
+        &json!({"sessionKey":"main","runId":"run","stream":"usage","data":{"outputTokens":42}}),
+    );
+    chat.apply_event(&json!({"sessionKey":"main","runId":"run","state":"final","seq":2}));
+    assert_eq!(chat.turn_recap.as_ref().unwrap().output_tokens, Some(42));
+    let history = chat.begin_history().unwrap();
+    chat.apply_history(
+        &history,
+        &json!({"messages":[{"role":"assistant","runId":"run","content":"Answer"}]}),
+    );
+    assert_eq!(chat.turn_recap.as_ref().unwrap().run_id, "run");
+    assert!(chat.apply_agent_event(
+        &json!({"sessionKey":"main","runId":"run","stream":"usage","data":{"outputTokens":45}})
+    ));
+    assert_eq!(chat.turn_recap.as_ref().unwrap().output_tokens, Some(45));
+    chat.apply_event(
+        &json!({"sessionKey":"main","runId":"next","state":"delta","seq":1,"deltaText":"Next"}),
+    );
+    assert!(chat.turn_recap.is_none());
+    assert!(!chat.apply_agent_event(
+        &json!({"sessionKey":"main","runId":"run","stream":"usage","data":{"outputTokens":99}})
+    ));
+    assert_eq!(chat.output_tokens, 0);
+    chat.apply_agent_event(
+        &json!({"sessionKey":"main","runId":"next","stream":"compaction","data":{"phase":"start"}}),
+    );
+    assert!(chat.compacting);
+    chat.apply_event(&json!({"sessionKey":"main","runId":"next","state":"aborted","seq":2}));
+    assert!(!chat.compacting);
+    assert!(chat.turn_recap.is_none());
+}
+
+#[test]
+fn history_projects_compaction_and_collapsed_system_context_as_notices() {
+    let mut chat = chat();
+    let request = chat.begin_history().unwrap();
+    assert!(chat.apply_history(&request, &json!({"messages":[
+        {"role":"custom","customType":"openclaw.context-compaction","__openclaw":{"tokensBefore":1500,"tokensAfter":500}},
+        {"role":"user","content":"[System] **Context**\n\n- Preserve this list", "provenance":{"kind":"internal_system","sourceTool":"cli_harness_context"}}
+    ]})));
+    assert_eq!(chat.messages.len(), 2);
+    let compact = chat.messages[0].notice.as_ref().unwrap();
+    assert!(compact.compaction);
+    assert_eq!(compact.saved_tokens, Some(1000));
+    let injected = chat.messages[1].notice.as_ref().unwrap();
+    assert!(injected.collapsed);
+    assert_eq!(injected.label, "System · injected context");
+    assert!(chat.messages[1].text.contains("**Context**"));
+}

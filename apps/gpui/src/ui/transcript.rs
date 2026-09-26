@@ -1,10 +1,12 @@
-use super::{AppView, theme::Palette};
+use super::{
+    AppView,
+    theme::{Palette, TranscriptSurfaceTokens as T},
+};
 use crate::model::chat::{Message, now_ms};
 use gpui_kit::{
     component::{
-        Disableable, StyledExt,
+        Disableable, IconName, StyledExt,
         button::{Button, ButtonVariants},
-        spinner::Spinner,
     },
     prelude::FluentBuilder,
     *,
@@ -19,60 +21,7 @@ impl AppView {
             && self.chat.note.is_none()
             && self.chat.history_error.is_none()
         {
-            return div()
-                .v_flex()
-                .flex_1()
-                .min_h_0()
-                .items_center()
-                .justify_center()
-                .gap_3()
-                .p_8()
-                .child(
-                    div()
-                        .text_size(px(36.))
-                        .text_color(p.accent)
-                        .child(self.selected_agent_avatar()),
-                )
-                .child(
-                    div()
-                        .text_size(px(24.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(p.strong)
-                        .child(self.selected_agent_name()),
-                )
-                .child(div().text_color(p.muted).child(if self.chat.loading {
-                    "Loading conversation…"
-                } else {
-                    "Type / for commands"
-                }))
-                .when(!self.chat.loading, |this| {
-                    this.child(
-                        div()
-                            .v_flex()
-                            .w_full()
-                            .max_w(px(420.))
-                            .mt_6()
-                            .gap_1()
-                            .children(
-                                self.rows
-                                    .iter()
-                                    .filter(|row| {
-                                        Some(&row.key) != self.chat.selected_session.as_ref()
-                                    })
-                                    .take(5)
-                                    .map(|row| {
-                                        let key = row.key.clone();
-                                        Button::new(SharedString::from(format!("recent-{key}")))
-                                            .ghost()
-                                            .label(row.title().to_owned())
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.select_session(key.clone(), window, cx)
-                                            }))
-                                    }),
-                            ),
-                    )
-                })
-                .into_any_element();
+            return self.transcript_welcome(cx);
         }
         let view = cx.entity().downgrade();
         div()
@@ -81,6 +30,7 @@ impl AppView {
             .flex_1()
             .min_h_0()
             .overflow_hidden()
+            .child(self.render_run_error(cx))
             .when(self.chat.has_more, |this| {
                 this.child(
                     div().flex().justify_center().py_1().child(
@@ -123,7 +73,9 @@ impl AppView {
                     view.update(cx, |this, cx| this.transcript_row(index, cx))
                         .unwrap_or_else(|_| div().into_any_element())
                 })
-                .size_full(),
+                .w_full()
+                .flex_1()
+                .min_h_0(),
             )
             .when(!self.transcript_list.is_following_tail(), |this| {
                 this.child(
@@ -136,10 +88,12 @@ impl AppView {
                         .justify_center()
                         .child(
                             Button::new("jump-latest")
-                                .label("↓")
+                                .icon(IconName::ArrowDown)
+                                .tooltip("Scroll to bottom")
+                                .accessibility_label("Scroll to bottom")
                                 .rounded_full()
-                                .w(px(36.))
-                                .h(px(36.))
+                                .w(px(T::SCROLL_SIZE))
+                                .h(px(T::SCROLL_SIZE))
                                 .bg(p.panel_strong)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.transcript_list.set_follow_mode(FollowMode::Tail);
@@ -149,6 +103,7 @@ impl AppView {
                         ),
                 )
             })
+            .children(self.render_reply_preview(cx))
             .into_any_element()
     }
     fn transcript_row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -178,90 +133,41 @@ impl AppView {
                 run_id: self.chat.active_run.clone(),
                 ..Default::default()
             };
-            let elapsed =
-                now_ms().saturating_sub(self.chat.started_at.unwrap_or_else(now_ms)) / 1000;
-            let phase = if self.chat.phase_label.is_empty() {
-                "Working".to_owned()
-            } else {
-                self.chat.phase_label.clone()
-            };
+            let elapsed = now_ms().saturating_sub(self.chat.started_at.unwrap_or_else(now_ms));
+            let waiting = self
+                .router
+                .approvals
+                .pending
+                .values()
+                .any(|approval| approval.expires_at_ms > now_ms());
             div()
                 .v_flex()
                 .gap_3()
                 .child(self.render_message(index, &message, true, true, cx))
-                .child(
-                    div()
-                        .h_flex()
-                        .gap_2()
-                        .text_color(p.muted)
-                        .text_xs()
-                        .child(Spinner::new().color(p.accent))
-                        .child(format!(
-                            "{phase} · {elapsed}s{}",
-                            if self.chat.output_tokens > 0 {
-                                format!(" · {} tokens", self.chat.output_tokens)
-                            } else {
-                                String::new()
-                            }
-                        )),
-                )
-                .into_any_element()
-        } else if let Some(note) = self.chat.note.clone() {
-            let details = self.chat.error_detail.clone();
-            let full = format!(
-                "{}{}",
-                note.text,
-                details
-                    .as_ref()
-                    .map(|text| format!("\n{text}"))
-                    .unwrap_or_default()
-            );
-            div()
-                .v_flex()
-                .gap_2()
-                .p_3()
-                .rounded_md()
-                .bg(p.card)
-                .border_1()
-                .border_color(if note.error { p.danger } else { p.border })
-                .text_sm()
-                .text_color(if note.error { p.danger } else { p.muted })
-                .child(
-                    div()
-                        .h_flex()
-                        .gap_2()
-                        .child(div().flex_1().child(note.text))
-                        .child(Button::new("copy-error").ghost().label("Copy").on_click(
-                            move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(full.clone()))
-                            },
-                        ))
-                        .when(details.is_some(), |this| {
-                            this.child(
-                                Button::new("error-details")
-                                    .ghost()
-                                    .label(if self.transcript_state.error_expanded {
-                                        "Hide details"
-                                    } else {
-                                        "Details"
-                                    })
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.transcript_state.error_expanded =
-                                            !this.transcript_state.error_expanded;
-                                        this.transcript_list.remeasure();
-                                        cx.notify();
-                                    })),
-                            )
-                        }),
-                )
-                .when(self.transcript_state.error_expanded, |this| {
-                    this.child(
-                        div()
-                            .text_xs()
-                            .font_family("monospace")
-                            .child(details.unwrap_or_default()),
-                    )
+                .when(self.chat.compacting, |this| {
+                    this.child(super::transcript_notices::system_line(
+                        "Compacting context…",
+                        None,
+                        true,
+                        true,
+                        cx,
+                    ))
                 })
+                .child(self.render_working_indicator(
+                    waiting,
+                    elapsed,
+                    (self.chat.output_tokens > 0).then_some(self.chat.output_tokens),
+                    cx,
+                ))
+                .into_any_element()
+        } else if let Some(recap) = self.chat.turn_recap.as_ref() {
+            self.render_turn_recap(recap.runtime_ms, recap.output_tokens, cx)
+        } else if let Some(note) = self.chat.note.as_ref().filter(|note| !note.error) {
+            div()
+                .my_3()
+                .text_size(px(T::SMALL_TEXT))
+                .text_color(p.muted)
+                .child(note.text.clone())
                 .into_any_element()
         } else {
             div().into_any_element()
@@ -270,8 +176,8 @@ impl AppView {
             .w_full()
             .flex()
             .justify_center()
-            .px_6()
-            .child(div().w_full().max_w(px(768.)).child(content))
+            .px(px(T::INSET))
+            .child(div().w_full().max_w(px(T::WIDTH)).child(content))
             .into_any_element()
     }
 }

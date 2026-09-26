@@ -103,6 +103,7 @@ impl AppView {
         self.connection.take();
         self.connection_id += 1;
         self.epoch += 1;
+        self.reset_transcript_media();
         self.attention_state = AttentionUi::default();
         self.session = None;
         self.rows.clear();
@@ -209,6 +210,7 @@ impl AppView {
                 retry_after,
             } => {
                 self.epoch += 1;
+                self.reset_transcript_media();
                 self.session = None;
                 self.sidebar_state.activity.clear();
                 self.sidebar_state.people.entries.clear();

@@ -9,12 +9,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
 mod message;
-pub use message::Message;
+mod time;
+pub use time::{exact_time, relative_timestamp};
+pub mod notice;
+pub use message::{MediaRef, Message, MessageContent, ReplyTarget};
 
 #[derive(Clone, Debug)]
 pub struct ChatNote {
     pub text: String,
     pub error: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct TurnRecap {
+    pub run_id: String,
+    pub runtime_ms: u64,
+    pub output_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +98,8 @@ pub struct ChatState {
     pub phase_label: String,
     pub started_at: Option<u64>,
     pub output_tokens: u64,
+    pub turn_recap: Option<TurnRecap>,
+    pub compacting: bool,
     pub session_info: SessionInfo,
     pub dirty_from: Option<usize>,
     generation: u64,
@@ -222,6 +234,9 @@ impl ChatState {
             if self.active_run.as_deref() != run.map(|run| run.run_id.as_str()) || run.is_none() {
                 self.clear_stream();
             }
+            if run.is_some() && self.active_run.as_deref() != run.map(|run| run.run_id.as_str()) {
+                self.turn_recap = None;
+            }
             self.active_run = run.map(|run| run.run_id.clone());
             self.stream_text = run.map(|run| run.text.clone()).unwrap_or_default();
             self.started_at = run.and_then(|run| run.started_at);
@@ -287,6 +302,7 @@ impl ChatState {
             ..Default::default()
         });
         if self.active_run.is_none() {
+            self.turn_recap = None;
             self.clear_stream();
             self.active_run = Some(id);
             self.started_at = Some(now_ms());
@@ -402,6 +418,7 @@ impl ChatState {
             return outcome;
         }
         if self.active_run.is_none() {
+            self.turn_recap = None;
             self.clear_stream();
         }
         let sequence = payload.get("seq").and_then(Value::as_u64);
@@ -550,6 +567,14 @@ impl ChatState {
             return false;
         }
         if self.completed_runs.iter().any(|run| run == &event.run_id) {
+            if event.stream == "usage"
+                && let Some(tokens) = event.data.output_tokens
+                && let Some(recap) = self.turn_recap.as_mut()
+                && recap.run_id == event.run_id
+            {
+                recap.output_tokens = Some(tokens);
+                return true;
+            }
             // A late result may settle a known interrupted call without restarting its run.
             if event.stream == "tool"
                 && event.data.phase == "result"
@@ -570,6 +595,13 @@ impl ChatState {
             }
             return false;
         }
+        if self
+            .active_run
+            .as_deref()
+            .is_some_and(|run| run != event.run_id)
+        {
+            return false;
+        }
         match event.stream.as_str() {
             "tool" => {
                 if self
@@ -580,6 +612,7 @@ impl ChatState {
                     return false;
                 }
                 if self.active_run.is_none() {
+                    self.turn_recap = None;
                     self.clear_stream();
                 }
                 self.active_run = Some(event.run_id.clone());
@@ -630,6 +663,7 @@ impl ChatState {
                 true
             }
             "compaction" => {
+                self.compacting = event.data.phase == "start";
                 self.phase_label = if event.data.phase == "start" {
                     "Compacting conversation"
                 } else {
@@ -642,6 +676,15 @@ impl ChatState {
         }
     }
     fn finish_run(&mut self) {
+        let recap = self
+            .active_run
+            .as_ref()
+            .zip(self.started_at)
+            .map(|(run, start)| TurnRecap {
+                run_id: run.clone(),
+                runtime_ms: now_ms().saturating_sub(start),
+                output_tokens: (self.output_tokens > 0).then_some(self.output_tokens),
+            });
         if let Some(run) = self.active_run.take() {
             self.completed_runs.push_back(run);
             if self.completed_runs.len() > 128 {
@@ -649,8 +692,10 @@ impl ChatState {
             }
         }
         self.clear_stream();
+        self.turn_recap = if self.note.is_none() { recap } else { None };
     }
     fn clear_stream(&mut self) {
+        self.compacting = false;
         self.stream_text.clear();
         self.stream_thinking.clear();
         self.live_tools.clear();
