@@ -3507,7 +3507,12 @@ describe("subagent registry seam flow", () => {
     });
     await vi.advanceTimersByTimeAsync(500);
     expect(run?.execution.status).toBe("terminal");
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    // Completion commits the task through the real async task store before it
+    // announces; that takes real time, not fake time.
+    await vi.waitFor(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce(), {
+      timeout: 15_000,
+      interval: 50,
+    });
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalledWith(
       expect.objectContaining({ deliveryPhase: "wait-expiry" }),
     );
