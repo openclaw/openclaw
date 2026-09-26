@@ -7,6 +7,45 @@ import {
 } from "./session-row-provenance.ts";
 
 describe("session row provenance", () => {
+  it("isolates donated field receipts from the source and other inherited rows", () => {
+    const provenance = createSessionRowProvenance();
+    const source: GatewaySessionRow = {
+      key: "agent:main:inherited",
+      sessionId: "inherited",
+      kind: "direct",
+      derivedTitle: "Source title",
+      label: "Source label",
+    };
+    const donor = { ...source, derivedTitle: "Donated title" };
+    const donorFields = provenance.observeReadRow(donor, 1);
+    const sourceFields = provenance.observeReadRow(source, 2);
+    const sibling = provenance.inheritRow({ ...source }, source);
+    const enriched = provenance.inheritRow(
+      { ...source, derivedTitle: donor.derivedTitle },
+      source,
+      donor,
+    );
+
+    expect(donorFields(enriched, ["derivedTitle", "label"])).toEqual(["derivedTitle"]);
+    expect(sourceFields(enriched, ["derivedTitle", "label"])).toEqual(["label"]);
+    for (const row of [source, sibling]) {
+      expect(sourceFields(row, ["derivedTitle", "label"])).toEqual(["derivedTitle", "label"]);
+    }
+
+    const eventFields = provenance.observeFields(
+      enriched,
+      ["derivedTitle"],
+      createSessionWriteObservation(3, 20),
+    );
+    provenance.observeFields(source, ["label"], createSessionWriteObservation(4, 30));
+    expect(eventFields(enriched, ["derivedTitle"])).toEqual(["derivedTitle"]);
+    expect(donorFields(donor, ["derivedTitle"])).toEqual(["derivedTitle"]);
+    expect(donorFields(enriched, ["derivedTitle"])).toEqual([]);
+    expect(sourceFields(source, ["derivedTitle", "label"])).toEqual(["derivedTitle"]);
+    expect(sourceFields(sibling, ["derivedTitle", "label"])).toEqual(["derivedTitle", "label"]);
+    expect(sourceFields(enriched, ["derivedTitle", "label"])).toEqual(["label"]);
+  });
+
   it("advances read freshness without replacing unchanged presentation rows", () => {
     const provenance = createSessionRowProvenance();
     const initial: GatewaySessionRow = {
