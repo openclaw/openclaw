@@ -418,6 +418,9 @@ export const dispatchTelegramMessage = async (
   }
 
   if (turnDispatched === false) {
+    // Core dropped the turn before dispatch (for example the bot-pair loop guard). Settle the
+    // thinking reaction and its stall timers instead of leaving them running.
+    status.finalizeInBackground({ outcome: "cancelled" }, "skipped finalize");
     return { kind: "completed" };
   }
   if (dispatchWasSuperseded) {
