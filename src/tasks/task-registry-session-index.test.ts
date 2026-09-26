@@ -19,6 +19,8 @@ import {
   getTaskById,
   hasActiveTaskForChildSessionKey,
   listTaskRecordPage,
+  listTasksForFlowId,
+  listTasksForOwnerKey,
   listTasksForRelatedSessionKey,
 } from "./task-registry-query.js";
 import { createTaskRecord, linkTaskToFlowById } from "./task-registry-record-api.js";
@@ -266,10 +268,91 @@ it.each(["native update", "store readback"] as const)(
   },
 );
 
+it.each(["native update", "scoped store readback", "atomic publication"] as const)(
+  "preserves established equal-time membership ordering during %s",
+  async (writer) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    let first: ReturnType<typeof createTask>;
+    let second: ReturnType<typeof createTask>;
+    try {
+      first = createTask({ notifyPolicy: "silent" });
+      const flow = createTaskFlowForTask({ task: first });
+      if (!flow) {
+        throw new Error("task flow creation failed");
+      }
+      first = expectDefined(
+        linkTaskToFlowById({ taskId: first.taskId, flowId: flow.flowId }),
+        "first linked task",
+      );
+      second = createTask({ notifyPolicy: "silent" });
+      second = expectDefined(
+        linkTaskToFlowById({ taskId: second.taskId, flowId: flow.flowId }),
+        "second linked task",
+      );
+    } finally {
+      clock.mockRestore();
+    }
+
+    const expectedBefore = [second.taskId, first.taskId];
+    const membershipIds = () => ({
+      owner: listTasksForOwnerKey(first.ownerKey).map((task) => task.taskId),
+      related: listTasksForRelatedSessionKey(first.requesterSessionKey).map((task) => task.taskId),
+      flow: listTasksForFlowId(first.parentFlowId!).map((task) => task.taskId),
+    });
+    expect(membershipIds()).toEqual({
+      owner: expectedBefore,
+      related: expectedBefore,
+      flow: expectedBefore,
+    });
+
+    const replacement = { ...first, progressSummary: `Published by ${writer}` };
+    if (writer === "native update") {
+      expect(
+        updateTask(first.taskId, { progressSummary: replacement.progressSummary }),
+      ).not.toBeNull();
+    } else if (writer === "scoped store readback") {
+      const context = captureOpenClawStateWorkerContext();
+      const store = getTaskRegistryStore();
+      const scope = { taskId: first.taskId };
+      await runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope,
+          publicationRecords: () => new Map([[first.taskId, replacement]]),
+        },
+        async () => store.upsertTaskWithDeliveryState({ task: replacement }),
+        () => store.loadMutationSnapshotAsync(context, scope),
+      );
+    } else {
+      upsertTaskWithDeliveryStateToSqlite({ task: replacement });
+      publishTaskRecordAfterAtomicStore(replacement);
+    }
+
+    const expectedAfter =
+      writer === "atomic publication" ? [first.taskId, second.taskId] : expectedBefore;
+    expect(membershipIds()).toEqual({
+      owner: expectedAfter,
+      related: expectedAfter,
+      flow: expectedAfter,
+    });
+  },
+);
+
 it.each(["native update", "atomic publication"] as const)(
   "indexes the row actually replaced after reentrant activity publication during %s",
   (writer) => {
-    const task = createTask({ runId: "run-before-flush", notifyPolicy: "silent" });
+    const created = createTask({
+      runId: "run-before-flush",
+      notifyPolicy: "silent",
+    });
+    const flow = createTaskFlowForTask({ task: created });
+    if (!flow) {
+      throw new Error("task flow creation failed");
+    }
+    const task = expectDefined(
+      linkTaskToFlowById({ taskId: created.taskId, flowId: flow.flowId }),
+      "linked task",
+    );
     const completed = { ...task, status: "succeeded" as const, endedAt: Date.now() };
     const store = getTaskRegistryStore();
     let reentered = false;
@@ -291,7 +374,13 @@ it.each(["native update", "atomic publication"] as const)(
             event.task.status === "running"
           ) {
             reentered = true;
-            observerUpdate = updateTask(task.taskId, { runId: "run-from-observer" });
+            observerUpdate = updateTask(task.taskId, {
+              runId: "run-from-observer",
+              ownerKey: "agent:main:owner-from-observer",
+              requesterSessionKey: "agent:main:requester-from-observer",
+              childSessionKey: "agent:main:child-from-observer",
+              parentFlowId: undefined,
+            });
             if (writer === "atomic publication") {
               // The outer publisher resumes with this last committed record after the observer.
               store.upsertTaskWithDeliveryState({ task: completed });
@@ -312,6 +401,20 @@ it.each(["native update", "atomic publication"] as const)(
     expect(observerUpdate).toMatchObject({ runId: "run-from-observer" });
     expect(findTaskByRunId("run-from-observer")).toBeUndefined();
     expect(findTaskByRunId(task.runId!)?.taskId).toBe(task.taskId);
+    expect(listTasksForOwnerKey("agent:main:owner-from-observer")).toEqual([]);
+    expect(listTasksForOwnerKey(task.ownerKey).map((row) => row.taskId)).toEqual([task.taskId]);
+    for (const sessionKey of [
+      "agent:main:requester-from-observer",
+      "agent:main:child-from-observer",
+    ]) {
+      expect(listTasksForRelatedSessionKey(sessionKey)).toEqual([]);
+    }
+    for (const sessionKey of [task.requesterSessionKey, task.childSessionKey!]) {
+      expect(listTasksForRelatedSessionKey(sessionKey).map((row) => row.taskId)).toEqual([
+        task.taskId,
+      ]);
+    }
+    expect(listTasksForFlowId(task.parentFlowId!).map((row) => row.taskId)).toEqual([task.taskId]);
     expect(getTaskById(task.taskId)).toMatchObject({ runId: task.runId, status: "succeeded" });
     expect(store.loadSnapshot().tasks.get(task.taskId)).toMatchObject({
       runId: task.runId,

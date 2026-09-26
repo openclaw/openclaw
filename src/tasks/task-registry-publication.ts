@@ -11,13 +11,7 @@ import {
   tasks,
 } from "./task-registry-state.js";
 import {
-  addOwnerKeyIndex,
-  deleteOwnerKeyIndex,
-  addParentFlowIdIndex,
-  deleteParentFlowIdIndex,
-  addRelatedSessionKeyIndex,
-  deleteRelatedSessionKeyIndex,
-  updateRunIdIndex,
+  updateTaskIndexes,
   recordTaskRegistryProjectionWrite,
 } from "./task-registry.process-state.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
@@ -36,11 +30,6 @@ export function publishTaskRecordAfterAtomicStore(
   if (becomesTerminal) {
     flushTaskActivity(next.taskId);
   }
-  if (current) {
-    deleteOwnerKeyIndex(next.taskId, current);
-    deleteParentFlowIdIndex(next.taskId, current);
-    deleteRelatedSessionKeyIndex(next.taskId, current);
-  }
   const indexedCurrent = tasks.get(next.taskId);
   tasks.set(next.taskId, next);
   recordTaskRegistryProjectionWrite("task", next.taskId);
@@ -48,10 +37,8 @@ export function publishTaskRecordAfterAtomicStore(
   if (becomesTerminal) {
     clearTaskActivity(next.taskId);
   }
-  addOwnerKeyIndex(next.taskId, next);
-  addParentFlowIdIndex(next.taskId, next);
-  addRelatedSessionKeyIndex(next.taskId, next);
-  updateRunIdIndex(indexedCurrent, next);
+  // Atomic publication has historically made the committed row the equal-time winner.
+  updateTaskIndexes(indexedCurrent, next, { reinsertUnchanged: true });
   const emit = () =>
     emitTaskRegistryObserverEvent(() => ({
       kind: "upserted",

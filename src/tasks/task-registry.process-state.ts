@@ -281,7 +281,7 @@ export function addOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKe
   addIndexedKey(indexState.taskIdsByOwnerKey, key, taskId);
 }
 
-export function deleteOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
+function deleteOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
   const key = normalizeOptionalString(task.ownerKey);
   if (!key) {
     return;
@@ -297,7 +297,7 @@ export function addParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "par
   addIndexedKey(indexState.taskIdsByParentFlowId, key, taskId);
 }
 
-export function deleteParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "parentFlowId">) {
+function deleteParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "parentFlowId">) {
   const key = task.parentFlowId?.trim();
   if (!key) {
     return;
@@ -315,7 +315,7 @@ export function addRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys)
   }
 }
 
-export function deleteRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
+function deleteRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
   const child = normalizeOptionalString(task.childSessionKey);
   if (child) {
     deleteIndexedKey(indexState.taskIdsByChildSessionKey, child, taskId);
@@ -350,7 +350,7 @@ export function installRestoredTaskRegistrySnapshot(
 }
 
 /** Update after installing next; previous is the row replaced at that write. */
-export function updateRunIdIndex(
+function updateRunIdIndex(
   previous: Pick<TaskRecord, "taskId" | "runId"> | undefined,
   next: Pick<TaskRecord, "taskId" | "runId">,
 ): void {
@@ -387,6 +387,69 @@ function clearTaskRegistryIndexes(): void {
   indexState.taskIdsByChildSessionKey.clear();
 }
 
+/** Update every process-local membership after installing the replacement row. */
+export function updateTaskIndexes(
+  previous: TaskRecord | undefined,
+  next: TaskRecord,
+  options?: { reinsertUnchanged?: boolean },
+): void {
+  updateRunIdIndex(previous, next);
+  const taskId = next.taskId;
+  const previousOwnerKey = normalizeOptionalString(previous?.ownerKey);
+  const nextOwnerKey = normalizeOptionalString(next.ownerKey);
+  if (options?.reinsertUnchanged || previousOwnerKey !== nextOwnerKey) {
+    if (previousOwnerKey) {
+      deleteIndexedKey(indexState.taskIdsByOwnerKey, previousOwnerKey, taskId);
+    }
+    if (nextOwnerKey) {
+      addIndexedKey(indexState.taskIdsByOwnerKey, nextOwnerKey, taskId);
+    }
+  }
+  const previousFlowId = previous?.parentFlowId?.trim();
+  const nextFlowId = next.parentFlowId?.trim();
+  if (options?.reinsertUnchanged || previousFlowId !== nextFlowId) {
+    if (previousFlowId) {
+      deleteIndexedKey(indexState.taskIdsByParentFlowId, previousFlowId, taskId);
+    }
+    if (nextFlowId) {
+      addIndexedKey(indexState.taskIdsByParentFlowId, nextFlowId, taskId);
+    }
+  }
+  const reinsertUnchanged = options?.reinsertUnchanged === true;
+  const previousRequesterKey = normalizeOptionalString(previous?.requesterSessionKey);
+  const nextRequesterKey = normalizeOptionalString(next.requesterSessionKey);
+  const previousChildKey = normalizeOptionalString(previous?.childSessionKey);
+  const nextChildKey = normalizeOptionalString(next.childSessionKey);
+  if (
+    !reinsertUnchanged &&
+    previousOwnerKey === nextOwnerKey &&
+    previousRequesterKey === nextRequesterKey &&
+    previousChildKey === nextChildKey
+  ) {
+    return;
+  }
+  if (reinsertUnchanged || previousChildKey !== nextChildKey) {
+    if (previousChildKey) {
+      deleteIndexedKey(indexState.taskIdsByChildSessionKey, previousChildKey, taskId);
+    }
+    if (nextChildKey) {
+      addIndexedKey(indexState.taskIdsByChildSessionKey, nextChildKey, taskId);
+    }
+  }
+  const previousSessionKeys = new Set(previous ? getTaskRelatedSessionIndexKeys(previous) : []);
+  const nextSessionKeys = new Set(getTaskRelatedSessionIndexKeys(next));
+  for (const sessionKey of previousSessionKeys) {
+    if (reinsertUnchanged || !nextSessionKeys.has(sessionKey)) {
+      deleteIndexedKey(indexState.taskIdsByRelatedSessionKey, sessionKey, taskId);
+    }
+  }
+  for (const sessionKey of nextSessionKeys) {
+    if (reinsertUnchanged || !previousSessionKeys.has(sessionKey)) {
+      addIndexedKey(indexState.taskIdsByRelatedSessionKey, sessionKey, taskId);
+    }
+  }
+}
+
 export function removeTaskIndexes(task: TaskRecord): void {
   deleteRunIdIndex(task.taskId, task.runId);
   deleteOwnerKeyIndex(task.taskId, task);
@@ -395,32 +458,7 @@ export function removeTaskIndexes(task: TaskRecord): void {
 }
 
 export function addTaskIndexes(task: TaskRecord): void {
-  addRunIdIndex(task.taskId, task.runId);
-  addOwnerKeyIndex(task.taskId, task);
-  addParentFlowIdIndex(task.taskId, task);
-  addRelatedSessionKeyIndex(task.taskId, task);
-}
-
-/** Update a published row without disturbing unchanged index insertion order. */
-export function updateTaskIndexes(current: TaskRecord, next: TaskRecord): void {
-  const taskId = next.taskId;
-  updateRunIdIndex(current, next);
-  if (current.ownerKey !== next.ownerKey) {
-    deleteOwnerKeyIndex(taskId, current);
-    addOwnerKeyIndex(taskId, next);
-  }
-  if (current.parentFlowId !== next.parentFlowId) {
-    deleteParentFlowIdIndex(taskId, current);
-    addParentFlowIdIndex(taskId, next);
-  }
-  if (
-    current.ownerKey !== next.ownerKey ||
-    current.requesterSessionKey !== next.requesterSessionKey ||
-    current.childSessionKey !== next.childSessionKey
-  ) {
-    deleteRelatedSessionKeyIndex(taskId, current);
-    addRelatedSessionKeyIndex(taskId, next);
-  }
+  updateTaskIndexes(undefined, task);
 }
 
 export function taskIdsInScope(scope?: TaskRegistryMutationScope): Iterable<string> {

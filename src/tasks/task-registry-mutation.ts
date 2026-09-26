@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getTaskFlowById,
   updateFlowRecordByIdExpectedRevision,
@@ -24,13 +23,7 @@ import {
 } from "./task-registry-state.js";
 import { prepareTaskRecordUpdate } from "./task-registry-transition.operation.js";
 import {
-  addOwnerKeyIndex,
-  deleteOwnerKeyIndex,
-  addParentFlowIdIndex,
-  deleteParentFlowIdIndex,
-  addRelatedSessionKeyIndex,
-  deleteRelatedSessionKeyIndex,
-  updateRunIdIndex,
+  updateTaskIndexes,
   recordTaskRegistryProjectionWrite,
 } from "./task-registry.process-state.js";
 import { tryPersistTaskUpsert } from "./task-registry.store.js";
@@ -120,13 +113,6 @@ export function publishTaskRecordUpdate(
   const published = persisted ? next : current;
   const becomesTerminal =
     !isTerminalTaskStatus(current.status) && isTerminalTaskStatus(next.status);
-  const sessionIndexChanged =
-    normalizeOptionalString(current.requesterSessionKey) !==
-      normalizeOptionalString(next.requesterSessionKey) ||
-    normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
-    normalizeOptionalString(current.childSessionKey) !==
-      normalizeOptionalString(next.childSessionKey);
-  const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
   if (persisted) {
     const indexedCurrent = tasks.get(taskId);
     tasks.set(taskId, next);
@@ -135,17 +121,7 @@ export function publishTaskRecordUpdate(
     if (becomesTerminal) {
       clearTaskActivity(taskId);
     }
-    updateRunIdIndex(indexedCurrent, next);
-    if (sessionIndexChanged) {
-      deleteOwnerKeyIndex(taskId, current);
-      addOwnerKeyIndex(taskId, next);
-      deleteRelatedSessionKeyIndex(taskId, current);
-      addRelatedSessionKeyIndex(taskId, next);
-    }
-    if (parentFlowIndexChanged) {
-      deleteParentFlowIdIndex(taskId, current);
-      addParentFlowIdIndex(taskId, next);
-    }
+    updateTaskIndexes(indexedCurrent, next);
   }
   // Storage no-ops still repair linked flows and retry failed observer publications.
   syncFlowFromTaskAfterTaskMutation(next, "update");
