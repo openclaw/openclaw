@@ -898,7 +898,7 @@ describe("SMS inbound MMS materialization", () => {
       expect.objectContaining({
         maxBytes: 5 * 1024 * 1024,
         requestInit: expect.objectContaining({ signal: expect.any(AbortSignal) }),
-        ssrfPolicy: { hostnameAllowlist: ["api.twilio.com"] },
+        ssrfPolicy: { hostnameAllowlist: ["api.twilio.com", "mms.twiliocdn.com"] },
         timeoutMs: 60_000,
         responseHeaderTimeoutMs: 30_000,
         readIdleTimeoutMs: 30_000,
