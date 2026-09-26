@@ -31,6 +31,7 @@ type HarnessOptions = NonNullable<Parameters<typeof createBaseHarness>[0]>;
 type EventRoute = { runId?: string; sessionKey?: string; agentId?: string };
 
 const activeHarnesses = new Set<Harness>();
+const databaseIdentity = Symbol("session-observer-database");
 
 function createHarness(options?: HarnessOptions): Harness {
   const harness = createBaseHarness(options);
@@ -118,6 +119,7 @@ function commitObserverSessionReset(harness: Harness, notify = true): void {
   }
   emitSessionIdentityMutation({
     agentId: "main",
+    databaseIdentity,
     kind: "reset",
     previous: { sessionId, sessionKeys: [sessionKey] },
     current: { sessionId, sessionKeys: [sessionKey] },

@@ -250,6 +250,9 @@ data class ChatPendingToolCall(
   val liveDiff: ChatDiffStat? = null,
   val activity: ChatAgentActivity? = null,
   val isComplete: Boolean = false,
+  val runId: String? = null,
+  /** Stable across provisional-to-canonical run ownership changes. */
+  val presentationId: String? = null,
 )
 
 data class ChatDiffStat(
@@ -613,6 +616,7 @@ data class ChatHistory(
   val messages: List<ChatMessage>,
   val sessionInfo: ChatSessionEntry? = null,
   val inFlightRun: ChatInFlightRun? = null,
+  val defaultModelRef: String? = null,
 )
 
 /**

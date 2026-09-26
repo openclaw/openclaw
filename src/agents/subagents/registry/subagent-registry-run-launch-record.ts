@@ -1,6 +1,7 @@
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export type RegisterSubagentRunParams = {
   runId: string;
@@ -43,6 +44,28 @@ export type RegisterSubagentRunParams = {
   taskRowOwnership?: "required" | "gateway_best_effort";
   gatewayContextResolver?: GatewayContextResolver;
 };
+
+export function resolveSwarmWaitOwnerSessionKeys(
+  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>,
+  requesterSessionKey: string,
+): string[] {
+  const ownerSessionKeys: string[] = [];
+  const visited = new Set<string>();
+  let currentSessionKey = requesterSessionKey.trim();
+  while (currentSessionKey && !visited.has(currentSessionKey)) {
+    visited.add(currentSessionKey);
+    ownerSessionKeys.push(currentSessionKey);
+    let latestOwner: SubagentRunRecord | undefined;
+    for (const candidate of getRunsForChildSession(currentSessionKey)) {
+      if (!latestOwner || compareSubagentRunGeneration(candidate, latestOwner) > 0) {
+        latestOwner = candidate;
+      }
+    }
+    currentSessionKey =
+      latestOwner?.controllerSessionKey?.trim() || latestOwner?.requesterSessionKey.trim() || "";
+  }
+  return ownerSessionKeys;
+}
 
 export function createSubagentRegistrationRecord(
   registerParams: RegisterSubagentRunParams,

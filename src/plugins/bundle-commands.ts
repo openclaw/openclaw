@@ -1,6 +1,7 @@
 // Bundles plugin command metadata for package output.
 import fs from "node:fs";
 import path from "node:path";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -13,7 +14,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { walkDirectorySync } from "../infra/fs-safe.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { parseFrontmatterBool } from "../shared/frontmatter.js";

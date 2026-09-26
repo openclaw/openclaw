@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
 
 type DriverClickButton = import("@trycua/cua-driver").ClickButton;
-type DriverEscalationReason = import("@trycua/cua-driver").EscalationReason;
 type CuaDriverLike = import("@trycua/cua-driver").CuaDriverLike;
 type CuaDriverSessionLike = import("@trycua/cua-driver").CuaDriverSessionLike;
 type DriverScrollDirection = import("@trycua/cua-driver").ScrollDirection;
@@ -13,7 +12,6 @@ type CuaDriverSdk = Pick<
   | "ClickPosition"
   | "CuaDriver"
   | "DriverError"
-  | "EscalationReason"
   | "InputDeliveryMode"
   | "ScrollBy"
   | "SessionPermissionMode"
@@ -21,15 +19,6 @@ type CuaDriverSdk = Pick<
 >;
 
 export type CuaToolResult = import("@trycua/cua-driver").ToolResult;
-
-export const EscalationReason = {
-  AxTreePixelMismatch: 0 as DriverEscalationReason,
-  BackgroundDeliveryFailed: 1 as DriverEscalationReason,
-  ForegroundIneffective: 2 as DriverEscalationReason,
-  NoWindowTarget: 3 as DriverEscalationReason,
-  Other: 4 as DriverEscalationReason,
-} as const;
-export type EscalationReason = (typeof EscalationReason)[keyof typeof EscalationReason];
 
 // These numeric values are part of the pinned SDK contract. Keeping
 // them local avoids loading the native library while OpenClaw is only
@@ -60,7 +49,7 @@ export interface CuaDriverSession {
     signal?: AbortSignal,
   ): Promise<CuaToolResult>;
   getCursorPosition(signal?: AbortSignal): Promise<CuaToolResult>;
-  escalateScope(reason: EscalationReason, signal?: AbortSignal): Promise<CuaSessionState>;
+  getSessionState(signal?: AbortSignal): Promise<CuaSessionState>;
   getDesktopState(signal?: AbortSignal): Promise<CuaToolResult>;
   getScreenSize(signal?: AbortSignal): Promise<CuaToolResult>;
   click(
@@ -175,7 +164,7 @@ class DirectCuaDriverSession {
       this.session.getCursorPosition({ session: this.publicSession }, asyncOptions(signal)),
     );
   }
-  async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
+  async getSessionState(signal?: AbortSignal) {
     await this.ensureSessionStarted(signal);
     return await this.session.getSessionState(
       { session: this.publicSession },
@@ -423,8 +412,8 @@ class LazyCuaDriverSession implements CuaDriverSession {
   async getCursorPosition(signal?: AbortSignal) {
     return await (await this.requireRuntime()).getCursorPosition(signal);
   }
-  async escalateScope(reason: EscalationReason, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).escalateScope(reason, signal);
+  async getSessionState(signal?: AbortSignal) {
+    return await (await this.requireRuntime()).getSessionState(signal);
   }
   async getScreenSize(signal?: AbortSignal) {
     return await (await this.requireRuntime()).getScreenSize(signal);

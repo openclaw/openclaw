@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import type { SecretRef } from "../../config/types.secrets.js";
 import {
   WorkerProviderError,
   type WorkerProfile,
@@ -11,6 +10,7 @@ import type {
   WorkerEnvironmentAbandonment,
   WorkerProviderLifecycleOptions,
 } from "./provider-lifecycle.types.js";
+import { createWorkerSshIdentityResolver } from "./provider-ssh-identity.js";
 import {
   requireProviderOperationTimeoutMs,
   requireWorkerAllocation,
@@ -44,6 +44,7 @@ export function createWorkerProviderOwnerLifecycle(
   > & {
     providerFor: (providerId: string) => WorkerProvider;
     requireWorkerProfile: (value: unknown) => WorkerProfile;
+    onOwnerStopped?: (environmentId: string) => void;
   },
 ) {
   const {
@@ -64,23 +65,6 @@ export function createWorkerProviderOwnerLifecycle(
     profile: requireWorkerProfile(record.profileSnapshot.settings),
   });
 
-  const identityResolverFor = (
-    record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
-    leaseId: string,
-  ) => {
-    const profile = requireWorkerProfile(record.profileSnapshot.settings);
-    const resolveSshIdentity = options.resolveSshIdentity;
-    return async (keyRef: SecretRef) => {
-      if (!resolveSshIdentity) {
-        throw new Error("Worker SSH identity resolution is unavailable");
-      }
-      return await callProvider(record.environmentId, () =>
-        resolveSshIdentity({ provider, leaseId, profile, keyRef }),
-      );
-    };
-  };
-
   const requireCurrentOwner = (record: WorkerEnvironmentRecord): WorkerEnvironmentRecord => {
     const current = store.get(record.environmentId);
     if (
@@ -97,11 +81,18 @@ export function createWorkerProviderOwnerLifecycle(
     return current;
   };
 
+  const identityResolverFor = createWorkerSshIdentityResolver({
+    ...options,
+    requireCurrentOwner,
+    requireWorkerProfile,
+  });
+
   const stopOwner = async (
     record: WorkerEnvironmentRecord,
     reason?: WorkerTunnelStopReason,
   ): Promise<WorkerEnvironmentRecord> => {
     requireCurrentOwner(record);
+    options.onOwnerStopped?.(record.environmentId);
     const sessionId = record.attachedSessionIds.length === 1 ? record.attachedSessionIds[0] : null;
     if (sessionId) {
       // Transfer an exact pending-result owner before credential revocation makes its
@@ -425,7 +416,6 @@ export function createWorkerProviderOwnerLifecycle(
     identityResolverFor,
     requireCurrentOwner,
     stopOwner,
-    destroyLease,
     beginDrain,
     finishProvenDestroy,
     lifecycleLease,

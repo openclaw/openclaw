@@ -23,6 +23,10 @@ type FeishuPostMessageElement =
 
 const FEISHU_POST_MAX_BYTES = 30 * 1024;
 
+export function shouldUseFeishuCard(text: string): boolean {
+  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+}
+
 /** One parser contract for Feishu message and document Markdown decisions. */
 export function parseFeishuMarkdown(text: string): FeishuMarkdownNode {
   return fromMarkdown(text, {
@@ -146,13 +150,9 @@ export function materializeFeishuPostMarkdownSoftBreaks(text: string): string {
   return parts.join("");
 }
 
-function chunkFeishuMarkdownWithMode(text: string, limit: number, mode: ChunkMode): string[] {
-  return chunkMarkdownTextWithMode(text, limit, mode);
-}
-
 /** Keep every platform chunk independently valid Markdown, including fences. */
 export function chunkFeishuMarkdown(text: string, limit: number): string[] {
-  return chunkFeishuMarkdownWithMode(text, limit, "length");
+  return chunkMarkdownTextWithMode(text, limit, "length");
 }
 
 function postContentBytes(messageText: string, mentions?: MentionTarget[]): number {
@@ -198,7 +198,7 @@ export function chunkFeishuMarkdownByEnvelope(
     Number.isFinite(params.limit) && params.limit > 0 ? Math.floor(params.limit) : text.length;
   const initialChunks =
     params.initialChunks ??
-    chunkFeishuMarkdownWithMode(text, requestedLimit, params.mode ?? "length");
+    chunkMarkdownTextWithMode(text, requestedLimit, params.mode ?? "length");
   const output: string[] = [];
   for (const initialChunk of initialChunks) {
     if (params.contentBytes(initialChunk, output.length === 0) <= FEISHU_POST_MAX_BYTES) {
@@ -209,7 +209,7 @@ export function chunkFeishuMarkdownByEnvelope(
     let adaptiveLimit = Math.max(1, Math.min(requestedLimit, initialChunk.length));
 
     while (true) {
-      const chunks = chunkFeishuMarkdownWithMode(
+      const chunks = chunkMarkdownTextWithMode(
         initialChunk,
         adaptiveLimit,
         params.mode ?? "length",

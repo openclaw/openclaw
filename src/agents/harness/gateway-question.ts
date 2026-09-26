@@ -1,9 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type {
-  QuestionAnswers,
-  QuestionRequestQuestion,
-  QuestionWaitAnswerResult,
-} from "../../../packages/gateway-protocol/src/schema/questions.js";
+import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
@@ -15,6 +11,9 @@ import {
   type GatewayQuestionCall,
 } from "../tools/gateway-question-lifecycle.js";
 import {
+  buildAgentQuestionAnswers,
+  buildAgentQuestionRequestQuestions,
+  PreparedQuestionAnswerRefusedError,
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
   QuestionDispatchUnsupportedError,
@@ -34,8 +33,8 @@ import {
   deliverAgentHarnessQuestionPrompt,
   deliverAgentHarnessUserInputPrompt,
   type AgentHarnessUserInputPromptOptions,
-  type AgentHarnessUserInputQuestion,
 } from "./user-input-bridge.js";
+import type { AgentHarnessUserInputQuestion } from "./user-input-types.js";
 
 const QUESTION_RPC_GRACE_MS = 10_000;
 
@@ -279,9 +278,18 @@ export async function claimPendingAgentQuestionAnswer(params: {
   return claimQuestionAnswer(params);
 }
 
+/** Core ingress revalidates its prepared route after question and source preparation. */
+export async function claimPreparedPendingAgentQuestionAnswer(
+  params: Parameters<typeof claimPendingAgentQuestionAnswer>[0],
+  assertPreparedCurrent: () => Promise<void>,
+): Promise<boolean> {
+  return claimQuestionAnswer(params, undefined, assertPreparedCurrent);
+}
+
 async function claimQuestionAnswer(
   params: Parameters<typeof claimPendingAgentQuestionAnswer>[0],
   onAnswerProcessed?: () => void,
+  assertPreparedCurrent?: () => Promise<void>,
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   const state = sessionKey ? pendingAgentQuestions.get(sessionKey) : undefined;
@@ -329,18 +337,23 @@ async function claimQuestionAnswer(
         await params.persist?.();
       }
     }
-    reservation.assertCurrent();
+    if (assertPreparedCurrent) {
+      try {
+        await assertPreparedCurrent();
+        reservation.assertCurrent();
+      } catch (error) {
+        throw new PreparedQuestionAnswerRefusedError(error);
+      }
+    } else {
+      reservation.assertCurrent();
+    }
     if (state.kind === "secret") {
       consumed = state.settle(params.text);
       return consumed;
     }
     state.answerAuthority?.admitTranscriptAnswer?.(sourceRecorder);
     const parsed = buildAgentHarnessUserInputAnswers(state.questions, params.text);
-    const answers: QuestionAnswers = {
-      answers: Object.fromEntries(
-        Object.entries(parsed.answers).map(([id, answer]) => [id, answer.answers]),
-      ),
-    };
+    const answers = buildAgentQuestionAnswers(parsed);
     const resolutionId = randomBytes(16).toString("hex");
     try {
       await state.gatewayCall(
@@ -445,20 +458,9 @@ export async function cancelPendingAgentQuestionForSession(params: {
   }
 }
 
-type RunAgentHarnessSecretInputParams = {
-  questions: readonly AgentHarnessUserInputQuestion[];
-  sessionKey: string;
-  timeoutMs: number;
-  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> & {
-    hostCapabilities?: AgentHarnessHostCapabilities;
-  };
-  promptOptions?: AgentHarnessUserInputPromptOptions;
-  signal?: AbortSignal;
-};
-
 /** Presents one warned secret prompt and keeps its answer out of durable question records. */
 function runAgentHarnessSecretInput(
-  params: RunAgentHarnessSecretInputParams,
+  params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<string | undefined> {
   params.signal?.throwIfAborted();
   const sessionKey = params.sessionKey.trim();
@@ -535,34 +537,19 @@ async function runScopedAgentHarnessQuestion(
   params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<QuestionWaitAnswerResult> {
   if (params.questions.some((question) => question.isSecret)) {
-    const text = await runAgentHarnessSecretInput({
-      questions: params.questions,
-      sessionKey: params.sessionKey,
-      timeoutMs: params.timeoutMs,
-      delivery: params.delivery,
-      promptOptions: params.promptOptions,
-      signal: params.signal,
-    });
+    const text = await runAgentHarnessSecretInput(params);
     if (text === undefined) {
       return { status: "cancelled" };
     }
     const parsed = buildAgentHarnessUserInputAnswers(params.questions, text);
     return {
       status: "answered",
-      answers: {
-        answers: Object.fromEntries(
-          Object.entries(parsed.answers).map(([id, answer]) => [id, answer.answers]),
-        ),
-      },
+      answers: buildAgentQuestionAnswers(parsed),
     };
   }
   const gatewayCall = resolveAgentQuestionGatewayCall(params.gatewayCall);
   const questionId = params.questionId ?? `ask_${randomBytes(16).toString("hex")}`;
-  const questions: QuestionRequestQuestion[] = params.questions.map(({ id, ...question }) => ({
-    ...question,
-    questionId: id,
-    options: [...(question.options ?? [])],
-  }));
+  const questions = buildAgentQuestionRequestQuestions(params.questions);
   let aborted = false;
   params.signal?.throwIfAborted();
   using prompt = createQuestionPromptLifetime(params.signal);

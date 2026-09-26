@@ -1,4 +1,5 @@
 import { createAgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
@@ -7,7 +8,9 @@ import {
   isCodexAppServerLiveThreadClaimed,
 } from "./client-runtime.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { threadRead } from "./native-subagent-monitor.test-support.js";
 
@@ -157,25 +160,45 @@ describe("automatic native task history ownership", () => {
       const { client } = fixture;
       ensureCodexAppServerClientRuntime(client, { agentDir: stateDir });
       const deliver = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
-      const parent = codexNativeSubagentMonitorRuntime.register({
+      const attemptStarted = createDeferred<void>();
+      const attempts: Promise<void>[] = [];
+      // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
+      const originalDelivery = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
+      const observeAttempt = vi
+        .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
+        .mockImplementation(function (
+          this: CodexNativeSubagentCompletionDelivery,
+          state,
+          child,
+          trigger,
+        ) {
+          const attempt = originalDelivery.call(this, state, child, trigger);
+          attempts.push(attempt);
+          attemptStarted.resolve();
+          return attempt;
+        });
+      const parent = await codexNativeSubagentMonitorRuntime.register({
         client,
         parentThreadId: owner?.parentThreadId ?? "current-parent",
         requesterSessionKey,
         taskRuntimeScope: scope,
         agentId: "main",
         ...(owner ? { historyOwner: owner } : {}),
-        runtime: { createAgentHarnessTaskRuntime, deliverAgentHarnessTaskCompletion: deliver },
+        runtime: {
+          ...defaultNativeSubagentMonitorRuntime,
+          deliverAgentHarnessTaskCompletion: deliver,
+        },
       });
       try {
         await parent.unregister();
         if (allow) {
-          await vi.waitFor(() =>
-            expect(tasks.listTaskRecords()[0]).toMatchObject({
-              status: "succeeded",
-              deliveryStatus: "delivered",
-              terminalSummary: "original native result",
-            }),
-          );
+          await attemptStarted.promise;
+          await Promise.all(attempts);
+          expect(tasks.listTaskRecords()[0]).toMatchObject({
+            status: "succeeded",
+            deliveryStatus: "delivered",
+            terminalSummary: "original native result",
+          });
           expect(deliver).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({ result: "original native result" }),
           );
@@ -193,8 +216,13 @@ describe("automatic native task history ownership", () => {
       } finally {
         await parent.unregister();
         fixture.close();
-        host.closeHost();
-        host.closeAdmission();
+        try {
+          await Promise.all(attempts);
+        } finally {
+          observeAttempt.mockRestore();
+          host.closeHost();
+          host.closeAdmission();
+        }
       }
     });
   });
@@ -288,9 +316,12 @@ it.each([
       agentId: "main",
       taskRuntimeScope,
       historyOwner: { ...originalHistory, parentThreadId: currentParent },
-      runtime: { createAgentHarnessTaskRuntime, deliverAgentHarnessTaskCompletion: deliver },
+      runtime: {
+        ...defaultNativeSubagentMonitorRuntime,
+        deliverAgentHarnessTaskCompletion: deliver,
+      },
     };
-    let replacement = codexNativeSubagentMonitorRuntime.register(registration);
+    let replacement = await codexNativeSubagentMonitorRuntime.register(registration);
     replacement.bindTurn("replacement-parent-turn");
     try {
       // Wait for actual recovered native custody, not just a scheduled history request.
@@ -309,7 +340,7 @@ it.each([
         await replacement.unregister();
       }
       if (reregisterReplacement) {
-        replacement = codexNativeSubagentMonitorRuntime.register(registration);
+        replacement = await codexNativeSubagentMonitorRuntime.register(registration);
       }
       if (retireReplacement) {
         codexNativeSubagentMonitorRuntime.retireParent(client, currentParent);

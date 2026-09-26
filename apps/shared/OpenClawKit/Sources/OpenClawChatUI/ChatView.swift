@@ -129,6 +129,7 @@ public struct OpenClawChatView: View {
     @State private var viewModel: OpenClawChatViewModel
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @State private var contentWidth: CGFloat = 0
     @State private var scrollerBottomID = UUID()
     @State private var scrollPosition: UUID?
     @State private var hasPerformedInitialScroll = false
@@ -201,14 +202,6 @@ public struct OpenClawChatView: View {
         static let messageListPaddingHorizontal: CGFloat = 8
         static let newTurnAnchor = UnitPoint(x: 0.5, y: 0.18)
         static let liveEdgeThreshold: CGFloat = 48
-        #endif
-    }
-
-    private var readingColumnWidth: CGFloat {
-        #if os(macOS)
-        self.isDesktopLayout ? 760 : .infinity
-        #else
-        .infinity
         #endif
     }
 
@@ -316,11 +309,11 @@ public struct OpenClawChatView: View {
                         if wasPresented, !isPresented { self.composerFocusRequest += 1 }
                     }
                 #endif
-                    .padding(.horizontal, Layout.outerPaddingHorizontal)
+                    .padding(.horizontal, self.isTabletLayout ? 0 : Layout.outerPaddingHorizontal)
             if !self.usesInlineProgressCard {
                 self.progressCard
                     .frame(maxWidth: self.readingColumnWidth)
-                    .padding(.horizontal, Layout.composerPaddingHorizontal)
+                    .padding(.horizontal, self.composerHorizontalMargin)
                     .padding(.top, Layout.stackSpacing)
             }
             if self.showsComposer {
@@ -329,20 +322,21 @@ public struct OpenClawChatView: View {
             }
             self.swarmProgress
                 .frame(maxWidth: self.readingColumnWidth)
-                .padding(.horizontal, Layout.swarmPaddingHorizontal)
+                .padding(.horizontal, self.isTabletLayout ? self.tabletHorizontalMargin : Layout.swarmPaddingHorizontal)
                 .padding(.vertical, Layout.swarmPaddingVertical)
                 .padding(.top, Layout.stackSpacing)
             if self.showsComposer {
                 self.composer
                     .frame(maxWidth: self.readingColumnWidth)
-                    .padding(.horizontal, self.isDesktopLayout ? 16 : Layout.composerPaddingHorizontal)
+                    .padding(.horizontal, self.composerHorizontalMargin)
                     .padding(.top, Layout.stackSpacing)
-                    .padding(.bottom, self.isDesktopLayout ? 12 : Layout.outerPaddingVertical)
+                    .padding(.bottom, self.isTabletLayout || self.isDesktopLayout ? 12 : Layout.outerPaddingVertical)
             }
         }
         .padding(.top, Layout.outerPaddingVertical)
-        .frame(maxWidth: .infinity)
-        .frame(maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { self.contentWidth = $0 }
+        .environment(\.openClawAssistantUsesReadingColumn, self.isTabletLayout)
     }
 
     @ViewBuilder
@@ -430,7 +424,10 @@ public struct OpenClawChatView: View {
                 .scrollTargetLayout()
                 .padding(.top, self.isDesktopLayout ? 24 : Layout.messageListPaddingTop)
                 .frame(maxWidth: self.readingColumnWidth)
-                .padding(.horizontal, self.isDesktopLayout ? 16 : Layout.messageListPaddingHorizontal)
+                .padding(
+                    .horizontal,
+                    self.isTabletLayout ? self.tabletHorizontalMargin :
+                        (self.isDesktopLayout ? 16 : Layout.messageListPaddingHorizontal))
                 .frame(maxWidth: .infinity)
             }
             #if !os(macOS)
@@ -615,17 +612,22 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if let text = viewModel.streamingAssistantText, self.hasVisibleStreamingAssistantText {
-            ChatStreamingAssistantBubble(
-                text: text,
-                markdownVariant: self.markdownVariant,
-                showsReasoning: self.displayOptions.contains(.reasoning),
-                assistantName: self.assistantName,
-                assistantAvatarText: self.assistantAvatarText,
-                assistantAvatarTint: self.assistantAvatarTint,
-                showsAssistantAvatar: self.showsAssistantAvatars,
-                isClean: self.composerChrome == .clean)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        if let text = viewModel.streamingAssistantText {
+            let preparedText = ChatStreamingAssistantText(
+                sourceText: text,
+                includesThinking: self.displayOptions.contains(.reasoning))
+            if !preparedText.segments.isEmpty {
+                EquatableChatStreamingAssistantBubble(bubble: ChatStreamingAssistantBubble(
+                    text: preparedText,
+                    markdownVariant: self.markdownVariant,
+                    assistantName: self.assistantName,
+                    assistantAvatarText: self.assistantAvatarText,
+                    assistantAvatarTint: self.assistantAvatarTint,
+                    showsAssistantAvatar: self.showsAssistantAvatars,
+                    isClean: self.composerChrome == .clean))
+                    .equatable()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -1617,5 +1619,36 @@ private struct ChatNoticeBanner: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)))
+    }
+}
+
+extension OpenClawChatView {
+    private var isTabletLayout: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .pad
+        #else
+        false
+        #endif
+    }
+
+    /// Measure the detail pane, not the screen: a visible sidebar and window resizing
+    /// change the space available to chat independently of device orientation.
+    private var tabletHorizontalMargin: CGFloat {
+        min(24, max(12, (self.contentWidth - 480) / 20 + 12))
+    }
+
+    private var composerHorizontalMargin: CGFloat {
+        self.isTabletLayout ? self.tabletHorizontalMargin :
+            (self.isDesktopLayout ? 16 : Layout.composerPaddingHorizontal)
+    }
+
+    private var readingColumnWidth: CGFloat {
+        #if os(macOS)
+        self.isDesktopLayout ? 760 : .infinity
+        #elseif os(iOS)
+        UIDevice.current.userInterfaceIdiom == .pad ? 760 : .infinity
+        #else
+        .infinity
+        #endif
     }
 }

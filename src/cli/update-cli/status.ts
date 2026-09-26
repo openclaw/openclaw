@@ -39,6 +39,25 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 
+async function readUpdateRecoverySetStatus() {
+  try {
+    const { inspectUpdateRecoveryBackups } =
+      await import("../../infra/update-recovery-backup-status.js");
+    const sets = await inspectUpdateRecoveryBackups();
+    return {
+      recoverySets: sets.map(({ ref, runId, status, message, nextAction }) => ({
+        runId,
+        manifestPath: ref.manifestPath,
+        status,
+        message,
+        nextAction,
+      })),
+    };
+  } catch (error) {
+    return { recoverySetsError: formatErrorMessage(error) };
+  }
+}
+
 async function readChannelStatusIssues(
   config: OpenClawConfig,
   timeoutMs = 5_000,
@@ -104,6 +123,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const updateAvailability = resolveUpdateAvailability(update);
 
   const runStatus = readUpdateRunStatus();
+  const recoveryStatus = await readUpdateRecoverySetStatus();
   const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
   const updateInProgress =
     !("runStatusError" in runStatus) && activeRun && !runStatus.staleRun && !runStatus.abandonedRun;
@@ -190,6 +210,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       ...(migrationWarnings.length > 0 ? { migrationWarnings } : {}),
       ...(migrationWarningsError ? { migrationWarningsError } : {}),
       ...runStatus,
+      ...recoveryStatus,
     });
     return;
   }
@@ -297,6 +318,9 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       }
     }
     if (run) {
+      if (!activeRun) {
+        defaultRuntime.log(`Last recorded update (${new Date(run.createdAtMs).toISOString()}):`);
+      }
       if (staleRun) {
         defaultRuntime.log(`Update ${run.runId}: ${staleRun.guidance}`);
       }
@@ -317,6 +341,23 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       for (const line of report.lines) {
         defaultRuntime.log(line);
       }
+      defaultRuntime.log("");
+    }
+  }
+
+  if ("recoverySetsError" in recoveryStatus) {
+    defaultRuntime.log(
+      theme.warn(
+        safeMessage(`Update recovery sets unavailable: ${recoveryStatus.recoverySetsError}`),
+      ),
+    );
+    defaultRuntime.log("");
+  } else {
+    for (const set of recoveryStatus.recoverySets) {
+      defaultRuntime.log(safeMessage(`Update recovery set ${set.runId}: ${set.status}`));
+      defaultRuntime.log(safeMessage(set.manifestPath));
+      defaultRuntime.log(safeMessage(set.message));
+      defaultRuntime.log(safeMessage(`Next action: ${set.nextAction}`));
       defaultRuntime.log("");
     }
   }

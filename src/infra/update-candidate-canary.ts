@@ -39,9 +39,10 @@ import {
   type UpdateFailureFact,
 } from "./update-failure-facts.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
+import type { UpdateRunStep } from "./update-run-record.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 type CanaryPhase =
   | "snapshot"
@@ -86,6 +87,7 @@ export async function validateUpdateCandidateCanary(params: {
   assertCurrent?: () => void;
   /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
   onStep?: (step: UpdateStepResult) => void;
+  onProgress?: (step: UpdateRunStep) => void;
 }): Promise<CanaryResult> {
   const started = Date.now();
   let rehearsal: UpdateCandidateRehearsal | undefined;
@@ -108,6 +110,7 @@ export async function validateUpdateCandidateCanary(params: {
           directory === rehearsal.stateDir
             ? "candidate-state-cleanup"
             : "candidate-plugin-inventory-cleanup",
+        onProgress: params.onProgress,
         onWarning: (step) => {
           steps.push(step);
           params.onStep?.(step);
@@ -224,6 +227,7 @@ export async function validateUpdateCandidateCanary(params: {
       nodeRunner: params.nodeRunner,
       timeoutMs: params.timeoutMs,
       signal: params.signal,
+      onProgress: params.onProgress,
     });
     // Copying private state has its own size/progress budget; preserve the
     // runtime validation budget after large snapshots finish.
@@ -234,6 +238,7 @@ export async function validateUpdateCandidateCanary(params: {
       durationMs: snapshotDuration,
       exitCode: 0,
       snapshotCapacity: rehearsal.snapshotCapacity,
+      diagnostics: rehearsal.snapshotDiagnostics,
     };
     steps.push(snapshotStep);
     params.onStep?.(snapshotStep);

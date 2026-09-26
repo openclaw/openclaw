@@ -50,16 +50,9 @@ import {
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
-import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
-import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
-import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
-import type { SkillUsagePath } from "../../skills/types.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import {
-  resolveAdmittedRunActiveAssertion,
-  resolvePreparedRunAdmission,
-} from "../admitted-run-context.js";
+import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
@@ -110,17 +103,12 @@ import {
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
-import {
-  mapSandboxSkillEntriesForPrompt,
-  remapSkillReferencePaths,
-  resolveSandboxSkillRuntimeInputs,
-} from "../embedded-agent-runner/sandbox-skills.js";
+import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { createAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
-import { findModelCatalogEntry, loadManifestModelCatalog } from "../model-catalog.js";
-import type { ModelCatalogEntry } from "../model-catalog.types.js";
+import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
@@ -129,7 +117,6 @@ import {
   type PreparedRootedExecutionCapability,
 } from "../rooted-run-params.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
-import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
@@ -154,6 +141,7 @@ import {
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
+import { resolveCliSessionId } from "./cli-run-recovery.js";
 import {
   createCliRunCurrentAssertion,
   resolveCliExecutionTarget,
@@ -167,12 +155,14 @@ import {
   finalizeCliMcpGrant,
   normalizeOptionalMcpContextValue,
 } from "./mcp-grant-context.js";
+import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
 import {
   buildCliTurnAppendContext,
   composeCliPromptContext,
   prepareCliSystemPrompt,
 } from "./prompt-context.js";
+import { admitCliRunParams, prepareCliRunModelAuthority } from "./run-admission.js";
 import {
   buildCliSessionHistoryPrompt,
   hasCliSessionTranscript,
@@ -180,6 +170,7 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
+import { resolveCliSkillsPrompt } from "./skills-prompt.js";
 import { prepareCliReplyToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
@@ -240,36 +231,6 @@ const defaultPrepareDeps = {
 };
 const prepareDeps = { ...defaultPrepareDeps };
 
-function findSelectableContextWindowEntry(params: {
-  catalog: ModelCatalogEntry[];
-  providers: string[];
-  models: string[];
-}): ModelCatalogEntry | undefined {
-  for (const provider of params.providers) {
-    for (const model of params.models) {
-      const entry = findModelCatalogEntry(params.catalog, { provider, modelId: model });
-      if (entry?.contextWindows?.length) {
-        return entry;
-      }
-    }
-  }
-  return undefined;
-}
-
-function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): string | undefined {
-  return reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
-    ? reusableCliSession.sessionId
-    : undefined;
-}
-
-function resolveCliSessionInvalidatedReason(
-  reusableCliSession: CliReusableSession,
-): Extract<CliReusableSession, { mode: "invalidate" }>["invalidatedReason"] | undefined {
-  return reusableCliSession.mode === "invalidate"
-    ? reusableCliSession.invalidatedReason
-    : undefined;
-}
-
 function prependCliSessionDriftUserContext(
   context: RunCliAgentParams["currentInboundContext"],
   reusableCliSession: CliReusableSession,
@@ -285,120 +246,6 @@ function prependCliSessionDriftUserContext(
     ...context,
     text: [note, context.text].join("\n\n"),
     ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
-  };
-}
-
-async function resolveCliSkillsPrompt(params: {
-  assertCurrent: () => void;
-  agentId: string;
-  config: RunCliAgentParams["config"];
-  sessionKey: string;
-  skillsSnapshot: RunCliAgentParams["skillsSnapshot"];
-  workspaceDir: string;
-  executionWorkspaceDir: string;
-}): Promise<{ prompt: string; usagePaths?: SkillUsagePath[] }> {
-  params.assertCurrent();
-  const skillsSnapshot =
-    params.skillsSnapshot ??
-    (
-      await resolveReusableWorkspaceSkillSnapshot({
-        assertCurrent: params.assertCurrent,
-        workspaceDir: params.workspaceDir,
-        executionWorkspaceDir: params.executionWorkspaceDir,
-        config: params.config ?? {},
-        agentId: params.agentId,
-        watch: false,
-      })
-    ).snapshot;
-  params.assertCurrent();
-  const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
-    skillsSnapshot,
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-  });
-  params.assertCurrent();
-  if (!sandboxWorkspace) {
-    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
-      await resolveEmbeddedRunSkillEntries({
-        assertCurrent: params.assertCurrent,
-        workspaceDir: params.workspaceDir,
-        executionWorkspaceDir: params.executionWorkspaceDir,
-        config: params.config,
-        agentId: params.agentId,
-        skillsSnapshot,
-      });
-    return {
-      prompt: await resolveSkillsPrompt({
-        assertCurrent: params.assertCurrent,
-        skillsSnapshot,
-        entries: shouldLoadSkillEntries ? skillEntries : undefined,
-        loadEntries: loadSkillEntries,
-        workspaceDir: params.workspaceDir,
-        config: params.config,
-        agentId: params.agentId,
-        preserveEntryOrder,
-      }),
-    };
-  }
-
-  const {
-    skillsEligibility,
-    skillUsagePaths,
-    skillsPromptWorkspaceDir,
-    skillsSnapshot: skillsSnapshotForRun,
-    skillsWorkspaceDir,
-    workspaceOnly,
-  } = resolveSandboxSkillRuntimeInputs({
-    sandbox: {
-      enabled: true,
-      ...(sandboxWorkspace.containerWorkdir
-        ? { containerWorkdir: sandboxWorkspace.containerWorkdir }
-        : {}),
-      ...(sandboxWorkspace.skillsEligibility
-        ? { skillsEligibility: sandboxWorkspace.skillsEligibility }
-        : {}),
-      ...(sandboxWorkspace.skillUsagePaths
-        ? { skillUsagePaths: sandboxWorkspace.skillUsagePaths }
-        : {}),
-      ...(sandboxWorkspace.skillsWorkspaceDir
-        ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
-        : {}),
-      ...(sandboxWorkspace.workspaceAccess
-        ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
-        : {}),
-    },
-    skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
-    skillsSnapshot,
-  });
-  const { shouldLoadSkillEntries, skillEntries, preserveEntryOrder } =
-    await resolveEmbeddedRunSkillEntries({
-      assertCurrent: params.assertCurrent,
-      workspaceDir: skillsWorkspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      eligibility: skillsEligibility,
-      skillsSnapshot: skillsSnapshotForRun,
-      workspaceOnly,
-    });
-  const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-    entries: shouldLoadSkillEntries ? skillEntries : undefined,
-    skillsWorkspaceDir,
-    skillsPromptWorkspaceDir,
-  });
-  return {
-    usagePaths: skillUsagePaths,
-    prompt: await resolveSkillsPrompt({
-      assertCurrent: params.assertCurrent,
-      skillsSnapshot: skillsSnapshotForRun,
-      entries: promptSkillEntries,
-      workspaceDir: skillsPromptWorkspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      eligibility: skillsEligibility,
-      preserveEntryOrder,
-    }),
   };
 }
 
@@ -450,42 +297,6 @@ function shouldResolveAuthProfileForExecution(params: {
     return params.policy.oauthRefreshOwner === "core";
   }
   return params.authCredential.type === "api_key" || params.authCredential.type === "token";
-}
-
-type CliAuthProfileResolutionFailure =
-  | { kind: "unmaterialized" }
-  | { kind: "resolved-as-other"; resolvedProfileId: string };
-
-function describeCliAuthProfileResolutionFailure(
-  profileId: string,
-  failure: CliAuthProfileResolutionFailure,
-): string {
-  switch (failure.kind) {
-    case "resolved-as-other":
-      return `selected auth profile "${profileId}" resolved as "${failure.resolvedProfileId}"`;
-    case "unmaterialized":
-      return `could not materialize selected auth profile "${profileId}"`;
-  }
-  return failure satisfies never;
-}
-
-function buildCliAuthProfileResolutionError(params: {
-  backendId: string;
-  profileId: string;
-  provider: string;
-  agentDir: string;
-  failure: CliAuthProfileResolutionFailure;
-}): CliAuthProfilePreparationError {
-  const loginCommand = buildOAuthRefreshFailureLoginCommand(params.provider, {
-    profileId: params.profileId,
-  });
-  const reason = describeCliAuthProfileResolutionFailure(params.profileId, params.failure);
-  return new CliAuthProfilePreparationError({
-    message: `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
-    profileId: params.profileId,
-    provider: params.provider,
-    agentDir: params.agentDir,
-  });
 }
 
 /** Builds the complete context required to execute a CLI-backed agent run. */
@@ -554,21 +365,6 @@ async function prepareCliRunContextWithinReadFence(
   // Control bytes must reach the resumed backend without turn hooks, prompts,
   // tools, MCP, skills, or context-engine setup changing their execution.
   const skipsTurnPreparation = isSideQuestion || isControlOperation;
-  const admitPreparedParams = async (
-    candidate: RunCliAgentParams,
-  ): Promise<
-    RunCliAgentParams & { admittedRunContext: NonNullable<RunCliAgentParams["admittedRunContext"]> }
-  > => {
-    const admittedRunContext = await resolvePreparedRunAdmission({
-      runId: candidate.runId,
-      runtimeKind: "embedded",
-      admittedRunContext: candidate.admittedRunContext,
-      preparedRunAdmission: candidate.preparedRunAdmission,
-    });
-    candidate.assertCurrent?.();
-    const { preparedRunAdmission: _preparedRunAdmission, ...rest } = candidate;
-    return { ...rest, agentId: workspaceResolution.agentId, admittedRunContext };
-  };
   const runtimeChatType = params.chatType ?? params.sessionEntry?.chatType;
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.rootedExecution?.root ?? params.workspaceDir,
@@ -625,6 +421,7 @@ async function prepareCliRunContextWithinReadFence(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  params = prepareCliRunModelAuthority(params);
   const backendAuthPolicy = resolveBundledCliBackendAuthPolicy(backendResolved.id);
   const canEnforceExactToolAvailability =
     backendResolved.nativeToolMode === "selectable" &&
@@ -724,7 +521,7 @@ async function prepareCliRunContextWithinReadFence(
       disableCliLiveSession: true,
       cliToolAvailability: { native: [], openClaw: params.cliToolAvailability?.openClaw ?? [] },
     };
-    const admittedParams = await admitPreparedParams(params);
+    const admittedParams = await admitCliRunParams(params, workspaceResolution.agentId);
     const assertRootedCurrent = resolveAdmittedRunActiveAssertion(
       admittedParams.admittedRunContext,
       params.abortSignal,
@@ -859,6 +656,21 @@ async function prepareCliRunContextWithinReadFence(
     })
   ) {
     const authProfileId = effectiveAuthProfileId;
+    const profileResolutionError = (provider: string, resolvedProfileId?: string) => {
+      const loginCommand = buildOAuthRefreshFailureLoginCommand(provider, {
+        profileId: authProfileId,
+      });
+      const reason =
+        resolvedProfileId !== undefined
+          ? `selected auth profile "${authProfileId}" resolved as "${resolvedProfileId}"`
+          : `could not materialize selected auth profile "${authProfileId}"`;
+      return new CliAuthProfilePreparationError({
+        message: `CLI backend "${backendResolved.id}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
+        profileId: authProfileId,
+        provider,
+        agentDir,
+      });
+    };
     const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
     const resolvedAuth = await prepareDeps.resolveApiKeyForProfile({
       cfg: params.config,
@@ -871,26 +683,19 @@ async function prepareCliRunContextWithinReadFence(
     });
     params.assertCurrent?.();
     if (!resolvedAuth && backendAuthPolicy?.strictSelectedProfile) {
-      throw buildCliAuthProfileResolutionError({
-        backendId: backendResolved.id,
-        profileId: authProfileId,
-        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
-        agentDir,
-        failure: { kind: "unmaterialized" },
-      });
+      throw profileResolutionError(
+        writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+      );
     }
     if (
       resolvedAuth &&
       backendAuthPolicy?.strictSelectedProfile &&
       resolvedAuth.profileId !== authProfileId
     ) {
-      throw buildCliAuthProfileResolutionError({
-        backendId: backendResolved.id,
-        profileId: authProfileId,
-        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
-        agentDir,
-        failure: { kind: "resolved-as-other", resolvedProfileId: resolvedAuth.profileId },
-      });
+      throw profileResolutionError(
+        writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        resolvedAuth.profileId,
+      );
     }
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
     authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
@@ -900,13 +705,7 @@ async function prepareCliRunContextWithinReadFence(
       (!authCredential ||
         (authCredential.type === "oauth" && !hasUsableOAuthCredential(authCredential)))
     ) {
-      throw buildCliAuthProfileResolutionError({
-        backendId: backendResolved.id,
-        profileId: authProfileId,
-        provider: resolvedAuth?.provider ?? params.provider,
-        agentDir,
-        failure: { kind: "unmaterialized" },
-      });
+      throw profileResolutionError(resolvedAuth?.provider ?? params.provider);
     }
     if (resolvedAuth && authCredential) {
       effectiveAuthProfileId = resolvedAuthProfileId;
@@ -1092,16 +891,21 @@ async function prepareCliRunContextWithinReadFence(
   // resolveAnthropicFixedContextWindow deliberately ignores catalog scalars,
   // so the selected (or default) option must apply after it or a 200k session
   // would auto-compact against a 1M budget.
-  const selectableContextEntry = findSelectableContextWindowEntry({
-    catalog: params.config
-      ? prepareDeps.loadManifestModelCatalog({ config: params.config, workspaceDir })
-      : [],
-    providers: uniqueStrings(
-      [params.provider, backendResolved.modelProvider].filter(
-        (provider): provider is string => typeof provider === "string" && provider.length > 0,
-      ),
-    ),
-    models: uniqueStrings([modelId, normalizedCatalogModel]),
+  const modelCatalog = params.config
+    ? overlayConfiguredModelCatalog({
+        catalog: prepareDeps.loadManifestModelCatalog({ config: params.config, workspaceDir }),
+        config: params.config,
+        workspaceDir,
+      })
+    : [];
+  const { selectableContextEntry, providerThinkingLevel } = resolveCliCatalogCapabilities({
+    catalog: modelCatalog,
+    provider: params.provider,
+    modelProvider: backendResolved.modelProvider,
+    modelId,
+    normalizedModel: normalizedCatalogModel,
+    agentRuntime: backendResolved.id,
+    thinkLevel: params.thinkLevel,
   });
   if (selectableContextEntry) {
     const contextWindowProfile = resolveModelContextWindowProfile({
@@ -1358,7 +1162,7 @@ async function prepareCliRunContextWithinReadFence(
     if (!promptBuildHookRunner || !toolAuthorityFingerprint) {
       return undefined;
     }
-    const admittedParams = await admitPreparedParams(params);
+    const admittedParams = await admitCliRunParams(params, workspaceResolution.agentId);
     params = admittedParams;
     const assertHostActive = resolveAdmittedRunActiveAssertion(
       admittedParams.admittedRunContext,
@@ -1658,7 +1462,7 @@ async function prepareCliRunContextWithinReadFence(
       modelId,
       ...(params.contextWindow ? { contextWindow: params.contextWindow } : {}),
       contextTokenBudget: contextWindowInfo.tokens,
-      thinkingLevel: params.thinkLevel === "ultra" ? "max" : params.thinkLevel,
+      thinkingLevel: providerThinkingLevel,
       authProfileId: effectiveAuthProfileId,
       executionMode,
       toolAvailability: params.cliToolAvailability,
@@ -1877,7 +1681,7 @@ async function prepareCliRunContextWithinReadFence(
         ? { mode: "invalidate", invalidatedReason: "system-prompt" }
         : reusableCliSessionCandidate;
     const candidateClaudeCliSessionId =
-      resolveReusableCliSessionId(backendReusableCliSession)?.trim() || undefined;
+      resolveCliSessionId(backendReusableCliSession)?.trim() || undefined;
     // Control operations must keep the exact native session they were asked to mutate.
     // Ordinary-turn transcript recovery must not turn `/compact` into a fresh session.
     const hasClaudeCliCandidate =
@@ -1923,8 +1727,9 @@ async function prepareCliRunContextWithinReadFence(
     const reusableCliSession: CliReusableSession = claudeCliInvalidatedReason
       ? { mode: "invalidate", invalidatedReason: claudeCliInvalidatedReason }
       : backendReusableCliSession;
-    const reusableCliSessionId = resolveReusableCliSessionId(reusableCliSession);
-    const invalidatedReason = resolveCliSessionInvalidatedReason(reusableCliSession);
+    const reusableCliSessionId = resolveCliSessionId(reusableCliSession);
+    const invalidatedReason =
+      reusableCliSession.mode === "invalidate" ? reusableCliSession.invalidatedReason : undefined;
     if (invalidatedReason) {
       cliBackendLog.info(
         `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,
@@ -2016,7 +1821,7 @@ async function prepareCliRunContextWithinReadFence(
     let systemPrompt = transformedSystemPrompt;
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
-    const historyParams = (params = await admitPreparedParams(params));
+    const historyParams = (params = await admitCliRunParams(params, workspaceResolution.agentId));
     const cliHistoryWriter = !isSideQuestion
       ? await prepareCliHistoryBoundary(historyParams, { credential: authCredential })
       : undefined;
@@ -2072,6 +1877,7 @@ async function prepareCliRunContextWithinReadFence(
           isNewSession:
             !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
           systemPrompt,
+          thinkLevel: params.thinkLevel,
           context: [hookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
         });
         const logicalPrompt = composeCliPromptContext(preparedPrompt, {
@@ -2209,6 +2015,7 @@ async function prepareCliRunContextWithinReadFence(
       contextEngineConfig: runConfig,
       modelId,
       normalizedModel,
+      providerThinkingLevel,
       contextWindowInfo,
       systemPrompt,
       systemPromptReport,
@@ -2226,13 +2033,16 @@ async function prepareCliRunContextWithinReadFence(
       ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true as const } : {}),
     });
     const admitFinalParams = () =>
-      admitPreparedParams({
-        ...params,
-        config: runConfig,
-        prompt: preparedPrompt,
-        transcriptPrompt: finalizedTranscriptPrompt,
-        ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
-      });
+      admitCliRunParams(
+        {
+          ...params,
+          config: runConfig,
+          prompt: preparedPrompt,
+          transcriptPrompt: finalizedTranscriptPrompt,
+          ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
+        },
+        workspaceResolution.agentId,
+      );
     const bindPreparedParams = (preparedParams: PreparedCliRunContext["params"]) => {
       bindMcpClientGrantAdmission(preparedParams.admittedRunContext);
       if (!isControlOperation) {

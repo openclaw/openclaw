@@ -31,9 +31,17 @@ function sampleCpu(): GatewayCpuUsageSnapshot {
 }
 
 function sampleResources(): GatewayResourceSnapshot {
+  const counts = new Map<string, number>();
+  for (const type of process.getActiveResourcesInfo()) {
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+  }
   return {
     ...sampleCpu(),
     memory: process.memoryUsage(),
+    // These resource types keep the event loop alive; they are not ownership IDs.
+    activeResources: Object.fromEntries(
+      [...counts].toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
+    ),
     runtime: { node: process.versions.node, platform: process.platform, arch: process.arch },
   };
 }

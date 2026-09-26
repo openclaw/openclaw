@@ -1,6 +1,4 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-// Matrix helper module supports formatting behavior.
-import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   markdownToMatrixBody,
@@ -47,17 +45,11 @@ export function buildTextContent(
     msgtype?: MatrixTextMsgType;
   } = {},
 ): MatrixTextContent {
-  const msgtype = opts.msgtype ?? MsgType.Text;
-  return relation
-    ? {
-        msgtype,
-        body,
-        "m.relates_to": relation,
-      }
-    : {
-        msgtype,
-        body,
-      };
+  return {
+    msgtype: opts.msgtype ?? MsgType.Text,
+    body,
+    ...(relation ? { "m.relates_to": relation } : {}),
+  };
 }
 
 export async function enrichMatrixFormattedContent(params: {
@@ -68,13 +60,7 @@ export async function enrichMatrixFormattedContent(params: {
   includeMentions?: boolean;
   tableMode?: MarkdownTableMode;
 }): Promise<void> {
-  const { body, html, mentions } = await renderMatrixFormattedContent({
-    client: params.client,
-    markdown: params.markdown,
-    preparedBody: params.preparedBody,
-    includeMentions: params.includeMentions,
-    tableMode: params.tableMode,
-  });
+  const { body, html, mentions } = await renderMatrixFormattedContent(params);
   params.content.body = body || params.content.body;
   if (mentions) {
     params.content["m.mentions"] = mentions;
@@ -141,7 +127,7 @@ export function diffMatrixMentions(
   return delta;
 }
 
-export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
+export function resolveMatrixMsgType(contentType?: string): MatrixMediaMsgType {
   const kind = getMatrixRuntime().media.mediaKindFromMime(contentType ?? "");
   switch (kind) {
     case "image":
@@ -153,27 +139,4 @@ export function resolveMatrixMsgType(contentType?: string, _fileName?: string): 
     default:
       return MsgType.File;
   }
-}
-
-export function resolveMatrixVoiceDecision(opts: {
-  wantsVoice: boolean;
-  contentType?: string;
-  fileName?: string;
-}): { useVoice: boolean } {
-  if (!opts.wantsVoice) {
-    return { useVoice: false };
-  }
-  if (isMatrixVoiceCompatibleAudio(opts)) {
-    return { useVoice: true };
-  }
-  return { useVoice: false };
-}
-
-function isMatrixVoiceCompatibleAudio(opts: { contentType?: string; fileName?: string }): boolean {
-  // Matrix currently shares the core voice compatibility policy.
-  // Keep this wrapper as the seam if Matrix policy diverges later.
-  return isVoiceMessageCompatibleAudio({
-    contentType: opts.contentType,
-    fileName: opts.fileName,
-  });
 }

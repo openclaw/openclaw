@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { hasUnjoinedWork } from "../../../scripts/lib/managed-child-process.mts";
 import { findVitestResourceOwner } from "../../../scripts/lib/vitest-resource-ownership.mts";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 
 type EnvValue = string | undefined | ((home: string) => string | undefined);
 
@@ -68,6 +67,7 @@ export async function withTempHomeCore<T>(
       throw new Error(`withTempHome: use built-in home env (got ${key})`);
     }
   }
+  const { cleanupSessionStateForTest } = await import("../../test-utils/session-state-cleanup.js");
   const base = await allocateTempHomeBase(opts.prefix ?? "openclaw-test-home-");
   const snapshot = captureEnv([
     "HOME",
@@ -103,9 +103,10 @@ export async function withTempHomeCore<T>(
     throw error;
   } finally {
     if (initialized && !unjoinedWork && !opts.skipSessionCleanup) {
-      await cleanupSessionStateForTest({ stateDir: path.join(base, ".openclaw") }).catch(
-        () => undefined,
-      );
+      await cleanupSessionStateForTest({
+        stateDir: path.join(base, ".openclaw"),
+        rootPath: base,
+      }).catch(() => undefined);
     }
     snapshot.restore();
     // Retention belongs to the body; failed acquisition has no caller-owned home.

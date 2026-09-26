@@ -1,7 +1,6 @@
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   readActiveTranscriptEntryAnchor,
-  readTranscriptEventAtSeqSync,
   readTranscriptMutationAtSync,
   validatePreparedAssistantAppendSync,
   type TranscriptEntryAnchor,
@@ -11,33 +10,26 @@ import { resolveSessionTranscriptReadFence } from "../../config/sessions/session
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
-import {
-  captureSessionMetadataPublication,
-  SessionTranscriptWriterClaimReboundError,
-  type SessionMetadataChange,
-  type SessionMetadataCommit,
-} from "../../config/sessions/transcript-write-context.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
-import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
-import {
-  copyCodeModeSourceAppend,
-  getCodeModeSourceAppend,
-  copyCodeModeSourceAppendOptions,
-} from "../transcript-code-mode-source.js";
+import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
+import { isTalkRealtimeVoiceEntry } from "./session-manager-codec.js";
 import {
-  isIndexedSessionEntry,
-  isSessionContextMetadataEntry,
-  isTalkRealtimeVoiceEntry,
-} from "./session-manager-codec.js";
+  prepareCurrentTurnReplayWitness,
+  resolveCurrentTurnEntryId,
+  sessionManagerPrepareCurrentTurnReplay,
+} from "./session-manager-current-turn.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
-import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import {
+  canonicalizeSessionEntry,
   isSqliteTranscriptMutationConflict,
   type PersistRecordResult,
+  type PersistWorkerRecordResult,
 } from "./session-manager-persistence.js";
 import { SessionManagerSuffixPersistence } from "./session-manager-suffix-persistence.js";
 import type {
@@ -58,43 +50,13 @@ import type {
 import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
-function canonicalizeSessionEntry<T extends SessionEntry>(entry: T): T {
-  // oxlint-disable-next-line unicorn/prefer-structured-clone -- Match the persisted JSON/toJSON shape exactly.
-  return JSON.parse(JSON.stringify(entry)) as T;
-}
-
 export class SessionManagerEntries extends SessionManagerSuffixPersistence {
   protected appendEntry<T extends SessionEntry>(
     entry: T,
     options?: AppendPersistenceOptions,
   ): { entry: T; anchor?: TranscriptEntryAnchor; lifecycleRevision?: string; appended: boolean } {
     this.assertTranscriptViewAvailable();
-    const canonicalEntry = canonicalizeSessionEntry(entry);
-    if (!isIndexedSessionEntry(canonicalEntry)) {
-      throw new Error(`Invalid session transcript entry: ${entry.type}`);
-    }
-    if (entry.type === "message" && canonicalEntry.type === "message") {
-      if (
-        entry.message.role === "toolResult" &&
-        canonicalEntry.message.role === "toolResult" &&
-        Array.isArray(entry.message.content) &&
-        Array.isArray(canonicalEntry.message.content)
-      ) {
-        const canonicalContent = canonicalEntry.message.content;
-        entry.message.content.forEach((block, index) => {
-          const canonicalBlock = canonicalContent[index];
-          if (block?.type === "text" && canonicalBlock?.type === "text") {
-            copyPreparedModelVisibleToolText(block, canonicalBlock);
-          }
-        });
-      }
-      copyCodeModeSourceAppend(
-        entry.message,
-        canonicalEntry.message,
-        getCodeModeSourceAppend(options),
-        (source) => source,
-      );
-    }
+    const canonicalEntry = canonicalizeSessionEntry(entry, options);
     const activeBranchAppend =
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
@@ -203,7 +165,42 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
     return this.adoptPersistedEntry(canonicalEntry, persistenceResult, admittedUserId);
   }
 
-  private adoptPersistedEntry<T extends SessionEntry>(
+  protected adoptWorkerCommittedEntry<T extends SessionEntry>(
+    entry: T,
+    committed: PersistWorkerRecordResult,
+    admittedUserId?: string,
+  ): {
+    entry: T;
+    anchor?: TranscriptEntryAnchor;
+    lifecycleRevision?: string;
+    appended: boolean;
+    viewWasSuperseded?: true;
+  } {
+    if (this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
+      // A native SDK append can publish a later view before the worker receipt arrives.
+      return {
+        entry: {
+          ...entry,
+          parentId:
+            committed.result?.effectiveParentId !== undefined
+              ? committed.result.effectiveParentId
+              : entry.parentId,
+        },
+        anchor: committed.result?.anchor,
+        lifecycleRevision: committed.result?.lifecycleRevision,
+        appended: committed.result?.appended ?? true,
+        viewWasSuperseded: true,
+      };
+    }
+    if (committed.viewFailure) {
+      throw committed.viewFailure;
+    }
+    this.transcriptVersion = committed.committedVersion;
+    this.transcriptMutationAt = committed.committedVersion.updatedAt;
+    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, committed.reload);
+  }
+
+  protected adoptPersistedEntry<T extends SessionEntry>(
     canonicalEntry: T,
     persistenceResult: PersistRecordResult,
     admittedUserId?: string,
@@ -293,53 +290,48 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
     return error;
   }
 
+  // SDK v2026.9.5 exposes this synchronous opt-in; internal replay uses async preparation.
   resolveCurrentTurnEntryId(
     isInterruptedTail?: (entry: SessionEntry) => boolean,
     options?: { includeOmittedCustomMessages?: boolean },
   ): string | null {
     this.assertTranscriptViewAvailable();
     const includeOmitted = options?.includeOmittedCustomMessages === true;
-    let parentId = this.appendParentId;
-    let remainingAncestors = includeOmitted
-      ? (this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size)
-      : this.byId.size;
-    // Compaction rewrites context without consuming the current user turn.
-    // Walk physical parents: opaque/context-excluded users still close older
-    // turns. Replay may read its omitted activity, never skip unidentified rows.
-    while (parentId && remainingAncestors-- > 0) {
-      const parent =
-        this.byId.get(parentId) ??
-        (includeOmitted ? this.readOmittedCustomMessage(parentId) : undefined);
-      if (
-        !parent ||
-        parent.id !== parentId ||
-        (!isSessionContextMetadataEntry(parent) &&
-          parent.type !== "compaction" &&
-          !isInterruptedTail?.(parent))
-      ) {
-        break;
-      }
-      parentId = parent.parentId;
-    }
-    return parentId;
+    return resolveCurrentTurnEntryId(
+      {
+        target: this.persistenceTarget,
+        entries: this.byId,
+        parentId: this.appendParentId,
+        remainingAncestors: includeOmitted
+          ? (this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size)
+          : this.byId.size,
+        isInterruptedTail,
+      },
+      includeOmitted,
+    );
   }
 
-  private readOmittedCustomMessage(entryId: string): SessionMessageEntry | undefined {
-    if (!this.persistenceTarget) {
-      return undefined;
-    }
-    const anchor = readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId });
-    if (!anchor) {
-      return undefined;
-    }
-    const event = readTranscriptEventAtSeqSync(this.persistenceTarget, anchor.rawSeq)?.event;
-    return isIndexedSessionEntry(event) &&
-      event.type === "message" &&
-      event.message.role === "custom" &&
-      event.id === anchor.entryId &&
-      event.parentId === anchor.effectiveParentId
-      ? event
-      : undefined;
+  [sessionManagerPrepareCurrentTurnReplay](
+    isInterruptedTail: (entry: SessionEntry) => boolean,
+    matchesUser: (entry: SessionEntry | undefined) => boolean,
+    signal?: AbortSignal,
+  ) {
+    return prepareCurrentTurnReplayWitness(
+      () => {
+        this.assertTranscriptViewAvailable();
+        return {
+          target: this.persistenceTarget,
+          version: this.transcriptVersion,
+          entries: this.byId,
+          parentId: this.appendParentId,
+          remainingAncestors:
+            this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size,
+          isInterruptedTail,
+        };
+      },
+      matchesUser,
+      signal,
+    );
   }
 
   appendMessage(
@@ -347,6 +339,102 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
     options?: AppendPersistenceOptions,
   ): string {
     return this.appendMessageWithTranscriptAnchor(message, options).entryId;
+  }
+
+  async appendMessageAsync(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: AppendPersistenceOptions,
+  ): Promise<string | undefined> {
+    return (await this.appendMessageWithTranscriptAnchorAsync(message, options)).entryId;
+  }
+
+  async appendMessageWithTranscriptAnchorAsync(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: AppendPersistenceOptions,
+  ): Promise<
+    ReturnType<SessionManagerEntries["appendMessageWithTranscriptAnchor"]> & {
+      viewWasSuperseded?: true;
+    }
+  > {
+    return await withSessionManagerWrite(this, async (admission) => {
+      this.assertTranscriptWriteActive();
+      // User custody and process-local incognito storage retain their native owners.
+      // The synchronous SDK also permits a transaction-local fresh-message callback.
+      if (
+        !admission ||
+        isIncognitoSessionKey(this.persistenceTarget?.sessionKey) ||
+        (message.role !== "assistant" && message.role !== "toolResult") ||
+        options?.beforeFreshMessageCommit
+      ) {
+        return this.appendMessageWithTranscriptAnchor(message, options);
+      }
+      applyAssistantDeliveryDirectives(message);
+      const canonical = canonicalizeSessionEntry<SessionMessageEntry>(
+        {
+          type: "message",
+          id: generateSessionEntryId(),
+          parentId: this.appendParentId,
+          timestamp: new Date().toISOString(),
+          message,
+        },
+        options,
+      );
+      const activeBranchAppend =
+        !this.pendingDeliberateAppend &&
+        this.appendMode !== "side" &&
+        !isSessionTranscriptSideAppendEntry(canonical);
+      const prepared = prepareTranscriptMessageAppend(
+        copyCodeModeSourceAppendOptions(options, {
+          message: canonical.message,
+          config: options?.config,
+        }),
+      );
+      if (!prepared) {
+        throw new Error("Session message append requires prepared storage bytes");
+      }
+      const target = this.getSessionTarget();
+      const sessionId = this.getSessionId();
+      const admittedUserId = target
+        ? resolveSessionTranscriptReadFence(target)?.entryId
+        : undefined;
+      const committed = await this.persistWorkerRecord(
+        canonical,
+        activeBranchAppend ? "active-branch" : undefined,
+        admission,
+        {
+          prepared,
+          cwd: this.cwd,
+          validateTurn: activeBranchAppend,
+          idempotencyLookup: options?.idempotencyLookup,
+        },
+      );
+      try {
+        if (
+          this.getSessionId() !== sessionId ||
+          !sameSessionTranscriptTargetBinding(target, this.getSessionTarget())
+        ) {
+          throw new SessionTranscriptWriterClaimReboundError();
+        }
+        const appended = this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
+        return {
+          entryId: appended.entry.id,
+          message: appended.entry.message,
+          anchor: appended.anchor,
+          lifecycleRevision: appended.lifecycleRevision,
+          appended: appended.appended,
+          ...(appended.viewWasSuperseded ? { viewWasSuperseded: true as const } : {}),
+        };
+      } catch (cause) {
+        const error = new Error(
+          "Session message committed, but its view could not be adopted; do not replay the append",
+          { cause },
+        );
+        error.name = "SessionMessageCommittedError";
+        recordModelFallbackStop(error);
+        this.invalidateTranscriptView(error);
+        throw error;
+      }
+    });
   }
 
   appendMessageWithTranscriptAnchor(
@@ -411,125 +499,6 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
       lifecycleRevision,
       appended,
     };
-  }
-
-  private async appendMetadataEntry(change: SessionMetadataChange): Promise<string> {
-    const publication = captureSessionMetadataPublication(this, change);
-    return await withSessionManagerWrite(this, async (admission) => {
-      this.assertTranscriptViewAvailable();
-      const entry = {
-        ...change,
-        id: generateSessionEntryId(),
-        parentId: this.appendParentId,
-        timestamp: new Date().toISOString(),
-      };
-      if (!admission || isIncognitoSessionKey(this.persistenceTarget?.sessionKey)) {
-        // Volatile storage keeps its one native owner until its complete actor cutover.
-        const appended = this.appendEntry(entry);
-        return this.publishMetadataCommit(
-          { entry: appended.entry, version: this.transcriptVersion, target: publication.target },
-          publication.publish,
-        );
-      }
-      const canonical: unknown = canonicalizeSessionEntry(entry);
-      if (
-        !isIndexedSessionEntry(canonical) ||
-        (canonical.type !== "model_change" && canonical.type !== "thinking_level_change")
-      ) {
-        throw new Error(`Invalid session transcript entry: ${entry.type}`);
-      }
-      const appendIntent =
-        !this.pendingDeliberateAppend && this.appendMode !== "side" ? "active-branch" : undefined;
-      const admittedUserId = this.persistenceTarget
-        ? resolveSessionTranscriptReadFence(this.persistenceTarget)?.entryId
-        : undefined;
-      const committedTarget = publication.target;
-      const { result, reload, committedVersion, viewFailure } = await this.persistMetadataRecord(
-        canonical,
-        appendIntent,
-        admission,
-      );
-      const commit: SessionMetadataCommit = {
-        entry: {
-          ...canonical,
-          parentId:
-            result?.effectiveParentId !== undefined ? result.effectiveParentId : canonical.parentId,
-        },
-        version: committedVersion,
-        target: committedTarget,
-      };
-      let failure: { cause: unknown } | undefined;
-      try {
-        const currentTarget = this.getSessionTarget();
-        if (
-          !committedTarget ||
-          this.getSessionId() !== publication.sessionId ||
-          !sameSessionTranscriptTargetBinding(committedTarget, currentTarget)
-        ) {
-          const rebound = new SessionTranscriptWriterClaimReboundError();
-          throw viewFailure
-            ? new AggregateError(
-                [rebound, viewFailure],
-                "Committed metadata lost its view and binding",
-                { cause: rebound },
-              )
-            : rebound;
-        }
-        if (viewFailure) {
-          throw viewFailure;
-        }
-        this.transcriptVersion = committedVersion;
-        this.transcriptMutationAt = committedVersion.updatedAt;
-        this.adoptPersistedEntry(canonical, result, admittedUserId, reload);
-      } catch (cause) {
-        failure = { cause };
-      }
-      return this.publishMetadataCommit(commit, publication.publish, failure);
-    });
-  }
-
-  private publishMetadataCommit(
-    commit: SessionMetadataCommit,
-    publish: (commit: SessionMetadataCommit) => undefined,
-    failure?: { cause: unknown },
-  ): string {
-    const committedError = (cause: unknown) =>
-      new SessionMetadataCommittedError(commit.entry, commit.version, cause, commit.target);
-    let error = failure ? committedError(failure.cause) : undefined;
-    if (error) {
-      this.invalidateTranscriptView(error);
-    }
-    try {
-      publish(commit);
-    } catch (cause) {
-      error = committedError(
-        error
-          ? new AggregateError([error, cause], "Metadata view and state publication failed", {
-              cause: error,
-            })
-          : cause,
-      );
-      this.invalidateTranscriptView(error);
-    }
-    if (error) {
-      throw error;
-    }
-    return commit.entry.id;
-  }
-
-  appendThinkingLevelChange(thinkingLevel: string): Promise<string> {
-    return this.appendMetadataEntry({
-      type: "thinking_level_change",
-      thinkingLevel,
-    });
-  }
-
-  appendModelChange(provider: string, modelId: string): Promise<string> {
-    return this.appendMetadataEntry({
-      type: "model_change",
-      provider,
-      modelId,
-    });
   }
 
   appendCompaction(

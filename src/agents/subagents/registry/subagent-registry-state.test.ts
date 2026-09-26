@@ -152,12 +152,12 @@ describe("subagent registry state read cache", () => {
       const currentRuns = new Map([[current.runId, current]]);
       persistSubagentRunsToDiskOrThrow(currentRuns, [current.runId]);
       expect(changed.mock.calls.map(([event]) => event)).toEqual([
-        { sessionKey: previous.childSessionKey },
-        { sessionKey: previous.requesterSessionKey },
-        { sessionKey: current.childSessionKey },
-        { sessionKey: current.requesterSessionKey },
-        { sessionKey: current.controllerSessionKey },
-        { sessionKey: current.swarmRequesterSessionKey },
+        { sessionKey: previous.childSessionKey, scope: "runtime" },
+        { sessionKey: previous.requesterSessionKey, scope: "runtime" },
+        { sessionKey: current.childSessionKey, scope: "runtime" },
+        { sessionKey: current.requesterSessionKey, scope: "runtime" },
+        { sessionKey: current.controllerSessionKey, scope: "runtime" },
+        { sessionKey: current.swarmRequesterSessionKey, scope: "runtime" },
       ]);
       changed.mockClear();
 
@@ -174,10 +174,10 @@ describe("subagent registry state read cache", () => {
       expect(changed).not.toHaveBeenCalled();
       deferred.forEach((publish) => publish());
       expect(changed.mock.calls.map(([event]) => event)).toEqual([
-        { sessionKey: current.childSessionKey },
-        { sessionKey: current.requesterSessionKey },
-        { sessionKey: current.controllerSessionKey },
-        { sessionKey: current.swarmRequesterSessionKey },
+        { sessionKey: current.childSessionKey, scope: "runtime" },
+        { sessionKey: current.requesterSessionKey, scope: "runtime" },
+        { sessionKey: current.controllerSessionKey, scope: "runtime" },
+        { sessionKey: current.swarmRequesterSessionKey, scope: "runtime" },
       ]);
       changed.mockClear();
       persistSubagentRunsToDiskOrThrow(new Map());
@@ -926,6 +926,7 @@ describe("subagent registry state read cache", () => {
           sessionKey: "global",
           agentId: "ops",
           reason: "swarm",
+          scope: "runtime",
         })),
       );
       expect(
@@ -970,6 +971,7 @@ describe("subagent registry state read cache", () => {
           sessionKey: "agent:ops:parent",
           agentId: "ops",
           reason: "swarm",
+          scope: "runtime",
         });
       } finally {
         unsubscribe();
@@ -1005,6 +1007,7 @@ describe("subagent registry state read cache", () => {
         sessionKey: "global",
         agentId: "ops",
         reason: "swarm",
+        scope: "runtime",
       });
     } finally {
       unsubscribe();
@@ -1035,6 +1038,7 @@ describe("subagent registry state read cache", () => {
         sessionKey: "agent:ops:parent",
         agentId: "ops",
         reason: "swarm",
+        scope: "runtime",
       });
     } finally {
       unsubscribe();

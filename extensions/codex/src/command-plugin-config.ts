@@ -20,10 +20,7 @@ export type CodexPluginsConfigBlock = {
 
 /** Config IO shared by command handlers and their scoped runtime. */
 export type CodexPluginsManagementIO = {
-  readConfig: () => Promise<{
-    enabled?: boolean;
-    plugins?: Record<string, CodexPluginConfigEntry>;
-  }>;
+  readConfig: () => Promise<CodexPluginsConfigBlock>;
   mutate: (
     update: (block: CodexPluginsConfigBlock) => void,
     assertCurrent?: () => void,

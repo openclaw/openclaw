@@ -142,7 +142,6 @@ describe("createChatRunState", () => {
       rawBuffer: "raw",
       buffer: "projected",
       planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
-      bufferUpdatedAt: 1,
       deltaSentAt: 2,
       deltaLastBroadcastText: "projected",
       agentText: { assistant: { lastSentAt: 3 } },
@@ -161,6 +160,7 @@ describe("createChatRunState", () => {
     expect(state.registry.peek("run-1")?.clientRunId).toBe("client-1");
     expect(state.toolEventRecipients.get("run-1")).toEqual(new Set(["conn-1"]));
     expect(state.runs.get("run-1")).toEqual({
+      lastActivityAt: expect.any(Number),
       registrations: expect.any(Array),
       abortMarker: expect.any(Object),
       toolRecipient: expect.any(Object),
@@ -210,6 +210,7 @@ describe("createChatRunState", () => {
   );
 
   it.each([
+    "waiting_for_state",
     "naming_worktree",
     "creating_worktree",
     "running_setup",

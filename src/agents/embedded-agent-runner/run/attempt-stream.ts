@@ -7,6 +7,10 @@ import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-glob
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import {
+  assertOperatorModelAllowed,
+  readRunOperatorAuthority,
+} from "../../admitted-run-context.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -26,6 +30,7 @@ import {
   dropThinkingBlocks,
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
+import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../tool-call-argument-decoding.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import {
   createYieldAbortedResponse,
@@ -43,7 +48,6 @@ import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import {
   shouldRepairMalformedToolCallArguments,
-  wrapStreamFnDecodeXaiToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 import {
@@ -126,6 +130,17 @@ export function installEmbeddedAttemptStreamGuards(
     input.prepared.toolCatalog.toolSearchRunPlan;
   const { sessionAgentId } = input.setup;
   const { signal: abortSignal } = input.runAbortController;
+  const operatorAuthority = readRunOperatorAuthority(attempt);
+  if (operatorAuthority) {
+    const providerStream = session.agent.streamFn;
+    session.agent.streamFn = (model, context, options) => {
+      assertOperatorModelAllowed(operatorAuthority, {
+        provider: attempt.provider,
+        model: attempt.modelId,
+      });
+      return providerStream(model, context, options);
+    };
+  }
   const repairRejectedReplay = async (
     kind: "compaction" | "thinking",
     checkpoint?: OpenAIResponsesCompactionRejection,
@@ -325,7 +340,9 @@ export function installEmbeddedAttemptStreamGuards(
   }
 
   if (resolveToolCallArgumentsEncoding(attempt.model) === "html-entities") {
-    session.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(session.agent.streamFn);
+    session.agent.streamFn = createHtmlEntityToolCallArgumentDecodingWrapper(
+      session.agent.streamFn,
+    );
   }
 
   // Tool-call repair can replace structured arguments from fragmented deltas.
@@ -404,6 +421,7 @@ export function installEmbeddedAttemptStreamGuards(
   session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
     config: attempt.config,
     runId: attempt.runId,
+    agentId: sessionAgentId,
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
     ...(attempt.sessionId && { sessionId: attempt.sessionId }),
     provider: attempt.provider,

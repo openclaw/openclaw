@@ -120,16 +120,18 @@ it.each([false, true])(
     const release = createDeferred();
     // oxlint-disable-next-line typescript/unbound-method -- Rebound to the original page-store receiver below.
     const originalRead = SessionSnapshotStore.prototype.read;
-    vi.spyOn(SessionSnapshotStore.prototype, "read").mockImplementation(
-      async function (this: SessionSnapshotStore, key, onPrewarm) {
-        const snapshot = await originalRead.call(this, key, onPrewarm);
-        if (key === "agent:main:main") {
-          entered.resolve();
-          await release.promise;
-        }
-        return snapshot;
-      },
-    );
+    vi.spyOn(SessionSnapshotStore.prototype, "read").mockImplementation(async function (
+      this: SessionSnapshotStore,
+      key,
+      onPrewarm,
+    ) {
+      const snapshot = await originalRead.call(this, key, onPrewarm);
+      if (key === "agent:main:main") {
+        entered.resolve();
+        await release.promise;
+      }
+      return snapshot;
+    });
     const page = new ChatPage();
     Object.assign(page, { context });
     const provider = new ContextProvider(page, { context: applicationContext });

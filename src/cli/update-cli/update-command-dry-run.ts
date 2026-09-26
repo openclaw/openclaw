@@ -25,7 +25,8 @@ export async function handleDryRunPreflightError(
   if (
     error.reason === "database-schema-preflight" ||
     error.reason === "target-metadata-preflight" ||
-    error.reason === "invalid-config"
+    error.reason === "invalid-config" ||
+    error.reason === "config-read-failed"
   ) {
     // A best-effort preview reports incomplete admission; it never authorizes mutation.
     notes.push(error.message.replace(/^Update refused:/u, "Would refuse update:"));

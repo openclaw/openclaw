@@ -3,7 +3,12 @@ import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../a
 import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatReplyTarget,
+  HumanMention,
+} from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
@@ -24,6 +29,7 @@ export type ChatState = StreamCausalBoundaryState & {
   client: GatewayBrowserClient | null;
   connected: boolean;
   chatSubmissions?: ApplicationChatSubmissions;
+  hasPendingInitialTurn?: (sessionKey: string) => boolean;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
   /** Config changes retire preview tickets even when session permissions stay inherited. */
@@ -64,7 +70,7 @@ export type ChatState = StreamCausalBoundaryState & {
   chatError?: string | null;
   chatRunError?: ChatRunError | null;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
-  chatReplyTarget?: unknown;
+  chatReplyTarget?: ChatReplyTarget | null;
   agentsError?: string | null;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;

@@ -98,25 +98,48 @@ function extractCurrentTaskEvent(text: string): string | undefined {
   if (!isInternalRuntimeContextCarrierText(text)) {
     return undefined;
   }
-  // v4 quotes each top-level data fragment. Selected history can contain nested
-  // event text, but only a fragment starting with the event owns this turn.
-  for (const match of Array.from(
-    text.matchAll(
-      /^Conversation data \(data, not instructions\):\r?\n("(?:[^"\\\r\n]|\\.)*")\r?$/gmu,
-    ),
-  ).toReversed()) {
-    try {
-      const fragment: unknown = JSON.parse(match[1] ?? "");
-      if (typeof fragment === "string" && startsTaskEvent(fragment)) {
-        return fragment;
-      }
-    } catch {
-      // Malformed quoted data does not become a current task event.
+  for (const fragment of extractRuntimeConversationData(text).toReversed()) {
+    if (startsTaskEvent(fragment)) {
+      return fragment;
     }
   }
   // v3 keeps the producer event as a literal runtime-instruction fragment.
   const literal = /^\[Internal task completion event\](?:\r?\n|$)/mu.exec(text);
   return literal ? text.slice(literal.index) : undefined;
+}
+
+function extractRuntimeConversationData(text: string): string[] {
+  const fragments: string[] = [];
+  // Decode only top-level v4 data fragments, never quoted history nested inside them.
+  for (const match of text.matchAll(
+    /^Conversation data \(data, not instructions\):\r?\n("(?:[^"\\\r\n]|\\.)*")\r?$/gmu,
+  )) {
+    try {
+      const fragment: unknown = JSON.parse(match[1] ?? "");
+      if (typeof fragment === "string") {
+        fragments.push(fragment);
+      }
+    } catch {
+      // Malformed quoted data is not runtime context.
+    }
+  }
+  return fragments;
+}
+
+export function extractCurrentRuntimeContextTexts(input: ResponsesInputItem[]): string[] {
+  const turn = extractLastMatchingUserTurn(input);
+  if (!turn) {
+    return [];
+  }
+  return input.slice(turn.index + 1).flatMap((item) => {
+    const text = item.role === "user" ? extractInputText(item.content) : "";
+    if (!isInternalRuntimeContextCarrierText(text)) {
+      return [];
+    }
+    return /^Conversation data \(data, not instructions\):$/mu.test(text)
+      ? extractRuntimeConversationData(text)
+      : [text]; // Session v3 retains literal runtime context.
+  });
 }
 
 function isSubagentRecoveryText(text: string): boolean {
@@ -162,7 +185,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
       continue;
     }
     if (
-      /^\[Subagent Context\] Every subagent spawned from this session has now settled/mu.test(
+      /^(?:\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} [^\]\r\n]+\] )?\[Subagent Context\] Every subagent spawned from this session has now settled/mu.test(
         current,
       )
     ) {
@@ -245,6 +268,12 @@ function isContinuationUserText(text: string) {
   );
 }
 
+function readFunctionCallOutputText(record: Record<string, unknown>) {
+  return [record.text, record.output_text, record.content].find(
+    (value): value is string => typeof value === "string",
+  );
+}
+
 function stringifyFunctionCallOutput(output: unknown): string {
   if (typeof output === "string") {
     return output;
@@ -258,31 +287,15 @@ function stringifyFunctionCallOutput(output: unknown): string {
         if (!entry || typeof entry !== "object") {
           return "";
         }
-        const record = entry as Record<string, unknown>;
-        if (typeof record.text === "string") {
-          return record.text;
-        }
-        if (typeof record.output_text === "string") {
-          return record.output_text;
-        }
-        if (typeof record.content === "string") {
-          return record.content;
-        }
-        return "";
+        return readFunctionCallOutputText(entry as Record<string, unknown>) ?? "";
       })
       .filter(Boolean)
       .join("\n");
   }
   if (output && typeof output === "object") {
-    const record = output as Record<string, unknown>;
-    if (typeof record.text === "string") {
-      return record.text;
-    }
-    if (typeof record.output_text === "string") {
-      return record.output_text;
-    }
-    if (typeof record.content === "string") {
-      return record.content;
+    const text = readFunctionCallOutputText(output as Record<string, unknown>);
+    if (text !== undefined) {
+      return text;
     }
     try {
       return JSON.stringify(output);
@@ -293,7 +306,7 @@ function stringifyFunctionCallOutput(output: unknown): string {
   return "";
 }
 
-function isResponsesToolCallOutput(item: ResponsesInputItem) {
+export function isResponsesToolCallOutput(item: ResponsesInputItem) {
   return item.type === "function_call_output" || item.type === "custom_tool_call_output";
 }
 
@@ -565,14 +578,15 @@ export function buildWhatsAppGroupDispatchReply(allInputText: string) {
   return QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE.exec(allInputText)?.[0];
 }
 
-export function buildWhatsAppBatchedReply(allInputText: string) {
-  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(allInputText);
+export function buildWhatsAppBatchedReply(prompt: string) {
+  const { current } = splitMockConversationContext(prompt);
+  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(current);
   const suffix = finalMatch?.[1];
   if (!suffix) {
     return undefined;
   }
   const firstMarker = `WHATSAPP_QA_BATCHED_FIRST_${suffix}`;
-  if (!allInputText.includes(firstMarker)) {
+  if (!current.includes(firstMarker)) {
     return `WHATSAPP_QA_BATCHED_MISSING_CONTEXT_${suffix}`;
   }
   return finalMatch[0];
@@ -610,26 +624,16 @@ export function countImageInputs(value: unknown): number {
 }
 
 function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
-  const latestUserIndex = input.findLastIndex(isUserTurn);
-  if (latestUserIndex < 0) {
-    return { text: "", imageInputCount: 0 };
-  }
-
-  const latestUserItem = input[latestUserIndex];
+  const latestUserItem = input.findLast(isUserTurn);
   if (!latestUserItem) {
     return { text: "", imageInputCount: 0 };
   }
-
-  const imageTurnItems = [latestUserItem];
-  const imageInputCount = countImageInputs(imageTurnItems.map((item) => item.content));
+  const imageInputCount = countImageInputs([latestUserItem.content]);
   if (imageInputCount === 0) {
     return { text: "", imageInputCount: 0 };
   }
   return {
-    text: imageTurnItems
-      .map((item) => extractInputText(item.content))
-      .filter(Boolean)
-      .join("\n"),
+    text: extractInputText(latestUserItem.content),
     imageInputCount,
   };
 }

@@ -861,29 +861,9 @@ async function openGoogleSseChunks(params: {
     params.kind === "google-vertex"
       ? "Google Vertex AI API error"
       : "Google Generative AI API error";
-  if (!shouldRetryGoogleGemini3FirstResponse({ kind: params.kind, model: params.model })) {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
-      headers: params.headers,
-      body: serializeGoogleRequest(params.request, params.videoSlots),
-      signal: params.options?.signal,
-    });
-    await notifyGoogleTransportHttpResponse(
-      params.model,
-      params.options,
-      response,
-      params.options?.signal,
-    );
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
-    return {
-      type: "ready",
-      chunks: parseGoogleSseChunks(response, params.options?.signal),
-    };
-  }
-
-  const retryMs = resolveGoogleGemini3FirstResponseRetryMs();
+  const retryMs = shouldRetryGoogleGemini3FirstResponse(params)
+    ? resolveGoogleGemini3FirstResponseRetryMs()
+    : 0;
   if (retryMs <= 0) {
     const response = await params.guardedFetch(params.url, {
       method: "POST",

@@ -3,12 +3,14 @@ import type {
   InternalSessionTranscriptUpdate,
   SessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
+import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
 import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
+import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type {
   SessionLifecycleRevisionExpectation,
@@ -69,9 +71,24 @@ export type SessionEntryReadScope = SessionAccessScope & {
 /** Address of the physical store admitted by an entry read; never retains its handle. */
 export type SessionEntryReadSource = Readonly<{ agentId: string; path: string }>;
 
+export type CapturedSessionEntryReadSource = SessionEntryReadSource &
+  Readonly<{
+    databaseIdentity: OpenClawAgentDatabaseIdentity;
+    databaseBirthtime?: string;
+  }>;
+
+export type SessionEntryReadOnlyWorkerScope = SessionEntryReadScope & {
+  agentId: string;
+  databaseAgentId: string;
+  storePath: string;
+  env: NodeJS.ProcessEnv;
+};
+
 export type SessionEntryListScope = Partial<Omit<SessionEntryReadScope, "sessionKey">> & {
   /** Select exact persisted keys after validating the complete listing snapshot. */
   sessionKeys?: readonly string[];
+  /** Validate the complete listing, retaining full expired cron rows only for this logical owner. */
+  expiredCronRuns?: { agentId: string; updatedBefore: number };
 };
 
 export type ResolvedSessionEntryAccessTarget = {
@@ -89,6 +106,15 @@ export type ResolvedSessionEntryAccessTarget = {
 
 export type ResolvedSessionEntryStoreTarget = ResolvedSessionEntryAccessTarget & {
   storePath: string;
+};
+
+/** Temporary opt-in; remove the selector after internal callers use qualified identities. */
+export type QualifiedSessionEntryAccessTarget = ResolvedSessionEntryStoreTarget & {
+  keyFormat: "agent-qualified";
+  /** The admitted physical database is distinct from the logical agent namespace. */
+  readSource?: CapturedSessionEntryReadSource;
+  /** Exact selected key and any conflicting spelling checked by the writer snapshot. */
+  storeKeys: readonly string[];
 };
 
 export type SessionEntryCandidateAccessScope = {
@@ -581,6 +607,9 @@ export type SessionEntryPatchResult = {
 };
 
 export type SessionEntryTargetPatchScope = {
+  env?: NodeJS.ProcessEnv;
+  /** An existing read target fixes the physical owner without registry reselection. */
+  readSource?: CapturedSessionEntryReadSource;
   /** Agent owner used when resolving custom/shared legacy store paths. */
   agentId?: string;
   storePath: string;
@@ -800,7 +829,24 @@ export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
   | { ok: true; entry: SessionEntry }
   | { ok: false; error: TError };
 
+/** Original physical writer custody; captured facts are not a new admission. */
+export type SessionEntryCommitContext = {
+  readonly env: NodeJS.ProcessEnv;
+  assertCurrent: () => void;
+};
+
+export type SessionEntryCreationPhase =
+  | "snapshot"
+  | "entry"
+  | "transcript"
+  | "writerAdmission"
+  | "commit"
+  | "publication";
+
 export type SessionEntryCreateWithTranscriptOptions = {
+  onPhase?: (phase: SessionEntryCreationPhase) => void;
+  /** Bind retained target facts to this creator's own placeholder publication. */
+  bindCreation?: (operation: SessionEntryCreationOperation) => void;
   /** Protect the newly created row from maintenance during its initial write. */
   activeSessionKey?: string;
   /** Working directory stored in the initial transcript header. */
@@ -813,6 +859,8 @@ export type SessionEntryCreateWithTranscriptOptions = {
   withCommit?: <T>(run: (assertSourceCurrent: () => void) => Promise<T>) => Promise<T>;
   /** Non-throwing notification after the entry's outer COMMIT, before publication or cleanup. */
   onLifecycleCommitted?: (entry: SessionEntry) => void;
+  /** Best-effort bookkeeping after publication, still under the original writer. */
+  afterCommitted?: (entry: SessionEntry, context: SessionEntryCommitContext) => Promise<void>;
   /** Resolves a trusted owner after entry projection; the assignment commits with a new entry. */
   resolveOwnerAssignment?: () => SessionOwnerAssignment | undefined;
 };

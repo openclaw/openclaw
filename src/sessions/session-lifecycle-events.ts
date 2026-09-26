@@ -7,6 +7,8 @@ export type SessionLifecycleEvent = {
   parentSessionKey?: string;
   label?: string;
   displayName?: string;
+  /** Internal producer classification; runtime events do not change stored session-row facts. */
+  scope?: "runtime";
   /** The committed change affects model, account, or runtime catalog projection. */
   catalogChanged?: true;
 } & (
@@ -20,6 +22,8 @@ export type SessionIdentityMutationTarget = {
 };
 
 export type SessionIdentityMutation = {
+  /** Physical source captured by the committing database owner. */
+  databaseIdentity: string | symbol;
   /** Resolved operation scope for bare keys; qualified keys retain their own agent. */
   agentId: string;
 } & (

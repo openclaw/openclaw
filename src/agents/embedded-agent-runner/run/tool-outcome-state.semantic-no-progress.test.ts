@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import * as decisionRuntime from "../../../decisions/runtime.js";
 import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
@@ -9,13 +14,7 @@ import type { HookContext } from "../../agent-tools.before-tool-call.types.js";
 import { admitToolCallBatch } from "../../tool-loop-admission.js";
 import { createRunToolOutcomeState } from "./tool-outcome-state.js";
 
-const decisionMocks = vi.hoisted(() => ({
-  evaluateDecision: vi.fn(),
-}));
-
-vi.mock("../../../decisions/runtime.js", () => ({
-  evaluateDecision: decisionMocks.evaluateDecision,
-}));
+let evaluateDecisionSpy: ReturnType<typeof vi.spyOn<typeof decisionRuntime, "evaluateDecision">>;
 
 const repeatedArgs = { path: "/synthetic/repeated" };
 const repeatedResult = {
@@ -23,10 +22,13 @@ const repeatedResult = {
   details: { source: "fixture" },
 };
 
-function configWithDecisionModel(decisionModel: string | undefined): OpenClawConfig {
+function configWithDecisionModel(
+  decisionModel: string | undefined,
+  consent: boolean | undefined = true,
+): OpenClawConfig {
   return {
     agents: {
-      defaults: decisionModel === undefined ? {} : { decisionModel },
+      defaults: { decisionModel, experimental: { decisionAssistance: consent } },
     },
     tools: { loopDetection: { enabled: true, semanticNoProgress: "shadow" } },
   };
@@ -110,19 +112,33 @@ async function driveRepeatedResults(params: {
 }
 
 describe("run-owned semantic no-progress observation", () => {
+  afterEach(() => clearRuntimeConfigSnapshot());
+
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
     resetDiagnosticSessionStateForTest();
-    decisionMocks.evaluateDecision.mockReset();
+    vi.restoreAllMocks();
+    evaluateDecisionSpy = vi.spyOn(decisionRuntime, "evaluateDecision");
   });
 
   it.each([
+    [
+      "Labs omitted with a selected model",
+      {
+        ...configWithDecisionModel("fixture/judge"),
+        agents: { defaults: { decisionModel: "fixture/judge" } },
+      },
+      "main",
+    ],
+    ["Labs off with a selected model", configWithDecisionModel("fixture/judge", false), "main"],
+    ["Labs off without a model", configWithDecisionModel(undefined, false), "main"],
     ["an absent global decision model", configWithDecisionModel(undefined), "main"],
     [
       "an empty owning-agent override",
       {
         ...configWithDecisionModel("fixture/judge"),
         agents: {
-          defaults: { decisionModel: "fixture/judge" },
+          defaults: { decisionModel: "fixture/judge", experimental: { decisionAssistance: true } },
           entries: { worker: { decisionModel: "" } },
         },
       } satisfies OpenClawConfig,
@@ -150,11 +166,24 @@ describe("run-owned semantic no-progress observation", () => {
       detector: "generic_repeat",
       count: 20,
     });
-    expect(decisionMocks.evaluateDecision).not.toHaveBeenCalled();
+    expect(evaluateDecisionSpy).not.toHaveBeenCalled();
+  });
+
+  it("stops a prepared observer after published Labs opt-out", async () => {
+    const config = configWithDecisionModel("fixture/judge");
+    const state = createState(config);
+    expect(state.semanticNoProgressObserver).toBeDefined();
+    setRuntimeConfigSnapshot(configWithDecisionModel("fixture/judge", false));
+    const result = await driveRepeatedResults({ config, state });
+    expect(result.warningCounts).toEqual([10]);
+    expect(result.critical.intervention).toMatchObject({ kind: "critical-tool-loop" });
+    expect(evaluateDecisionSpy).not.toHaveBeenCalled();
+    expect(state.semanticNoProgressObserver?.snapshot().trajectoryVersion).toBe(0);
+    await state.semanticNoProgressObserver?.close();
   });
 
   it("keeps a stalled shadow verdict non-authoritative at the critical loop boundary", async () => {
-    decisionMocks.evaluateDecision.mockResolvedValue({
+    evaluateDecisionSpy.mockResolvedValue({
       status: "ok",
       provenance: {
         providerId: "fixture",
@@ -173,7 +202,7 @@ describe("run-owned semantic no-progress observation", () => {
 
     const result = await driveRepeatedResults({ config, state });
 
-    expect(decisionMocks.evaluateDecision).toHaveBeenCalled();
+    expect(evaluateDecisionSpy).toHaveBeenCalled();
     expect(state.semanticNoProgressObserver?.snapshot().latestJudgment?.verdict).toBe("stalled");
     expect(result.warningCounts).toEqual([10]);
     expect(result.critical.intervention).toMatchObject({

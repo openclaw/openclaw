@@ -299,13 +299,12 @@ export function createDispatchReplyOperationCoordinator(params: {
       return { status: "ready" };
     }
     if (dispatchAbortOperation && !dispatchAbortOperation.result) {
-      return dispatchReplyOperation ? { status: "ready" } : { status: "busy" };
+      return { status: "busy" };
     }
     if (
       phase !== "pre_dispatch" &&
       preDispatchAbortOperation?.result &&
       preDispatchAbortOperation.result.kind !== "completed" &&
-      !dispatchReplyOperation &&
       // Low-level queue resolution can abort the old owner before final delivery acquires its
       // successor operation. The old result belongs to that owner, not to this inbound turn.
       params.allowActiveQueueResolution !== true
@@ -366,6 +365,9 @@ export function createDispatchReplyOperationCoordinator(params: {
     const admitCurrentReplyTurn = async () => {
       try {
         return await admitReplyTurn({
+          runId: params.replyOptions?.runId,
+          stateAcquisitionDeadline: params.replyOptions?.stateAcquisitionDeadline,
+          assertRequestCurrent: () => params.replyOptions?.operatorAuthority?.assertCurrent(),
           providerReviewAcknowledgment: params.replyOptions?.providerReviewAcknowledgment,
           agentId: params.agentId,
           sessionKey: dispatchOperationSessionKey,
@@ -515,14 +517,6 @@ export function createDispatchReplyOperationCoordinator(params: {
         signal: AbortSignal | undefined;
       }
     | undefined;
-  let cachedDispatchAbortSignal:
-    | {
-        operationSignal: AbortSignal | undefined;
-        upstreamSignal: AbortSignal | undefined;
-        signal: AbortSignal | undefined;
-      }
-    | undefined;
-
   const getPreDispatchAbortSignal = () => {
     const operationSignal = getPreDispatchAbortOperation()?.abortSignal;
     const lifecycleSignal = preDispatchLifecycleAbortController?.signal;
@@ -548,17 +542,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       dispatchReplyOperation?.abortSignal ?? dispatchLifecycleAbortController?.signal;
     // The operation mirrors upstream aborts until the backend commits its
     // terminal outcome, then keeps delivery alive during bounded finalization.
-    const upstreamSignal = operationSignal ? undefined : params.replyOptions?.abortSignal;
-    if (
-      cachedDispatchAbortSignal &&
-      cachedDispatchAbortSignal.operationSignal === operationSignal &&
-      cachedDispatchAbortSignal.upstreamSignal === upstreamSignal
-    ) {
-      return cachedDispatchAbortSignal.signal;
-    }
-    const signal = operationSignal ?? upstreamSignal;
-    cachedDispatchAbortSignal = { operationSignal, upstreamSignal, signal };
-    return signal;
+    return operationSignal ?? params.replyOptions?.abortSignal;
   };
 
   const getQueuedFollowupAbortSignal = () =>

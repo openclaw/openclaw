@@ -2,13 +2,12 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   createTelegramNonIdempotentRequestWithDiag,
-  createTelegramRequestWithDiag,
-  normalizeMessageId,
   resolveAndPersistChatId,
   withTelegramApiContext,
   type TelegramApiContext,
 } from "./send-context.js";
 import type { TelegramApiCallOpts, TelegramMessageActionOpts } from "./send-message-types.js";
+import { prepareTelegramOutbound } from "./send-outbound.js";
 import { parseTelegramTarget } from "./targets.js";
 
 type TelegramCreateForumTopicParams = NonNullable<
@@ -59,32 +58,23 @@ export async function editForumTopicTelegram(
       name?: string;
       iconCustomEmojiId?: string;
     }> => {
-      const { cfg, account, api } = context;
-      const rawTarget = String(chatIdInput);
-      const target = parseTelegramTarget(rawTarget);
-      const chatId = await resolveAndPersistChatId({
-        cfg,
-        api,
-        lookupTarget: target.chatId,
-        persistTarget: rawTarget,
-        verbose: opts.verbose,
-        gatewayClientScopes: opts.gatewayClientScopes,
-      });
-      const messageThreadId = normalizeMessageId(messageThreadIdInput);
-      const requestWithDiag = createTelegramRequestWithDiag({
-        cfg,
-        account,
-        retry: opts.retry,
-        verbose: opts.verbose,
+      const { api } = context;
+      const {
+        chatId,
+        messageId: messageThreadId,
+        request,
+      } = await prepareTelegramOutbound({
+        to: chatIdInput,
+        context,
+        opts,
+        messageIdInput: messageThreadIdInput,
+        request: { kind: "standard" },
       });
       const payload = {
         ...(trimmedName ? { name: trimmedName } : {}),
         ...(trimmedIconCustomEmojiId ? { icon_custom_emoji_id: trimmedIconCustomEmojiId } : {}),
       };
-      await requestWithDiag(
-        () => api.editForumTopic(chatId, messageThreadId, payload),
-        "editForumTopic",
-      );
+      await request(() => api.editForumTopic(chatId, messageThreadId, payload), "editForumTopic");
       logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
       return {
         ok: true,
@@ -173,7 +163,6 @@ export async function createForumTopicTelegram(
 
       const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
         cfg,
-        account,
         retry: opts.retry,
         verbose: opts.verbose,
       });

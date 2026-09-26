@@ -1,5 +1,4 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-// Telegram helper module supports format behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_REF_EXTENSIONS_WITH_TLD,
@@ -10,8 +9,10 @@ import {
   type MarkdownLinkSpan,
   type MarkdownIR,
   renderMarkdownIRChunksWithinLimit,
+  renderMarkdownWithMarkers,
   tokenizeHtmlTags,
 } from "openclaw/plugin-sdk/text-chunking";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   protectTelegramAssistantTranscriptRoleHeaders,
   TELEGRAM_ASSISTANT_TRANSCRIPT_PREFIX,
@@ -24,7 +25,6 @@ import {
   prepareTelegramHtmlTextSplitter,
   type TelegramHtmlTextSplitter,
 } from "./format-html.js";
-import { renderTelegramMarkdownIR } from "./format-render.js";
 import { renderTelegramMonospaceGrid } from "./text-width.js";
 
 export { escapeTelegramHtml } from "./format-html.js";
@@ -38,17 +38,6 @@ function isTelegramRichLinkHref(href: string): boolean {
   return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
 }
 
-/**
- * File extensions that share TLDs and commonly appear in code/documentation.
- * These are wrapped in <code> tags to prevent Telegram from generating
- * spurious domain registrar previews.
- *
- * Only includes extensions that are:
- * 1. Commonly used as file extensions in code/docs
- * 2. Rarely used as intentional domain references
- *
- * Excluded: .ai, .io, .tv, .fm (popular domain TLDs like x.ai, vercel.io, github.io)
- */
 function buildTelegramLink(
   link: MarkdownLinkSpan,
   text: string,
@@ -88,10 +77,31 @@ function buildTelegramCodeBlockOpen(span: { language?: string }): string {
 }
 
 function renderTelegramHtml(ir: MarkdownIR): string {
-  return renderTelegramMarkdownIR(ir, {
+  return renderMarkdownWithMarkers(ir, {
+    annotationMarkers: {
+      assistant_transcript_role: {
+        open: "<code>",
+        close: "</code>",
+        suppressNestedFormatting: true,
+      },
+    },
+    styleMarkers: {
+      bold: { open: "<b>", close: "</b>" },
+      italic: { open: "<i>", close: "</i>" },
+      strikethrough: { open: "<s>", close: "</s>" },
+      code: { open: "<code>", close: "</code>" },
+      code_block: { open: buildTelegramCodeBlockOpen, close: "</code></pre>" },
+      spoiler: { open: "<tg-spoiler>", close: "</tg-spoiler>" },
+      blockquote: { open: "<blockquote>", close: "</blockquote>" },
+      heading_1: { open: "<h1>", close: "</h1>" },
+      heading_2: { open: "<h2>", close: "</h2>" },
+      heading_3: { open: "<h3>", close: "</h3>" },
+      heading_4: { open: "<h4>", close: "</h4>" },
+      heading_5: { open: "<h5>", close: "</h5>" },
+      heading_6: { open: "<h6>", close: "</h6>" },
+    },
     escapeText: escapeTelegramHtml,
     buildLink: buildTelegramLink,
-    buildCodeBlockOpen: buildTelegramCodeBlockOpen,
   });
 }
 
@@ -149,6 +159,10 @@ function parseTelegramLegacyMarkdown(markdown: string, tableMode?: MarkdownTable
     headingStyle: "none",
     blockquotePrefix: "",
     tableMode: tableMode === "block" ? "code" : tableMode,
+    // buildTelegramLink already collapses unsupported hrefs (file:, data:, ...)
+    // to their label; let the parser tokenize them instead of leaking raw
+    // `[label](href)` source when markdown-it's own scheme denylist rejects it.
+    allowAllLinkSchemes: true,
   });
 }
 
@@ -164,19 +178,6 @@ export function markdownToTelegramHtml(
     return wrapFileReferencesInHtml(telegramHtml);
   }
   return telegramHtml;
-}
-
-/**
- * Wraps standalone file references (with TLD extensions) in <code> tags.
- * This prevents Telegram from treating them as URLs and generating
- * irrelevant domain registrar previews.
- *
- * Runs AFTER markdown→HTML conversion to avoid modifying HTML attributes.
- * Skips content inside <code>, <pre>, and <a> tags to avoid nesting issues.
- */
-/** Escape regex metacharacters in a string */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 const HTML_MODE_TAG_PATTERN = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^<>]*)>$/;
@@ -213,56 +214,35 @@ const TELEGRAM_ATTR_HTML_TAG_PATTERNS = new Map([
 ]);
 const TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN = /^\s+class="language-[^"]+"\s*$/;
 
-type TelegramHtmlTagSupport = {
-  simpleTags: ReadonlySet<string>;
-  attrPatterns: ReadonlyMap<string, RegExp>;
-};
-
-const TELEGRAM_LEGACY_HTML_TAG_SUPPORT: TelegramHtmlTagSupport = {
-  simpleTags: TELEGRAM_SIMPLE_HTML_TAGS,
-  attrPatterns: TELEGRAM_ATTR_HTML_TAG_PATTERNS,
-};
-
 let fileReferencePattern: RegExp | undefined;
 let orphanedTldPattern: RegExp | undefined;
 
 function popLastTagName(tags: string[], name: string): boolean {
-  for (let index = tags.length - 1; index >= 0; index -= 1) {
-    if (tags[index] === name) {
-      tags.splice(index, 1);
-      return true;
-    }
+  const index = tags.lastIndexOf(name);
+  if (index < 0) {
+    return false;
   }
-  return false;
+  tags.splice(index, 1);
+  return true;
 }
 
-function isSupportedTelegramHtmlTag(
-  closing: boolean,
-  name: string,
-  attrs: string,
-  support: TelegramHtmlTagSupport,
-): boolean {
+function isSupportedTelegramHtmlTag(closing: boolean, name: string, attrs: string): boolean {
   if (closing) {
-    return attrs.trim() === "" && (support.simpleTags.has(name) || support.attrPatterns.has(name));
+    return (
+      attrs.trim() === "" &&
+      (TELEGRAM_SIMPLE_HTML_TAGS.has(name) || TELEGRAM_ATTR_HTML_TAG_PATTERNS.has(name))
+    );
   }
-  if (name === "code" && TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN.test(attrs)) {
+  if (TELEGRAM_ATTR_HTML_TAG_PATTERNS.get(name)?.test(attrs)) {
     return true;
   }
-  if (support.attrPatterns.get(name)?.test(attrs)) {
-    return true;
-  }
-  return support.simpleTags.has(name) && attrs.trim() === "";
-}
-
-function hasOpenTelegramHtmlTag(tags: readonly string[], name: string): boolean {
-  return tags.includes(name);
+  return TELEGRAM_SIMPLE_HTML_TAGS.has(name) && attrs.trim() === "";
 }
 
 function preserveTelegramHtmlTag(
   rawTag: string,
   openTags: string[],
   escapeTag: (rawTag: string) => string,
-  support: TelegramHtmlTagSupport = TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
 ): string {
   const match = HTML_MODE_TAG_PATTERN.exec(rawTag);
   if (!match) {
@@ -273,12 +253,12 @@ function preserveTelegramHtmlTag(
   const attrs = match[3] ?? "";
   if (!closing && tagName === "code" && TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN.test(attrs)) {
     openTags.push(tagName);
-    if (hasOpenTelegramHtmlTag(openTags, "pre")) {
+    if (openTags.includes("pre")) {
       return rawTag;
     }
     return "<code>";
   }
-  if (!isSupportedTelegramHtmlTag(closing, tagName, attrs, support)) {
+  if (!isSupportedTelegramHtmlTag(closing, tagName, attrs)) {
     return escapeTag(rawTag);
   }
   if (closing) {
@@ -291,10 +271,7 @@ function preserveTelegramHtmlTag(
   return rawTag;
 }
 
-function escapeUnsupportedTelegramHtml(
-  text: string,
-  support: TelegramHtmlTagSupport = TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
-): string {
+function escapeUnsupportedTelegramHtml(text: string): string {
   let result = "";
   let index = 0;
   const openTags: string[] = [];
@@ -315,7 +292,7 @@ function escapeUnsupportedTelegramHtml(
       const end = text.indexOf(">", index + 1);
       if (end !== -1) {
         const rawTag = text.slice(index, end + 1);
-        result += preserveTelegramHtmlTag(rawTag, openTags, escapeTelegramHtml, support);
+        result += preserveTelegramHtmlTag(rawTag, openTags, escapeTelegramHtml);
         index = end + 1;
       } else {
         result += "&lt;";
@@ -334,7 +311,7 @@ function escapeUnsupportedTelegramHtml(
   return result;
 }
 
-function stripTelegramHtmlForPlainText(html: string): string {
+export function resolveTelegramHtmlVisibleText(html: string): string {
   return decodeTelegramHtmlEntities(
     html.replace(TELEGRAM_HTML_BREAK_PATTERN, "\n").replace(TELEGRAM_HTML_TAG_PATTERN, ""),
   );
@@ -342,11 +319,7 @@ function stripTelegramHtmlForPlainText(html: string): string {
 
 export function countTelegramHtmlVisibleCharacters(html: string): number {
   // Telegram limits UTF-16 caption characters after stripping markup and decoding entities.
-  return stripTelegramHtmlForPlainText(html).length;
-}
-
-export function resolveTelegramHtmlVisibleText(html: string): string {
-  return stripTelegramHtmlForPlainText(html);
+  return resolveTelegramHtmlVisibleText(html).length;
 }
 
 export function telegramHtmlToPlainTextFallback(html: string): string {
@@ -367,85 +340,64 @@ export function telegramHtmlToPlainTextFallback(html: string): string {
       const href = decodeTelegramHtmlEntities(
         doubleQuotedHref ?? singleQuotedHref ?? unquotedHref ?? "",
       ).trim();
-      const label = stripTelegramHtmlForPlainText(labelHtml).trim();
+      const label = resolveTelegramHtmlVisibleText(labelHtml).trim();
       if (!href) {
         return escapeTelegramHtml(label);
       }
       return escapeTelegramHtml(!label || label === href ? href : `${label} (${href})`);
     },
   );
-  return stripTelegramHtmlForPlainText(withPlainLinks);
+  return resolveTelegramHtmlVisibleText(withPlainLinks);
 }
 
-function promoteEscapedSupportedTelegramTags(
-  text: string,
-  openTags: string[],
-  support: TelegramHtmlTagSupport,
-): string {
+function promoteEscapedSupportedTelegramTags(text: string, openTags: string[]): string {
   ESCAPED_HTML_TAG_PATTERN.lastIndex = 0;
   return text.replace(
     ESCAPED_HTML_TAG_PATTERN,
     (match, closing: string, name: string, attrs: string) =>
-      preserveTelegramHtmlTag(`<${closing}${name}${attrs}>`, openTags, () => match, support),
+      preserveTelegramHtmlTag(`<${closing}${name}${attrs}>`, openTags, () => match),
   );
 }
 
-function preserveSupportedTelegramHtmlTags(
+function transformUnprotectedTelegramHtmlText(
   html: string,
-  support: TelegramHtmlTagSupport = TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
+  protectedTags: readonly string[],
+  transformText: (text: string) => string,
 ): string {
-  if (!html.includes("&lt;")) {
-    return html;
-  }
-  let codeDepth = 0;
-  let preDepth = 0;
+  const depths = protectedTags.map((name) => ({ name, depth: 0 }));
   let result = "";
   let lastIndex = 0;
-  const openEscapedTags: string[] = [];
-
+  const transform = (text: string) =>
+    depths.some(({ depth }) => depth > 0) ? text : transformText(text);
   for (const tag of tokenizeHtmlTags(html)) {
-    const tagStart = tag.start;
-    const tagEnd = tag.end;
-    const tagName = tag.name;
-    const isClosing = tag.closing;
-    const textBefore = html.slice(lastIndex, tagStart);
-    result +=
-      codeDepth > 0 || preDepth > 0
-        ? textBefore
-        : promoteEscapedSupportedTelegramTags(textBefore, openEscapedTags, support);
-
-    if (tagName === "code") {
-      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
-    } else if (tagName === "pre") {
-      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
+    result += transform(html.slice(lastIndex, tag.start));
+    const tracked = depths.find(({ name }) => name === tag.name);
+    if (tracked) {
+      tracked.depth = tag.closing ? Math.max(0, tracked.depth - 1) : tracked.depth + 1;
     }
-
-    result += html.slice(tagStart, tagEnd);
-    lastIndex = tagEnd;
+    result += html.slice(tag.start, tag.end);
+    lastIndex = tag.end;
   }
-
-  const remainingText = html.slice(lastIndex);
-  result +=
-    codeDepth > 0 || preDepth > 0
-      ? remainingText
-      : promoteEscapedSupportedTelegramTags(remainingText, openEscapedTags, support);
-  return result;
+  return result + transform(html.slice(lastIndex));
 }
 
-function renderSupportedTelegramHtml(
-  html: string,
-  support: TelegramHtmlTagSupport = TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
-): string {
-  return protectTelegramAssistantTranscriptRoleHeaders(
-    preserveSupportedTelegramHtmlTags(html, support),
-  );
+function renderSupportedTelegramHtml(html: string): string {
+  const openEscapedTags: string[] = [];
+  const promoted = html.includes("&lt;")
+    ? transformUnprotectedTelegramHtmlText(html, ["code", "pre"], (text) =>
+        promoteEscapedSupportedTelegramTags(text, openEscapedTags),
+      )
+    : html;
+  return protectTelegramAssistantTranscriptRoleHeaders(promoted);
 }
 
 function getFileReferencePattern(): RegExp {
   if (fileReferencePattern) {
     return fileReferencePattern;
   }
-  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
+  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD)
+    .map(escapeRegExp)
+    .join("|");
   fileReferencePattern = new RegExp(
     `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${fileExtensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
     "gi",
@@ -457,7 +409,9 @@ function getOrphanedTldPattern(): RegExp {
   if (orphanedTldPattern) {
     return orphanedTldPattern;
   }
-  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
+  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD)
+    .map(escapeRegExp)
+    .join("|");
   orphanedTldPattern = new RegExp(
     `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${fileExtensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
     "g",
@@ -475,13 +429,8 @@ function wrapStandaloneFileRef(match: string, prefix: string, filename: string):
   return `${prefix}<code>${escapeTelegramHtml(filename)}</code>`;
 }
 
-function wrapSegmentFileRefs(
-  text: string,
-  codeDepth: number,
-  preDepth: number,
-  anchorDepth: number,
-): string {
-  if (codeDepth > 0 || preDepth > 0 || anchorDepth > 0 || !text.includes(".")) {
+function wrapSegmentFileRefs(text: string): string {
+  if (!text.includes(".")) {
     return text;
   }
   const wrappedStandalone = text.replace(getFileReferencePattern(), wrapStandaloneFileRef);
@@ -491,43 +440,7 @@ function wrapSegmentFileRefs(
 }
 
 export function wrapFileReferencesInHtml(html: string): string {
-  // Track nesting depth for tags that should not be modified
-  let codeDepth = 0;
-  let preDepth = 0;
-  let anchorDepth = 0;
-  let result = "";
-  let lastIndex = 0;
-
-  // Process tags token-by-token so we can skip protected regions while wrapping plain text.
-  for (const tag of tokenizeHtmlTags(html)) {
-    const tagStart = tag.start;
-    const tagEnd = tag.end;
-    const isClosing = tag.closing;
-    const tagName = tag.name;
-
-    // Process text before this tag
-    const textBefore = html.slice(lastIndex, tagStart);
-    result += wrapSegmentFileRefs(textBefore, codeDepth, preDepth, anchorDepth);
-
-    // Update tag depth (clamp at 0 for malformed HTML with stray closing tags)
-    if (tagName === "code") {
-      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
-    } else if (tagName === "pre") {
-      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
-    } else if (tagName === "a") {
-      anchorDepth = isClosing ? Math.max(0, anchorDepth - 1) : anchorDepth + 1;
-    }
-
-    // Add the tag itself
-    result += html.slice(tagStart, tagEnd);
-    lastIndex = tagEnd;
-  }
-
-  // Process remaining text
-  const remainingText = html.slice(lastIndex);
-  result += wrapSegmentFileRefs(remainingText, codeDepth, preDepth, anchorDepth);
-
-  return result;
+  return transformUnprotectedTelegramHtmlText(html, ["code", "pre", "a"], wrapSegmentFileRefs);
 }
 
 export function renderTelegramHtmlText(
@@ -536,17 +449,10 @@ export function renderTelegramHtmlText(
 ): string {
   const textMode = options.textMode ?? "markdown";
   if (textMode === "html") {
-    return escapeUnsupportedTelegramHtmlWithTableFallback(text);
+    return escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(text));
   }
   // markdownToTelegramHtml already wraps file references by default
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
-}
-
-function escapeUnsupportedTelegramHtmlWithTableFallback(html: string): string {
-  return escapeUnsupportedTelegramHtml(
-    normalizeTelegramLegacyHtmlTables(html),
-    TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
-  );
 }
 
 function normalizeTelegramLegacyHtmlTables(html: string): string {
@@ -606,16 +512,10 @@ function renderTelegramRichHtmlRawTableFallback(
   tableHtml: string,
   rows: readonly string[][],
 ): string {
-  const caption =
-    rows.length > 0
-      ? telegramHtmlToPlainTextFallback(
-          TELEGRAM_HTML_CAPTION_PATTERN.exec(tableHtml)?.[1] ?? "",
-        ).trim()
-      : "";
-  const tableText =
-    rows.length > 0
-      ? renderTelegramMonospaceGrid(rows)
-      : stripTelegramHtmlForPlainText(tableHtml).trim();
+  const caption = telegramHtmlToPlainTextFallback(
+    TELEGRAM_HTML_CAPTION_PATTERN.exec(tableHtml)?.[1] ?? "",
+  ).trim();
+  const tableText = renderTelegramMonospaceGrid(rows);
   return `<pre><code>${escapeTelegramHtml([caption, tableText].filter(Boolean).join("\n"))}</code></pre>\n\n`;
 }
 
@@ -631,7 +531,6 @@ function buildTelegramHtmlOpenPrefix(tags: TelegramHtmlTag[]): string {
 
 function buildTelegramHtmlCloseSuffix(tags: TelegramHtmlTag[]): string {
   return tags
-    .slice()
     .toReversed()
     .map((tag) => tag.closeTag)
     .join("");
@@ -642,11 +541,9 @@ function buildTelegramHtmlCloseSuffixLength(tags: TelegramHtmlTag[]): number {
 }
 
 function popTelegramHtmlTag(tags: TelegramHtmlTag[], name: string): void {
-  for (let index = tags.length - 1; index >= 0; index -= 1) {
-    if (tags[index]?.name === name) {
-      tags.splice(index, 1);
-      return;
-    }
+  const index = tags.findLastIndex((tag) => tag.name === name);
+  if (index >= 0) {
+    tags.splice(index, 1);
   }
 }
 
@@ -794,10 +691,12 @@ function renderTelegramChunkHtml(ir: MarkdownIR): string {
   return wrapFileReferencesInHtml(renderSupportedTelegramHtml(renderTelegramHtml(ir)));
 }
 
-function renderTelegramChunksWithinHtmlLimit(
-  ir: MarkdownIR,
+export function markdownToTelegramChunks(
+  markdown: string,
   limit: number,
+  options: { tableMode?: MarkdownTableMode } = {},
 ): TelegramFormattedChunk[] {
+  const ir = parseTelegramLegacyMarkdown(markdown, options.tableMode);
   return renderMarkdownIRChunksWithinLimit({
     ir,
     limit,
@@ -809,15 +708,6 @@ function renderTelegramChunksWithinHtmlLimit(
   }));
 }
 
-export function markdownToTelegramChunks(
-  markdown: string,
-  limit: number,
-  options: { tableMode?: MarkdownTableMode } = {},
-): TelegramFormattedChunk[] {
-  const ir = parseTelegramLegacyMarkdown(markdown, options.tableMode);
-  return renderTelegramChunksWithinHtmlLimit(ir, limit);
-}
-
 export function markdownToTelegramHtmlChunks(
   markdown: string,
   limit: number,
@@ -825,4 +715,3 @@ export function markdownToTelegramHtmlChunks(
 ): string[] {
   return markdownToTelegramChunks(markdown, limit, options).map((chunk) => chunk.html);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

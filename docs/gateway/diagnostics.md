@@ -148,6 +148,16 @@ keys. Repeated stage visits contribute to the counts and totals. Parallel and
 nested stages can overlap, so their totals are neither an exclusive breakdown
 of request time nor CPU measurements.
 
+With diagnostics and warning logs enabled, `sessions.create` calls lasting at
+least one second emit `slow session create`. Its `elapsedMs` and
+`phaseDurationsMs` separate request preparation, admission, target discovery,
+worktree preparation, row snapshot and projection, transcript initialization,
+writer admission, commit, publication, initial-turn dispatch, and response work.
+These are elapsed times, including waits, with fixed phase names and no session
+keys or request values. Worktree preparation measures only work required before
+the response; provisioning already deferred to an initial turn stays with that
+turn's lifecycle.
+
 Two related info-level records help attribute slow worktree cleanup:
 `slow managed worktree removal` separates allocation admission, callback work,
 and final settlement, with preparation, snapshot, checkout removal, and body
@@ -220,7 +230,7 @@ shutdown cancels the capture and runs profiler cleanup. Overlapping requests fai
 instead of queuing. No profile is written to disk or included in diagnostics exports.
 
 The result contains `profile` in V8 CPU-profile format, `requestedDurationMs`,
-`actualDurationMs`, `samplingIntervalMicros`, `redactedNodeCount`, and
+`actualDurationMs`, `startBlockedMs`, `samplingIntervalMicros`, `redactedNodeCount`, and
 `sampleLossCount: null` because V8 does not expose an explicit lost-sample count.
 The complete result is limited to 1 MiB; larger profiles fail without truncating
 nodes or samples. Code locations inside the OpenClaw package use `openclaw:` paths;
@@ -235,6 +245,16 @@ Sampling can outlast the requested interval when the event loop is blocked. The
 response limit does not bound V8's internal allocation during that delay. Profile
 samples describe this isolate, not all process threads, and are not exact
 per-function CPU accounting.
+
+Starting a CPU profile synchronously scans V8's heap to build its code map. On a
+large Gateway this can block the main event loop for seconds on every capture,
+before regular sampling begins. Keeping the inspector domain enabled or sending
+the request from a Worker does not avoid that main-isolate work.
+`startBlockedMs` measures the synchronous start call with a monotonic clock,
+excluding promise waits, setup, sampling time, and stop/cleanup. Use it to
+attribute capture-induced stalls when analyzing an individual capture; it cannot
+be subtracted from aggregate event-loop maxima or percentiles. The measurement
+reports the cost; it does not prevent or interrupt the native stall.
 
 The RPC refuses a known active inspector listener, profiling flags, coverage
 collection, or any active Node tracing, including non-CPU categories. Stop tracing
@@ -347,6 +367,14 @@ Critical memory pressure retires idle workers through their existing cleanup own
 including when diagnostic event collection is disabled. Active operations keep
 their custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
+
+When a task pool recreates an idle-retired Worker within five minutes, it keeps
+one replacement warm for five minutes of inactivity. Other slots retain their
+normal idle timeout. Node Code Mode likewise retains at most one completed
+Worker for five minutes, reusing it only when its runtime entry and heap limit
+match. Warm task workers still collect released payloads in place; critical
+pressure, cancellation, rotation, and shutdown retain their existing cleanup
+paths. No configuration setting is needed.
 
 ## Related
 

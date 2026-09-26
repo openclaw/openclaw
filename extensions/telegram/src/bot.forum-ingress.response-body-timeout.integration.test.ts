@@ -18,7 +18,7 @@ import {
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
-import { createTelegramIngressResolver, createTelegramIngressSubject } from "./ingress.js";
+import { createTelegramIngressResolver } from "./ingress.js";
 import * as telegramRequestTimeouts from "./request-timeouts.js";
 import { setTelegramRuntime } from "./runtime.js";
 
@@ -97,7 +97,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       accountId: "default",
       ownerAgentId: "main",
       bot,
-      cfg: {},
+      cfg: { messages: { inbound: { debounceMs: 0 } } },
       mediaMaxBytes: 1,
       opts: { token: "123456:integration-token", botInfo },
       runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
@@ -119,7 +119,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
         allowed: true as const,
         resolveChannelIngress: async (contextBinding) =>
           await resolver.message({
-            subject: createTelegramIngressSubject(inbound.senderId),
+            subject: { stableId: inbound.senderId },
             conversation: {
               kind: inbound.isGroup ? "group" : "direct",
               id: String(inbound.chatId),
@@ -131,7 +131,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
         effectiveDmAllow: emptyAllow,
         context: {
           commandAuthorizedByConfig: false,
-          cfg: {},
+          cfg: params.cfg,
           telegramCfg: {},
           allowFrom: [],
           dmPolicy: "open" as const,
@@ -148,16 +148,9 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     };
     const message: TelegramMessagePipeline = {
       ...createTelegramMessagePipeline(params),
-      normalizePromptContextMinTimestampMs: () => undefined,
-      promptContextBoundaryOptions: () => ({}),
       releaseDispatchDedupeClaims: () => undefined,
       claimMessageDispatchDedupe: async () => ({ process: true, claims: [] }),
-      buildSyntheticContext: (context, syntheticMessage) => ({
-        message: syntheticMessage,
-        me: context.me,
-        getFile: context.getFile.bind(context),
-      }),
-      resolveTelegramSessionState: () => ({
+      resolveTelegramSessionState: async () => ({
         agentId: "integration",
         sessionEntry: undefined,
         sessionKey: "integration",

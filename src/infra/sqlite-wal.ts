@@ -183,21 +183,10 @@ function parseProcMountInfoEntries(contents: string): MountEntry[] {
 function parseMountCommandEntries(contents: string): MountEntry[] {
   const entries: MountEntry[] = [];
   for (const line of contents.split("\n")) {
-    const linuxMatch = /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line);
-    if (linuxMatch) {
-      const source = linuxMatch[1];
-      const mountPoint = linuxMatch[2];
-      const fsType = linuxMatch[3];
-      if (source && mountPoint && fsType) {
-        entries.push({ source, mountPoint, fsType });
-      }
-      continue;
-    }
-    const bsdMatch = /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
-    if (bsdMatch) {
-      const source = bsdMatch[1];
-      const mountPoint = bsdMatch[2];
-      const fsType = bsdMatch[3];
+    const match =
+      /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line) ?? /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
+    if (match) {
+      const [, source, mountPoint, fsType] = match;
       if (source && mountPoint && fsType) {
         entries.push({ source, mountPoint, fsType });
       }
@@ -500,14 +489,8 @@ export function configureSqliteWalMaintenance(
   }
   if (journalPolicy === "rollback") {
     requireRollbackJournalMode(db, options);
-    return {
-      checkpoint: () => true,
-      reclaimFreePages: (reclaimOptions = {}) =>
-        reclaimSqliteWalFreePages(db, () => true, reclaimOptions),
-      close: () => true,
-    };
   }
-  if (!enableWalJournalMode(db, busyTimeoutMs, options)) {
+  if (journalPolicy === "rollback" || !enableWalJournalMode(db, busyTimeoutMs, options)) {
     return {
       checkpoint: () => true,
       reclaimFreePages: (reclaimOptions = {}) =>
@@ -526,17 +509,11 @@ export function configureSqliteWalMaintenance(
   let splitBrainDetectionEnabled = Boolean(tripwireDatabasePath);
   let splitBrainDetectionWarningLogged = false;
   const checkpointOwner = createSqliteWalCheckpoint(
+    db,
     options,
     DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES,
   );
-  const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
-    try {
-      return checkpointOwner.record(mode, db.prepare(`PRAGMA wal_checkpoint(${mode});`).get());
-    } catch (error) {
-      checkpointOwner.recordError(error);
-      return false;
-    }
-  };
+  const runCheckpoint = checkpointOwner.checkpoint;
 
   const runMaintenance = (operation: () => boolean): boolean => {
     if (invalidated) {
@@ -574,17 +551,31 @@ export function configureSqliteWalMaintenance(
   };
 
   let timer: IntervalHandle | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const maintain = createSqliteWalMaintenanceScheduler(
     db,
-    () => {
+    (maxPages) => {
       // Admission may outlive this timer or its exact native connection.
       if (!timer || invalidated) {
-        return;
+        return 0;
       }
+      let reclaimedPages = 0;
       runMaintenance(() => {
-        const checkpointed = reclaimSqliteWalFreePages(db, runCheckpoint, {
+        const reclaimed = reclaimSqliteWalFreePages(db, runCheckpoint, {
           checkpointMode: periodicCheckpointMode,
-        }).checkpointCompleted;
+          maxPages,
+        });
+        const checkpointed = reclaimed.checkpointCompleted;
+        if (
+          checkpointed &&
+          reclaimed.freePagesBefore !== null &&
+          reclaimed.remainingFreePages !== null
+        ) {
+          reclaimedPages = Math.min(
+            reclaimed.vacuumPagesRequested,
+            reclaimed.freePagesBefore - reclaimed.remainingFreePages,
+          );
+        }
         if (
           checkpointed &&
           periodicCheckpointMode === "PASSIVE" &&
@@ -596,9 +587,22 @@ export function configureSqliteWalMaintenance(
         }
         return checkpointed;
       });
+      return reclaimedPages;
     },
     (error) => checkpointOwner.recordError(error),
+    512,
   );
+  const maintainPeriodically = (retry = true) => {
+    void maintain().then(() => {
+      if (retry && timer && !invalidated && checkpointOwner.health?.blockingOwner && !retryTimer) {
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined;
+          maintainPeriodically(false);
+        }, 1_000);
+        retryTimer.unref();
+      }
+    });
+  };
   if (timerIntervalMs > 0) {
     timer = runInSqliteMaintenanceContext(
       () =>
@@ -630,7 +634,7 @@ export function configureSqliteWalMaintenance(
               terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
             }
           }
-          maintain();
+          maintainPeriodically();
         }, timerIntervalMs) as IntervalHandle,
     );
     timer.unref?.();
@@ -642,13 +646,10 @@ export function configureSqliteWalMaintenance(
     },
     checkpoint,
     reclaimFreePages,
-    inspectIdle: () =>
-      runMaintenance(() =>
-        checkpointOwner.inspectIdle(db.prepare("PRAGMA wal_checkpoint(PASSIVE);").get()),
-      )
-        ? "healthy"
-        : "retire",
+    inspectIdle: () => (runMaintenance(checkpointOwner.inspectIdle) ? "healthy" : "retire"),
     close: (closeOptions) => {
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
       clearInterval(timer ?? undefined);
       timer = null;
       cancelSqliteWalWriteAdmission(db);

@@ -5,6 +5,7 @@ import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { ImageLightboxGalleryController } from "./image-lightbox-gallery.ts";
+import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
 import { imageLightboxStyles } from "./image-lightbox.styles.ts";
 import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 import "./modal-dialog.ts";
@@ -22,6 +23,15 @@ const DOUBLE_TAP_SCALE = 2.5;
 const SWIPE_THRESHOLD_PX = 56;
 const SWIPE_AXIS_THRESHOLD_PX = 8;
 const SLIDE_DURATION_MS = 180;
+const GALLERY_INPUTS = [
+  "src",
+  "originalSrc",
+  "gallery",
+  "loadFullResolution",
+  "imageWidth",
+  "imageHeight",
+  "mediaKind",
+] as const;
 
 function mimeTypeEssence(value: string): string {
   return value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -137,15 +147,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     if (!this.isConnected) {
       return;
     }
-    if (
-      changed.has("src") ||
-      changed.has("originalSrc") ||
-      changed.has("gallery") ||
-      changed.has("loadFullResolution") ||
-      changed.has("imageWidth") ||
-      changed.has("imageHeight") ||
-      changed.has("mediaKind")
-    ) {
+    if (GALLERY_INPUTS.some((key) => changed.has(key))) {
       this.cancelSwipe();
       this.resetGallery();
     }
@@ -156,13 +158,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       return;
     }
     const selectionChanged =
-      changed.has("src") ||
-      changed.has("originalSrc") ||
-      changed.has("gallery") ||
-      changed.has("loadFullResolution") ||
-      changed.has("imageWidth") ||
-      changed.has("imageHeight") ||
-      changed.has("mediaKind") ||
+      GALLERY_INPUTS.some((key) => changed.has(key)) ||
       this.displayedIndex !== this.galleryController.index;
     if (selectionChanged) {
       this.displayedIndex = this.galleryController.index;
@@ -360,7 +356,6 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     }
     this.destroyPanzoom();
     this.scale = 1;
-    this.imageReady = false;
   };
 
   private initializePanzoom(image: HTMLImageElement) {
@@ -657,7 +652,14 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   }
 
   private handleKeydown = (event: KeyboardEvent) => {
-    if (this.hasGallery && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    if (panImageWithKeyboard(event, this.panzoom)) {
+      return;
+    }
+    if (
+      this.hasGallery &&
+      !event.shiftKey &&
+      (event.key === "ArrowLeft" || event.key === "ArrowRight")
+    ) {
       event.preventDefault();
       event.stopPropagation();
       void this.navigate((event.key === "ArrowRight" ? 1 : -1) * this.direction);

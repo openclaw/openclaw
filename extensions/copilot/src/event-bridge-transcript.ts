@@ -126,7 +126,6 @@ export function buildAssistantProjectionGroup(
   let terminalThinking:
     | Extract<AssistantMessage["content"][number], { type: "thinking" }>
     | undefined;
-  const toolCallOrder: string[] = [];
   const toolCallsById = new Map<
     string,
     Extract<AssistantMessage["content"][number], { type: "toolCall" }>
@@ -134,9 +133,6 @@ export function buildAssistantProjectionGroup(
   for (const message of messages) {
     for (const part of message.content) {
       if (part.type === "toolCall") {
-        if (!toolCallsById.has(part.id)) {
-          toolCallOrder.push(part.id);
-        }
         toolCallsById.set(part.id, part);
         continue;
       }
@@ -154,12 +150,12 @@ export function buildAssistantProjectionGroup(
       }
     }
   }
-  const toolCalls = toolCallOrder.flatMap((id) => {
-    const toolCall = toolCallsById.get(id);
-    return toolCall ? [toolCall] : [];
-  });
-  const content = [...(terminalThinking ? [terminalThinking] : []), ...narrative, ...toolCalls];
-  const toolCallIds = [...toolCallOrder];
+  const content = [
+    ...(terminalThinking ? [terminalThinking] : []),
+    ...narrative,
+    ...toolCallsById.values(),
+  ];
+  const toolCallIds = [...toolCallsById.keys()];
   return {
     message: {
       ...last,

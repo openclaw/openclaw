@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getSessionCostUsageUpdatedAt } from "../../infra/session-cost-usage-events.js";
 import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
@@ -62,6 +63,7 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.includeContextWeight,
     params.creatorKey,
     readUserProfileVersion(),
+    getSessionCostUsageUpdatedAt(),
     ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
@@ -94,7 +96,7 @@ export async function loadCostUsageSummaryCached(params: {
     ? undefined
     : normalizeAgentId(params.agentId ?? resolveSessionAgentId({ config: params.config }));
   const dayBucketKey = usageDayBucketCacheKey(params.dayBucket);
-  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
+  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}:${getSessionCostUsageUpdatedAt()}`;
   return await loadUsageResultCached({
     cache: costUsageCache,
     cacheKey,
@@ -127,7 +129,7 @@ async function loadAllAgentCostUsageSummary(params: {
 }): Promise<CostUsageSummary> {
   // Same agent universe as discoverAllSessionsForUsage: enumerating configured
   // ids only would list system-agent sessions whose cost never reaches totals.
-  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
+  const agentIds = (await listGatewayAgentsBasic(params.config)).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
   const summaries = await runUsageAgentTasks(

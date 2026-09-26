@@ -1,4 +1,5 @@
 import type { Message } from "grammy/types";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -23,7 +24,6 @@ import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
 import { sendLogger, withTelegramApiContext, type TelegramApiContext } from "./send-context.js";
 import type { TelegramApiCallOpts, TelegramSendOpts } from "./send-message-types.js";
 import { prepareTelegramOutbound } from "./send-outbound.js";
-import { resolveMarkdownTableMode } from "./send.runtime.js";
 import {
   deliverTelegramTextPage,
   planTelegramTextDeliveryPages,
@@ -107,11 +107,8 @@ export async function editMessageTelegram(
             isTelegramServerError(err),
         },
       });
-      const requestWithEditShouldLog = <T>(
-        fn: () => Promise<T>,
-        label?: string,
-        shouldLog?: (err: unknown) => boolean,
-      ) => request(fn, label, shouldLog ? { shouldLog } : undefined);
+      const edit = <T>(fn: () => Promise<T>, label = "editMessage") =>
+        request(fn, label, { shouldLog: (err) => !isTelegramMessageNotModifiedError(err) });
 
       const textMode = opts.textMode ?? "markdown";
       const linkPreviewEnabled = opts.linkPreview ?? account.config.linkPreview ?? true;
@@ -180,8 +177,6 @@ export async function editMessageTelegram(
         if (!page) {
           throw new Error("telegram editMessage failed: empty text");
         }
-        const edit = <T>(fn: () => Promise<T>, label = "editMessage") =>
-          requestWithEditShouldLog(fn, label, (err) => !isTelegramMessageNotModifiedError(err));
         const [accepted] = await deliverTelegramTextPage({
           page,
           context: "editMessage",
@@ -224,17 +219,12 @@ export async function editMessageTelegram(
           plainText,
           warn: (message) => sendLogger.warn(message),
           sendFormatted: () =>
-            requestWithEditShouldLog(
+            edit(
               () => api.editMessageCaption(chatId, messageId, captionEditParams),
               "editMessageCaption",
-              (err) => !isTelegramMessageNotModifiedError(err),
             ),
           sendPlain: (_plan, label) =>
-            requestWithEditShouldLog(
-              () => api.editMessageCaption(chatId, messageId, plainCaptionParams),
-              label,
-              (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
-            ),
+            edit(() => api.editMessageCaption(chatId, messageId, plainCaptionParams), label),
         });
 
       let editedMessage: TelegramOutboundPromptContextMessage | true | undefined;

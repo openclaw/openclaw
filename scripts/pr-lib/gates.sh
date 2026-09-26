@@ -151,6 +151,11 @@ resolve_pr_gates_remote_mode() {
       printf 'local\n'
       ;;
     testbox|crabbox-aws|github)
+      if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+        echo "OPENCLAW_PR_GATES_REMOTE=$OPENCLAW_PR_GATES_REMOTE conflicts with OPENCLAW_TESTBOX=1; select one gate mode." >&2
+        echo "Unset OPENCLAW_TESTBOX to use $OPENCLAW_PR_GATES_REMOTE gates, or unset OPENCLAW_PR_GATES_REMOTE to use completed hosted proof." >&2
+        return 2
+      fi
       printf '%s\n' "$OPENCLAW_PR_GATES_REMOTE"
       ;;
     *)
@@ -169,6 +174,22 @@ run_remote_testbox_full_test_gate() {
   local label="$1"
   local log_file="$2"
   local lease_label="$3"
+  local remote_env=(CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false)
+  local name value
+  # Delegated Testbox commands do not inherit the caller's scheduling controls.
+  for name in OPENCLAW_TEST_PROJECTS_PARALLEL OPENCLAW_VITEST_MAX_WORKERS; do
+    [ -n "${!name:-}" ] || continue
+    value=$(node --input-type=module -e '
+      import { pathToFileURL } from "node:url";
+      const { parsePositiveInt } = await import(pathToFileURL(process.argv[1] + "/lib/numeric-options.mjs").href);
+      const value = process.argv[2].trim();
+      if (value) {
+        try { console.log(parsePositiveInt(value, process.argv[3])); }
+        catch (error) { console.error(error.message); process.exitCode = 2; }
+      }
+    ' "$script_parent_dir" "${!name}" "$name") || return 2
+    [ -z "$value" ] || remote_env+=("$name=$value")
+  done
   # Same Blacksmith Testbox delegation shape check:changed uses; the worktree's
   # own wrapper syncs this prep tree (the canonical copy would sync the primary
   # checkout instead).
@@ -183,7 +204,7 @@ run_remote_testbox_full_test_gate() {
     --ttl 240m \
     --timing-json \
     --label "$lease_label" \
-    -- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false corepack pnpm test
+    -- env "${remote_env[@]}" corepack pnpm test
 }
 
 read_remote_testbox_gate_stamp() {
@@ -281,7 +302,7 @@ finalize_remote_crabbox_aws_gate() {
   require_active_org_admin_for_crabbox_gate >/dev/null || return 1
   log_file=".local/gates-crabbox-aws.log"
   run_quiet_logged "protected-main Crabbox AWS exact-head gate" "$log_file" \
-    ci_dispatch "$pr" --backend crabbox
+    ci_dispatch "$pr" --backend crabbox || return 1
   stamp=$(jq -c -R \
     --arg baseSha "$base_sha" \
     --arg headSha "$head_sha" '
@@ -353,8 +374,62 @@ write_gates_env_stamp() {
   } > .local/gates.env
 }
 
+# Correction publication requires the native gate owner's exact candidate
+# stamp. An explicit pending Crabbox stamp is admission to its protected-main
+# publisher, not proof; retain that separately authorized route.
+require_correction_publication_gates() (
+  local pr="$1" head="$2" allow_pending="${3:-false}"
+  local PR_NUMBER="" LAST_VERIFIED_HEAD_SHA="" FULL_GATES_HEAD_SHA=""
+  local GATES_MODE="" HOSTED_GATES_TARGET_HEAD_SHA="" DOCS_ONLY=""
+  local REMOTE_GATES_PROVIDER="" REMOTE_GATES_RUN_ID="" REMOTE_GATES_LEASE_ID="" REMOTE_GATES_RUN_URL=""
+  require_artifact .local/gates.env || return 1
+  source .local/gates.env || return 1
+  local qualified_head="$LAST_VERIFIED_HEAD_SHA"
+  [ "$PR_NUMBER" = "$pr" ] || return 1
+  if [ "$qualified_head" != "$head" ]; then
+    # GraphQL can assign a hosted OID for the identical reviewed local tree.
+    # The verified publication can precede the completed preparation stamp.
+    local PR_HEAD="" PR_HEAD_SHA_BEFORE=""
+    local PREP_PUBLICATION_LEASE_SHA="" PREP_PUBLICATION_HEAD_SHA=""
+    PR_NUMBER=""
+    require_artifact .local/prep-context.env || return 1
+    source .local/prep-context.env || return 1
+    resolve_prep_publication_target "$pr" "$head" || return 1
+    [ "$PREP_PUBLICATION_HEAD_SHA" = "$qualified_head" ] || {
+      echo "Correction publication requires gates for the exact reviewed candidate." >&2
+      return 1
+    }
+  fi
+  case "$GATES_MODE" in
+    full) [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
+    docs_only|reused_docs_only) [ "$DOCS_ONLY" = true ] || return 1 ;;
+    hosted_exact_or_recent_parent) [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
+    remote_testbox)
+      [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] &&
+        [ "$REMOTE_GATES_PROVIDER" = blacksmith-testbox ] &&
+        [[ "$REMOTE_GATES_LEASE_ID" == tbx_* ]] || return 1
+      ;;
+    remote_crabbox_aws)
+      [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] &&
+        [ "$REMOTE_GATES_PROVIDER" = aws ] &&
+        [[ "$REMOTE_GATES_RUN_ID" == run_* ]] && [[ "$REMOTE_GATES_LEASE_ID" == cbx_* ]] &&
+        [[ "$REMOTE_GATES_RUN_URL" == https://github.com/openclaw/openclaw/actions/runs/* ]] || return 1
+      ;;
+    remote_crabbox_aws_pending)
+      [ "$allow_pending" = true ] && [ "$REMOTE_GATES_PROVIDER" = aws ] || return 1
+      require_active_org_admin_for_crabbox_gate >/dev/null || return 1
+      # The candidate is not hosted yet. Bind eligibility to the publication
+      # lease, then let the existing publisher verify the newly hosted head.
+      [ -n "${PREP_PUBLICATION_LEASE_SHA:-}" ] || return 1
+      read_crabbox_gate_pr_binding "$pr" "$PREP_PUBLICATION_LEASE_SHA" >/dev/null || return 1
+      ;;
+    *) echo "Unrecognized correction gate mode: $GATES_MODE" >&2; return 1 ;;
+  esac
+)
+
 derive_prepare_gate_change_plan() {
-  PREPARE_GATE_CHANGED_FILES=$(pr_git diff --name-only "$PR_MAIN_SHA...${1:-HEAD}") || return 1
+  PREPARE_GATE_BASE_SHA=$(pr_git merge-base "$PR_MAIN_SHA" "${1:-HEAD}") || return 1
+  PREPARE_GATE_CHANGED_FILES=$(pr_git diff --name-only "$PREPARE_GATE_BASE_SHA" "${1:-HEAD}") || return 1
   PREPARE_GATE_DOCS_ONLY=false
   if file_list_is_docsish_only "$PREPARE_GATE_CHANGED_FILES"; then
     PREPARE_GATE_DOCS_ONLY=true
@@ -379,11 +454,7 @@ prepare_gates() {
   local pr="$1"
   local remote_record="${2:-}"
   local gates_remote_mode
-  gates_remote_mode=$(resolve_pr_gates_remote_mode) || return 1
-  if [ "$gates_remote_mode" != "local" ] && [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    echo "OPENCLAW_PR_GATES_REMOTE=$gates_remote_mode conflicts with OPENCLAW_TESTBOX=1; hosted PR gates already own remote proof."
-    exit 2
-  fi
+  gates_remote_mode=$(resolve_pr_gates_remote_mode) || return $?
 
   PR_MAIN_SHA=""
   enter_worktree "$pr" false || return 1
@@ -395,7 +466,11 @@ prepare_gates() {
   # shellcheck disable=SC1091
   source .local/pr-meta.env
 
-  derive_prepare_gate_change_plan
+  require_prepared_review "$pr" || return 1
+  local current_head
+  current_head=$(pr_git rev-parse HEAD) || return 1
+  derive_prepare_gate_change_plan "$current_head" || return 1
+  local check_base="$PREPARE_GATE_BASE_SHA"
   local changed_files="$PREPARE_GATE_CHANGED_FILES"
   local docs_only="$PREPARE_GATE_DOCS_ONLY"
   local changelog_only="$PREPARE_GATE_CHANGELOG_ONLY"
@@ -445,8 +520,6 @@ prepare_gates() {
     echo "Changelog not required for this changed-file set."
   fi
 
-  local current_head
-  current_head=$(pr_git rev-parse HEAD)
   local previous_last_verified_head=""
   local previous_full_gates_head=""
   local remote_gates_provider=""
@@ -507,7 +580,7 @@ prepare_gates() {
   else
     prepare_local_gate_workspace
     run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
-    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
+    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check --base "$check_base"
 
     if [ "$docs_only" = "true" ]; then
       gates_mode="docs_only"
@@ -552,6 +625,11 @@ prepare_gates() {
     fi
   fi
 
+  require_prepared_review "$pr" || return 1
+  [ "$(pr_git rev-parse HEAD)" = "$current_head" ] || {
+    echo "Candidate changed while gates ran; no gate stamp written." >&2
+    return 1
+  }
   write_gates_env_stamp \
     "$pr" \
     "$docs_only" \

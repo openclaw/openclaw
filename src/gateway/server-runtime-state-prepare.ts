@@ -6,6 +6,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
@@ -19,7 +20,7 @@ import {
 } from "../state/agent-database-admission.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
@@ -48,6 +49,7 @@ type ChannelRuntime = ReturnType<
 
 export async function prepareGatewayKernelState(params: {
   bootstrap: GatewayBootstrap;
+  scheduler: GatewayScheduler;
   bootId: string;
   pluginRegistryOwner: ReturnType<typeof createPluginRegistryOwner>;
   getPluginReloadStatus: () => GatewayPluginReloadStatus | undefined;
@@ -68,6 +70,7 @@ export async function prepareGatewayKernelState(params: {
 }) {
   const {
     bootstrap,
+    scheduler,
     bootId,
     port,
     opts,
@@ -351,9 +354,9 @@ export async function prepareGatewayKernelState(params: {
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
-  const authRateLimiter = createAuthRateLimiter(rateLimitConfig);
+  const authRateLimiter = createGatewayAuthRateLimiter(rateLimitConfig);
   // Browser-origin attempts are throttled even when local CLI clients are exempt.
-  const browserAuthRateLimiter = createAuthRateLimiter({
+  const browserAuthRateLimiter = createGatewayAuthRateLimiter({
     ...rateLimitConfig,
     exemptLoopback: false,
   });
@@ -441,7 +444,7 @@ export async function prepareGatewayKernelState(params: {
     ...startupCheckerDeps,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     getStateDatabaseFailure: () =>
-      openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(resolveDatabasePath()),
+      openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(resolveDatabasePath()),
     getAgentDatabaseAdmissionRefusals: () => {
       const cfg = getRuntimeConfig();
       return listAgentDatabaseAdmissionRefusals().filter(
@@ -530,6 +533,7 @@ export async function prepareGatewayKernelState(params: {
 
   return {
     ...bootstrap,
+    scheduler,
     bootId,
     pluginRuntime,
     workerEnvironmentService,

@@ -6,12 +6,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { listCoreToolFactoryDescriptors } from "../../agents/core-tool-factory-descriptors.js";
+import { filterToolsByPolicy } from "../../agents/tool-policy-match.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
 } from "../../plugins/tools.js";
+import * as userProfileList from "../../state/user-profile-list.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
@@ -47,6 +50,7 @@ type CatalogTool = {
   source: "core" | "plugin";
   label?: string;
   description?: string;
+  parameters?: Array<{ name: string; required: boolean; type?: string; description?: string }>;
   pluginId?: string;
   optional?: boolean;
   risk?: unknown;
@@ -118,7 +122,10 @@ describe("tools.catalog handler", () => {
       name: "voice_call",
       label: "voice_call",
       description: "Plugin calling tool",
-      parameters: Type.Object({}),
+      parameters: Type.Object({
+        destination: Type.String({ description: "Call destination." }),
+        note: Type.Optional(Type.String({ description: "Optional call note.", default: "hidden" })),
+      }),
       execute: async () => ({ content: [], details: {} }),
     };
     const matrixRoom = {
@@ -188,6 +195,26 @@ describe("tools.catalog handler", () => {
     ).toContain("agents_wait");
   });
 
+  it("lets the catalog's Disable All deny every configurable core factory tool", async () => {
+    const identityCount = vi
+      .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+      .mockReturnValue(true);
+    try {
+      const { respond, invoke } = createInvokeParams({ includePlugins: false });
+      await invoke();
+      const deny = expectCatalogPayload(respond).groups.flatMap((group) =>
+        group.tools.map((tool) => tool.id),
+      );
+      // Collector output is required by its per-run schema, not operator tool policy.
+      const configurableTools = listCoreToolFactoryDescriptors().filter(
+        (tool) => tool.name !== "structured_output",
+      );
+      expect(filterToolsByPolicy(configurableTools, { allow: ["*"], deny })).toEqual([]);
+    } finally {
+      identityCount.mockRestore();
+    }
+  });
+
   it("includes plugin groups with plugin metadata", async () => {
     const { respond, invoke } = createInvokeParams({});
     await invoke();
@@ -202,6 +229,10 @@ describe("tools.catalog handler", () => {
       label: "voice_call",
       description: "Plugin calling tool",
       fullDescription: "Plugin calling tool",
+      parameters: [
+        { name: "destination", required: true, type: "string", description: "Call destination." },
+        { name: "note", required: false, type: "string", description: "Optional call note." },
+      ],
       source: "plugin",
       pluginId: "voice-call",
       optional: true,
@@ -257,16 +288,13 @@ describe("tools.catalog handler", () => {
         pluginName: "Same",
         source: "fixture",
         names: [],
-        declaredNames: ["b_a", "c_a"],
+        declaredNames: new Set(["b_a", "c_a"]),
         factory,
         optional: true,
       },
     );
     for (const entry of registry.tools) {
       Object.freeze(entry.names);
-      if (entry.declaredNames) {
-        Object.freeze(entry.declaredNames);
-      }
       Object.freeze(entry);
     }
     Object.freeze(tags);
@@ -303,6 +331,7 @@ describe("tools.catalog handler", () => {
       ["b_z", "resolved_z", "tts", "b_a"],
       [],
     ]);
+    expect(Array.from(registry.tools[1]?.declaredNames ?? [])).toEqual(["b_a", "c_a"]);
     expect(factory).not.toHaveBeenCalled();
     for (const tool of tools) {
       expect(tool.execute).not.toHaveBeenCalled();
@@ -414,3 +443,20 @@ describe("tools.catalog handler", () => {
     );
   });
 });
+
+it.each([false, true])(
+  "advertises personal instructions only for multiple people (%s)",
+  async (multipleProfiles) => {
+    const policy = vi
+      .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+      .mockReturnValue(multipleProfiles);
+    try {
+      const { respond, invoke } = createInvokeParams({ includePlugins: false });
+      await invoke();
+      const tools = expectCatalogPayload(respond).groups.flatMap((group) => group.tools);
+      expect(tools.some((tool) => tool.id === "personal_instructions")).toBe(multipleProfiles);
+    } finally {
+      policy.mockRestore();
+    }
+  },
+);

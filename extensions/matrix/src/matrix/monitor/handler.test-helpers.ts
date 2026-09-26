@@ -19,9 +19,12 @@ import { createMatrixRoomMessageHandler } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
 
 type MatrixMonitorHandlerParams = Parameters<typeof createMatrixRoomMessageHandler>[0];
+type MatrixDispatchInput = Parameters<
+  typeof import("openclaw/plugin-sdk/reply-runtime").dispatchInboundMessage
+>[0];
 type MatrixDispatchInboundMessage = (params: {
-  ctx: unknown;
-  cfg: unknown;
+  ctx: MatrixDispatchInput["ctx"];
+  cfg: MatrixDispatchInput["cfg"];
   dispatcher: unknown;
   replyOptions?: Record<string, unknown>;
 }) => Promise<{
@@ -161,17 +164,14 @@ export function createMatrixHandlerTestHarness(
       markDispatchIdle: () => {},
       markRunComplete: () => {},
     }));
-  const dispatchInboundMessageWithBufferedDispatcher = (async ({
+  const dispatchInboundMessageWithBufferedDispatcher = async ({
     ctx,
     cfg,
     dispatcherOptions,
     replyOptions,
-  }: {
-    ctx: unknown;
-    cfg: unknown;
-    dispatcherOptions: Record<string, unknown>;
-    replyOptions?: Record<string, unknown>;
-  }) => {
+  }: Parameters<
+    typeof import("openclaw/plugin-sdk/reply-runtime").dispatchInboundMessageWithBufferedDispatcher
+  >[0]) => {
     const prepared = createReplyDispatcherWithTyping(dispatcherOptions);
     try {
       return await dispatchInboundMessage({
@@ -179,7 +179,7 @@ export function createMatrixHandlerTestHarness(
         cfg,
         dispatcher: prepared.dispatcher,
         replyOptions: { ...replyOptions, ...prepared.replyOptions },
-      } as never);
+      });
     } finally {
       const dispatcher = prepared.dispatcher as {
         markComplete?: () => void;
@@ -187,11 +187,11 @@ export function createMatrixHandlerTestHarness(
       };
       dispatcher.markComplete?.();
       await dispatcher.waitForIdle?.();
-      await (dispatcherOptions.onSettled as (() => Promise<void> | void) | undefined)?.();
+      await dispatcherOptions.onSettled?.();
       prepared.markRunComplete();
       prepared.markDispatchIdle();
     }
-  }) as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchInboundMessageWithBufferedDispatcher;
+  };
   const createChannelInboundEnvelopeBuilder = (() => (input: { body: string }) =>
     (options.formatAgentEnvelope ?? (({ body }: { body: string }) => body))({
       body: input.body,
@@ -407,6 +407,36 @@ export function createMatrixHandlerTestHarness(
     runPrepared,
     upsertPairingRequest,
   };
+}
+
+export function createMatrixReactionTestHarness(params?: {
+  cfg?: unknown;
+  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
+  allowFrom?: string[];
+  storeAllowFrom?: string[];
+  targetSender?: string;
+  isDirectMessage?: boolean;
+  senderName?: string;
+  client?: NonNullable<Parameters<typeof createMatrixHandlerTestHarness>[0]>["client"];
+}) {
+  return createMatrixHandlerTestHarness({
+    cfg: params?.cfg,
+    dmPolicy: params?.dmPolicy,
+    allowFrom: params?.allowFrom,
+    readAllowFromStore: vi.fn(async () => params?.storeAllowFrom ?? []),
+    client: {
+      getEvent: async (_roomId, eventId) =>
+        createMatrixTextMessageEvent({
+          eventId,
+          sender: params?.targetSender ?? "@bot:example.org",
+          body: "Bot response",
+          originServerTs: 0,
+        }),
+      ...params?.client,
+    },
+    isDirectMessage: params?.isDirectMessage,
+    getMemberDisplayName: async () => params?.senderName ?? "sender",
+  });
 }
 
 export function createMatrixTextMessageEvent(params: {

@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -475,6 +476,88 @@ describe("openSessionWorkspaceFile", () => {
       edit: { hash: "a".repeat(64) },
     });
   });
+
+  it.each(["current", "replaced", "refresh-error"] as const)(
+    "refreshes saved file metadata only for its %s workspace",
+    async (scope) => {
+      const saved = createDeferred<{ file: { hash: string } }>();
+      const state = {
+        client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+        connected: true,
+        connectionEpoch: 1,
+        handleOpenSidebar: createSidebarContentRecorder(),
+        hello: gatewayHelloForMethods(["sessions.files.set", "sessions.diff"]),
+        sessionKey: "agent:main:current",
+        sidebarContent: null,
+        requestUpdate: vi.fn(),
+        sessions: {
+          getFile: vi.fn().mockResolvedValue({
+            sessionKey: "agent:main:current",
+            root: "/workspace",
+            file: { path: "notes.md", name: "notes.md", content: "before", hash: "old" },
+          }),
+          setFile: vi.fn(() => saved.promise),
+          listFiles: vi.fn(async () => {
+            if (scope === "refresh-error") {
+              throw new Error("Listing unavailable");
+            }
+            return {
+              sessionKey: "agent:main:current",
+              files: [{ path: "notes.md", name: "notes.md", kind: "modified", size: 130 }],
+            };
+          }),
+        },
+      } as unknown as SessionWorkspaceHost;
+      const opened = createDeferred();
+      state.requestUpdate = () => {
+        if (state.sessionWorkspaceState?.previews[0]?.content.kind === "file") {
+          opened.resolve();
+        }
+      };
+      openSessionWorkspaceFile(state, { path: "notes.md" });
+      await opened.promise;
+      const file = await loadedSidebarContent(state);
+      if (file.kind !== "file" || !file.edit) {
+        throw new Error("Expected an editable workspace file");
+      }
+      const workspace = state.sessionWorkspaceState!;
+      workspace.browserSearch = "notes";
+      const oldDiff = resolveSessionDiffSidebarContent(state);
+      state.sidebarContent = oldDiff;
+      const savedUpdate = createDeferred();
+      state.requestUpdate = () => {
+        if (!workspace.loading) {
+          savedUpdate.resolve();
+        }
+      };
+      const saving = file.edit.save({ content: "after — café 雪 🦞", expectedHash: "old" });
+      if (scope === "replaced") {
+        state.connectionEpoch += 1;
+        createSessionWorkspaceProps(state);
+      }
+      saved.resolve({ file: { hash: "new" } });
+      await expect(saving).resolves.toMatchObject({ ok: true, hash: "new" });
+      if (scope === "replaced") {
+        expect(state.sessions.listFiles).not.toHaveBeenCalled();
+        expect(state.sessionWorkspaceState?.list).toBeNull();
+      } else {
+        expect(state.sessions.listFiles).toHaveBeenCalledWith(state.sessionKey, {
+          path: "",
+          search: "notes",
+          agentId: "main",
+        });
+        await savedUpdate.promise;
+        expect(state.sidebarContent).not.toBe(oldDiff);
+        expect(state.handleOpenSidebar).toHaveBeenCalledOnce();
+        expect(state.sessionWorkspaceState).toBe(workspace);
+        if (scope === "refresh-error") {
+          expect(workspace.error).toBe("Listing unavailable");
+        } else {
+          expect(workspace.list?.files[0]?.size).toBe(130);
+        }
+      }
+    },
+  );
 
   it.each([
     { label: "the method is not advertised", methods: [], scopes: ["operator.admin"] },

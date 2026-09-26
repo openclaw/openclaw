@@ -151,9 +151,6 @@ export abstract class MatrixClientCore extends MatrixClientBase {
   }
 
   async resolveRoom(aliasOrRoomId: string): Promise<string | null> {
-    if (aliasOrRoomId.startsWith("!")) {
-      return aliasOrRoomId;
-    }
     if (!aliasOrRoomId.startsWith("#")) {
       return aliasOrRoomId;
     }
@@ -199,7 +196,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     const assertCurrent = captureMatrixSendCurrentness(this);
     const wireTransactionId =
       transactionId ?? (beforeWireDispatch || assertCurrent ? this.client.makeTxnId() : undefined);
-    return await this.runSerializedRoomSend(roomId, async () => {
+    return await this.sendQueue.enqueue(roomId, async () => {
       return await this.messageWireDispatchGuards.run({
         transactionId: wireTransactionId,
         guard: beforeWireDispatch,
@@ -303,7 +300,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     eventType: string,
     content: Record<string, unknown>,
   ): Promise<string> {
-    return await this.runSerializedRoomSend(roomId, async () => {
+    return await this.sendQueue.enqueue(roomId, async () => {
       // SDK encryption trusts these wire event types without inspecting their
       // payload; only SDK encryption and the dedicated redaction owner may emit them.
       if (
@@ -322,12 +319,6 @@ export abstract class MatrixClientCore extends MatrixClientBase {
       const sent = await this.client.sendEvent(roomId, eventType as never, content as never);
       return sent.event_id;
     });
-  }
-
-  // Keep outbound room events ordered when multiple plugin paths emit
-  // messages/reactions/polls into the same Matrix room concurrently.
-  private async runSerializedRoomSend<T>(roomId: string, task: () => Promise<T>): Promise<T> {
-    return await this.sendQueue.enqueue(roomId, task);
   }
 
   async sendStateEvent(
@@ -388,10 +379,6 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     await this.client.joinRoom(roomId);
   }
 
-  mxcToHttp(mxcUrl: string): string | null {
-    return this.client.mxcUrlToHttp(mxcUrl, undefined, undefined, undefined, true, false, true);
-  }
-
   async downloadContent(
     mxcUrl: string,
     opts: {
@@ -438,10 +425,11 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     return uploaded.content_uri;
   }
 
-  async getEvent(roomId: string, eventId: string): Promise<Record<string, unknown>> {
-    const rawEvent = (await this.client.fetchRoomEvent(roomId, eventId)) as Record<string, unknown>;
+  async getEvent(roomId: string, eventId: string): Promise<MatrixRawEvent> {
+    const rawEvent = await this.client.fetchRoomEvent(roomId, eventId);
     if (rawEvent.type !== "m.room.encrypted") {
-      return rawEvent;
+      // SAFETY: This endpoint returns a complete room event despite the SDK Partial<IEvent> type.
+      return rawEvent as MatrixRawEvent;
     }
 
     const mapper = this.client.getEventMapper();

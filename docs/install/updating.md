@@ -10,12 +10,69 @@ Keep OpenClaw up to date.
 
 For Docker, Podman, and Kubernetes image replacements, see
 [Upgrading container images](/install/docker#upgrading-container-images). The
-gateway runs startup-safe upgrade work before readiness and exits if mounted
-state needs manual repair.
+image entrypoint runs Doctor before starting the Gateway and exits if mounted
+state cannot be repaired safely.
 
 Before a significant update, [create a verified backup](#before-updating-create-a-verified-backup).
 Automatic config copies and migration recovery originals are not a full-state
 backup.
+
+## Upgrading very old versions
+
+For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
+Doctor migrations, and then upgrade to `latest`. The bridge release still
+imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
+`plugin-state/state.sqlite` databases, imports pre-June plugin JSON state and
+`credentials/oauth.json`, repairs retired agent and channel config keys, and
+includes the old runtime aliases. The retired plugin imports cover Telegram,
+iMessage, Active Memory, Nostr, and Microsoft Teams; see
+[legacy state migration](/cli/doctor/state-migrations). Current releases leave
+those retired state files untouched.
+If you already installed the latest version, Doctor stops before rewriting config
+that still contains these retired keys and directs you through the same bridge.
+
+If a newer release has already upgraded your SQLite databases, use a compatible
+pre-update backup for the bridge. Older releases cannot open newer database
+schemas; follow [downgrade recovery](/reference/database-schemas/integrity-and-recovery#downgrade-recovery)
+before running `2026.9.5` against that state.
+
+Back up the state first and use a [supported Node version](/install/node):
+Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
+installation prefix, profile, and state/configuration paths throughout.
+
+For an npm installation with an OpenClaw-managed Gateway service, run this
+first stage from a terminal:
+
+```bash
+openclaw gateway stop &&
+  npm install -g openclaw@2026.9.5 --allow-scripts=openclaw &&
+  openclaw --version &&
+  openclaw doctor --fix
+```
+
+Confirm that the version output is `2026.9.5` and that Doctor imported the old
+task, flow, plugin, and channel state you need. Resolve any failed or conflicting
+imports before continuing. Doctor imports channel state only for enabled channels
+and accounts. If needed, temporarily enable those channels while the Gateway is
+stopped, rerun the bridge Doctor, then restore their previous enabled settings.
+Ensure the affected plugins are installed before running their migrations.
+Then install the current release and restart:
+
+```bash
+npm install -g openclaw@latest --allow-scripts=openclaw &&
+  openclaw doctor --fix &&
+  openclaw gateway start &&
+  openclaw gateway status --deep
+```
+
+These npm commands are for npm 12 or npm 11.16+; on npm 11.15 and earlier, omit
+`--allow-scripts=openclaw`. For a pnpm-owned installation, replace each install
+command with `pnpm add -g --allow-build=openclaw openclaw@2026.9.5`, then
+`pnpm add -g --allow-build=openclaw openclaw@latest`. For Bun, use
+`bun add -g --trust openclaw@2026.9.5`, then `bun add -g --trust openclaw@latest`.
+Keep any normal `--profile` selector on every `openclaw` command. For a custom
+service or foreground Gateway, stop and start it through its actual owner
+instead of the managed-service commands above.
 
 ## Recommended: `openclaw update`
 
@@ -26,11 +83,30 @@ the old Gateway serves, then activates and verifies the update.
 openclaw update
 ```
 
+Starting with the release that adds [candidate-owned admission](/cli/update#candidate-owned-admission),
+package updates privately stage the target and let its code judge configuration,
+database schema, Node requirements, and plugin availability before activation.
+Later releases can therefore correct these admission decisions for users already
+on a supporting updater. The installed updater retains managed-service ownership
+and ancestry checks and every mutation. Older installed updaters keep their
+pre-staging refusals; a newer candidate cannot repair that first hop. Targets
+without the capability marker fall back to installed checks, as do
+`--admission installed` and `--dry-run` (which never stages a package).
+Admission selection is CLI-only: `--admission auto` is the default, and there is
+no environment-variable override.
+
 Managed-service inspection is best effort. If the service manager is unavailable,
 including Linux hosts without systemd, the update continues and records a warning.
 It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
+
+Control UI updates use a verified helper to stop and restart the managed Gateway.
+On macOS, the helper carries its live update ownership into LaunchAgent activation;
+ordinary commands inside the Gateway still cannot stop their own service. If an
+older installed updater reports `managed-service-stop-failed` before activation,
+the candidate has not replaced that updater. Update from an external terminal
+using the same installation owner, then retry the Control UI update.
 
 After package replacement, compatibility config reads from older updaters run
 in a fresh process using the updated package and its dependencies. This also
@@ -38,12 +114,21 @@ applies to updates driven by 2026.9.4. If an optional read fails, the updater
 prints `candidate-config-read-failed` and leaves the service definition unchanged.
 Reads follow the restored package after a rollback. Inspect the reported problem
 with the updated CLI after the update.
+Node and Bun readers run only one child per read. An attempted nested reader
+stops before spawning and records `candidate-config-read-recursion`.
+Both runtimes use the same result channel for synchronous and asynchronous reads;
+config diagnostics stay separate from the result.
 
 When a writable managed Gateway service points at another global installation,
 the update keeps the active CLI's installation as its target and refreshes the
 service through `gateway install --force` before verifying the restarted Gateway.
 The old service command remains the recovery identity until that handoff succeeds.
 Reconciliation failures are recorded as warnings with a manual repair command.
+The code update can report success while service reconciliation remains pending;
+a stopped service stays stopped until repaired. On Linux, regeneration preserves
+the order of retained `PATH` entries and prepends newly added managed entries.
+Paths carried over solely from the old definition still pass the existing safety
+filters. If the definition cannot be preserved, reconciliation requires manual repair.
 Deployment-owned definitions retain their existing installation owner.
 Pending package-publication recovery in either the CLI or selected service
 installation blocks writable preparation. Follow the package recovery command
@@ -78,7 +163,7 @@ containing the managed-helper authority fix, subsequent updates started through
 **from** the fixed version; it does not repair the 2026.9.4 macOS handoff in place.
 </Note>
 
-Registry updates inspect the exact candidate's Node requirement before staging.
+Package updates inspect the exact candidate's Node requirement before activation.
 An incompatible runtime produces `node-runtime-preflight`, with the target
 version, required engine range, selected Node version, and an upgrade command.
 npm directory permission failures produce `global-install-permission-denied`,
@@ -87,8 +172,8 @@ includes these outcomes in `failures`; the update report and Doctor's update
 history retain recorded failures. The serving Gateway stays in place during
 these preflight checks.
 
-These checks run in the **installed updater**. Older updaters cannot gain new
-preflight behavior from the candidate they have not installed yet. If upgrading
+Directory permission checks remain in the **installed updater**. Older updaters cannot gain new
+admission behavior from the candidate they have not staged yet. If upgrading
 from an older release, check [Node requirements](/install/node) and the npm
 prefix's permissions first; see [update troubleshooting](/install/update-troubleshooting#node-and-global-install-permissions).
 
@@ -107,6 +192,8 @@ include the FreeBSD fixes; changes on `main` are not a published release.
 Stop and start the Gateway through its actual supervisor or foreground process
 owner around the manual replacement. This recovery does not add CLI-managed
 FreeBSD rc.d service updates.
+
+After an upgrade, check the [FreeBSD model-runtime limitation](/install/installer#install-clish) before starting agent turns.
 </Note>
 
 An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway when plugins change or its service points at another installation, unless `--no-restart` is set. Unchanged runs finish as `skipped` / `already-current`.
@@ -151,6 +238,23 @@ refresh, so a slow registry cannot consume the canary's startup budget.
 This candidate-side behavior also applies when the installed updater is 2026.9.3.
 That older updater still caps the entire validation sequence at five minutes;
 its `--timeout` option cannot increase this cap.
+
+Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
+uses up to four concurrent file copies and avoids a disk flush for every file.
+If a copy fails, active copies finish before cleanup; link publication and
+verification run only after all file copies succeed. Canonical state and recovery backups
+retain their existing durability guarantees. An older installed updater keeps
+its initial snapshot behavior until you launch an update from the newer version.
+
+Database rehearsal also avoids a second full backup of each private snapshot.
+Update schema inspection and rehearsal use SQLite online backup with a pinned
+read transaction, so a busy Gateway can keep writing while the copy includes
+committed WAL data. Each acquisition makes one copy instead of retrying until
+the database becomes quiet. On rollback-journal volumes, SQLite can delay writer
+commits until the consistent read finishes. Rehearsal records copied pages, bytes, and elapsed
+time in the update ledger, then checks, compacts, and publishes the private
+copy for validation. Source databases and recovery backups retain their existing
+protection; the faster preparation takes effect when the newer updater runs.
 
 Package updates also check npm availability for enabled configured plugins before
 stopping the serving Gateway or replacing the installed core. Registry targets

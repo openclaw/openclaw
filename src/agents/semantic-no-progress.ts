@@ -59,6 +59,8 @@ export type SemanticNoProgressObserver = {
 export type SemanticNoProgressObserverOptions = {
   signal: AbortSignal;
   assertActive: () => void;
+  /** Current automatic-consumer consent; never gates explicit Decision tools. */
+  isEligible?: () => boolean;
   agentId?: string;
   /** Bounded goal supplied by the logical run owner; never used for goal status. */
   goal?: string;
@@ -225,13 +227,13 @@ export function createSemanticNoProgressObserver(
     decisionTrajectoryVersion: number,
   ): Promise<void> => {
     const evidence = outcome.evidence;
-    if (!evidence || closed) {
+    if (!evidence || closed || options.isEligible?.() === false) {
       return;
     }
     assertOwnerActive();
     metrics.decisionCalls += 1;
     const runtime = await resolveRuntime(options.runtime);
-    if (closed) {
+    if (closed || options.isEligible?.() === false) {
       return;
     }
     // Runtime resolution can yield. Recheck the owner before starting provider work.
@@ -267,7 +269,7 @@ export function createSemanticNoProgressObserver(
     if (options.signal.aborted) {
       options.signal.throwIfAborted();
     }
-    if (closed) {
+    if (closed || options.isEligible?.() === false) {
       return;
     }
     options.assertActive();
@@ -323,7 +325,7 @@ export function createSemanticNoProgressObserver(
   };
 
   const observeOutcome = async (outcome: SemanticNoProgressOutcome): Promise<void> => {
-    if (closed) {
+    if (closed || options.isEligible?.() === false) {
       return;
     }
     assertOwnerActive();
@@ -345,7 +347,7 @@ export function createSemanticNoProgressObserver(
       if (options.signal.aborted) {
         options.signal.throwIfAborted();
       }
-      if (closed) {
+      if (closed || options.isEligible?.() === false) {
         return;
       }
       options.assertActive();

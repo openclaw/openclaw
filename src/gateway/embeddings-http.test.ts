@@ -142,6 +142,10 @@ afterEach(async () => {
   }
   providerGateReleases.clear();
   await drainRetainedOpenAiEmbeddingProviders();
+  // Pending cleanup must consume its implementation before queued fixture behavior is reset.
+  createEmbeddingProviderMock.mockReset();
+  embedBatchMock.mockReset();
+  closeEmbeddingProviderMock.mockReset();
   Reflect.set(openAiAdapter, "transport", "remote");
   clearEmbeddingProviders();
   resetTestPluginRegistry();
@@ -830,6 +834,9 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   ])(
     "does not bypass pending cleanup with $kind",
     async ({ localProvider, modelOverride, closeFails }) => {
+      const lifetime = await import("./embeddings-provider-lifetime.js");
+      const acquireLease = lifetime.acquireEmbeddingProviderLease;
+      const acquireLeaseSpy = vi.spyOn(lifetime, "acquireEmbeddingProviderLease");
       Reflect.set(openAiAdapter, "transport", localProvider ? "remote" : "local");
       const closeStarted = createDeferred();
       const { promise: closeGate, resolve: releaseClose } = createProviderGate();
@@ -841,6 +848,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
         }
       });
       if (localProvider) {
+        registerEmbeddingProvider({ ...openAiAdapter, id: "local", transport: "local" });
         createEmbeddingProviderMock.mockResolvedValueOnce({
           provider: {
             id: "local",
@@ -861,12 +869,18 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       try {
         await waitForProviderEntry(closeStarted.promise, firstPromise);
         expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1);
+        const secondEntered = createDeferred();
+        acquireLeaseSpy.mockImplementationOnce((...args) => {
+          const lease = acquireLease(...args);
+          secondEntered.resolve();
+          return lease;
+        });
         const secondPromise = postEmbeddings(
           { model: "openclaw/default", input: "second" },
           modelOverride ? { "x-openclaw-model": "openai/model-b" } : undefined,
         );
         requests.push(secondPromise);
-        await Promise.resolve();
+        await waitForProviderEntry(secondEntered.promise, secondPromise);
         expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 1);
 
         releaseClose();
@@ -880,6 +894,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
           await Promise.allSettled(requests);
           await drainRetainedOpenAiEmbeddingProviders();
         } finally {
+          acquireLeaseSpy.mockRestore();
           Reflect.set(openAiAdapter, "transport", "remote");
         }
       }

@@ -19,13 +19,14 @@ import {
 } from "../infra/sqlite-file-generation.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   OpenClawQuarantineReadCleanupError,
   type OpenClawDatabaseKind,
   type OpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-error.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
-import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
 const OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS = 5_000;
@@ -95,7 +96,10 @@ export function readOpenClawAgentIntegrityVerification(
   if (consume) {
     // Failure cannot admit a writer while leaving an old clean receipt reusable.
     return withQuarantineWriter(env, (database) =>
-      runSqliteImmediateTransactionSync(database, () => read(database)),
+      runSqliteImmediateTransactionSync(database, () => read(database), {
+        databaseLabel: resolveQuarantineStorePath(env),
+        operationLabel: "quarantine.integrity.consume",
+      }),
     );
   }
   const storePath = resolveQuarantineStorePath(env);
@@ -117,12 +121,11 @@ export function canReuseOpenClawAgentIntegrityVerification(
   pathname: string,
   record: OpenClawAgentIntegrityVerification | undefined,
   migrationPending: boolean,
-  reuseRuntimeIntegrity = false,
 ): boolean {
   if (
     migrationPending ||
     !record ||
-    (!reuseRuntimeIntegrity && record.clean_close !== 1) ||
+    record.clean_close !== 1 ||
     record.app_version !== VERSION ||
     record.path !== resolveAgentIntegrityPath(pathname)
   ) {
@@ -179,15 +182,28 @@ export function recordOpenClawAgentIntegrityVerification(
 export function clearOpenClawAgentIntegrityVerification(
   pathname: string,
   env: NodeJS.ProcessEnv = process.env,
+  runtimeProof: "revoke" | "retain" = "revoke",
 ): void {
+  if (runtimeProof === "revoke") {
+    invalidateOpenClawAgentDatabaseValidation(pathname);
+  }
   withQuarantineWriter(env, (database) =>
-    runSqliteImmediateTransactionSync(database, () =>
-      deleteAgentIntegrityVerification(database, pathname),
+    runSqliteImmediateTransactionSync(
+      database,
+      () => deleteAgentIntegrityVerification(database, pathname, runtimeProof),
+      {
+        databaseLabel: resolveQuarantineStorePath(env),
+        operationLabel: "quarantine.integrity.invalidate",
+      },
     ),
   );
 }
 
-function deleteAgentIntegrityVerification(database: DatabaseSync, pathname: string): void {
+function deleteAgentIntegrityVerification(
+  database: DatabaseSync,
+  pathname: string,
+  runtimeProof: "revoke" | "retain" = "revoke",
+): void {
   const query = getNodeSqliteKysely<IntegrityDatabase>(database);
   const stored = executeSqliteQueryTakeFirstSync(
     database,
@@ -197,6 +213,13 @@ function deleteAgentIntegrityVerification(database: DatabaseSync, pathname: stri
       .where("path", "=", resolveAgentIntegrityPath(pathname)),
   );
   const current = statSync(pathname, { bigint: true, throwIfNoEntry: false });
+  if (runtimeProof === "revoke") {
+    for (const file of [stored, current]) {
+      if (file) {
+        invalidateOpenClawAgentDatabaseValidation(pathname, `${file.dev}:${file.ino}`);
+      }
+    }
+  }
   executeSqliteQuerySync(
     database,
     query
@@ -252,10 +275,6 @@ function createOpenClawDatabaseVerificationError(
   );
   error.name = "SqliteIntegrityError";
   return error;
-}
-
-export function resolveQuarantineStorePath(env: NodeJS.ProcessEnv): string {
-  return path.join(resolveOpenClawStateSqliteDir(env), "openclaw-quarantine.sqlite");
 }
 
 function ensureQuarantineStoreDirectory(storePath: string): void {
@@ -375,30 +394,6 @@ function readOpenClawDatabaseQuarantine(
   return outcome.value;
 }
 
-/** Reject a known state quarantine while retaining best-effort metadata admission. */
-export function assertOpenClawStateDatabaseNotQuarantined(
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-  onNativeCleanupFailure?: (error: OpenClawQuarantineReadCleanupError) => void,
-): void {
-  let quarantineFailure: Error | undefined;
-  try {
-    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, { env });
-  } catch (error) {
-    if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
-      throw error;
-    }
-    onNativeCleanupFailure?.(error);
-    return;
-  }
-  if (quarantineFailure?.cause instanceof OpenClawQuarantineReadCleanupError) {
-    onNativeCleanupFailure?.(quarantineFailure.cause);
-  }
-  if (quarantineFailure) {
-    throw quarantineFailure;
-  }
-}
-
 function readQuarantineDecision(
   database: DatabaseSync,
   pathname: string,
@@ -504,10 +499,12 @@ export function recordOpenClawDatabaseQuarantine(options: {
     : null;
   try {
     return withQuarantineWriter(options.env ?? process.env, (database) =>
-      runSqliteImmediateTransactionSync(database, () => {
-        database
-          .prepare(
-            `
+      runSqliteImmediateTransactionSync(
+        database,
+        () => {
+          database
+            .prepare(
+              `
               INSERT INTO quarantined_databases (
                 path, kind, reason, quarantined_at, writer_app_version, verified_generation
               ) VALUES (?, ?, ?, ?, ?, ?)
@@ -518,20 +515,25 @@ export function recordOpenClawDatabaseQuarantine(options: {
                 writer_app_version = excluded.writer_app_version,
                 verified_generation = excluded.verified_generation
             `,
-          )
-          .run(
-            path.resolve(options.path),
-            options.kind,
-            options.reason,
-            Date.now(),
-            VERSION,
-            serializedGeneration,
-          );
-        if (options.kind === "agent") {
-          deleteAgentIntegrityVerification(database, options.path);
-        }
-        return true;
-      }),
+            )
+            .run(
+              path.resolve(options.path),
+              options.kind,
+              options.reason,
+              Date.now(),
+              VERSION,
+              serializedGeneration,
+            );
+          if (options.kind === "agent") {
+            deleteAgentIntegrityVerification(database, options.path);
+          }
+          return true;
+        },
+        {
+          databaseLabel: resolveQuarantineStorePath(options.env ?? process.env),
+          operationLabel: "quarantine.record",
+        },
+      ),
     );
   } catch {
     return false;
@@ -549,13 +551,20 @@ export function clearOpenClawDatabaseQuarantine(
   }
   try {
     return withQuarantineWriter(env, (database) =>
-      runSqliteImmediateTransactionSync(database, () => {
-        database
-          .prepare("DELETE FROM quarantined_databases WHERE path = ?")
-          .run(path.resolve(pathname));
-        deleteAgentIntegrityVerification(database, pathname);
-        return true;
-      }),
+      runSqliteImmediateTransactionSync(
+        database,
+        () => {
+          database
+            .prepare("DELETE FROM quarantined_databases WHERE path = ?")
+            .run(path.resolve(pathname));
+          deleteAgentIntegrityVerification(database, pathname);
+          return true;
+        },
+        {
+          databaseLabel: resolveQuarantineStorePath(env),
+          operationLabel: "quarantine.clear",
+        },
+      ),
     );
   } catch {
     return false;

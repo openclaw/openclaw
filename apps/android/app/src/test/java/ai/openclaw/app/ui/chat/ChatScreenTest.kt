@@ -34,10 +34,24 @@ class ChatScreenTest {
   }
 
   @Test
-  fun assistantContentUsesTheFullRowWhileUserMessagesRemainBubbles() {
+  fun richAssistantContentKeepsRoomWhileUserBubblesReserveATrailingGutter() {
     assertEquals(1f, chatBubbleWidthFraction(isUser = false), 0.0001f)
     assertEquals(0.78f, chatBubbleWidthFraction(isUser = true), 0.0001f)
     assertEquals(24, CHAT_BUBBLE_CORNER_RADIUS_DP)
+  }
+
+  @Test
+  fun detachedAttachmentsPreserveAudioVideoPrecedenceAndAssistantRuns() {
+    val image = ChatMessageContent(type = "image")
+    val file = ChatMessageContent(type = "file")
+    val text = ChatMessageContent(text = "Between images")
+    assertTrue(image.isDetachedChatAttachment())
+    assertTrue(file.isDetachedChatAttachment())
+    for (part in listOf(image, file)) {
+      assertFalse(part.copy(mimeType = "audio/mpeg").isDetachedChatAttachment())
+      assertFalse(part.copy(mimeType = "video/mp4").isDetachedChatAttachment())
+    }
+    assertEquals(listOf(listOf(image, file), listOf(text), listOf(image)), chatMessageContentGroups(listOf(image, file, text, image)))
   }
 
   @Test
@@ -154,7 +168,7 @@ class ChatScreenTest {
       resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = false),
     )
     assertEquals(
-      ChatComposerPrimaryAction.None,
+      ChatComposerPrimaryAction.Talk,
       resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = false),
     )
   }

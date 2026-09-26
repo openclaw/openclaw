@@ -12,6 +12,7 @@ import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -24,8 +25,10 @@ function shellQuote(value: string): string {
 function createFixtureGit(root: string) {
   const home = join(root, "home");
   mkdirSync(home);
+  const handoff = createPrivateHandoffStoreFixture(home);
   const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH,
+    ...handoff.env,
+    PATH: handoff.env.PATH,
     HOME: home,
     TMPDIR: root,
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -45,7 +48,7 @@ function createFixtureGit(root: string) {
     }
     return result.stdout.trim();
   }
-  return { env, realGit, git };
+  return { env, realGit, git, handoff };
 }
 
 function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean) {
@@ -125,7 +128,8 @@ export function createMainRefreshFixture(
   const worktree = join(canonical, ".worktrees", "pr-42");
   const bin = join(root, "bin");
   mkdirSync(bin);
-  const { env, realGit, git } = createFixtureGit(root);
+  const { env, realGit, git, handoff } = createFixtureGit(root);
+  const privateNodeOptions = env.NODE_OPTIONS;
   const { main, head, sameTreeHead, movedMain, gateMain } = template;
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
   cpSync(template.origin, origin, copyOptions);
@@ -748,6 +752,7 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     gateMain,
     env,
     git,
+    assertPrivateHandoffVerified: () => handoff.assertProvisionersInjected(),
     metadata,
     seedPreparedMerge() {
       // Merge-only cases need prepared inputs, not another prepare/gates/push run.
@@ -770,11 +775,10 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     },
     configure(update: Partial<typeof control>) {
       Object.assign(control, update);
-      if (control.hostedCi === "scheduled") {
-        delete env.NODE_OPTIONS;
-      } else {
-        env.NODE_OPTIONS = `--import=${clock}`;
-      }
+      env.NODE_OPTIONS =
+        control.hostedCi === "scheduled"
+          ? privateNodeOptions
+          : `${privateNodeOptions} --import=${pathToFileURL(clock).href}`;
       writeFileSync(controlFile, JSON.stringify(control));
     },
     events() {

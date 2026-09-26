@@ -3,6 +3,8 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { CoreConfig } from "../../types.js";
 import {
   resolveMatrixAccountAllowlistConfig,
@@ -12,7 +14,6 @@ import {
   resolveMatrixMonitorLiveUserAllowlist,
   type MatrixResolvedAllowlistEntry,
 } from "./config.js";
-import type { PluginRuntime, RuntimeEnv } from "./runtime-api.js";
 
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
@@ -40,15 +41,13 @@ export function createMatrixHandlerState(config: {
     expiresAtMs: number;
   } | null = null;
   type LiveAllowlistCacheEntry = { signature: string; entries: string[] };
-  let liveDmAllowlistCache: LiveAllowlistCacheEntry | null = null;
-  let liveGroupAllowlistCache: LiveAllowlistCacheEntry | null = null;
+  const liveAllowlistCache = new Map<"dm" | "group", LiveAllowlistCacheEntry>();
   const resolveCachedLiveAllowlist = async (paramsValue: {
     cfg: CoreConfig;
     entries?: ReadonlyArray<string | number>;
     failClosedOnUnresolved?: boolean;
     startupResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
-    cache: LiveAllowlistCacheEntry | null;
-    updateCache: (next: LiveAllowlistCacheEntry) => void;
+    scope: "dm" | "group";
   }): Promise<string[]> => {
     const accountConfigLocal = resolveMatrixAccountConfig({ cfg: paramsValue.cfg, accountId });
     const signature = JSON.stringify({
@@ -56,8 +55,9 @@ export function createMatrixHandlerState(config: {
       failClosedOnUnresolved: paramsValue.failClosedOnUnresolved === true,
       dangerouslyAllowNameMatching: isDangerousNameMatchingEnabled(accountConfigLocal),
     });
-    if (paramsValue.cache?.signature === signature) {
-      return paramsValue.cache.entries;
+    const cached = liveAllowlistCache.get(paramsValue.scope);
+    if (cached?.signature === signature) {
+      return cached.entries;
     }
     const entries = await resolveLiveUserAllowlist({
       cfg: paramsValue.cfg,
@@ -67,8 +67,7 @@ export function createMatrixHandlerState(config: {
       startupResolvedEntries: paramsValue.startupResolvedEntries,
       runtime,
     });
-    const next = { signature, entries };
-    paramsValue.updateCache(next);
+    liveAllowlistCache.set(paramsValue.scope, { signature, entries });
     return entries;
   };
   const pairingReplySentAtMsBySender = new Map<string, number>();
@@ -82,20 +81,14 @@ export function createMatrixHandlerState(config: {
       cfg: liveCfg,
       entries: liveAccountAllowlists.dmAllowFrom,
       startupResolvedEntries: allowFromResolvedEntries,
-      cache: liveDmAllowlistCache,
-      updateCache: (next) => {
-        liveDmAllowlistCache = next;
-      },
+      scope: "dm",
     });
     const liveGroupAllowFrom = await resolveCachedLiveAllowlist({
       cfg: liveCfg,
       entries: liveAccountAllowlists.groupAllowFrom,
       failClosedOnUnresolved: true,
       startupResolvedEntries: groupAllowFromResolvedEntries,
-      cache: liveGroupAllowlistCache,
-      updateCache: (next) => {
-        liveGroupAllowlistCache = next;
-      },
+      scope: "group",
     });
     return { liveCfg, liveDmAllowFrom, liveGroupAllowFrom };
   };

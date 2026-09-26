@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  maintainOpenClawCompileCache,
+  resolveOpenClawCompileCacheDirectory,
+} from "./node-compile-cache.mjs";
 import { isNodeHostLauncherChild, runNodeHostLauncher } from "./node-host-launcher.mjs";
 import {
   consumeLauncherRootOptionToken,
@@ -88,40 +92,26 @@ const ensureSupportedRuntimeVersion = async () => {
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
   Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
-const sanitizeCompileCachePathSegment = (value) => {
-  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
-  return normalized.length > 0 ? normalized : "unknown";
-};
-const readPackageVersion = () => {
-  try {
-    const parsed = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
-    if (typeof parsed?.version === "string" && parsed.version.trim().length > 0) {
-      return parsed.version;
+const resolvePackagedCompileCacheDirectory = () =>
+  resolveOpenClawCompileCacheDirectory({
+    installRoot: fileURLToPath(new URL(".", import.meta.url)),
+  });
+
+const resolveCompileCacheRespawnLauncher = () => {
+  const moduleLauncher = fileURLToPath(import.meta.url);
+  const invokedLauncher = process.argv[1];
+  if (invokedLauncher) {
+    try {
+      // npm/pnpm's lexical install path matters only when it identifies this module.
+      if (realpathSync(invokedLauncher) === realpathSync(moduleLauncher)) {
+        return invokedLauncher;
+      }
+    } catch {
+      // An unavailable entry path cannot identify this launcher.
     }
-  } catch {
-    // Fall through to an install-metadata-only cache key.
   }
-  return "unknown";
-};
-const resolvePackagedCompileCacheDirectory = () => {
-  const packageJsonUrl = new URL("./package.json", import.meta.url);
-  const version = sanitizeCompileCachePathSegment(readPackageVersion());
-  let installMarker = "no-package-json";
-  try {
-    const stat = statSync(packageJsonUrl);
-    installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
-  } catch {
-    // Package archives should always have package.json, but keep startup best-effort.
-  }
-  const baseDirectory = isNodeCompileCacheRequested()
-    ? process.env.NODE_COMPILE_CACHE
-    : path.join(os.tmpdir(), "node-compile-cache");
-  return path.join(
-    baseDirectory,
-    "openclaw",
-    version,
-    sanitizeCompileCachePathSegment(installMarker),
-  );
+  // Public cli-entry imports can belong to another application or have no argv[1].
+  return moduleLauncher;
 };
 
 const respawnWithoutCompileCacheIfNeeded = () => {
@@ -142,7 +132,7 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   delete env.NODE_COMPILE_CACHE;
   return runRespawnedChild(
     process.execPath,
-    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
     env,
   );
 };
@@ -159,7 +149,15 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
     return false;
   }
   const desiredDirectory = resolvePackagedCompileCacheDirectory();
-  if (path.resolve(currentDirectory) === path.resolve(desiredDirectory)) {
+  const desired = path.resolve(desiredDirectory);
+  if (
+    path.resolve(currentDirectory) === desired ||
+    (process.env.NODE_COMPILE_CACHE &&
+      path.resolve(process.env.NODE_COMPILE_CACHE) === desired &&
+      path.dirname(path.resolve(currentDirectory)) === desired)
+  ) {
+    // Node reports its version-specific leaf; an inherited, already scoped base
+    // does not need another launcher process to enable that same cache.
     return false;
   }
   const env = {
@@ -169,8 +167,7 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
   };
   return runRespawnedChild(
     process.execPath,
-    // pnpm's lexical hash link owns the install; its realpath is only shared package content.
-    [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
+    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
     env,
   );
 };
@@ -716,6 +713,7 @@ if (isBrowserNativeHostInvocation) {
       const directory = resolvePackagedCompileCacheDirectory();
       const baseDirectory = path.resolve(directory);
       const result = module.enableCompileCache(directory);
+      void maintainOpenClawCompileCache(directory);
       const enabled = module.constants?.compileCacheStatus?.ENABLED;
       if (enabled !== undefined && result?.status === enabled) {
         // Bootstrap adapter for src/infra/node-compile-cache-env.ts: preserve the first

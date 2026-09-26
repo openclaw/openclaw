@@ -85,7 +85,7 @@ export function toWorkerInferenceContext(context: Context): WorkerInferenceConte
   };
 }
 
-type WorkerTranscriptClient = {
+export type WorkerTranscriptClient = {
   commit: (messages: WorkerTranscriptMessage[]) => Promise<void>;
 };
 
@@ -96,8 +96,10 @@ type WorkerTranscriptRuntime = {
 
 export function createWorkerTranscriptRuntime(
   client: WorkerTranscriptClient,
+  signal?: AbortSignal,
 ): WorkerTranscriptRuntime {
   const pendingTranscriptMessages: WorkerTranscriptMessage[] = [];
+  let failedCommit: { error: unknown } | undefined;
   const onMessagePersisted = (message: AgentMessage) => {
     const projected = toWorkerTranscriptMessage(message, "transcript");
     if (!projected) {
@@ -115,8 +117,21 @@ export function createWorkerTranscriptRuntime(
   };
   const flushTranscript = async () => {
     while (pendingTranscriptMessages.length > 0) {
+      if (signal?.aborted) {
+        // Unsubmitted output can stop; a submitted commit still needs a known outcome.
+        if (failedCommit) {
+          throw failedCommit.error;
+        }
+        return;
+      }
       const batch = pendingTranscriptMessages.slice(0, WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES);
-      await client.commit(batch);
+      try {
+        await client.commit(batch);
+      } catch (error) {
+        failedCommit = { error };
+        throw error;
+      }
+      failedCommit = undefined;
       pendingTranscriptMessages.splice(0, batch.length);
     }
   };

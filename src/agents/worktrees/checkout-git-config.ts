@@ -31,12 +31,11 @@ const native: WorktreeGitPolicy = {
   worker: { text: runGitBytes, buffered: runGitBuffered },
   withContentEnvironment: async (run) => await run(gitEnvironment()),
 };
-type GitPolicy = WorktreeGitPolicy;
 type GitConfigOptions = Pick<
   NonNullable<Parameters<typeof runGit>[2]>,
   "baseEnv" | "env" | "signal" | "beforeRun"
 >;
-type Guard = { signal?: AbortSignal; beforeRun?: () => void };
+type Guard = Pick<GitConfigOptions, "signal" | "beforeRun" | "env">;
 const sharedDirectories = ["objects", "refs", "logs", "worktrees", "reftable"] as const;
 const sharedFiles = ["packed-refs", "shallow", "info/exclude"] as const;
 
@@ -69,7 +68,7 @@ export async function withWorktreeGitConfig<T>(
   cwd: string,
   sourceOnly: boolean,
   guard: Guard,
-  run: (git: GitPolicy) => Promise<T>,
+  run: (git: WorktreeGitPolicy) => Promise<T>,
 ): Promise<T> {
   if (!sourceOnly) {
     return await run(native);
@@ -103,7 +102,7 @@ export async function withWorktreeGitConfig<T>(
       "--includes",
       "--null",
       "--get-regexp",
-      "^core\\.(symlinks|ignorecase|precomposeunicode|excludesfile)$",
+      "^core\\.(symlinks|ignorecase|precomposeunicode|excludesfile|autocrlf|eol)$",
     ],
     guard,
   );
@@ -159,9 +158,10 @@ export async function withWorktreeGitConfig<T>(
   };
   try {
     await prepareMetadata(directory);
+    // Windows cannot represent executable bits; POSIX content checks remain strict.
     await fs.writeFile(
       path.join(directory, "config"),
-      `[core]\nrepositoryformatversion=${format === "sha256" || refStorage === "reftable" ? 1 : 0}\nbare=false\nsymlinks=${process.platform !== "win32"}\n[extensions]\n${format === "sha256" ? "objectFormat=sha256\n" : ""}${refStorage === "reftable" ? "refStorage=reftable\n" : ""}`,
+      `[core]\nrepositoryformatversion=${format === "sha256" || refStorage === "reftable" ? 1 : 0}\nbare=false\nfilemode=${process.platform !== "win32"}\nsymlinks=${process.platform !== "win32"}\n[extensions]\n${format === "sha256" ? "objectFormat=sha256\n" : ""}${refStorage === "reftable" ? "refStorage=reftable\n" : ""}`,
     );
     // Preserve filesystem/ignore behavior, never program drivers or relaxed path protections.
     for (const [key, value] of layout) {

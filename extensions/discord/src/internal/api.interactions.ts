@@ -1,7 +1,8 @@
 import { Routes } from "discord-api-types/v10";
 import { normalizeDiscordMessageId } from "./api.messages.js";
+import type { RequestData } from "./rest-body.js";
 import type { RequestQuery } from "./rest-scheduler.js";
-import type { RequestClient, RequestData } from "./rest.js";
+import type { RequestClient } from "./rest.js";
 
 function normalizeDiscordWebhookMessageId(messageId: string): string {
   const normalized = messageId.trim();

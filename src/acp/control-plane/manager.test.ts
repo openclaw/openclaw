@@ -10,8 +10,6 @@ import {
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { isAcpTurnActive } from "./active-turns.js";
 import {
   installMutableAcpSessionMetaUpsert,
@@ -108,63 +106,6 @@ describe("AcpSessionManager", () => {
       { state: "running", skipMaintenance: true, takeCacheOwnership: true },
       { state: "idle", skipMaintenance: true, takeCacheOwnership: true },
     ]);
-  });
-
-  it("records parented ACP turns only for human provenance", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      const childSessionKey = "agent:main:acp:child-state";
-      mockParentedAcpSessionEntries({
-        childSessionKey,
-        parentSessionKey: "agent:main:main",
-      });
-      const manager = new AcpSessionManager();
-
-      await manager.runTurn({
-        provenance: "human",
-        cfg: baseCfg,
-        sessionKey: childSessionKey,
-        text: "human turn",
-        mode: "prompt",
-        requestId: "human-state-turn",
-      });
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: childSessionKey,
-        text: "system turn",
-        mode: "prompt",
-        requestId: "system-state-turn",
-      });
-      runtimeState.runTurn.mockImplementationOnce(async function* () {
-        yield { type: "done" as const, status: "cancelled" as const };
-      });
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: childSessionKey,
-        text: "cancelled turn",
-        mode: "prompt",
-        requestId: "cancelled-state-turn",
-      });
-
-      expect(listSessionStateEventsSince(childSessionKey, "main", 0, 200).events).toMatchObject([
-        { kind: "human_direct_message", runId: "human-state-turn" },
-        { kind: "run_completed", runId: "human-state-turn" },
-        { kind: "run_completed", runId: "system-state-turn" },
-        {
-          kind: "run_failed",
-          runId: "cancelled-state-turn",
-          summary: "child run cancelled",
-          payload: { outcome: "cancelled" },
-        },
-      ]);
-      closeOpenClawStateDatabaseForTest();
-    });
   });
 
   it("tracks parented direct ACP turns in the task registry", async () => {

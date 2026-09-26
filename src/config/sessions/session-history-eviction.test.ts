@@ -25,7 +25,6 @@ import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -53,6 +52,7 @@ import {
   inspectSqliteSessionHistoryDiskBudget,
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
+import * as workerReaders from "./session-transcript-worker-readers.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 describe("SQLite historical session disk budget", () => {
@@ -142,6 +142,15 @@ describe("SQLite historical session disk budget", () => {
         ).toEqual(new Set(["oldest-history"]));
       }
       setSessionUpdatedAt("newer-history", 20);
+      if (execution === "worker" && oldestBytes === 64 * 1024 && !capArchive) {
+        database().db.exec(`
+          WITH RECURSIVE entries(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM entries WHERE n < 5000)
+          INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+          SELECT 'agent:main:unrelated-' || n, 'unrelated-' || n,
+            json_object('sessionId', 'unrelated-' || n, 'updatedAt', 1), 1 FROM entries;
+          UPDATE session_nodes SET entry_valid = 1;
+        `);
+      }
       await closeOpenClawAgentDatabaseByPathAsync(database().path);
       settlePhysicalUsage();
       database().db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
@@ -173,6 +182,7 @@ describe("SQLite historical session disk budget", () => {
         });
       };
       process.on("worker", observeWorker);
+      const references = vi.spyOn(sessionLifecycleState, "readReferencedSessionIds");
       let result: Awaited<ReturnType<typeof enforceSqliteSessionHistoryDiskBudget>>;
       try {
         result = await enforceSqliteSessionHistoryDiskBudget({
@@ -188,6 +198,19 @@ describe("SQLite historical session disk budget", () => {
         process.off("worker", observeWorker);
       }
 
+      const hostDiscoveryScans = references.mock.calls.filter(
+        (call) => call[2] === undefined,
+      ).length;
+      const hostReferenceScans = references.mock.calls.length;
+      console.info("history eviction host reference scans", {
+        execution,
+        hostDiscoveryScans,
+        hostReferenceScans,
+      });
+      expect(hostDiscoveryScans).toBe(execution === "in-process" ? 1 : 0);
+      if (execution === "worker") {
+        expect(hostReferenceScans).toBe(0);
+      }
       expect(reclamationWorkers).toBe(execution === "in-process" ? 0 : 1);
       expect(archiveReplies.map(({ message }) => message.type)).toEqual(["done", "published"]);
       expect(new Set(archiveReplies.map(({ worker }) => worker)).size).toBe(1);
@@ -590,9 +613,12 @@ describe("SQLite historical session disk budget", () => {
     },
   );
 
-  it.each(["same connection", "external connection"] as const)(
-    "rechecks cross-owner references written through a %s after materialization",
-    async (writerKind) => {
+  it.each([
+    { writerKind: "same connection", after: "discovery" },
+    { writerKind: "external connection", after: "materialization" },
+  ] as const)(
+    "rechecks cross-owner references written through a $writerKind after $after",
+    async ({ writerKind, after }) => {
       const sessionKey = "agent:main:reference-race";
       const referringKey = "agent:main:reference-survivor";
       await createHistoricalTranscript({
@@ -604,35 +630,53 @@ describe("SQLite historical session disk budget", () => {
       });
       const archive = await import("./session-accessor.sqlite-archive.js");
       const materialize = archive.materializeSessionStateDeletePlans;
+      const addReference = () => {
+        const owner = database();
+        const writer =
+          writerKind === "external connection" ? new DatabaseSync(owner.path) : owner.db;
+        try {
+          writer
+            .prepare(
+              "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
+            )
+            .run(
+              referringKey,
+              "survivor-current",
+              JSON.stringify({
+                sessionId: "survivor-current",
+                updatedAt: 1,
+                usageFamilySessionIds: ["reference-old"],
+              }),
+            );
+          // Complete the canonical writer's validity settlement for this healthy fixture row.
+          writer
+            .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+            .run(referringKey);
+        } finally {
+          if (writer !== owner.db) {
+            writer.close();
+          }
+        }
+      };
+      if (after === "discovery") {
+        const createReaders = workerReaders.createSessionHistoryWorkerReaders;
+        vi.spyOn(workerReaders, "createSessionHistoryWorkerReaders").mockImplementation((run) => {
+          const readers = createReaders(run);
+          const discover = readers.readHistoricalEvictionCandidates;
+          readers.readHistoricalEvictionCandidates = async (input) => {
+            const candidates = await discover(input);
+            addReference();
+            return candidates;
+          };
+          return readers;
+        });
+      }
       const materialization = vi
         .spyOn(archive, "materializeSessionStateDeletePlans")
         .mockImplementationOnce(async (plans) => {
           const prepared = await materialize(plans);
-          const owner = database();
-          const writer =
-            writerKind === "external connection" ? new DatabaseSync(owner.path) : owner.db;
-          try {
-            writer
-              .prepare(
-                "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
-              )
-              .run(
-                referringKey,
-                "survivor-current",
-                JSON.stringify({
-                  sessionId: "survivor-current",
-                  updatedAt: 1,
-                  usageFamilySessionIds: ["reference-old"],
-                }),
-              );
-            // Complete the canonical writer's validity settlement for this healthy fixture row.
-            writer
-              .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-              .run(referringKey);
-          } finally {
-            if (writer !== owner.db) {
-              writer.close();
-            }
+          if (after === "materialization") {
+            addReference();
           }
           return prepared;
         });
@@ -736,7 +780,17 @@ describe("SQLite historical session disk budget", () => {
     evictionWarnSpy.mockClear();
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const references = vi.spyOn(sessionLifecycleState, "readReferencedSessionIds");
+    const references = vi.fn();
+    const createReaders = workerReaders.createSessionHistoryWorkerReaders;
+    vi.spyOn(workerReaders, "createSessionHistoryWorkerReaders").mockImplementation((run) => {
+      const readers = createReaders(run);
+      const discover = readers.readHistoricalEvictionCandidates;
+      readers.readHistoricalEvictionCandidates = (input) => {
+        references();
+        return discover(input);
+      };
+      return readers;
+    });
     const maintenanceConfig = resolveMaintenanceConfigFromInput({
       mode: "enforce",
       maxDiskBytes: 1,
@@ -820,7 +874,7 @@ describe("SQLite historical session disk budget", () => {
       .spyOn(diskBudget, "hasRetainedSessionTranscriptArchives")
       .mockImplementation(async (pathname) => {
         const retained = await probe(pathname);
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         return retained;
       });
 

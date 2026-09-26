@@ -28,7 +28,7 @@ import { buildAssistantMediaContentDisposition } from "./assistant-media-content
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-  createAuthRateLimiter,
+  createGatewayAuthRateLimiter,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -446,15 +446,19 @@ describe("handleControlUiHttpRequest", () => {
     const originalRead = fileHandlePrototype.read;
     await probe.close();
     let constrained = false;
-    return vi
-      .spyOn(fileHandlePrototype, "read")
-      .mockImplementation(async function (this: unknown, target, offset, length, position) {
-        if (!constrained && position === 0 && length > maxBytes) {
-          constrained = true;
-          return await originalRead.call(this, target, offset, maxBytes, position);
-        }
-        return await originalRead.call(this, target, offset, length, position);
-      });
+    return vi.spyOn(fileHandlePrototype, "read").mockImplementation(async function (
+      this: unknown,
+      target,
+      offset,
+      length,
+      position,
+    ) {
+      if (!constrained && position === 0 && length > maxBytes) {
+        constrained = true;
+        return await originalRead.call(this, target, offset, maxBytes, position);
+      }
+      return await originalRead.call(this, target, offset, length, position);
+    });
   }
 
   async function withBasePathRootFixture<T>(params: {
@@ -577,7 +581,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).toContain("frame-src 'self'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).toContain(
-          "connect-src 'self' ws: wss: data: https://api.openai.com https://tweakcn.com",
+          "connect-src 'self' ws: wss: data: blob: https://api.openai.com https://tweakcn.com",
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
@@ -805,7 +809,7 @@ describe("handleControlUiHttpRequest", () => {
         const filePath = path.join(tmpRoot, filename);
         await fs.writeFile(filePath, Buffer.from("fixture"));
         const { res, handled } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&filename=ignored.txt&token=test-token`,
           method: "GET",
           auth: { mode: "token", token: "test-token", allowTailscale: false },
         });
@@ -900,30 +904,6 @@ describe("handleControlUiHttpRequest", () => {
     expect(buildAssistantMediaContentDisposition("draft\uD800.pdf", "application/pdf")).toBe(
       `attachment; filename="draft_.pdf"; filename*=UTF-8''draft%EF%BF%BD.pdf`,
     );
-  });
-
-  it("serves assistant media from canonical inbound media refs", async () => {
-    const stateDir = resolveStateDir();
-    const id = `report---${randomUUID()}.pdf`;
-    const filePath = path.join(stateDir, "media", "inbound", id);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-
-    try {
-      const { res, handled } = await runAssistantMediaRequest({
-        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(`media://inbound/${id}`)}&token=test-token`,
-        method: "GET",
-        auth: { mode: "token", token: "test-token", allowTailscale: false },
-      });
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
-      expect(res["setHeader"]).toHaveBeenCalledWith(
-        "Content-Disposition",
-        `attachment; filename="report.pdf"; filename*=UTF-8''report.pdf`,
-      );
-    } finally {
-      await fs.rm(filePath, { force: true });
-    }
   });
 
   it("reports assistant media metadata for canonical inbound media refs", async () => {
@@ -2428,7 +2408,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("rejects unattributable proxy ingress before bootstrap device-token fallback", async () => {
-    const rateLimiter = createAuthRateLimiter({
+    const rateLimiter = createGatewayAuthRateLimiter({
       maxAttempts: 2,
       windowMs: 60_000,
       lockoutMs: 60_000,

@@ -24,7 +24,7 @@ Acceptance supplies the canonical package Telegram E2E when selected; beta
 | -------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `beta`   | Fastest release-critical smoke.   | OpenAI/core live path, Docker live models for OpenAI, native gateway core, native OpenAI gateway profile, native OpenAI plugin, and Docker live gateway OpenAI.                                            |
 | `stable` | Default release approval profile. | `beta` plus Anthropic smoke, Google, MiniMax, backend, native live test harness, Docker live CLI backend, Docker ACP bind, Docker Codex harness, Docker subagent-announce, and an OpenCode Go smoke shard. |
-| `full`   | Broad advisory sweep.             | `stable` plus advisory providers, plugin live shards, and media live shards.                                                                                                                               |
+| `full`   | Broad provider sweep.             | `stable` plus additional providers, plugin live shards, and media live shards.                                                                                                                             |
 
 ## Full-only additions
 
@@ -33,7 +33,7 @@ These suites are skipped by `stable` and included by `full`:
 | Area                             | Full-only coverage                                                                                                          |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Docker live models               | OpenCode Go, OpenRouter, xAI, Z.ai, and Fireworks.                                                                          |
-| Docker live gateway              | Advisory providers split into DeepSeek/Fireworks, OpenCode Go/OpenRouter, and xAI/Z.ai shards.                              |
+| Docker live gateway              | Additional providers split into DeepSeek/Fireworks, OpenCode Go/OpenRouter, and xAI/Z.ai shards.                            |
 | Native gateway provider profiles | Full Anthropic Opus and Sonnet/Haiku shards, Fireworks, DeepSeek, full OpenCode Go model shards, OpenRouter, xAI, and Z.ai. |
 | Native plugin live shards        | Plugins A-K, L-N, O-Z other, Moonshot, and xAI.                                                                             |
 | Native media live shards         | Audio, Google music, MiniMax music, and video groups A-D.                                                                   |
@@ -83,33 +83,21 @@ canonical selector `qa-live-matrix`, `qa-live-buzz`, `qa-live-telegram`,
 `qa-live-discord`, `qa-live-whatsapp`, or `qa-live-slack`.
 
 The `live-gateway-advisory-docker` handle is an aggregate rerun handle for its
-three provider shards, so it still fans out to all advisory Docker gateway jobs.
+three provider shards, so it still fans out to all additional Docker gateway jobs.
 
 Use `cross_os_suite_filter` with `rerun_group=cross-os` when one cross-OS lane
 failed. The filter accepts comma-separated OS ids, suite ids, or OS/suite pairs,
 for example `windows/packaged-upgrade`, `windows`, or `packaged-fresh`.
-All-group runs accept the same selections: `-f cross_os_suite_filter=ubuntu,macos`
-excludes Windows while retaining every Linux suite. `npm-stable-v1` and
-`npm-beta-v1` still qualify when advisory OS lanes are omitted, provided all
-three Linux suites (`packaged-fresh`, `installer-fresh`, and `packaged-upgrade`)
-remain selected and the other policy requirements hold. Omitted lanes are not
-run, never passed. Focused reruns remain focused evidence, not publication
-authorization. Cross-OS
-summaries include per-phase timings for packaged upgrade lanes, and long-running
-commands print heartbeat lines so a stuck update is visible before the job
-timeout.
+All-group runs must keep every OS/suite pair: `-f cross_os_suite_filter=ubuntu,windows,macos`
+or `packaged-fresh,installer-fresh,packaged-upgrade` are accepted, while any all-group
+filter that omits one of the nine Linux/Windows/macOS install and upgrade pairs is
+rejected before scheduling. All selected cross-OS outcomes block on failure. Every all-group run must retain
+all nine install/upgrade combinations. Every selected CI, plugin, QA, Telegram,
+and performance lane must succeed; no operator waiver can authorize publication
+with failed selected tests. Stable publication requires stable/full evidence,
+soak, and blocking performance.
 
-QA release-check failures block normal release validation, including selected
-parity, runtime-pair/restart, Matrix, and runtime tool coverage. Some QA jobs use
-`continue-on-error` to preserve diagnostics, but the release verifier checks
-their recorded status; that setting does not remove the gate. Source and package
-Telegram outcomes are advisory; failed, skipped, or deferred attempts are never
-reported as passed. Tideclaw alpha runs may still treat non-package-safety
-release-check lanes as advisory. With
-`release_profile=beta`, the `Run repo/live E2E validation` live-provider suites
-are advisory: third-party model deployments change underneath a release, so
-beta surfaces their failures as warnings while stable and full profiles keep
-them blocking. When
+Skipped or deferred attempts are never reported as passed. When
 `live_suite_filter` explicitly requests a gated QA live lane such as Discord,
 WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo
 variable must be enabled; otherwise input capture fails instead of silently skipping the lane.

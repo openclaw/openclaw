@@ -27,7 +27,10 @@ import {
 } from "./scheduled-tool-policy.js";
 import { resolveSessionPlacementSandboxToolPolicy } from "./session-placement-computer.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
-import type { PreparedSessionCapabilityEntry } from "./subagents/spawn/subagent-capabilities.js";
+import type {
+  PreparedSessionCapabilityEntry,
+  SessionCapabilityStore,
+} from "./subagents/spawn/subagent-capabilities.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
   collectExplicitAllowlist,
@@ -64,6 +67,8 @@ export type ConversationCapabilityProfileParams = {
   sandboxSessionKey?: string;
   /** Owner-read session metadata consumed synchronously during policy preparation. */
   preparedSessionEntry?: PreparedSessionCapabilityEntry;
+  /** Complete owner-prepared lineage; no database reads during policy projection. */
+  preparedSessionCapabilityStore?: SessionCapabilityStore;
   sessionId?: string;
   runId?: string;
   agentId?: string;
@@ -150,6 +155,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
     sessionKey: params.sessionKey,
     subagentSessionKey,
     preparedSessionEntry: params.preparedSessionEntry,
+    preparedSessionCapabilityStore: params.preparedSessionCapabilityStore,
     agentId: effective.agentId,
     spawnedBy: params.spawnedBy,
     messageProvider: callerContext.local ? messageProvider : callerContext.channel,
@@ -297,6 +303,8 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       trustedGroup,
       profile: effective.profile,
       providerProfile: effective.providerProfile,
+      sources: effective.sources,
+      profiles: effective.profiles,
       gatewayConfigReadAllowed: effective.gatewayConfigReadAllowed,
       profilePolicy,
       providerProfilePolicy,

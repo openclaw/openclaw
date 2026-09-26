@@ -667,6 +667,66 @@ it.each(["skills.library.descriptions", "skills.library.manifests"] as const)(
   },
 );
 
+it.each(["single", "union"] as const)(
+  "captures and charges %s task selectors while retaining original admission",
+  async (shape) => {
+    const { options } = source();
+    const context = captureOpenClawStateWorkerContext(options);
+    const selector = "任务🦞".repeat(512);
+    const scope = {
+      taskId: selector,
+      flowId: selector,
+      runId: selector,
+      childSessionKey: selector,
+    };
+    const input = shape === "single" ? scope : [scope, { taskId: selector }];
+    const expected = structuredClone(input);
+    const dispatch = createDeferredCore();
+    const task = queueTask(dispatch.promise);
+    const result = executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "tasks.mutationSnapshot", input },
+      { context },
+    );
+    const returned: OpenClawStateReadReply = {
+      ok: true,
+      type: "tasks.mutationSnapshot",
+      sourceAdmitted: true,
+      snapshot: { tasks: new Map(), deliveryStates: new Map() },
+    };
+    try {
+      const submitted = await task.submitted;
+      scope.taskId = "changed task";
+      scope.flowId = "changed flow";
+      scope.runId = "changed run";
+      scope.childSessionKey = "changed child";
+      if (Array.isArray(input)) {
+        input.push({ taskId: "added while queued" });
+      }
+      options.env.OPENCLAW_STATE_DIR = "/changed-after-capture";
+      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
+        Buffer.byteLength(selector) * (shape === "single" ? 4 : 5),
+      );
+      dispatch.resolve();
+      const request = await task.captured;
+      expect(request.command).toEqual({ type: "tasks.mutationSnapshot", input: expected });
+      expect(request.databasePath).toBe(context.admission.databasePath);
+      expect(request.context.environment).toEqual(context.environment);
+      const failure = new Error("Original task admission retired");
+      vi.spyOn(context.admission, "assertCurrent").mockImplementation(() => {
+        throw failure;
+      });
+      const rejected = expect(result).rejects.toThrow(failure.message);
+      task.result.resolve(returned);
+      await rejected;
+    } finally {
+      dispatch.resolve();
+      task.result.resolve(returned);
+      await Promise.allSettled([result]);
+    }
+  },
+);
+
 it.each([
   {
     input: {
@@ -755,6 +815,42 @@ it.each([
     }
   },
 );
+
+it("does not retain caller context in no-input ingress health reads", async () => {
+  const { pathname, options } = source();
+  const context = captureOpenClawStateWorkerContext(options);
+  const command = {
+    type: "channelIngress.failedHealth" as const,
+    callerContext: { onClosed: () => {} },
+  };
+  const transport = createOpenClawStateReadTransport(command);
+  const task = queueTask();
+  const reply: OpenClawStateReadReply = {
+    ok: true,
+    type: command.type,
+    sourceAdmitted: true,
+    result: [],
+  };
+  const read = transport.read(
+    { context, location: pathname, checkFreshAdmission: false },
+    { signal: new AbortController().signal, assertCurrent: () => {} },
+  );
+  try {
+    const request = await Promise.race([
+      task.captured,
+      read.then(() => {
+        throw new Error("Read completed before dispatch");
+      }),
+    ]);
+    expect(request.command).toEqual({ type: command.type });
+    task.result.resolve(reply);
+    await expect(read).resolves.toEqual({ value: reply });
+  } finally {
+    task.result.resolve(reply);
+    await Promise.allSettled([read]);
+    await transport.close();
+  }
+});
 
 it("captures cron recovery markers and charges their retained bytes before dispatch", async () => {
   const { pathname, options } = source();

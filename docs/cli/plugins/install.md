@@ -18,6 +18,13 @@ Gateway, it saves the installation for the next start. A lost reply or failed
 runtime activation does not trigger a second local install; inspect the reported
 state and use `plugins reload <id>` after fixing an activation failure.
 
+Use `--no-enable` when configuration already owns plugin activation. It installs
+and records the plugin without adding it to `plugins.allow`, removing it from
+`plugins.deny`, enabling its entry, or selecting its exclusive slot. Existing
+enabled entries stay enabled; this flag does not disable a plugin. Required
+configuration checks still apply, and plugins missing required configuration
+remain disabled. Hook-pack installs do not support this flag.
+
 Local paths, archives, npm-pack tarballs, and local Git repositories must be on
 the Gateway host. Marketplace requests also require a local connection because
 marketplace names can resolve to host-local registrations. The CLI resolves local
@@ -41,6 +48,7 @@ openclaw plugins install <plugin>@<marketplace>             # marketplace shorth
 openclaw plugins install <plugin> --marketplace <name>      # marketplace (explicit)
 openclaw plugins install <package> --force                  # confirm source / overwrite existing
 openclaw plugins install <package> --pin                    # pin resolved npm version
+openclaw plugins install <package> --no-enable              # preserve activation policy
 openclaw plugins install <package> --acknowledge-install-policy-warning
 ```
 
@@ -136,11 +144,13 @@ openclaw plugins install npm:@scope/plugin-name@1.0.1
 OpenClaw checks the advertised plugin API / minimum gateway compatibility before install. When the selected ClawHub version publishes a ClawPack artifact, OpenClaw downloads the versioned npm-pack `.tgz`, verifies the ClawHub digest header and the artifact digest, then installs it through the normal archive path. Older ClawHub versions without ClawPack metadata still install through the legacy package archive verification path. Recorded installs keep their ClawHub source metadata, artifact kind, npm integrity, npm shasum, tarball name, and ClawPack digest facts for later updates.
 Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plugins update` can follow newer ClawHub releases; explicit version or tag selectors such as `clawhub:pkg@1.2.3` and `clawhub:pkg@beta` remain pinned to that selector.
 
+When legacy metadata supplies `files[]` without an archive digest, OpenClaw verifies the canonical extracted paths and SHA-256 hashes before installing. Harmless archive spellings such as backslash separators may normalize to those paths; missing, changed, or extra files and named unsupported records still fail verification. Root-only records that create no output are ignored. Server-provided paths and generated `_meta.json` metadata remain strictly validated.
+
 ### Config includes and invalid-config repair
 
 If your `plugins` section, or the `plugins.entries.<id>` entry being changed, is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to the deepest included file that owns the change and leave `openclaw.json` untouched. Root includes (every section of a config whose root object authors `$include`), include arrays, includes with sibling overrides, changes spanning several include files, and an include whose own file still authors a nested `$include` fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
 
-If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. Gateway startup can apply [safe legacy-key migrations](/gateway/doctor#detailed-behavior-and-rationale), but plugin config that remains invalid still fails closed; hot reload also rejects invalid plugin config. `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception for plugin installation is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. Doctor owns [legacy-key migrations](/gateway/doctor#detailed-behavior-and-rationale) and can quarantine invalid plugin entries. Gateway startup and hot reload reject invalid plugin config without running that repair. The only pre-existing-config exception for plugin installation is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
 
 When the existing host config is valid but the newly installed plugin's own config is absent, OpenClaw records the install disabled instead of writing an invalid enabled entry. Configure `plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an existing plugin config entry is present but invalid, install fails without rewriting it.
 
@@ -219,6 +229,10 @@ the same per-plugin managed npm project path used by registry installs,
 including `package-lock.json` verification, hoisted dependency scanning,
 and npm install records. Plain archive paths still install as local
 archives under the plugin extensions root.
+
+For registered archive plugins in the extensions root, `openclaw doctor --fix`
+repairs stale or dangling `node_modules/openclaw` host links using the installed
+package. This repair does not require the original archive or reinstall the plugin.
 
 Claude marketplace installs are also supported.
 

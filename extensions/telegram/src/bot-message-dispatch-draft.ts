@@ -9,7 +9,6 @@ import type {
   TelegramDraftStateSlice,
   TelegramQueuedAnswerBlockRotation,
   TelegramSplitLaneSegmentsResult,
-  TelegramAnswerBlockDelivery,
 } from "./bot-message-dispatch.types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import type { TelegramDraftPreview } from "./draft-stream-message.js";
@@ -197,11 +196,11 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       params.resolvedReasoningLevel === "on" || Boolean(lanes.reasoning.stream),
     lastAnswerPartialText: "",
     activeAnswerDraftIsToolProgressOnly: false,
-    activeAnswerBlockAssistantMessageIndex: undefined as number | undefined,
-    activeAnswerBlockDelivery: undefined as TelegramAnswerBlockDelivery | undefined,
-    queuedAnswerBlockRotations: [] as TelegramQueuedAnswerBlockRotation[],
-    queuedAnswerBlockAssistantMessageIndex: undefined as number | undefined,
-    pendingAnswerBlockAssistantMessageIndex: undefined as number | undefined,
+    activeAnswerBlockAssistantMessageIndex: undefined,
+    activeAnswerBlockDelivery: undefined,
+    queuedAnswerBlockRotations: [],
+    queuedAnswerBlockAssistantMessageIndex: undefined,
+    pendingAnswerBlockAssistantMessageIndex: undefined,
     rotateAnswerLaneWhenQueuedBlocksSettle: false,
     draftEventQueue: Promise.resolve(),
   };
@@ -266,7 +265,7 @@ export async function rotateAnswerLaneForNewMessage(turn: Turn) {
   await retireAnswerLane(turn);
 }
 
-export async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boolean> {
+async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boolean> {
   if (!turn.activeAnswerDraftIsToolProgressOnly) {
     return false;
   }
@@ -580,19 +579,9 @@ export function beginDraftQueuedFollowup(turn: Turn): void {
 }
 
 export async function cleanupDrafts(turn: Turn, superseded: boolean): Promise<void> {
-  for (const lane of [turn.answerLane, turn.reasoningLane]) {
-    const stream = lane.stream;
-    if (!stream) {
-      continue;
-    }
-    if (superseded) {
-      await stream.discard();
-    } else if (lane.finalized) {
-      await stream.stop();
-    } else {
-      await stream.clear();
-    }
-  }
+  await turn.previewLifecycle.cleanup({
+    failed: superseded || turn.dispatchError != null || turn.agentRunFailed,
+  });
 }
 
 export const waitForDraftEvents = (turn: Turn) => turn.draftEventQueue;

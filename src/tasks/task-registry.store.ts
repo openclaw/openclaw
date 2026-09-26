@@ -1,5 +1,6 @@
 import type { SqliteWorkerNativeSettlementOwner } from "../infra/sqlite-worker-operation-settlement.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { TaskInitialWorkerOperations } from "./task-initial-worker.types.js";
 import type {
@@ -65,6 +66,7 @@ export type TaskRegistryStore = TaskExecutionRestoreStore & {
   loadMutationSnapshotAsync: (
     context: OpenClawStateWorkerContext,
     scope?: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],
+    options?: { missingDatabase: "empty" },
   ) => Promise<TaskRegistryStoreSnapshot>;
   loadMutationSnapshot?: (
     scopes: readonly TaskRegistryMutationScope[],
@@ -118,9 +120,22 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
     );
   },
   loadSnapshot: loadTaskRegistryStateFromSqlite,
-  async loadMutationSnapshotAsync(context, scope) {
-    const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
-    return executeOpenClawStateWorker(context, { type: "tasks.mutationSnapshot", input: scope });
+  async loadMutationSnapshotAsync(context, scope, options) {
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "tasks.mutationSnapshot", input: scope },
+      { context },
+    );
+    if (!reply) {
+      if (options?.missingDatabase === "empty") {
+        return { tasks: new Map(), deliveryStates: new Map() };
+      }
+      throw new Error("Task registry snapshot requires an admitted database");
+    }
+    if (!reply.ok || reply.type !== "tasks.mutationSnapshot") {
+      throw new Error("Unexpected task registry snapshot result");
+    }
+    return reply.snapshot;
   },
   loadMutationSnapshot: loadTaskRegistryMutationStateFromSqlite,
   withMutation: withTaskRegistrySqliteMutation,

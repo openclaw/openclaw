@@ -25,6 +25,7 @@ import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
@@ -187,14 +188,7 @@ export async function buildMessagePayload(params: {
       return entry;
     }),
   );
-  const seenMedia = new Set<string>();
-  const preparedMedia = normalizedMedia.filter((entry) => {
-    if (seenMedia.has(entry.url)) {
-      return false;
-    }
-    seenMedia.add(entry.url);
-    return true;
-  });
+  const preparedMedia = dedupeByKey(normalizedMedia, (entry) => entry.url);
   const mergedMediaUrls = preparedMedia.map((entry) => entry.url);
   const mediaAttachments = preparedMedia.map((entry) =>
     Object.assign(

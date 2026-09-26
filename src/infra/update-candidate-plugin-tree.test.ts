@@ -4,6 +4,7 @@ import path from "node:path";
 import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import * as fsSafe from "./fs-safe.js";
 import {
   copyUpdateCandidatePluginTrees,
@@ -13,7 +14,7 @@ import {
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-async function fixture(hardlink = false) {
+async function fixture(hardlink = false, beforePlan?: (source: string) => Promise<void>) {
   const root = await fs.realpath(dirs.make("candidate-plugin-copy-"));
   const source = path.join(root, "source");
   const targetStateDir = path.join(root, "snapshot");
@@ -27,6 +28,7 @@ async function fixture(hardlink = false) {
   if (hardlink) {
     await fs.link(file, `${file}.linked`);
   }
+  await beforePlan?.(source);
   const plan = await prepareUpdateCandidatePluginTrees({
     roots: new Map([[source, destination]]),
     project: (entry) => path.join(destination, path.relative(source, entry)),
@@ -157,3 +159,171 @@ it.each(["mode", "same-size content with changed mtime", "identity"] as const)(
     expect(await fs.readdir(f.destination)).toEqual([]);
   },
 );
+
+it("drains concurrent file copies before reporting a failure or publishing links", async () => {
+  const f = await fixture(false, async (source) => {
+    for (let index = 0; index < 7; index++) {
+      await fs.writeFile(path.join(source, `extra-${index}.txt`), `plugin bytes ${index}`);
+    }
+    await fs.symlink("payload.txt", path.join(source, "payload-link"), "file");
+  });
+  const peerEntered = createDeferredCore();
+  const releasePeers = createDeferredCore();
+  const firstFailure = createDeferredCore<unknown>();
+  const started: string[] = [];
+  const settled = new Set<string>();
+  const inFlight: Promise<void>[] = [];
+  let settledAtRejection: string[] = [];
+  const openRoot = fsSafe.root;
+  vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+    const root = await openRoot(...args);
+    const copyIn = root.copyIn.bind(root);
+    vi.spyOn(root, "copyIn").mockImplementation((relative, source, options) => {
+      const first = started.length === 0;
+      started.push(relative);
+      if (started.length === 2) {
+        peerEntered.resolve();
+      }
+      const copying = (async () => {
+        try {
+          await peerEntered.promise;
+          if (first) {
+            await fs.writeFile(
+              path.join(f.destination, path.basename(relative)),
+              "existing bytes",
+              {
+                flag: "wx",
+              },
+            );
+          } else {
+            await releasePeers.promise;
+          }
+          await copyIn(relative, source, options);
+          if (first) {
+            throw new Error("Expected the real copy to reject its occupied destination");
+          }
+        } catch (error) {
+          if (first) {
+            firstFailure.resolve(error);
+          }
+          throw error;
+        } finally {
+          settled.add(relative);
+        }
+      })();
+      inFlight.push(copying);
+      return copying;
+    });
+    return root;
+  });
+  const copying = f.copy().catch((error: unknown) => {
+    settledAtRejection = [...settled];
+    return error;
+  });
+  try {
+    const failure = await Promise.race([firstFailure.promise, copying]);
+    releasePeers.resolve();
+    expect(await copying).toBe(failure);
+    expect(failure).toMatchObject({ code: "already-exists" });
+    expect(started.length).toBeGreaterThan(1);
+    expect(started.length).toBeLessThanOrEqual(4);
+    expect(settledAtRejection.toSorted()).toEqual(started.toSorted());
+    expect((await fs.readdir(f.destination)).toSorted()).toEqual(
+      started.map((file) => path.basename(file)).toSorted(),
+    );
+    expect(await fs.readFile(path.join(f.destination, path.basename(started[0]!)), "utf8")).toBe(
+      "existing bytes",
+    );
+  } finally {
+    peerEntered.resolve();
+    releasePeers.resolve();
+    await Promise.allSettled(inFlight);
+    await copying;
+  }
+});
+
+it("copies a linked workspace dependency without reading or changing Git update transactions", async () => {
+  let dependency = "";
+  let abandoned = "";
+  let rollback = "";
+  const sdkLink = "../../../../packages/plugin-sdk";
+  const f = await fixture(false, async (source) => {
+    const workspace = path.join(path.dirname(source), "workspace");
+    dependency = path.join(workspace, "extensions", "a2a");
+    const sdk = path.join(workspace, "packages", "plugin-sdk");
+    await fs.mkdir(path.join(dependency, "node_modules", "@openclaw"), { recursive: true });
+    await fs.mkdir(sdk, { recursive: true });
+    await fs.writeFile(path.join(sdk, "package.json"), '{"name":"@openclaw/plugin-sdk"}');
+    await fs.writeFile(path.join(dependency, "package.json"), '{"name":"workspace-dependency"}');
+    await fs.writeFile(path.join(dependency, "data.txt"), "live dependency");
+    await fs.symlink(sdkLink, path.join(dependency, "node_modules", "@openclaw", "plugin-sdk"));
+    await fs.mkdir(path.join(source, "node_modules"));
+    await fs.symlink(
+      dependency,
+      path.join(source, "node_modules", "workspace-dependency"),
+      "junction",
+    );
+
+    // Promotion links describe the final destination, not the intermediate candidate directory.
+    abandoned = path.join(
+      dependency,
+      "node_modules.openclaw-update-00000000-0000-4000-8000-000000000009.tmp",
+    );
+    const stagedSdk = path.join(abandoned, "candidate", "@openclaw", "plugin-sdk");
+    await fs.mkdir(path.dirname(stagedSdk), { recursive: true });
+    await fs.symlink(sdkLink, stagedSdk);
+    rollback = path.join(
+      dependency,
+      "dist.openclaw-update-00000000-0000-4000-8000-000000000010.tmp",
+    );
+    await fs.mkdir(path.join(rollback, "previous"), { recursive: true });
+    await fs.writeFile(path.join(rollback, "previous", "keep.txt"), "rollback bytes");
+    await fs.mkdir(path.join(dependency, "ordinary.tmp"));
+    await fs.writeFile(path.join(dependency, "ordinary.tmp", "asset.txt"), "plugin asset");
+  });
+  await f.copy();
+  const copied = path.join(f.destination, "node_modules", "workspace-dependency");
+  expect(await fs.readFile(path.join(copied, "data.txt"), "utf8")).toBe("live dependency");
+  expect(await fs.readFile(path.join(copied, "ordinary.tmp", "asset.txt"), "utf8")).toBe(
+    "plugin asset",
+  );
+  expect(await fs.readdir(copied)).not.toContain(path.basename(abandoned));
+  expect(await fs.readdir(copied)).not.toContain(path.basename(rollback));
+  expect(await fs.readlink(path.join(abandoned, "candidate", "@openclaw", "plugin-sdk"))).toBe(
+    sdkLink,
+  );
+  expect(await fs.readFile(path.join(rollback, "previous", "keep.txt"), "utf8")).toBe(
+    "rollback bytes",
+  );
+  await fs.writeFile(path.join(copied, "data.txt"), "private candidate data");
+  expect(await fs.readFile(path.join(dependency, "data.txt"), "utf8")).toBe("live dependency");
+});
+
+it.each(["ordinary.tmp", "node_modules.openclaw-update-operator.tmp"])(
+  "still rejects a missing dependency beneath %s",
+  async (directory) => {
+    await expect(
+      fixture(false, async (source) => {
+        const nested = path.join(source, directory);
+        await fs.mkdir(nested);
+        await fs.symlink(
+          path.join(path.dirname(source), "missing-dependency"),
+          path.join(nested, "required"),
+        );
+      }),
+    ).rejects.toThrow("Cannot privately copy plugin dependency");
+  },
+);
+
+it("retains explicitly linked inputs inside a Git transaction namespace", async () => {
+  const name = "store.openclaw-update-00000000-0000-4000-8000-000000000011.tmp";
+  const f = await fixture(false, async (source) => {
+    await fs.mkdir(path.join(source, name));
+    await fs.writeFile(path.join(source, name, "required.txt"), "explicit dependency");
+    await fs.symlink(path.join(name, "required.txt"), path.join(source, "required.txt"));
+  });
+  await f.copy();
+  expect(await fs.readFile(path.join(f.destination, "required.txt"), "utf8")).toBe(
+    "explicit dependency",
+  );
+});

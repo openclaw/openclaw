@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { DecisionRuntimeV1 } from "../decisions/types.js";
 import {
   getDiagnosticSessionState,
@@ -127,6 +128,35 @@ describe("semantic no-progress shadow observer", () => {
     );
     expect(secondTrajectory).toHaveLength(8);
     expect(observer.snapshot().metrics.candidateFollowOnCalls).toBe(13);
+  });
+
+  it("discards an in-flight classification after automatic consent is removed", async () => {
+    const started = createDeferred();
+    const release = createDeferred();
+    let eligible = true;
+    const answer = outcome("stalled");
+    const runtime: TestDecisionRuntime = {
+      evaluate: vi.fn(async (...args) => {
+        started.resolve();
+        await release.promise;
+        return answer.evaluate(...args);
+      }),
+    };
+    const observer = createSemanticNoProgressObserver({
+      signal: new AbortController().signal,
+      assertActive: vi.fn(),
+      isEligible: () => eligible,
+      runtime,
+    });
+    const pending = observer.observeOutcome({ ...trajectoryEntry(0), evidence });
+    await started.promise;
+    eligible = false;
+    release.resolve();
+    await pending;
+    await observer.observeOutcome({ ...trajectoryEntry(1), evidence });
+    expect(observer.snapshot().latestJudgment).toBeUndefined();
+    expect(runtime.evaluate).toHaveBeenCalledTimes(1);
+    await observer.close();
   });
 
   it("allows one in-flight Decision and joins it on close", async () => {

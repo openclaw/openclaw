@@ -1,38 +1,16 @@
 import path from "node:path";
-import { isLegacyPluginSourceCaptureName } from "../plugins/plugin-source-capture-path.js";
 import { readDarwinProcessCommand } from "../process/supervisor/darwin-process-command.js";
 import { readProcessGroupMembers } from "../process/supervisor/service-child-group-ownership.js";
 import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
 import { isContainerEnvironment } from "./container-environment.js";
-import { isOpenClawArgv } from "./gateway-process-argv.js";
+import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 
-const workerSuffixes = Object.values(runtimeProcessEntrypoints).flatMap((entry) => [
-  path.posix.normalize(`/infra/${entry.sourceWorkerName}.ts`),
-  `/${entry.distWorkerPath}`,
+const workerEntrypoints = Object.values(runtimeProcessEntrypoints).flatMap((entry) => [
+  path.posix.normalize(`src/infra/${entry.sourceWorkerName}.ts`),
+  `dist/${entry.distWorkerPath}`,
 ]);
-
-function isDoctorLauncher(argv: string[]): boolean {
-  // A parent wrapper waiting for this exact Doctor is safe; other commands and
-  // retitled parents may retain plugin captures of their own.
-  const entry = argv.findIndex((arg) => isOpenClawArgv([arg]));
-  return (
-    entry >= 0 && getRootOptionAwareCommandPath(["node", ...argv.slice(entry)], 1)[0] === "doctor"
-  );
-}
-
-function isOpenClawProcess(argv: string[]): boolean {
-  const executable = (argv[0] ?? "").replaceAll("\\", "/");
-  return (
-    isOpenClawArgv(argv) ||
-    /^openclaw-[a-z0-9-]+$/i.test(executable.split("/").at(-1) ?? "") ||
-    argv.some((arg) =>
-      arg.replaceAll("\\", "/").split("/").some(isLegacyPluginSourceCaptureName),
-    ) ||
-    argv.some((arg) => workerSuffixes.some((suffix) => arg.replaceAll("\\", "/").endsWith(suffix)))
-  );
-}
 
 /** Incomplete process inspection never authorizes reclamation of unowned scratch. */
 export function inspectOtherOpenClawProcesses(): { pids: number[] } | { error: string } {
@@ -59,8 +37,22 @@ export function inspectOtherOpenClawProcesses(): { pids: number[] } | { error: s
         throw new Error("OpenClaw process ancestry is incomplete.");
       }
       ancestors.add(parentPid);
-      if ("argv" in parent.command && isDoctorLauncher(parent.command.argv)) {
-        launchers.add(parentPid);
+      if ("argv" in parent.command) {
+        const { argv, serviceMarker } = parent.command;
+        const identity = classifyOpenClawArgv(argv, {
+          pid: parentPid,
+          serviceMarker,
+          additionalEntrypoints: workerEntrypoints,
+        });
+        // Only the exact CLI launcher waiting for this Doctor is exempt, never a retitled parent.
+        if (
+          identity.kind === "openclaw" &&
+          identity.entryIndex !== undefined &&
+          getRootOptionAwareCommandPath(["node", ...argv.slice(identity.entryIndex)], 1)[0] ===
+            "doctor"
+        ) {
+          launchers.add(parentPid);
+        }
       }
       parentPid = parent.command.ppid;
     }
@@ -72,7 +64,26 @@ export function inspectOtherOpenClawProcesses(): { pids: number[] } | { error: s
         if (state.startsWith("Z") && isPidDefinitelyDead(pid)) {
           return false;
         }
-        return command && "argv" in command ? isOpenClawProcess(command.argv) : false;
+        if (!command || !("argv" in command)) {
+          return false;
+        }
+        // Retained terminal writers can use node --eval with the runtime path in argv.
+        if (
+          command.argv.some((arg) =>
+            /(?:^|[/\\])openclaw-update-runtime-[A-Za-z0-9]{6}(?:[/\\]|$)/u.test(arg),
+          )
+        ) {
+          return true;
+        }
+        const identity = classifyOpenClawArgv(command.argv, {
+          pid,
+          serviceMarker: command.serviceMarker,
+          additionalEntrypoints: workerEntrypoints,
+        });
+        if (identity.kind === "unclassified") {
+          throw new Error(`Could not classify PID ${pid}: ${identity.reason}`);
+        }
+        return identity.kind === "openclaw";
       })
       .map(({ pid }) => pid);
     return { pids };

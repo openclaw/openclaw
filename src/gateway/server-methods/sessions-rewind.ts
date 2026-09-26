@@ -30,13 +30,14 @@ import {
 import { readSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
-import { buildDashboardSessionKey } from "../session-create-service.js";
+import { buildDashboardSessionKey } from "../session-create-key.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
+import { resolveSessionWorkerPlacementMutationError } from "../worker-environments/session-placement-lifecycle.js";
 import { forkSessionRepositoryWorkspace } from "../worker-environments/session-repository-checkpoints.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -47,13 +48,9 @@ import {
   createUpstreamForkCurrentGuard,
   resolveUpstreamForkHarness,
 } from "./sessions-fork-runtime-guard.js";
-import {
-  loadAccessorSessionEntryForGatewayTarget,
-  resolveSessionWorkerPlacementMutationError,
-  respondSessionWorkerPlacementMutationError,
-} from "./sessions-shared.js";
+import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 type MessageCutAction = "fork" | "rewind" | "switch";
 type MessageCutMutationResult =
@@ -105,58 +102,26 @@ async function resolveEditorMediaAttachments(
 }
 
 export const sessionRewindHandlers: GatewayRequestHandlers = {
-  "sessions.branches.list": async (options) => {
-    if (
-      !assertValidParams(
-        options.params,
-        validateSessionsBranchesListParams,
-        "sessions.branches.list",
-        options.respond,
-      )
-    ) {
-      return;
-    }
-    await listBranches(options);
-  },
-  "sessions.branches.switch": async (options) => {
-    if (
-      !assertValidParams(
-        options.params,
-        validateSessionsBranchesSwitchParams,
-        "sessions.branches.switch",
-        options.respond,
-      )
-    ) {
-      return;
-    }
-    await mutateSessionAtMessage(options, "switch");
-  },
-  "sessions.rewind": async (options) => {
-    if (
-      !assertValidParams(
-        options.params,
-        validateSessionsRewindParams,
-        "sessions.rewind",
-        options.respond,
-      )
-    ) {
-      return;
-    }
-    await mutateSessionAtMessage(options, "rewind");
-  },
-  "sessions.fork": async (options) => {
-    if (
-      !assertValidParams(
-        options.params,
-        validateSessionsForkParams,
-        "sessions.fork",
-        options.respond,
-      )
-    ) {
-      return;
-    }
-    await mutateSessionAtMessage(options, "fork");
-  },
+  "sessions.branches.list": defineValidatedGatewayHandler(
+    "sessions.branches.list",
+    validateSessionsBranchesListParams,
+    listBranches,
+  ),
+  "sessions.branches.switch": defineValidatedGatewayHandler(
+    "sessions.branches.switch",
+    validateSessionsBranchesSwitchParams,
+    (options) => mutateSessionAtMessage(options, "switch"),
+  ),
+  "sessions.rewind": defineValidatedGatewayHandler(
+    "sessions.rewind",
+    validateSessionsRewindParams,
+    (options) => mutateSessionAtMessage(options, "rewind"),
+  ),
+  "sessions.fork": defineValidatedGatewayHandler(
+    "sessions.fork",
+    validateSessionsForkParams,
+    (options) => mutateSessionAtMessage(options, "fork"),
+  ),
 };
 
 async function listBranches(options: GatewayRequestHandlerOptions): Promise<void> {
@@ -172,7 +137,10 @@ async function listBranches(options: GatewayRequestHandlerOptions): Promise<void
     respond(false, undefined, requestedAgent.error);
     return;
   }
-  const read = retainSessionScopedRead(options, sessionKey, requestedAgent.agentId);
+  // Branches depend on transcript/lifecycle state, not a label or activity update during I/O.
+  const read = retainSessionScopedRead(options, sessionKey, requestedAgent.agentId, {
+    allowMetadataChanges: true,
+  });
   try {
     const current = loadAccessorSessionEntryForGatewayTarget({
       key: sessionKey,
@@ -296,7 +264,11 @@ async function mutateSessionAtMessage(
     sessionId: initial.entry.sessionId,
   });
   if (initialPlacementError) {
-    respondSessionWorkerPlacementMutationError(initialPlacementError, respond);
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, initialPlacementError.message),
+    );
     return;
   }
 
@@ -401,7 +373,7 @@ async function mutateSessionAtMessage(
         sessionId: current.entry.sessionId,
       });
       if (placementError) {
-        respondSessionWorkerPlacementMutationError(placementError, respond);
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, placementError.message));
         return;
       }
       const targetKey =

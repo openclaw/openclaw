@@ -7,6 +7,7 @@ import {
   SessionGoalOperationError,
 } from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
+import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import {
   loadExactSessionEntryCandidates,
   readSessionSubmittedInput,
@@ -32,7 +33,11 @@ import {
   abortChatRunsForSessionKeyWithPartials,
   descendantAbortError,
 } from "./chat-abort-runtime.js";
-import { hasRestartRecoveryTerminalRun, resolveDurableChatClaim } from "./chat-restart-recovery.js";
+import {
+  abortedPartialPersistenceError,
+  withAbortedPartialPersistenceWarning,
+} from "./chat-aborted-partial.js";
+import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
   assertExpectedLeafActive,
@@ -42,7 +47,7 @@ import {
   captureAdmittedChatSendSessionSettings,
   SESSION_SETTINGS_CHANGED_ERROR_REASON,
 } from "./chat-send-session-settings.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
+import type { LoadedChatSendSession } from "./chat-send-session.js";
 import { resolveChatSendStopOwnerScope } from "./chat-send-stop-owner-scope.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -111,9 +116,9 @@ export function respondChatSendAdmissionError(
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
 }
 
-type ChatSendPreAdmissionParams = {
+export type ChatSendPreAdmissionParams = {
   request: NormalizedChatSendRequest;
-  session: PreparedChatSendSession;
+  session: LoadedChatSendSession;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
@@ -127,7 +132,7 @@ type ChatSendRetryParams = {
     "goalOperation" | "requestIdentity" | "rawMessage" | "mentions" | "workContext"
   >;
   session: Pick<
-    PreparedChatSendSession,
+    LoadedChatSendSession,
     | "clientRunId"
     | "pendingChatSendKey"
     | "entry"
@@ -514,24 +519,38 @@ export async function runChatSendPreAdmission(
       });
       // Descendant cancellation aggregates errors; preserve the admission reason.
       if (guard.failure) {
-        throw guard.failure.error;
+        throw abortedPartialPersistenceError(guard.failure.error, res.warning);
       }
     } catch (error) {
       const admissionError = guard.failure ? guard.failure.error : error;
       if (admissionError instanceof SessionMutationAuthorizationChangedError) {
-        throw admissionError;
+        throw error instanceof SessionMutationAuthorizationChangedError ? error : admissionError;
       }
-      respondChatSendAdmissionError(admissionError, respond);
+      respondChatSendAdmissionError(admissionError, (ok, payload, failure) => {
+        // Classify the original admission error without discarding an attached save warning.
+        respond(
+          ok,
+          payload,
+          failure && error instanceof Error && error.cause === admissionError
+            ? { ...failure, message: error.message }
+            : failure,
+        );
+      });
       return false;
     }
     const error = res.unauthorized
       ? errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized")
       : (res.error ?? descendantAbortError(res.descendants, "Session"));
     if (error) {
-      respond(false, undefined, error);
+      respond(false, undefined, withAbortedPartialPersistenceWarning(error, res.warning));
       return false;
     }
-    respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
+    respond(true, {
+      ok: true,
+      aborted: res.aborted,
+      runIds: res.runIds,
+      ...(res.warning ? { warning: res.warning } : {}),
+    });
     return false;
   }
 

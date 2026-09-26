@@ -284,20 +284,33 @@ describe("DefaultPackageManager", () => {
     expect(resolved.themes).toEqual([]);
   });
 
-  it("honors filters on direct local extension files", async () => {
+  it("honors scoped filters on direct local extension files", async () => {
     const root = tempDirs.make("openclaw-package-manager-filter-");
     const extensionPath = join(root, "extension.ts");
     await writeFile(extensionPath, "export default {};\n", "utf-8");
+    const settingsManager = SettingsManager.inMemory({
+      packages: [{ source: extensionPath, extensions: [] }],
+    });
     const manager = new DefaultPackageManager({
       cwd: root,
       agentDir: join(root, "agent"),
-      settingsManager: SettingsManager.inMemory({
-        packages: [{ source: extensionPath, extensions: [] }],
-      }),
+      settingsManager,
     });
 
     expect((await manager.resolve()).extensions).toEqual([
       expect.objectContaining({ path: extensionPath, enabled: false }),
+    ]);
+
+    settingsManager.setProjectPackages([
+      { source: extensionPath, extensions: ["*.ts"] },
+      { source: extensionPath, extensions: [] },
+    ]);
+    expect((await manager.resolve()).extensions).toEqual([
+      expect.objectContaining({
+        path: extensionPath,
+        enabled: true,
+        metadata: expect.objectContaining({ scope: "project" }),
+      }),
     ]);
   });
 
