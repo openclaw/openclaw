@@ -21,6 +21,10 @@ import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
+  missingContainerRecoveryHint,
+  recoverStoppedFleetCellAfterRestoreFailure,
+} from "./backup.restore-recovery.js";
+import {
   cellAuthSecretDir,
   cellNetworkName,
   FLEET_ATTEMPT_LABEL,
@@ -459,7 +463,7 @@ export async function restoreFleetCell(params: {
   );
   if (inspectionResult.kind === "missing") {
     throw new Error(
-      `Fleet cell container is missing for ${params.record.tenantId}; remove the stale registration without purging data (openclaw fleet rm ${params.record.tenantId} --force), recreate a stopped cell with the intended image (openclaw fleet create ${params.record.tenantId} --no-start --image <image>), then retry fleet restore.`,
+      `Fleet cell container is missing for ${params.record.tenantId}; ${missingContainerRecoveryHint(params.record)}.`,
     );
   }
   const inspection = assertManagedInspection(params.record, inspectionResult);
@@ -780,20 +784,13 @@ export async function restoreFleetCell(params: {
       // A --force restore stopped a running cell but failed before removal.
       // Restart the same managed generation so an aborted restore does not
       // strand a healthy tenant stopped; the original error stays primary.
-      try {
-        // Same generation by identity, so no attempt-label comparison is needed:
-        // the cell name may already point at something this must not start.
-        const current = assertManagedInspection(
-          params.record,
-          await params.containers.inspect(params.record.runtime, inspection.containerId),
-        );
-        if (!current.running) {
-          await params.checkpoint();
-          await params.containers.start(params.record.runtime, current.containerId);
-        }
-      } catch {
-        // Best-effort recovery; the container remains stopped but intact.
-      }
+      await recoverStoppedFleetCellAfterRestoreFailure({
+        record: params.record,
+        containers: params.containers,
+        containerId: inspection.containerId,
+        checkpoint: params.checkpoint,
+        originalError: error,
+      });
     }
     throw error;
   } finally {

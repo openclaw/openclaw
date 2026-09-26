@@ -81,7 +81,11 @@ function stopInspection(current: ReturnType<typeof inspection>) {
 }
 
 async function createArchive(
-  params: { tenant?: string; mutate?: (dir: string) => Promise<void> } = {},
+  params: {
+    tenant?: string;
+    runtime?: FleetCellRecord["runtime"];
+    mutate?: (dir: string) => Promise<void>;
+  } = {},
 ): Promise<string> {
   const source = path.join(root, `archive-source-${crypto.randomUUID()}`);
   await fs.mkdir(path.join(source, "data"), { recursive: true });
@@ -95,7 +99,7 @@ async function createArchive(
       createdAt: new Date(0).toISOString(),
       hostPort: 19100,
       image: "image",
-      runtime: "docker",
+      runtime: params.runtime ?? "docker",
     }),
   );
   await fs.writeFile(path.join(source, "data", "restored.txt"), "new-data");
@@ -494,7 +498,7 @@ describe("fleet restore runtime", () => {
     const containers = containerMock({ kind: "missing", state: "missing" });
 
     await expect(restoreFleetCell(restoreParams(containers, archive))).rejects.toThrow(
-      /fleet rm acme --force.*fleet create acme --no-start --image <image>.*retry fleet restore/iu,
+      /fleet rm acme --force.*same original OS user and group identity.*same Docker or Podman rootless\/rootful context.*original full provisioning profile.*fleet create acme --runtime docker --image <image> --port <port> --memory <memory> --cpus <cpus> --pids-limit <pids-limit> --network <bridge\|internal>.*--env KEY=VALUE.*original provisioning command or deployment record.*do not use create defaults.*retry fleet restore/iu,
     );
     expect(containers.remove).not.toHaveBeenCalled();
   });
@@ -718,6 +722,123 @@ describe("fleet restore runtime", () => {
     await expect(fs.readFile(path.join(record.dataDir, "state.txt"), "utf8")).resolves.toBe(
       "state",
     );
+  });
+
+  it("reports when a force-stopped cell cannot be restarted after restore fails", async () => {
+    const archive = await createArchive();
+    const running = inspection(true);
+    const containers = containerMock(running);
+    containers.stop.mockImplementation(async () => {
+      running.running = false;
+      running.state = "exited";
+    });
+    containers.remove.mockRejectedValue(new Error("transient removal failure"));
+    containers.start.mockRejectedValue(new Error("restart unavailable"));
+
+    let message = "";
+    try {
+      await restoreFleetCell({ ...restoreParams(containers, archive), force: true });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/transient removal failure/iu);
+    expect(message).toMatch(/previous cell could not be restarted/iu);
+    expect(message).toMatch(/openclaw fleet start acme/iu);
+  });
+
+  it("does not start a replacement that inherits the cell name after the original disappears", async () => {
+    const archive = await createArchive();
+    const running = inspection(true);
+    const replacement = {
+      ...inspection(true),
+      containerId: "replacement-id",
+      labels: { ...inspection(true).labels },
+    };
+    const containers = containerMock(running);
+    containers.stop.mockImplementation(async () => {
+      running.running = false;
+      running.state = "exited";
+    });
+    containers.remove.mockRejectedValue(new Error("transient removal failure"));
+    let inspectCount = 0;
+    containers.inspect.mockImplementation(async (_runtime, reference) => {
+      inspectCount += 1;
+      if (inspectCount === 1) {
+        return running;
+      }
+      if (reference === "container-id" && containers.remove.mock.calls.length > 0) {
+        return { kind: "missing", state: "missing" };
+      }
+      return reference === "container-id" ? running : replacement;
+    });
+
+    let message = "";
+    try {
+      await restoreFleetCell({ ...restoreParams(containers, archive), force: true });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/transient removal failure/iu);
+    expect(message).toMatch(/previous cell container is missing/iu);
+    expect(message).toMatch(/registered cell name and was left untouched/iu);
+    expect(message).toMatch(
+      /do not run the missing-container removal or create sequence while that name is occupied/iu,
+    );
+    expect(message).toMatch(/resolve the name conflict without deleting it/iu);
+    expect(message).not.toMatch(/openclaw fleet rm acme --force/iu);
+    expect(message).not.toMatch(/openclaw fleet create acme/iu);
+    expect(containers.inspect).toHaveBeenCalledWith("docker", record.containerName);
+    expect(containers.start).not.toHaveBeenCalled();
+    expect(containers.stop).not.toHaveBeenCalledWith("docker", "replacement-id");
+    expect(containers.remove).not.toHaveBeenCalledWith("docker", "replacement-id", false);
+    expect(replacement).toMatchObject({ containerId: "replacement-id", running: true });
+  });
+
+  it("requires the original profile when a force-stopped Podman cell disappears", async () => {
+    record.runtime = "podman";
+    record.hostPort = 19125;
+    const archive = await createArchive({ runtime: "podman" });
+    const running = inspection(true);
+    running.memory = "4294967296";
+    running.cpus = "1.5";
+    running.pidsLimit = 1024;
+    running.labels["openclaw.fleet.env-keys"] = "TENANT_REGION";
+    running.environment.TENANT_REGION = "west=1";
+    const containers = containerMock(running);
+    containers.inspectNetwork.mockResolvedValue({
+      kind: "ok",
+      labels: {
+        "openclaw.fleet.tenant": "acme",
+        "openclaw.fleet.owner": cellOwnerId(record.dataDir),
+      },
+      attachedContainers: [{ id: "cell", name: record.containerName }],
+      internal: true,
+    });
+    containers.stop.mockImplementation(async () => {
+      running.running = false;
+      running.state = "exited";
+    });
+    containers.remove.mockRejectedValue(new Error("transient removal failure"));
+    containers.inspect.mockImplementation(async () =>
+      containers.remove.mock.calls.length > 0 ? { kind: "missing", state: "missing" } : running,
+    );
+
+    let message = "";
+    try {
+      await restoreFleetCell({ ...restoreParams(containers, archive), force: true });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/transient removal failure/iu);
+    expect(message).toMatch(/previous cell container is missing/iu);
+    expect(message).toMatch(
+      /same original OS user and group identity.*same Docker or Podman rootless\/rootful context.*original full provisioning profile.*fleet create acme --runtime podman --image <image> --port <port> --memory <memory> --cpus <cpus> --pids-limit <pids-limit> --network <bridge\|internal>.*--disk <disk>.*--env KEY=VALUE.*original provisioning command or deployment record.*do not use create defaults.*retry fleet restore/iu,
+    );
+    expect(message).not.toMatch(/fleet start acme/iu);
+    expect(containers.start).not.toHaveBeenCalled();
   });
 
   it("stops an unhealthy started replacement so its undelivered token cannot serve", async () => {
