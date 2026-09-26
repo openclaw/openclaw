@@ -765,11 +765,6 @@ async function prepareCliRunContextWithinReadFence(
     normalizeOptionalMcpContextValue(params.provider) ??
     params.provider;
   const normalizedCatalogModel = normalizeCliModel(modelId, backendResolved.config);
-  const normalizedModel =
-    backendResolved.resolveModelId?.({
-      modelId: normalizedCatalogModel,
-      contextWindow: params.contextWindow,
-    }) ?? normalizedCatalogModel;
   const questionRoute = { provider: modelProvider, model: modelId };
   const questionFingerprint = questionOperation
     ? questionOperation.bindToolAuthorityRoute(questionRoute)
@@ -907,17 +902,29 @@ async function prepareCliRunContextWithinReadFence(
     agentRuntime: backendResolved.id,
     thinkLevel: params.thinkLevel,
   });
+  let effectiveContextWindow = params.contextWindow;
   if (selectableContextEntry) {
     const contextWindowProfile = resolveModelContextWindowProfile({
       catalogEntry: selectableContextEntry,
       selected: params.contextWindow,
     });
+    effectiveContextWindow = contextWindowProfile.contextWindow ?? params.contextWindow;
     // Only an effective option caps the window; the bare catalog scalar stays
     // subordinate to the fixed provider contract above.
     if (contextWindowProfile.contextWindow && contextWindowProfile.contextTokens !== undefined) {
       modelContextTokens = Math.min(modelContextTokens, contextWindowProfile.contextTokens);
     }
   }
+  // The native model id must follow the same effective option as the budget:
+  // resolving it from the explicit selection alone left unselected sessions on
+  // a bare id while budgeting the declared default (e.g. 1m), and CLIs that do
+  // not infer that default (Claude Code behind a custom ANTHROPIC_BASE_URL)
+  // then auto-compact at their smaller native window.
+  const normalizedModel =
+    backendResolved.resolveModelId?.({
+      modelId: normalizedCatalogModel,
+      contextWindow: effectiveContextWindow,
+    }) ?? normalizedCatalogModel;
   const resolvedContextWindowInfo = resolveContextWindowInfo({
     cfg: params.config,
     provider: params.provider,
