@@ -129,6 +129,7 @@ async function waitForAcpRuntimeBackendReady(params: {
 
 /** Start post-ready sidecars such as channels, hooks, plugin services, and cleanup tasks. */
 export async function startGatewaySidecars(params: {
+  scheduler: GatewayScheduler;
   restartSentinelContext?: DeliveryQueueStateContext;
   cfg: OpenClawConfig;
   getModelRuntimeConfig?: () => OpenClawConfig;
@@ -505,6 +506,7 @@ export async function startGatewaySidecars(params: {
             cfg: params.cfg,
             log: params.logHooks,
             signal,
+            scheduler: params.scheduler,
           });
         },
       }),
@@ -900,6 +902,7 @@ export async function startGatewayPostAttachRuntime(
                 : params.getCurrentPluginMetadataSnapshot?.();
               return await measureStartup(params.startupTrace, "sidecars.total", () =>
                 runtimeDeps.startGatewaySidecars({
+                  scheduler: params.scheduler,
                   restartSentinelContext,
                   cfg: startupRuntimeCurrent
                     ? params.gatewayPluginConfigAtStart
