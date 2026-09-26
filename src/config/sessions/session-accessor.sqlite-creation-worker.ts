@@ -44,6 +44,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
     const read = () =>
       reader.readExactEntries({
         projection: "creation",
+        creationLabel: options.label,
         sessionKeys: [scope.sessionKey],
         env: { ...scope.env },
       });
@@ -58,8 +59,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
     if (!snapshot) {
       throw new Error("Session creation lost its initialized database");
     }
-    const { normalizedKey, legacyKeys, labels, databaseIdentity, databasePath, ...context } =
-      snapshot;
+    const { normalizedKey, legacyKeys, databaseIdentity, databasePath, ...context } = snapshot;
     const assertDatabaseCurrent = () => {
       reader.assertCurrent();
       assertExistingDatabaseIdentity(scope.path, `file:${databaseIdentity}`);
@@ -87,10 +87,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
               )
           : undefined;
         options.onPhase?.("entry");
-        const created = await createEntry({
-          ...context,
-          isLabelInUse: (label) => labels.has(label),
-        });
+        const created = await createEntry(context);
         if (!created.ok) {
           return { ok: false, error: created.error, phase: "entry" };
         }
