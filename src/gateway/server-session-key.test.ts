@@ -289,6 +289,63 @@ describe("resolveSessionKeyForRun", () => {
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(2);
   });
 
+  it("expires positive cache entries so a deleted session is not served from stale cache", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-12T15:00:00Z"));
+    hoisted.loadConfigMock.mockReturnValue({});
+    const store = {
+      "agent:main:acp:run-deleted": { sessionId: "run-deleted", updatedAt: 123 },
+    };
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store,
+    });
+
+    expect(resolveSessionKeyForRun("run-deleted")).toBe("acp:run-deleted");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
+
+    // Simulate session deletion: the store no longer has the entry.
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store: {},
+    });
+
+    // Within the hit TTL the stale cached key is still returned.
+    vi.advanceTimersByTime(29_000);
+    expect(resolveSessionKeyForRun("run-deleted")).toBe("acp:run-deleted");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
+
+    // After the hit TTL expires the cache re-resolves and finds nothing.
+    vi.advanceTimersByTime(2_000);
+    expect(resolveSessionKeyForRun("run-deleted")).toBeUndefined();
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-resolves positive cache entries after hit TTL when the session still exists", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-12T15:00:00Z"));
+    hoisted.loadConfigMock.mockReturnValue({});
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store: {
+        "agent:main:acp:run-stable": { sessionId: "run-stable", updatedAt: 123 },
+      },
+    });
+
+    expect(resolveSessionKeyForRun("run-stable")).toBe("acp:run-stable");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
+
+    // Within TTL, no re-scan.
+    vi.advanceTimersByTime(29_000);
+    expect(resolveSessionKeyForRun("run-stable")).toBe("acp:run-stable");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
+
+    // After TTL, re-scan and re-cache.
+    vi.advanceTimersByTime(2_000);
+    expect(resolveSessionKeyForRun("run-stable")).toBe("acp:run-stable");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(2);
+  });
+
   it("prefers the structurally matching session key when duplicate session ids exist", () => {
     hoisted.loadConfigMock.mockReturnValue({});
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({

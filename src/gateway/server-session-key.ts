@@ -21,10 +21,11 @@ import { loadCombinedSessionStoreForGatewayCore } from "./session-utils.js";
 
 const RUN_LOOKUP_CACHE_LIMIT = 256;
 const RUN_LOOKUP_MISS_TTL_MS = 1_000;
+const RUN_LOOKUP_HIT_TTL_MS = 30_000;
 
 // Run-id to session-key lookup bridges live agent events and persisted session
-// stores. Positive hits are stable; misses stay short-lived so late transcript
-// writes can become visible without polling on every caller.
+// stores. Positive hits and misses both expire so a deleted or reset session
+// is not served from stale cache indefinitely.
 type RunLookupCacheEntry = {
   sessionKey: string | null;
   expiresAt: number | null;
@@ -51,7 +52,7 @@ function setResolvedSessionKeyCache(
   ) {
     pruneMapToMaxSize(resolvedSessionKeyByRunId, RUN_LOOKUP_CACHE_LIMIT - 1);
   }
-  let expiresAt: number | null = null;
+  let expiresAt: number | null;
   if (sessionKey === null) {
     // Negative caching avoids repeated full-store scans while still allowing
     // a just-created run/session pair to appear shortly after the first lookup.
@@ -60,6 +61,14 @@ function setResolvedSessionKeyCache(
       return;
     }
     expiresAt = missExpiresAt;
+  } else {
+    // Positive hits expire so a session deleted or reset after the cache was
+    // populated is not served indefinitely.
+    const hitExpiresAt = resolveExpiresAtMsFromDurationMs(RUN_LOOKUP_HIT_TTL_MS);
+    if (hitExpiresAt === undefined) {
+      return;
+    }
+    expiresAt = hitExpiresAt;
   }
   resolvedSessionKeyByRunId.set(cacheKey, {
     sessionKey,
@@ -113,13 +122,10 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   const cacheKey = runLookupCacheKey(runId, cacheAgentId);
   const cachedLookup = resolvedSessionKeyByRunId.get(cacheKey);
   if (cachedLookup !== undefined) {
-    if (cachedLookup.sessionKey !== null) {
-      return cachedLookup.sessionKey;
-    }
     const expiresAt = asDateTimestampMs(cachedLookup.expiresAt);
     const now = asDateTimestampMs(Date.now());
     if (expiresAt !== undefined && now !== undefined && expiresAt > now) {
-      return undefined;
+      return cachedLookup.sessionKey !== null ? cachedLookup.sessionKey : undefined;
     }
     resolvedSessionKeyByRunId.delete(cacheKey);
   }
