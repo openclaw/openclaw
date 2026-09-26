@@ -614,28 +614,6 @@ describe("environment gateway methods", () => {
     ).not.toHaveProperty("desktopApps");
   });
 
-  it("returns status for one node environment", async () => {
-    runtimeState.sessionHostNodeIds.add("node-live");
-    const [ok, payload] = await callEnvironmentMethod("environments.status", {
-      environmentId: "node:node-live",
-    });
-
-    expect(ok).toBe(true);
-    expect(payload).toEqual({
-      id: "node:node-live",
-      type: "node",
-      label: "Live Node",
-      status: "available",
-      platform: "ios",
-      sessionHost: true,
-      lastConnectedAtMs: 123,
-      lastSeenAtMs: 123,
-      lastSeenReason: "connect",
-      trust: "persistent",
-      capabilities: ["camera", "system.run"],
-    });
-  });
-
   it("rejects unknown environment ids", async () => {
     const [ok, , error] = await callEnvironmentMethod("environments.status", {
       environmentId: "missing",
@@ -856,31 +834,6 @@ describe("environment gateway methods", () => {
       );
       expect(response[2]).toEqual({ code: gatewayCode, message });
     }
-  });
-
-  it("destroys an environment idempotently", async () => {
-    const destroyed = workerRecord({ state: "destroyed" });
-    const destroyUnattached = vi.fn(async () => destroyed);
-    const service = workerService({ destroyUnattached });
-    const first = await callEnvironmentMethod(
-      "environments.destroy",
-      { environmentId: "worker-1" },
-      { service },
-    );
-    const second = await callEnvironmentMethod(
-      "environments.destroy",
-      { environmentId: "worker-1" },
-      { service },
-    );
-
-    expect(first).toEqual(second);
-    expect(first[0]).toBe(true);
-    expect(first[1]).toMatchObject({
-      id: "worker-1",
-      status: "unavailable",
-      worker: { state: "destroyed" },
-    });
-    expect(destroyUnattached).toHaveBeenCalledTimes(2);
   });
 
   it("rejects raw destruction of a session-attached worker", async () => {

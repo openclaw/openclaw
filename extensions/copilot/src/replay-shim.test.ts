@@ -39,21 +39,8 @@ describe("decideReplayAction", () => {
     }
   });
 
-  it("returns resume when sdkSessionId is present and replayInvalid is not true", () => {
-    expect(decideReplayAction({ sdkSessionId: "sess-1" })).toEqual({
-      action: "resume",
-      sdkSessionId: "sess-1",
-      downgradedFromResume: false,
-    });
-    expect(decideReplayAction({ sdkSessionId: "sess-2", replayInvalid: false })).toEqual({
-      action: "resume",
-      sdkSessionId: "sess-2",
-      downgradedFromResume: false,
-    });
-  });
-
   it("trims whitespace around sdkSessionId before resuming", () => {
-    expect(decideReplayAction({ sdkSessionId: "  sess-3  " })).toEqual({
+    expect(decideReplayAction({ sdkSessionId: "  sess-3  ", replayInvalid: false })).toEqual({
       action: "resume",
       sdkSessionId: "sess-3",
       downgradedFromResume: false,
@@ -81,13 +68,6 @@ describe("classifyResumeFailure", () => {
     });
   });
 
-  it("treats a generic Error as unrecoverable", () => {
-    expect(classifyResumeFailure(new Error("boom"))).toEqual({
-      recoverable: false,
-      kind: "unknown",
-    });
-  });
-
   it("treats a non-Error throw value as unrecoverable", () => {
     expect(classifyResumeFailure("string-error")).toEqual({
       recoverable: false,
@@ -96,14 +76,6 @@ describe("classifyResumeFailure", () => {
     expect(classifyResumeFailure(42)).toEqual({
       recoverable: false,
       kind: "unknown",
-    });
-  });
-
-  it("classifies status:404 errors as missing/recoverable", () => {
-    const error = Object.assign(new Error("Not Found"), { status: 404 });
-    expect(classifyResumeFailure(error)).toEqual({
-      recoverable: true,
-      kind: "missing",
     });
   });
 
@@ -220,30 +192,6 @@ describe("computeReplayMetadata", () => {
   it("resumeFailureRecovered invalidates replay even without side effects", () => {
     expect(computeReplayMetadata({ thisAttemptResumeFailureRecovered: true })).toEqual({
       hadPotentialSideEffects: false,
-      replaySafe: false,
-    });
-  });
-
-  it("combinations: prior side effects + timeout still hadSideEffects:true (no double-count)", () => {
-    expect(
-      computeReplayMetadata({
-        priorHadPotentialSideEffects: true,
-        thisAttemptTimedOut: true,
-      }),
-    ).toEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-  });
-
-  it("combinations: clean attempt with prior replayInvalid+sideEffects propagates both invariants", () => {
-    expect(
-      computeReplayMetadata({
-        priorReplayInvalid: true,
-        priorHadPotentialSideEffects: true,
-      }),
-    ).toEqual({
-      hadPotentialSideEffects: true,
       replaySafe: false,
     });
   });

@@ -75,56 +75,6 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
   return { accountId, context };
 }
 
-class ExecApprovalContainer extends DiscordUiContainer {
-  constructor(params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    title: string;
-    description?: string;
-    commandLabel?: string;
-    commandPreview: string;
-    commandSecondaryPreview?: string | null;
-    metadataLines?: string[];
-    actionRow?: Row<Button>;
-    footer?: string;
-    accentColor?: string;
-  }) {
-    const components: Array<TextDisplay | Separator | Row<Button>> = [
-      new TextDisplay(`## ${params.title}`),
-    ];
-    if (params.description) {
-      components.push(new TextDisplay(params.description));
-    }
-    components.push(new Separator({ divider: true, spacing: "small" }));
-    components.push(
-      new TextDisplay(
-        `### ${params.commandLabel ?? "Command"}\n\`\`\`\n${params.commandPreview}\n\`\`\``,
-      ),
-    );
-    if (params.commandSecondaryPreview) {
-      components.push(
-        new TextDisplay(`### Shell Preview\n\`\`\`\n${params.commandSecondaryPreview}\n\`\`\``),
-      );
-    }
-    if (params.metadataLines?.length) {
-      components.push(new TextDisplay(params.metadataLines.join("\n")));
-    }
-    if (params.actionRow) {
-      components.push(params.actionRow);
-    }
-    if (params.footer) {
-      components.push(new Separator({ divider: false, spacing: "small" }));
-      components.push(new TextDisplay(`-# ${params.footer}`));
-    }
-    super({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      components,
-      accentColor: params.accentColor,
-    });
-  }
-}
-
 class ExecApprovalActionButton extends Button {
   override customId: string;
   override label: string;
@@ -166,12 +116,6 @@ function createApprovalActionRow(view: PendingApprovalView): Row<Button> {
   );
 }
 
-function buildApprovalMetadataLines(
-  metadata: readonly { label: string; value: string }[],
-): string[] {
-  return metadata.map((item) => `- ${item.label}: ${item.value}`);
-}
-
 function buildExecApprovalPayload(container: DiscordUiContainer): MessagePayloadObject {
   const components: TopLevelComponents[] = [container];
   return { components, allowed_mentions: DISCORD_APPROVAL_ALLOWED_MENTIONS };
@@ -198,7 +142,7 @@ function createApprovalContainer(params: {
   cfg: OpenClawConfig;
   accountId: string;
   actionRow?: Row<Button>;
-}): ExecApprovalContainer {
+}): DiscordUiContainer {
   const { view } = params;
   const plugin = view.approvalKind === "plugin";
   const systemAgent = view.approvalKind === "system-agent";
@@ -261,17 +205,33 @@ function createApprovalContainer(params: {
     ? `Expires <t:${Math.max(0, Math.floor(view.expiresAtMs / 1000))}:R> · ID: ${approvalId}`
     : `ID: ${approvalId}`;
 
-  return new ExecApprovalContainer({
+  const components: Array<TextDisplay | Separator | Row<Button>> = [
+    new TextDisplay(`## ${title}`),
+    new TextDisplay(description),
+    new Separator({ divider: true, spacing: "small" }),
+    new TextDisplay(`### ${systemAgent ? "Change" : "Command"}\n\`\`\`\n${commandPreview}\n\`\`\``),
+  ];
+  if (commandSecondaryPreview) {
+    components.push(
+      new TextDisplay(`### Shell Preview\n\`\`\`\n${commandSecondaryPreview}\n\`\`\``),
+    );
+  }
+  if (view.metadata.length) {
+    components.push(
+      new TextDisplay(view.metadata.map((item) => `- ${item.label}: ${item.value}`).join("\n")),
+    );
+  }
+  if (params.actionRow) {
+    components.push(params.actionRow);
+  }
+  components.push(
+    new Separator({ divider: false, spacing: "small" }),
+    new TextDisplay(`-# ${footer}`),
+  );
+  return new DiscordUiContainer({
     cfg: params.cfg,
     accountId: params.accountId,
-    title,
-    description,
-    commandLabel: systemAgent ? "Change" : "Command",
-    commandPreview,
-    commandSecondaryPreview,
-    metadataLines: buildApprovalMetadataLines(view.metadata),
-    actionRow: params.actionRow,
-    footer,
+    components,
     accentColor,
   });
 }

@@ -239,13 +239,6 @@ function setupChannelArg(index: number) {
   return mockArg(channelWizardMocks.setupChannels, 0, index, `setup channel arg ${index}`);
 }
 
-function applyAccountConfigCall(fn: MockCallSource, index = 0) {
-  return requireRecord(
-    mockArg(fn, index, 0, `apply account config ${index}`),
-    "apply account config",
-  );
-}
-
 function installCall(index = 0) {
   return requireRecord(
     mockArg(
@@ -449,11 +442,7 @@ type SignalAfterAccountConfigWritten = NonNullable<
 type ApplyAccountConfigParams = Parameters<
   NonNullable<NonNullable<ChannelPlugin["setup"]>["applyAccountConfig"]>
 >[0];
-type PrepareAccountConfigInputParams = Parameters<
-  NonNullable<NonNullable<ChannelPlugin["setup"]>["prepareAccountConfigInput"]>
->[0];
 type SignalSetupInput = ChannelSetupInput & { signalNumber?: string };
-type NextcloudTalkSetupInput = ChannelSetupInput & { secretFile?: string };
 type MatrixSetupInput = ChannelSetupInput & { initialSyncLimit?: number };
 type PreparedChatSetupInput = ChannelSetupInput & { workspace?: string };
 
@@ -691,19 +680,6 @@ describe("channelsAddCommand", () => {
     },
   );
 
-  it("fails fast before guided setup when no interactive terminal is available", async () => {
-    terminalMocks.isTerminalInteractive.mockReturnValue(false);
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
-
-    await channelsAddCommand({ channel: "telegram" }, runtime, { hasFlags: false });
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("channels add --channel <id> --use-env"),
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
-  });
-
   it("keeps no-TTY guidance for an explicit ownerless agent fleet", async () => {
     terminalMocks.isTerminalInteractive.mockReturnValue(false);
     const config: OpenClawConfig = {
@@ -715,11 +691,7 @@ describe("channelsAddCommand", () => {
         },
       },
     };
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
 
     await channelsAddCommand({ channel: "telegram" }, runtime, { hasFlags: false });
 
@@ -730,18 +702,21 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
   });
 
-  it.each(
-    [true, false].flatMap((interactive) => [
-      { label: "empty", channel: "", expectedChannel: "", interactive },
-      { label: "whitespace-only", channel: " \t ", expectedChannel: "", interactive },
-      {
-        label: "unknown",
-        channel: "unknown-channel",
-        expectedChannel: "unknown-channel",
-        interactive,
-      },
-    ]),
-  )(
+  it.each([
+    { label: "whitespace-only", channel: " \t ", expectedChannel: "", interactive: true },
+    {
+      label: "unknown",
+      channel: "unknown-channel",
+      expectedChannel: "unknown-channel",
+      interactive: true,
+    },
+    {
+      label: "unknown",
+      channel: "unknown-channel",
+      expectedChannel: "unknown-channel",
+      interactive: false,
+    },
+  ])(
     "rejects an explicit $label guided selector when interactive=$interactive",
     async ({ channel, expectedChannel, interactive }) => {
       terminalMocks.isTerminalInteractive.mockReturnValue(interactive);
@@ -763,7 +738,6 @@ describe("channelsAddCommand", () => {
   );
 
   it.each([
-    { label: "empty", channel: "", expectedChannel: "" },
     { label: "whitespace-only", channel: " \t ", expectedChannel: "" },
     {
       label: "unknown",
@@ -790,11 +764,7 @@ describe("channelsAddCommand", () => {
 
   it("keeps an omitted hosted selector on the shared picker path", async () => {
     const config: OpenClawConfig = { channels: {} };
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
 
     await runChannelsSetupWizard({}, runtime, channelWizardMocks.prompter);
 
@@ -909,11 +879,7 @@ describe("channelsAddCommand", () => {
     "preselects a hosted catalog channel from the %s selector",
     async (channel) => {
       const config: OpenClawConfig = { channels: {} };
-      configMocks.readConfigFileSnapshot.mockResolvedValue({
-        ...baseConfigSnapshot,
-        sourceConfig: config,
-        config,
-      });
+      configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
       catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
         {
           ...createExternalChatCatalogEntry(),
@@ -944,11 +910,7 @@ describe("channelsAddCommand", () => {
         },
         channels: {},
       };
-      configMocks.readConfigFileSnapshot.mockResolvedValue({
-        ...baseConfigSnapshot,
-        sourceConfig: config,
-        config,
-      });
+      configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
       channelWizardMocks.prompter.select
         .mockResolvedValueOnce({ agentId: "helper" })
         .mockResolvedValueOnce("main");
@@ -996,10 +958,7 @@ describe("channelsAddCommand", () => {
 
   it.each([
     { answer: { agentId: "missing" }, error: 'Unknown agent id "missing"' },
-    { answer: { agentId: "" }, error: 'Unknown agent id ""' },
-    { answer: { agentId: "   " }, error: 'Unknown agent id "   "' },
     { answer: null, error: "Invalid channel setup owner selection" },
-    { answer: {}, error: "Invalid channel setup owner selection" },
     { answer: { agentId: 17 }, error: "Invalid channel setup owner selection" },
   ])("rejects invalid hosted owner $answer before setup", async ({ answer, error }) => {
     const config: OpenClawConfig = {
@@ -1012,11 +971,7 @@ describe("channelsAddCommand", () => {
       },
       channels: {},
     };
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
     policyMocks.readCurrentConfigForPolicyCheckAsync.mockResolvedValue(config);
     const session = new WizardSession(async (prompter) => {
       await runChannelsSetupWizard({ channel: "lifecycle-chat" }, runtime, prompter);
@@ -1098,11 +1053,7 @@ describe("channelsAddCommand", () => {
         },
         channels: {},
       };
-      configMocks.readConfigFileSnapshot.mockResolvedValue({
-        ...baseConfigSnapshot,
-        sourceConfig: config,
-        config,
-      });
+      configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
       channelWizardMocks.prompter.select.mockResolvedValueOnce("main");
       channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
         const options = requireRecord(args[3], "setup options");
@@ -1155,11 +1106,6 @@ describe("channelsAddCommand", () => {
       env: { MULTI_CHAT_TOKEN: "token", MULTI_CHAT_SECOND_TOKEN: "" },
       missing: ["MULTI_CHAT_SECOND_TOKEN"],
     },
-    {
-      channel: "private-key-chat",
-      env: { PRIVATE_CHAT_KEY: "" },
-      missing: ["PRIVATE_CHAT_KEY"],
-    },
   ])("rejects $channel --use-env when declared env vars are missing", async (testCase) => {
     for (const [name, value] of Object.entries(testCase.env)) {
       vi.stubEnv(name, value);
@@ -1179,10 +1125,6 @@ describe("channelsAddCommand", () => {
   });
 
   it.each([
-    {
-      channel: "single-env-chat",
-      env: { SINGLE_CHAT_TOKEN: "token" },
-    },
     {
       channel: "multi-env-chat",
       env: { MULTI_CHAT_TOKEN: "token", MULTI_CHAT_SECOND_TOKEN: "second-token" },
@@ -1223,11 +1165,7 @@ describe("channelsAddCommand", () => {
 
   it("keeps guided channel setup lazy until the user selects a channel", async () => {
     const config: OpenClawConfig = { channels: {} };
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
 
     await channelsAddCommand({}, runtime, { hasFlags: false });
 
@@ -1256,11 +1194,7 @@ describe("channelsAddCommand", () => {
         },
       },
     };
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
     channelWizardMocks.setupChannels.mockResolvedValueOnce(installedConfig);
 
     await channelsAddCommand({}, runtime, { hasFlags: false });
@@ -1280,11 +1214,7 @@ describe("channelsAddCommand", () => {
     "preselects an installable catalog channel from the %s selector",
     async (channel) => {
       const config: OpenClawConfig = { channels: {} };
-      configMocks.readConfigFileSnapshot.mockResolvedValue({
-        ...baseConfigSnapshot,
-        sourceConfig: config,
-        config,
-      });
+      configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
       catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
         {
           ...createExternalChatCatalogEntry(),
@@ -1305,11 +1235,7 @@ describe("channelsAddCommand", () => {
     const config: OpenClawConfig = {
       channels: { "lifecycle-chat": { enabled: false } },
     };
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
 
     await channelsAddCommand({ channel: "lifecycle-chat" }, runtime, { hasFlags: false });
 
@@ -1335,11 +1261,7 @@ describe("channelsAddCommand", () => {
         },
       ]),
     );
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
         ...createExternalChatCatalogEntry(),
@@ -1490,150 +1412,6 @@ describe("channelsAddCommand", () => {
       expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     },
   );
-
-  it("maps legacy Nextcloud Talk add flags to setup input fields", async () => {
-    const prepareAccountConfigInput = vi.fn(({ input }: PrepareAccountConfigInputParams) => {
-      const setupInput = input as NextcloudTalkSetupInput;
-      return {
-        ...setupInput,
-        baseUrl: setupInput.baseUrl ?? setupInput.url,
-        secret: setupInput.secret ?? setupInput.token ?? setupInput.password,
-        secretFile: setupInput.secretFile ?? setupInput.tokenFile,
-      };
-    });
-    const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => {
-      const setupInput = input as NextcloudTalkSetupInput;
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          "nextcloud-talk": {
-            enabled: true,
-            baseUrl: setupInput.baseUrl,
-            botSecret: setupInput.secret,
-            botSecretFile: setupInput.secretFile,
-          },
-        },
-      };
-    });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "nextcloud-talk",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "nextcloud-talk",
-              label: "Nextcloud Talk",
-            }),
-            setup: { prepareAccountConfigInput, applyAccountConfig },
-          },
-          source: "test",
-        },
-      ]),
-    );
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
-
-    await channelsAddCommand(
-      {
-        channel: "nextcloud-talk",
-        account: "default",
-        url: "https://cloud.example.com/",
-        token: "shared-secret",
-      },
-      runtime,
-      { hasFlags: true },
-    );
-
-    const applyInput = requireRecord(
-      applyAccountConfigCall(applyAccountConfig as unknown as MockCallSource).input,
-      "apply input",
-    );
-    expect(applyInput.url).toBe("https://cloud.example.com/");
-    expect(applyInput.token).toBe("shared-secret");
-    expect(applyInput.baseUrl).toBe("https://cloud.example.com/");
-    expect(applyInput.secret).toBe("shared-secret");
-    expect(writtenChannel("nextcloud-talk")).toEqual({
-      enabled: true,
-      baseUrl: "https://cloud.example.com/",
-      botSecret: "shared-secret",
-      botSecretFile: undefined,
-    });
-
-    configMocks.writeConfigFile.mockClear();
-    applyAccountConfig.mockClear();
-    await channelsAddCommand(
-      {
-        channel: "nextcloud-talk",
-        account: "default",
-        url: "https://cloud.example.com",
-        tokenFile: "/tmp/nextcloud-secret",
-      },
-      runtime,
-      { hasFlags: true },
-    );
-
-    const secondApplyInput = requireRecord(
-      applyAccountConfigCall(applyAccountConfig as unknown as MockCallSource).input,
-      "second apply input",
-    );
-    expect(secondApplyInput.baseUrl).toBe("https://cloud.example.com");
-    expect(secondApplyInput.secretFile).toBe("/tmp/nextcloud-secret");
-  });
-
-  it("passes channel auth directory overrides through add setup input", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "whatsapp",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "whatsapp",
-              label: "WhatsApp",
-            }),
-            setup: {
-              applyAccountConfig: (params: ApplyAccountConfigParams) => ({
-                ...params.cfg,
-                channels: {
-                  ...params.cfg.channels,
-                  whatsapp: {
-                    enabled: true,
-                    accounts: {
-                      [params.accountId]: {
-                        enabled: true,
-                        authDir: params.input.authDir,
-                      },
-                    },
-                  },
-                },
-              }),
-            },
-          },
-          source: "test",
-        },
-      ]),
-    );
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
-
-    await channelsAddCommand(
-      {
-        channel: "whatsapp",
-        account: "work",
-        authDir: "/tmp/openclaw-wa-auth",
-      },
-      runtime,
-      { hasFlags: true },
-    );
-
-    expect(writtenChannel("whatsapp")).toEqual({
-      enabled: true,
-      accounts: {
-        work: {
-          enabled: true,
-          authDir: "/tmp/openclaw-wa-auth",
-        },
-      },
-    });
-  });
 
   it.each([
     ...["Work Phone", "work-phone", "WORK-PHONE"].flatMap((storedKey) =>

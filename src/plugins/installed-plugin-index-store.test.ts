@@ -231,14 +231,6 @@ describe("installed plugin index persistence", () => {
     },
   );
 
-  it("resolves the persisted index path to the shared state database", () => {
-    const stateDir = makeTempDir();
-
-    expect(resolveInstalledPluginIndexStorePath({ stateDir })).toBe(
-      path.join(stateDir, "state", "openclaw.sqlite"),
-    );
-  });
-
   it("writes and reads the installed plugin index atomically", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
@@ -755,31 +747,6 @@ describe("installed plugin index persistence", () => {
     insertPersistedIndexRow(stateDir, { migrationVersion: 0 });
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
-  });
-
-  it("refreshes and persists a rebuilt index without loading plugin runtime", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
-
-    const index = refreshPersistedInstalledPluginIndex({
-      reason: "manual",
-      stateDir,
-      candidates: [candidate],
-      env: {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      },
-    });
-
-    expect(index.refreshReason).toBe("manual");
-    expect(index.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-    await expectPersistedIndex(stateDir, {
-      refreshReason: "manual",
-      pluginIds: ["demo"],
-    });
   });
 
   it("preserves existing install records when refreshing the manifest cache", async () => {

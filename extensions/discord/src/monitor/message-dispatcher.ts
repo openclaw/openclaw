@@ -22,7 +22,6 @@ import {
   hasDiscordMessageStickers,
   resolveDiscordReferencedReplyMessageId,
 } from "./message-forwarded.js";
-import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
   createDiscordMessageRunQueue,
@@ -62,10 +61,6 @@ type DiscordMessageDispatcher = (
 type DiscordMessageDispatcherWithLifecycle = DiscordMessageDispatcher & {
   deactivate: () => Promise<void>;
 };
-
-function isNonEmptyString(value: string | undefined): value is string {
-  return typeof value === "string" && value.length > 0;
-}
 
 export function createDiscordMessageDispatcher(
   params: DiscordMessageHandlerParams,
@@ -192,18 +187,6 @@ export function createDiscordMessageDispatcher(
             if (!ctx) {
               await ingress.settle();
               return;
-            }
-            applyImplicitReplyBatchGate(ctx, params.replyToMode, entries.length > 1);
-            const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
-            if (entries.length > 1 && ids.length > 0) {
-              const ctxBatch = ctx as typeof ctx & {
-                MessageSids?: string[];
-                MessageSidFirst?: string;
-                MessageSidLast?: string;
-              };
-              ctxBatch.MessageSids = ids;
-              ctxBatch.MessageSidFirst = ids[0];
-              ctxBatch.MessageSidLast = ids[ids.length - 1];
             }
             messageRunQueue.enqueue({ context: ctx, ingressSettlement: ingress });
           } catch (error) {
