@@ -36,6 +36,22 @@ export type AssembleResult = {
    * legacy per-turn projection behavior.
    */
   contextProjection?: ContextEngineProjection;
+  /** Content-free per-turn observation; never changes the engine's persisted transcript. */
+  semanticCurationObservation?: {
+    mode: "shadow";
+    reason: string;
+    sourceChars: number;
+    selectedChars: number;
+    sourceEstimatedTokens: number;
+    selectedEstimatedTokens: number;
+    reductionRatio: number;
+    protectedSegments: number;
+    evaluatedSegments: number;
+    uncertainSegments: number;
+    decisionWallMs: number;
+    decisionInputTokens?: number;
+    decisionOutputTokens?: number;
+  };
 };
 
 export type ContextEngineProjection = {

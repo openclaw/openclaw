@@ -3,6 +3,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
@@ -14,6 +15,7 @@ import {
   peekAdjustedParamsForToolCall,
 } from "../agent-tools.before-tool-call.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
+import { isDecisionAssistanceEligible } from "../decision-assistance.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
 import type { AgentToolResult } from "../runtime/index.js";
@@ -134,6 +136,13 @@ export function buildEmbeddedExtensionFactories(params: {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+    const semanticAgentId =
+      params.sessionManager.getSessionTarget?.()?.agentId ?? params.agentId ?? "main";
+    const readSemanticConfig = createRuntimeConfigReader(params.cfg ?? {});
+    const semanticCurationEligible = () =>
+      isDecisionAssistanceEligible(readSemanticConfig(), semanticAgentId);
+    const semanticCurationModeReader = () =>
+      readSemanticConfig().agents?.defaults?.compaction?.semanticCuration?.mode ?? "off";
     const qualityGuardCfg = compactionCfg?.qualityGuard;
     // Prepared runs carry the canonical policy budget; fallback resolution is
     // only for callers that do not own a prepared attempt.
@@ -148,10 +157,15 @@ export function buildEmbeddedExtensionFactories(params: {
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens;
     setCompactionSafeguardRuntime(params.sessionManager, {
+      agentId: semanticAgentId,
       contextWindowTokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
+      semanticCurationMode: semanticCurationEligible() ? semanticCurationModeReader() : "off",
+      semanticCurationModeReader,
+      semanticCurationEligible,
+      semanticCurationTimeoutMs: compactionCfg?.semanticCuration?.timeoutMs,
       model: params.model,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       workspaceDir: params.workspaceDir,
