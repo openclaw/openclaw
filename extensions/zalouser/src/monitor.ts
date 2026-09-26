@@ -484,12 +484,13 @@ async function processMessage(
     cliMsgId: message.cliMsgId,
     fallback: `${message.timestampMs}`,
   });
-  accessDecision = await resolveAccessDecision({
+  const routeContextBinding: ChannelIngressContextBinding = {
     agentId: route.agentId,
     sessionKey: route.sessionKey,
     messageId: messageSid,
     inboundEventKind: "user_request",
-  });
+  };
+  accessDecision = await resolveAccessDecision(routeContextBinding);
   if (!accessDecision.senderAccess.allowed) {
     logVerbose(core, runtime, `zalouser: authorization changed before dispatch for ${senderId}`);
     return;
@@ -588,6 +589,29 @@ async function processMessage(
 
   // Download only after access and mention gating so dropped messages never fetch.
   const inboundMedia = await resolveZalouserInboundMedia({ message, account, core, runtime });
+  if (message.attachment) {
+    // The download can take minutes; re-check access so a revocation meanwhile still drops the turn.
+    accessDecision = await resolveAccessDecision(routeContextBinding);
+    if (!accessDecision.senderAccess.allowed) {
+      logVerbose(
+        core,
+        runtime,
+        `zalouser: authorization changed during attachment download for ${senderId}`,
+      );
+      return;
+    }
+    commandAuthorized = accessDecision.commandAccess.requested
+      ? accessDecision.commandAccess.authorized
+      : undefined;
+    if (isGroup && hasControlCommand && commandAuthorized !== true) {
+      logVerbose(
+        core,
+        runtime,
+        `zalouser: drop control command from unauthorized sender ${senderId}`,
+      );
+      return;
+    }
+  }
   const bodyForAgent = inboundMedia.unavailableNotice
     ? formatInboundMediaUnavailableText({ body: rawBody, notice: inboundMedia.unavailableNotice })
     : rawBody;

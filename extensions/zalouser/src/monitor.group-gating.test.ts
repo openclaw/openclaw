@@ -149,7 +149,7 @@ function installRuntime(params: {
       };
     },
   );
-  const readAllowFromStore = vi.fn(async () => []);
+  const readAllowFromStore = vi.fn(async (): Promise<string[]> => []);
   type TurnPlan = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
   const recordInboundSession = vi.fn(async (_params: unknown) => {});
   const dispatch = vi.fn(async (plan: TurnPlan) => {
@@ -1057,6 +1057,7 @@ describe("zalouser monitor inbound attachments", () => {
   };
 
   beforeEach(() => {
+    sendMessageZalouserMock.mockClear();
     startZaloListenerMock.mockReset();
     startZaloListenerMock.mockResolvedValue({ stop: vi.fn() });
     listZaloFriendsMock.mockResolvedValue([]);
@@ -1139,6 +1140,44 @@ describe("zalouser monitor inbound attachments", () => {
     );
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { revoke: false, dispatches: 1 },
+    { revoke: true, dispatches: 0 },
+  ])(
+    "re-checks pairing access after the download (revoked during download: $revoke)",
+    async ({ revoke, dispatches }) => {
+      let allowFrom = ["321"];
+      const { dispatchReplyWithBufferedBlockDispatcher, readAllowFromStore, saveRemoteMedia } =
+        installRuntime({
+          saveRemoteMedia: async () => {
+            if (revoke) {
+              allowFrom = [];
+            }
+            return {
+              id: "saved-2",
+              path: "/state/media/inbound/Contract-2026---saved-2.pdf",
+              size: 10,
+              contentType: "application/pdf",
+            };
+          },
+        });
+      readAllowFromStore.mockImplementation(async () => allowFrom);
+      const account = createAccount();
+      account.config = { ...account.config, dmPolicy: "pairing", allowFrom: [] };
+
+      await processMessageThroughMonitor({
+        message: createDmMessage({ content: "Contract-2026.pdf", attachment: fileAttachment }),
+        account,
+        config: createConfig(),
+        runtime: createRuntimeEnv(),
+      });
+
+      expect(saveRemoteMedia).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(dispatches);
+      expect(sendMessageZalouserMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not download attachments from group messages dropped by mention gating", async () => {
     const { saveRemoteMedia, dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
