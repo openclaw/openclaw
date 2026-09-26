@@ -108,7 +108,7 @@ describe("SidebarSessionNarrationController", () => {
     const released = createDeferred<void>();
     const wireKeys = new Set<string>();
     let releases = 0;
-    const request = vi.fn(async (method: string, params: { key: string }) => {
+    const request = vi.fn().mockImplementation(async (method: string, params: { key: string }) => {
       if (method === "sessions.messages.subscribe") {
         await subscribed.promise;
         wireKeys.add(params.key);
@@ -136,7 +136,7 @@ describe("SidebarSessionNarrationController", () => {
       visibility("hidden");
     }
     subscribed.resolve();
-    const handle = await source.subscribeMessages.mock.results[0].value;
+    const handle = await source.subscribeMessages.mock.results[0]?.value;
     visibility("hidden");
     await vi.advanceTimersByTimeAsync(0);
     expect(wireKeys.size).toBe(1);
