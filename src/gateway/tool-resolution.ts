@@ -98,6 +98,14 @@ export function resolveGatewayScopedTools(
     /** Authenticated standalone invocation lifetime supplied by its HTTP/RPC owner. */
     assertInvocationCurrent?: () => void;
     excludeToolNames?: Iterable<string>;
+    /**
+     * Subset of `excludeToolNames` withheld only because the requester's own
+     * harness materializes them. Transport deduplication, not an authority
+     * denial: these stay part of the requester's inheritable capability so
+     * spawned children keep the parent's real tool access. Names still pass the
+     * full policy pipeline and every explicit deny before they are inherited.
+     */
+    requesterOwnedToolNames?: Iterable<string>;
     /** Server-minted coding tools that must be mediated through the loopback surface. */
     mediatedToolNames?: Iterable<string>;
     /** Host-projected canonical authority for native CLI tools absent from this bridge. */
@@ -230,6 +238,13 @@ export function resolveGatewayScopedTools(
       ? sandboxRuntime.toolPolicy
       : undefined;
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
+  const excludedToolNameSet = new Set(
+    excludedToolNames.map((name) => normalizeToolPolicyName(name)),
+  );
+  // Only names the surface actually withheld can be restored as parent authority.
+  const requesterOwnedToolNames = Array.from(params.requesterOwnedToolNames ?? [], (name) =>
+    normalizeToolPolicyName(name),
+  ).filter((name) => Boolean(name) && excludedToolNameSet.has(name));
   const mediatedToolNames = new Set(
     Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolPolicyName(name)).filter(
       Boolean,
@@ -589,6 +604,11 @@ export function resolveGatewayScopedTools(
 
   const toolsForMessageProvider = filterToolsByMessageProvider(allTools, params.messageProvider);
   let nativeCreatorTools = (params.nativeCronCreatorToolAllowlist ?? []).map((name) => ({ name }));
+  // Name-only stand-ins for tools this surface withheld because the requester's
+  // harness owns them. They carry no executor and are never exposed on this
+  // transport; they exist so the same policy pass that shapes the visible
+  // catalog also decides what the requester may pass down to its children.
+  let requesterOwnedTools = requesterOwnedToolNames.map((name) => ({ name }));
   const declaredToolAllowlist = buildDeclaredToolAllowlistContext({
     config: params.cfg,
     workspaceDir,
@@ -630,16 +650,22 @@ export function resolveGatewayScopedTools(
   }
   const policyFiltered = filterGatewayToolPolicies(params.cfg, ({ policy }) => {
     nativeCreatorTools = filterToolsByPolicy(nativeCreatorTools, policy);
+    requesterOwnedTools = filterToolsByPolicy(requesterOwnedTools, policy);
   });
 
-  const gatewayDenySet = new Set(
+  // Real authority denials. These bind the requester and every child it spawns.
+  const gatewayAuthorityDenySet = new Set(
     [
       ...defaultGatewayDeny,
       ...ownerOnlyGatewayDeny,
       ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
-      ...excludedToolNames,
     ].map(normalizeToolPolicyName),
   );
+  // Surface exclusions additionally shape what this transport materializes.
+  const gatewayDenySet = new Set([
+    ...gatewayAuthorityDenySet,
+    ...excludedToolNames.map(normalizeToolPolicyName),
+  ]);
   const tools = applySwarmCollectorToolContract(
     applyDelegationCapability(
       policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
@@ -652,11 +678,24 @@ export function resolveGatewayScopedTools(
   );
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
   // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
+  const isNodeOnlyExecName = (name: string): boolean =>
+    includeNodeExecTool && name.trim().toLowerCase() === "exec";
   const inheritableTools = includeNodeExecTool
-    ? tools.filter((tool) => tool.name.trim().toLowerCase() !== "exec")
+    ? tools.filter((tool) => !isNodeOnlyExecName(tool.name))
     : tools;
   if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
+    // What the child may inherit is the requester's authority, not this
+    // transport's catalog. Tools withheld because the requester's own harness
+    // owns them survived the policy pass above, so add them back here; every
+    // real denial (policy, sandbox, sender, gateway deny) already dropped them.
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, [
+      ...inheritableTools,
+      ...requesterOwnedTools.filter(
+        (tool) =>
+          !isNodeOnlyExecName(tool.name) &&
+          !gatewayAuthorityDenySet.has(normalizeToolPolicyName(tool.name)),
+      ),
+    ]);
   }
   const nativeCapture = {
     canonicalToolNames: params.nativeCronCreatorToolAllowlist,
