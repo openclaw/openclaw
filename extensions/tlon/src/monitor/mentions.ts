@@ -58,6 +58,8 @@ export async function prepareTlonGroupAdmission(params: {
   account: Pick<TlonResolvedAccount, "accountId" | "requireMentionInBotThreads">;
   api: { scry: (path: string) => Promise<unknown> };
   channelNest: string;
+  senderShip: string;
+  isOwner: (ship: string) => boolean;
   botShipName: string;
   botNickname: string | null;
   rawText: string;
@@ -90,25 +92,36 @@ export async function prepareTlonGroupAdmission(params: {
   const isBotOwnedThread = Boolean(
     threadRootAuthor && normalizeShip(threadRootAuthor) === botShipName,
   );
-  const resolveCurrentMentionDecision = () =>
-    resolveTlonGroupMentionDecision({
-      cfg,
-      accountId: account.accountId,
-      wasMentioned: mentioned,
-      botParticipatedInThread,
-      isBotOwnedThread,
-      requireMentionInBotThreads:
-        resolveChannelAuthorization(cfg, channelNest, params.getSettings())
-          .requireMentionInBotThreads ?? account.requireMentionInBotThreads,
-    });
-  const mentionDecision = resolveCurrentMentionDecision();
+  const resolveCurrentAdmission = () => {
+    const authorization = resolveChannelAuthorization(cfg, channelNest, params.getSettings());
+    return {
+      ...authorization,
+      senderAllowed:
+        params.isOwner(params.senderShip) ||
+        authorization.mode === "open" ||
+        authorization.allowedShips.some((ship) => normalizeShip(ship) === params.senderShip),
+      mentionDecision: resolveTlonGroupMentionDecision({
+        cfg,
+        accountId: account.accountId,
+        wasMentioned: mentioned,
+        botParticipatedInThread,
+        isBotOwnedThread,
+        requireMentionInBotThreads:
+          authorization.requireMentionInBotThreads ?? account.requireMentionInBotThreads,
+      }),
+    };
+  };
+  const admission = resolveCurrentAdmission();
+  const { mentionDecision } = admission;
   if (mentionDecision.implicitMention && !mentioned && !mentionDecision.shouldSkip) {
     runtime.log?.(`[tlon] Responding to thread we participated in (no mention): ${parentId}`);
   }
   return {
-    ...resolveChannelAuthorization(cfg, channelNest, params.getSettings()),
-    mentionDecision,
+    ...admission,
     parentId,
-    isMentionAllowed: () => !resolveCurrentMentionDecision().shouldSkip,
+    isAdmissionAllowed: () => {
+      const current = resolveCurrentAdmission();
+      return current.senderAllowed && !current.mentionDecision.shouldSkip;
+    },
   };
 }

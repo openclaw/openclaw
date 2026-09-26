@@ -134,6 +134,45 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       admitted: true,
     },
     {
+      name: "open channel becomes restricted during ingress",
+      policy: false,
+      rootAuthor: "~zod",
+      pauseAt: "ingress",
+      latePolicy: false,
+      lateAllowedShips: [],
+      admitted: false,
+    },
+    {
+      name: "sender removed from the allowlist during ingress",
+      policy: false,
+      rootAuthor: "~zod",
+      restricted: true,
+      allowedShips: ["~nec"],
+      pauseAt: "ingress",
+      latePolicy: false,
+      lateAllowedShips: [],
+      admitted: false,
+    },
+    {
+      name: "sender remains allowlisted after an ingress policy update",
+      policy: false,
+      rootAuthor: "~zod",
+      pauseAt: "ingress",
+      latePolicy: false,
+      lateAllowedShips: ["~nec"],
+      admitted: true,
+    },
+    {
+      name: "owner remains admitted after an ingress allowlist removal",
+      policy: false,
+      rootAuthor: "~zod",
+      ownerShip: "~nec",
+      pauseAt: "ingress",
+      latePolicy: false,
+      lateAllowedShips: [],
+      admitted: true,
+    },
+    {
       name: "omitted thread policy becomes strict during ingress after participation",
       rootAuthor: "~zod",
       participate: true,
@@ -191,12 +230,14 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
           code: "code",
           ship: "~zod",
           url: realUrbitFixture.url,
+          ownerShip: row.ownerShip,
           groupChannels: [channelNest],
           requireMentionInBotThreads: row.policy,
           authorization: {
             channelRules: {
               [channelNest]: {
                 mode: row.restricted ? "restricted" : "open",
+                allowedShips: row.allowedShips,
                 requireMentionInBotThreads: row.channelPolicy,
               },
             },
@@ -297,7 +338,11 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
         expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
         settingsManagerMock.onChange.mock.calls[0]?.[0]({
           channelRules: {
-            [channelNest]: { mode: "open", requireMentionInBotThreads: row.latePolicy },
+            [channelNest]: {
+              mode: row.lateAllowedShips === undefined ? "open" : "restricted",
+              allowedShips: row.lateAllowedShips,
+              requireMentionInBotThreads: row.latePolicy,
+            },
           },
         });
         resume.resolve();
