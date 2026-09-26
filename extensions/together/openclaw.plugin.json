@@ -41,6 +41,12 @@
     "videoGenerationProviders": ["together"]
   },
   "modelCatalog": {
+    "aliases": {
+      "togetherai": {
+        "provider": "together",
+        "api": "openai-completions"
+      }
+    },
     "modelsDev": {
       "together": "togetherai"
     },
