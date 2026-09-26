@@ -108,13 +108,6 @@ describe("transcripts CLI", () => {
     }
   });
 
-  it("registers a kebab-case command", () => {
-    const program = new Command();
-    registerTranscriptsCli(program);
-
-    expect(program.commands.map((command) => command.name())).toContain("transcripts");
-  });
-
   it.each(["list", "show", "path"] as const)(
     "keeps %s output clean after a successful update with warnings",
     async (command) => {

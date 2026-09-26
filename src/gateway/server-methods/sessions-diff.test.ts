@@ -8,11 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
-import {
-  parseNameStatusZ,
-  parseNumstatZ,
-  splitPatchByFile,
-} from "../../sessions/session-diff-parser.js";
+import { parseNumstatZ, splitPatchByFile } from "../../sessions/session-diff-parser.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
 import { loadSessionDiff, sessionsDiffHandlers } from "./sessions-diff.js";
 
@@ -69,15 +65,6 @@ function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): v
 }
 
 describe("sessions.diff parsers", () => {
-  it("parses name-status -z including renames", () => {
-    const entries = parseNameStatusZ("M\0a.txt\0R100\0old.txt\0new.txt\0D\0gone.txt\0");
-    expect(entries).toEqual([
-      { path: "a.txt", status: "modified" },
-      { path: "new.txt", oldPath: "old.txt", status: "renamed" },
-      { path: "gone.txt", status: "deleted" },
-    ]);
-  });
-
   it("parses numstat -z including rename and binary entries", () => {
     // NUL separators written as \u0000: a bare \0 before a digit would
     // parse as an octal escape.

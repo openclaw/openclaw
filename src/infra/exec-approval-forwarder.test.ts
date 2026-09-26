@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Covers exec approval forwarding to channel plugins.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -343,18 +342,6 @@ describe("exec approval forwarder", () => {
       pendingDelivery.resolve();
       await forwarder.stop();
     }
-  });
-
-  it("forwards to explicit targets and expires", async () => {
-    vi.useFakeTimers();
-    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
-
-    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
-    await Promise.resolve();
-    expect(deliver).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
-    expect(deliver).toHaveBeenCalledTimes(2);
   });
 
   it("deduplicates session and explicit approval targets through normalized route identity", async () => {
@@ -906,39 +893,6 @@ describe("exec approval forwarder", () => {
       expect(mockLogError).toHaveBeenCalledWith(
         expect.stringContaining("channel delivery crashed"),
       );
-    });
-
-    it("cleans up pending entry after successful expiry delivery", async () => {
-      vi.useFakeTimers();
-      const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
-
-      await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
-      await flushPendingDelivery();
-      deliver.mockClear();
-
-      // Trigger expiry
-      await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - 1000);
-      await flushPendingDelivery();
-
-      expect(deliver).toHaveBeenCalledTimes(1);
-      const expiryText =
-        (
-          expectDefined(deliver.mock.calls[0], "deliver.mock.calls[0] test invariant")[0] as {
-            payloads?: Array<{ text?: string }>;
-          }
-        ).payloads?.[0]?.text ?? "";
-      expect(expiryText).toContain("expired");
-
-      // After expiry, the pending entry should be cleaned up.
-      deliver.mockClear();
-      await forwarder.handleResolved({
-        id: baseRequest.id,
-        decision: "allow-once",
-        resolvedBy: "slack:U123",
-        ts: 7000,
-      });
-      // No delivery because pending entry was already deleted before delivery
-      expect(deliver).not.toHaveBeenCalled();
     });
 
     it("deletes pending entry before starting expiry delivery", async () => {

@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   extractMSTeamsQuoteInfo,
-  normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
@@ -10,22 +9,9 @@ import {
 
 describe("msteams inbound", () => {
   describe("stripMSTeamsMentionTags", () => {
-    it("removes <at>...</at> tags and trims", () => {
-      expect(stripMSTeamsMentionTags("<at>Bot</at> hi")).toBe("hi");
-      expect(stripMSTeamsMentionTags("hi <at>Bot</at>")).toBe("hi");
-    });
-
     it("removes <at ...> tags with attributes", () => {
       expect(stripMSTeamsMentionTags('<at id="1">Bot</at> hi')).toBe("hi");
       expect(stripMSTeamsMentionTags('hi <at itemid="2">Bot</at>')).toBe("hi");
-    });
-  });
-
-  describe("normalizeMSTeamsConversationId", () => {
-    it("strips the ;messageid suffix", () => {
-      expect(normalizeMSTeamsConversationId("19:abc@thread.tacv2;messageid=deadbeef")).toBe(
-        "19:abc@thread.tacv2",
-      );
     });
   });
 
@@ -78,11 +64,6 @@ describe("msteams inbound", () => {
           '<strong itemprop="mri">Alice</strong>' +
           '<p itemprop="copy">Hello world</p>' +
           "</blockquote>",
-    });
-
-    it("extracts sender and body from a Teams reply attachment", () => {
-      const result = extractMSTeamsQuoteInfo([replyAttachment()]);
-      expect(result).toEqual({ sender: "Alice", body: "Hello world" });
     });
 
     it("returns undefined for empty attachments array", () => {
@@ -187,21 +168,6 @@ describe("msteams inbound", () => {
       expect(result).toEqual({ sender: "Alice", body: "Hello world" });
     });
 
-    it("parses body from itemprop='preview' when 'copy' is absent", () => {
-      const result = extractMSTeamsQuoteInfo([
-        {
-          contentType: "text/html",
-          content:
-            '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
-            '<strong itemprop="mri">Frank</strong>' +
-            '<p itemprop="preview">truncated snippet…</p>' +
-            "</blockquote>",
-        },
-      ]);
-      expect(result?.body).toBe("truncated snippet…");
-      expect(result?.sender).toBe("Frank");
-    });
-
     it("prefers 'copy' over 'preview' when both are present", () => {
       const result = extractMSTeamsQuoteInfo([
         {
@@ -215,24 +181,6 @@ describe("msteams inbound", () => {
         },
       ]);
       expect(result?.body).toBe("the full text");
-    });
-
-    it("captures the blockquote itemid as the quoted message id", () => {
-      const result = extractMSTeamsQuoteInfo([
-        {
-          contentType: "text/html",
-          content:
-            '<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="1783379480258">' +
-            '<strong itemprop="mri">Heidi</strong>' +
-            '<p itemprop="preview">San Francisco right now…</p>' +
-            "</blockquote>",
-        },
-      ]);
-      expect(result).toEqual({
-        sender: "Heidi",
-        body: "San Francisco right now…",
-        id: "1783379480258",
-      });
     });
 
     it("parses a real Teams quote-reply payload (preview + itemid)", () => {

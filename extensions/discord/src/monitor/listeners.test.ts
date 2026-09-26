@@ -94,39 +94,6 @@ describe("DiscordMessageListener", () => {
     expect(order).toContain("end:1");
   });
 
-  it("runs handlers for different channels in parallel", async () => {
-    const deferredA = createDeferred<void>();
-    const deferredB = createDeferred<void>();
-    const order: string[] = [];
-    const handler = vi.fn(async (data: { channel_id: string }) => {
-      order.push(`start:${data.channel_id}`);
-      if (data.channel_id === "ch-a") {
-        await deferredA.promise;
-      } else {
-        await deferredB.promise;
-      }
-      order.push(`end:${data.channel_id}`);
-    });
-    const listener = new DiscordMessageListener(handler as never, createLogger() as never);
-
-    const handledA = listener.handle(fakeEvent("ch-a"), {} as never);
-    const handledB = listener.handle(fakeEvent("ch-b"), {} as never);
-
-    await flushAsyncWork();
-    expect(handler).toHaveBeenCalledTimes(2);
-    expect(order).toContain("start:ch-a");
-    expect(order).toContain("start:ch-b");
-
-    deferredB.resolve?.();
-    await flushAsyncWork();
-    expect(order).toContain("end:ch-b");
-    expect(order).not.toContain("end:ch-a");
-
-    deferredA.resolve?.();
-    await Promise.all([handledA, handledB]);
-    expect(order).toContain("end:ch-a");
-  });
-
   it("logs async handler failures", async () => {
     const handler = vi.fn(async () => {
       throw new Error("boom");

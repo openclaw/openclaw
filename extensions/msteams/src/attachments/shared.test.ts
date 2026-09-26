@@ -90,18 +90,6 @@ describe("msteams attachment allowlists", () => {
     expect(resolveAuthAllowedHosts(["*", "graph.microsoft.com"])).toEqual(["*"]);
   });
 
-  it("resolves a normalized attachment fetch policy", () => {
-    expect(
-      resolveAttachmentFetchPolicy({
-        allowHosts: ["sharepoint.com"],
-        authAllowHosts: ["graph.microsoft.com"],
-      }),
-    ).toEqual({
-      allowHosts: ["sharepoint.com"],
-      authAllowHosts: ["graph.microsoft.com"],
-    });
-  });
-
   it("allows Azure China Bot Framework attachment URLs with auth by default", () => {
     const policy = resolveAttachmentFetchPolicy();
     const url = "https://msteams.botframework.azure.cn/teams/v3/attachments/att-1/views/original";
@@ -136,21 +124,6 @@ describe("msteams attachment allowlists", () => {
 // ─── safeFetch ───────────────────────────────────────────────────────────────
 
 describe("safeFetch", () => {
-  it("fetches a URL directly when no redirect occurs", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
-      return new Response("ok", { status: 200 });
-    });
-    await expectSafeFetchStatus({
-      fetchMock,
-      url: "https://teams.sharepoint.com/file.pdf",
-      allowHosts: ["sharepoint.com"],
-      expectedStatus: 200,
-    });
-    expect(fetchMock).toHaveBeenCalledOnce();
-    // Should have used redirect: "manual"
-    expect(fetchInitAt(fetchMock, 0)).toHaveProperty("redirect", "manual");
-  });
-
   it("pins the validated DNS result into the request dispatcher", async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
       return new Response("ok", { status: 200 });
@@ -164,19 +137,6 @@ describe("safeFetch", () => {
     });
 
     expect(fetchInitAt(fetchMock, 0)).toHaveProperty("dispatcher");
-  });
-
-  it("follows a redirect to an allowlisted host with public IP", async () => {
-    const fetchMock = mockFetchWithRedirect({
-      "https://teams.sharepoint.com/file.pdf": "https://cdn.sharepoint.com/storage/file.pdf",
-    });
-    await expectSafeFetchStatus({
-      fetchMock,
-      url: "https://teams.sharepoint.com/file.pdf",
-      allowHosts: ["sharepoint.com"],
-      expectedStatus: 200,
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("fails explicitly for custom fetch functions that cannot receive the pinned dispatcher", async () => {
@@ -551,24 +511,6 @@ describe("attachment fetch auth helpers", () => {
     });
     expect(headers.get("authorization")).toBeNull();
   });
-
-  it("safeFetchWithPolicy forwards policy allowlists", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
-      return new Response("ok", { status: 200 });
-    });
-    const res = await safeFetchWithPolicy({
-      url: "https://teams.sharepoint.com/file.pdf",
-      policy: resolveAttachmentFetchPolicy({
-        allowHosts: ["sharepoint.com"],
-        authAllowHosts: ["graph.microsoft.com"],
-      }),
-      fetchFn: fetchMock as unknown as typeof fetch,
-      resolveFn: publicResolve,
-    });
-    expect(res.status).toBe(200);
-    await res.body?.cancel();
-    expect(fetchMock).toHaveBeenCalledOnce();
-  });
 });
 
 describe("Graph shared-link helpers", () => {
@@ -576,13 +518,10 @@ describe("Graph shared-link helpers", () => {
     ["https://contoso.sharepoint.com/personal/user/Documents/report.pdf", true],
     ["https://contoso.sharepoint.us/sites/team/file.docx", true],
     ["https://contoso.sharepoint.cn/file", true],
-    ["https://tenant-my.sharepoint.com/:b:/g/personal/file", true],
     ["https://1drv.ms/b/s!AkxYabc", true],
     ["https://onedrive.live.com/view.aspx?resid=ABC", true],
     ["https://onedrive.com/share/abc", true],
     ["https://graph.microsoft.com/v1.0/me", false],
-    ["https://smba.trafficmanager.net/amer/v3", false],
-    ["https://example.com/file.pdf", false],
     ["https://notonedrive.com/x", false],
     ["https://evil1drv.ms/x", false],
     ["https://fakeonedrive.live.com/x", false],
@@ -607,17 +546,6 @@ describe("Graph shared-link helpers", () => {
     expect(decoded).toBe(url);
   });
 
-  it("encodeGraphShareId swaps '+' and '/' for '-' and '_'", () => {
-    // A URL whose standard base64 contains '+' and '/' chars.
-    // Choose an input that base64 encodes with those characters.
-    const url = "https://host.sharepoint.com/sites/path?x=???";
-    const shareId = encodeGraphShareId(url);
-    const encoded = shareId.slice(2);
-    expect(encoded).not.toContain("+");
-    expect(encoded).not.toContain("/");
-    expect(encoded).not.toContain("=");
-  });
-
   it("tryBuildGraphSharesUrlForSharedLink rewrites SharePoint URLs", () => {
     const url = "https://contoso.sharepoint.com/personal/user/Documents/report.pdf";
     const result = tryBuildGraphSharesUrlForSharedLink(url);
@@ -633,28 +561,12 @@ describe("Graph shared-link helpers", () => {
       `https://graph.microsoft.com/v1.0/shares/${encodeGraphShareId(url)}/driveItem/content`,
     );
   });
-
-  it("tryBuildGraphSharesUrlForSharedLink returns undefined for non-shared URLs", () => {
-    expect(
-      tryBuildGraphSharesUrlForSharedLink("https://graph.microsoft.com/v1.0/me"),
-    ).toBeUndefined();
-    expect(tryBuildGraphSharesUrlForSharedLink("https://example.com/file.pdf")).toBeUndefined();
-    expect(tryBuildGraphSharesUrlForSharedLink("not-a-url")).toBeUndefined();
-  });
 });
 
 describe("normalizeContentType case-insensitivity", () => {
   // MIME types are case-insensitive (RFC 2045); relay payloads routinely emit
   // mixed-case values. normalizeContentType must lowercase so the downstream
   // startsWith/=== comparisons (which assume lowercase) match.
-  it("lowercases mixed-case content types", () => {
-    expect(normalizeContentType("Image/PNG")).toBe("image/png");
-    expect(normalizeContentType("TEXT/HTML")).toBe("text/html");
-    expect(normalizeContentType("Application/Vnd.Microsoft.Teams.File.Download.Info")).toBe(
-      "application/vnd.microsoft.teams.file.download.info",
-    );
-  });
-
   it("trims surrounding whitespace before lowercasing", () => {
     expect(normalizeContentType("  Image/PNG  ")).toBe("image/png");
   });

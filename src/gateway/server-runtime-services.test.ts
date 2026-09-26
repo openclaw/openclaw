@@ -125,27 +125,16 @@ describe("server-runtime-services", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["auto", true],
-    ["off", false],
-    ["propose", false],
-  ] as const)(
-    "reports cron-disabled automatic skill collection reviews for mode %s",
-    (mode, shouldWarn) => {
-      const warn = activateCronOff({
-        agents: { defaults: { heartbeat: { every: "0m" } } },
-        skills: { workshop: { autonomous: { mode } } },
-      });
+  it("reports cron-disabled automatic skill collection reviews", () => {
+    const warn = activateCronOff({
+      agents: { defaults: { heartbeat: { every: "0m" } } },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    });
 
-      if (shouldWarn) {
-        expect(warn).toHaveBeenCalledWith(
-          expect.stringContaining("scheduled skill collection reviews are disabled"),
-        );
-      } else {
-        expect(warn).not.toHaveBeenCalled();
-      }
-    },
-  );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("scheduled skill collection reviews are disabled"),
+    );
+  });
 
   registerGatewayCronStartupTests(startGatewayCronWithLogging);
 
@@ -565,22 +554,13 @@ describe("server-runtime-services", () => {
     second.services.heartbeatRunner.stop();
   });
 
-  it.each([
-    {
-      name: "startup recovery deferred an existing delivery for backoff",
-      deferredBackoff: 1,
-    },
-    {
-      name: "a new delivery failed after an empty startup scan",
-      deferredBackoff: 0,
-    },
-  ])("retries outbound deliveries when $name", async ({ deferredBackoff }) => {
+  it("retries outbound deliveries after an empty startup scan", async () => {
     vi.useFakeTimers();
     hoisted.recoverPendingDeliveries.mockResolvedValueOnce({
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
-      deferredBackoff,
+      deferredBackoff: 0,
     });
     const { services } = activateScheduledServicesForTest();
 

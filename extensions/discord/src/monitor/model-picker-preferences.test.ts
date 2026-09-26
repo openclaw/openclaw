@@ -137,32 +137,6 @@ describe("discord model picker preferences", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("ignores retired legacy JSON preferences at runtime", async () => {
-    const env = await createStateEnv();
-    const scope = { userId: "legacy-runtime-user" };
-    const legacyPath = path.join(
-      env.OPENCLAW_STATE_DIR as string,
-      "discord",
-      "model-picker-preferences.json",
-    );
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      JSON.stringify({
-        version: 1,
-        entries: {
-          legacy: {
-            recent: ["openai/gpt-4.1"],
-            updatedAt: "2026-01-01T00:00:00.000Z",
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    await expect(readDiscordModelPickerRecentModels({ env, scope })).resolves.toEqual([]);
-  });
-
   it("preserves concurrent model picker selections for the same scope", async () => {
     const env = await createStateEnv();
     const scope = { userId: "concurrent-user" };

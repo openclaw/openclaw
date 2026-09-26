@@ -17,7 +17,32 @@ import {
   assertTelegramRichObservationFlow,
   telegramRichObservationCases,
 } from "./scenario-flow-runner.test-support.js";
-import type { QaSuiteStep } from "./suite-types.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+
+type FlowApi = Parameters<typeof runScenarioFlow>[0]["api"];
+
+function createImportApi(
+  id: string,
+  runScenario: FlowApi["runScenario"] = async (name, steps) => {
+    const stepResults = [];
+    for (const step of steps) {
+      const details = (await step.run())?.details;
+      stepResults.push({
+        name: step.name,
+        status: "pass" as const,
+        ...(details !== undefined ? { details } : {}),
+      });
+    }
+    return { name, status: "pass", steps: stepResults };
+  },
+): FlowApi {
+  return {
+    state: createQaBusState(),
+    scenario: makeQaSuiteTestScenario(id),
+    config: {},
+    runScenario,
+  };
+}
 
 function readWebchatTranscriptWaitFlow() {
   const scenario = readQaScenarioById("webchat-direct-reply-routing");
@@ -623,35 +648,7 @@ describe("scenario-flow-runner", () => {
 
   it("supports qaImport inside flow expressions", async () => {
     const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario: {
-          id: "qa-import",
-          title: "qa-import",
-          sourcePath: "qa/scenarios/qa-import.yaml",
-          surface: "test",
-          objective: "test",
-          successCriteria: ["test"],
-          execution: { kind: "flow" },
-        },
-        config: {},
-        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
-          const stepResults = [];
-          for (const step of steps) {
-            const details = (await step.run())?.details;
-            stepResults.push({
-              name: step.name,
-              status: "pass" as const,
-              ...(details !== undefined ? { details } : {}),
-            });
-          }
-          return {
-            name: "qa-import",
-            status: "pass" as const,
-            steps: stepResults,
-          };
-        },
-      },
+      api: createImportApi("qa-import"),
       scenarioTitle: "qa-import",
       vars: { preparedValue: "ready" },
       flow: {
@@ -693,35 +690,7 @@ describe("scenario-flow-runner", () => {
 
   it("loads bundled QA runtime modules through qaImport", async () => {
     const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario: {
-          id: "qa-fixture-import",
-          title: "qa-fixture-import",
-          sourcePath: "qa/scenarios/qa-fixture-import.yaml",
-          surface: "test",
-          objective: "test",
-          successCriteria: ["test"],
-          execution: { kind: "flow" },
-        },
-        config: {},
-        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
-          const stepResults = [];
-          for (const step of steps) {
-            const details = (await step.run())?.details;
-            stepResults.push({
-              name: step.name,
-              status: "pass" as const,
-              ...(details !== undefined ? { details } : {}),
-            });
-          }
-          return {
-            name: "qa-fixture-import",
-            status: "pass" as const,
-            steps: stepResults,
-          };
-        },
-      },
+      api: createImportApi("qa-fixture-import"),
       scenarioTitle: "qa-fixture-import",
       flow: {
         steps: [
@@ -766,32 +735,19 @@ describe("scenario-flow-runner", () => {
     let receivedError: unknown;
 
     const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario: {
-          id: "qa-skip-import",
-          title: "qa-skip-import",
-          sourcePath: "qa/scenarios/qa-skip-import.yaml",
-          surface: "test",
-          objective: "test",
-          successCriteria: ["test"],
-          execution: { kind: "flow" },
-        },
-        config: {},
-        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
-          try {
-            await steps[0]?.run();
-          } catch (error) {
-            receivedError = error;
-          }
-          return {
-            name: "qa-skip-import",
-            status: "skip" as const,
-            steps: [{ name: "throws imported skip", status: "skip" as const, details: message }],
-            details: message,
-          };
-        },
-      },
+      api: createImportApi("qa-skip-import", async (_name, steps) => {
+        try {
+          await steps[0]?.run();
+        } catch (error) {
+          receivedError = error;
+        }
+        return {
+          name: "qa-skip-import",
+          status: "skip" as const,
+          steps: [{ name: "throws imported skip", status: "skip" as const, details: message }],
+          details: message,
+        };
+      }),
       scenarioTitle: "qa-skip-import",
       flow: {
         steps: [

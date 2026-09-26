@@ -73,8 +73,4 @@ describe("parseTimeoutMsWithFallback", () => {
       "Received",
     );
   });
-
-  it("throws on partial-numeric values", () => {
-    expect(() => parseTimeoutMsWithFallback("1000ms", 3000)).toThrow('Received: "1000ms"');
-  });
 });

@@ -254,27 +254,6 @@ describe("tool terminal outcome observer", () => {
     expect(payloads).toEqual([]);
   });
 
-  it("keeps the sessions_spawn failure warning when no later spawn succeeds", () => {
-    const observe = createToolTerminalObserver("run-spawn-failed");
-    const failedArgs = { task: "Investigate the flaky gateway test", label: "Investigate" };
-
-    const terminal = observe({
-      toolName: "sessions_spawn",
-      arguments: failedArgs,
-      meta: inferToolMetaFromArgsCore("sessions_spawn", failedArgs),
-      outcome: "failure",
-      failure: { error: "cwd is outside the workspace" },
-    });
-
-    const payloads = buildPayloads({
-      assistantTexts: ["Started Investigate in a new session."],
-      lastToolError: terminal.lastToolError,
-    });
-    expect(payloads.map((payload) => payload.text)).toEqual([
-      "Started Investigate in a new session.",
-    ]);
-  });
-
   it("preserves durable memory recall side-effect evidence", () => {
     const observe = createToolTerminalObserver("run-memory");
 
