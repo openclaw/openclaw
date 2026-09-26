@@ -1064,6 +1064,21 @@ describe("isMessagingToolDuplicate", () => {
     {
       input: "Checking the deploy logs now. All good!",
       sentTexts: ["Checking the deploy logs now."],
+      expected: false,
+    },
+    {
+      input: "Deployment finished. Actually it failed.",
+      sentTexts: ["Deployment finished."],
+      expected: false,
+    },
+    {
+      input: "Deployment finished. 2 hosts restarted.",
+      sentTexts: ["Deployment finished."],
+      expected: false,
+    },
+    {
+      input: "Deployment finished!!!",
+      sentTexts: ["Deployment finished"],
       expected: true,
     },
   ])("returns $expected for duplicate check", ({ input, sentTexts, expected }) => {

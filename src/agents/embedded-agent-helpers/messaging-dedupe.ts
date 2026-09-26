@@ -36,6 +36,16 @@ export function isMessagingToolDuplicateNormalized(
       return false;
     }
     if (normalized.includes(normalizedSent)) {
+      // Text that opens with a prior send and then says something new is a
+      // follow-up, not a repeat. The length ratio cannot tell "<sent> All good!"
+      // from "<sent> Actually it failed.", so a tail with any letter or digit is
+      // delivered. A punctuation-only tail still falls through to the ratio.
+      if (
+        normalized.startsWith(normalizedSent) &&
+        /[\p{L}\p{N}]/u.test(normalized.slice(normalizedSent.length))
+      ) {
+        return false;
+      }
       return normalizedSent.length >= normalized.length * MIN_SUBSTRING_DUPLICATE_RATIO;
     }
     return (

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import {
   createMessageEndContext,
   createMessageToolEnvelope,
@@ -141,6 +142,26 @@ describe("handleMessageEnd", () => {
       );
     expect(diagnostic).toEqual(expect.any(String));
     expect(Buffer.from(String(diagnostic)).toString()).toBe(diagnostic);
+  });
+
+  it.each([
+    { text: "Deployment finished.", delivered: false },
+    { text: "Deployment finished. Actually it failed.", delivered: true },
+  ])("block-streams $text after a message-tool send: $delivered", ({ text, delivered }) => {
+    const onBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      onBlockReply,
+      state: {
+        messagingToolSentTextsNormalized: [normalizeTextForComparison("Deployment finished.")],
+      },
+    });
+
+    void endMessage(ctx, {
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    });
+
+    const texts = onBlockReply.mock.calls.map(([payload]) => (payload as { text?: string }).text);
+    expect(texts).toEqual(delivered ? [text] : []);
   });
 
   it("warns when assistant text only pretends to call a registered tool", () => {
