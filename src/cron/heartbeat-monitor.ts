@@ -68,11 +68,24 @@ function heartbeatMonitorDeclarativeFields(job: CronJob | CronJobCreate) {
   };
 }
 
+/**
+ * Live scheduler state for monitor plans: `cron.enabled` plus the
+ * `OPENCLAW_SKIP_CRON` launch-env kill switch. Every caller that inspects or
+ * writes monitor rows uses this so a disabled schedule never advertises an
+ * enabled monitor (`docs/gateway/heartbeat.md`).
+ */
+export function resolveHeartbeatSchedulerEnabled(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.OPENCLAW_SKIP_CRON !== "1" && cfg.cron?.enabled !== false;
+}
+
 /** Projects configured monitor state and its create/update/remove changes together. */
 export function resolveHeartbeatMonitorPlan(
   cfg: OpenClawConfig,
   existingJobs: readonly CronJob[],
-  options: { schedulerSeed?: string } = {},
+  options: { schedulerSeed?: string; cronEnabled?: boolean } = {},
 ): HeartbeatMonitorPlan {
   const { retained: existingByAgentId, duplicates } = partitionSystemMonitors(
     existingJobs,
@@ -80,6 +93,11 @@ export function resolveHeartbeatMonitorPlan(
   );
 
   const schedulerSeed = resolveHeartbeatSchedulerSeed(options.schedulerSeed);
+  // `cron.enabled: false` (or OPENCLAW_SKIP_CRON=1) means nothing is scheduled, so
+  // the monitor's scheduled state must follow the scheduler instead of advertising
+  // an enabled row that never ticks (`docs/gateway/heartbeat.md`). The configured
+  // cadence is retained so re-enabling converges back without a config rewrite.
+  const schedulerEnabled = options.cronEnabled !== false;
   const specs: HeartbeatMonitorSpec[] = resolveHeartbeatAgents(cfg).flatMap((agent) => {
     // Unset config already resolves to the 30m default here, so this is null
     // only for an explicitly disabled cadence ("0m"/invalid). The fallbacks
@@ -102,7 +120,7 @@ export function resolveHeartbeatMonitorPlan(
           displayName: `Heartbeat (${agent.agentId})`,
           name: `heartbeat-${agent.agentId}`,
           agentId: agent.agentId,
-          enabled: configuredIntervalMs !== null,
+          enabled: schedulerEnabled && configuredIntervalMs !== null,
           schedule: {
             kind: "every",
             everyMs: intervalMs,
@@ -154,6 +172,13 @@ export async function applyHeartbeatMonitorJobs(params: {
   cron: Pick<CronService, "add" | "list" | "remove">;
   cfg: OpenClawConfig;
   schedulerSeed?: string;
+  /**
+   * Live scheduler state (`cron.enabled` plus `OPENCLAW_SKIP_CRON`), as
+   * resolved by `resolveHeartbeatSchedulerEnabled`. Callers that own a
+   * scheduler, and Doctor when it plans against the launch environment, pass it
+   * so a disabled schedule cannot advertise an enabled monitor.
+   */
+  cronEnabled?: boolean;
   logger?: { warn: (obj: unknown, msg?: string) => void };
   commitGuard?: () => void;
 }): Promise<HeartbeatMonitorReconcileResult> {
@@ -168,6 +193,7 @@ export async function applyHeartbeatMonitorJobs(params: {
 
   const { changes } = resolveHeartbeatMonitorPlan(params.cfg, jobs, {
     schedulerSeed: params.schedulerSeed,
+    cronEnabled: params.cronEnabled,
   });
   const applied: HeartbeatMonitorChange[] = [];
   const failures: HeartbeatMonitorReconcileResult["failures"] = [];

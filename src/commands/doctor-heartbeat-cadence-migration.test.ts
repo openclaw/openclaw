@@ -13,6 +13,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
+  ensureHeartbeatMonitorJobs,
   maybeMigrateHeartbeatCadenceToCron,
 } from "./doctor-heartbeat-cadence-migration.js";
 
@@ -209,6 +210,82 @@ describe("heartbeat cadence cron migration", () => {
     );
     expect(gammaAfter?.id).not.toBe(betaBefore?.id);
     expect(await loadMonitor(fixture.storePath, "beta")).toBeUndefined();
+  });
+
+  it("keeps monitors disabled through the cadence-then-scratch sequence when cron is off", async () => {
+    const fixture = await createFixture();
+    const cfg = { ...fixture.cfg, cron: { enabled: false } } as OpenClawConfig;
+
+    const repaired = await maybeMigrateHeartbeatCadenceToCron({
+      cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+    expect(repaired.warnings).toEqual([]);
+    expect(await loadMainMonitor(fixture.storePath)).toEqual(
+      expect.objectContaining({ enabled: false }),
+    );
+
+    const monitors = await ensureHeartbeatMonitorJobs(cfg, fixture.storePath, fixture.env);
+    expect(monitors.get("main")).toEqual(expect.objectContaining({ enabled: false }));
+    expect(await loadMainMonitor(fixture.storePath)).toEqual(
+      expect.objectContaining({ enabled: false }),
+    );
+    await expect(collectHeartbeatCadenceMigrationFindings(cfg, fixture.env)).resolves.toEqual([]);
+  });
+
+  it("honors OPENCLAW_SKIP_CRON so doctor never re-enables a stopped scheduler's monitor", async () => {
+    const fixture = await createFixture();
+    const liveEnv = { ...fixture.env };
+    delete liveEnv.OPENCLAW_SKIP_CRON;
+    const skippedEnv = { ...fixture.env, OPENCLAW_SKIP_CRON: "1" };
+
+    await maybeMigrateHeartbeatCadenceToCron({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: liveEnv,
+    });
+    expect(await loadMainMonitor(fixture.storePath)).toEqual(
+      expect.objectContaining({ enabled: true }),
+    );
+
+    // Same config, scheduler stopped by the launch environment: the row follows
+    // the live scheduler instead of advertising an enabled monitor.
+    const skipped = await maybeMigrateHeartbeatCadenceToCron({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: skippedEnv,
+    });
+    expect(skipped.warnings).toEqual([]);
+    expect(skipped.changes).toEqual(['Update heartbeat monitor for agent "main" at 15m.']);
+    expect(await loadMainMonitor(fixture.storePath)).toEqual(
+      expect.objectContaining({ enabled: false }),
+    );
+    await expect(
+      collectHeartbeatCadenceMigrationFindings(fixture.cfg, skippedEnv),
+    ).resolves.toEqual([]);
+
+    // Scratch preparation shares the predicate, so the scratch-migration repair
+    // cannot hand itself an enabled row either.
+    const monitors = await ensureHeartbeatMonitorJobs(fixture.cfg, fixture.storePath, skippedEnv);
+    expect(monitors.get("main")).toEqual(expect.objectContaining({ enabled: false }));
+    expect(await loadMainMonitor(fixture.storePath)).toEqual(
+      expect.objectContaining({ enabled: false }),
+    );
+
+    // Dropping the kill switch converges the retained cadence back to enabled.
+    const restored = await maybeMigrateHeartbeatCadenceToCron({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: liveEnv,
+    });
+    expect(restored.warnings).toEqual([]);
+    expect(await loadMainMonitor(fixture.storePath)).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        schedule: expect.objectContaining({ kind: "every", everyMs: 15 * 60_000 }),
+      }),
+    );
   });
 
   it("uses the supplied environment for the writable scheduler seed", async () => {
