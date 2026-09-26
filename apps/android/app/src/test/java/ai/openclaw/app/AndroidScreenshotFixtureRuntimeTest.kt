@@ -82,20 +82,20 @@ class AndroidScreenshotFixtureRuntimeTest {
         withTimeout(5_000) {
           model.chatMessages.first { it.isNotEmpty() }
           model.chatHealthOk.first { it }
-          runtime.chatOutboxPresentationRestored.first { it }
+          runtime.chat.outboxPresentationRestored.first { it }
           model.refreshChatSessionBranches()
-          assertEquals("The branches intent must expose canonical branch choices", 12, runtime.chatSessionBranches.value.size)
+          assertEquals("The branches intent must expose canonical branch choices", 12, runtime.chat.sessionBranches.value.size)
           assertEquals(AndroidScreenshotScene.Branches, scene)
           assertEquals(HomeDestination.Chat, model.requestedHomeDestination.value)
-          assertEquals(AndroidScreenshotFixture.mainSessionKey, runtime.chatSessionKey.value)
-          assertEquals("main", runtime.chatSessionOwnerAgentId.value)
-          assertEquals(0, runtime.pendingRunCount.value)
+          assertEquals(AndroidScreenshotFixture.mainSessionKey, runtime.chat.sessionKey.value)
+          assertEquals("main", runtime.chat.sessionOwnerAgentId.value)
+          assertEquals(0, runtime.chat.pendingRunCount.value)
           val methods = ReflectionHelpers.getField<Set<String>>(runtime, "gatewayAdvertisedMethods")
           assertTrue(methods.containsAll(listOf("sessions.branches.list", "sessions.branches.switch")))
           val request = runtimeRequester(runtime)
 
-          val before = runtime.chatMessages.value
-          val branches = runtime.chatSessionBranches.value
+          val before = runtime.chat.messages.value
+          val branches = runtime.chat.sessionBranches.value
           assertEquals(12, branches.map { it.leafEntryId }.toSet().size)
           assertEquals(before.last().entryId, branches.single { it.active }.leafEntryId)
           branches.forEach {
@@ -107,31 +107,31 @@ class AndroidScreenshotFixtureRuntimeTest {
           assertTrue("The unchanged controller must complete a real fixture switch", model.switchChatSessionBranch(selected.leafEntryId))
           assertEquals(
             selected.leafEntryId,
-            runtime.chatSessionBranches.value
+            runtime.chat.sessionBranches.value
               .single { it.active }
               .leafEntryId,
           )
           assertEquals(
             selected.leafEntryId,
-            runtime.chatMessages.value
+            runtime.chat.messages.value
               .last()
               .entryId,
           )
           assertEquals(
             before.first().content,
-            runtime.chatMessages.value
+            runtime.chat.messages.value
               .first()
               .content,
           )
           assertEquals(
             before.first().entryId,
-            runtime.chatMessages.value
+            runtime.chat.messages.value
               .first()
               .entryId,
           )
           assertNotEquals(
             before.last().content,
-            runtime.chatMessages.value
+            runtime.chat.messages.value
               .last()
               .content,
           )
@@ -142,13 +142,13 @@ class AndroidScreenshotFixtureRuntimeTest {
           assertSame("Reentry must not replace the requester", request, runtimeRequester(runtime))
           assertEquals(
             selected.leafEntryId,
-            runtime.chatSessionBranches.value
+            runtime.chat.sessionBranches.value
               .single { it.active }
               .leafEntryId,
           )
           assertEquals(
             selected.leafEntryId,
-            runtime.chatMessages.value
+            runtime.chat.messages.value
               .last()
               .entryId,
           )
@@ -186,11 +186,11 @@ class AndroidScreenshotFixtureRuntimeTest {
             .filterNot { it in priorJobs }
             .toList()
             .joinAll()
-          runtime.chatHistoryLoading.first { !it }
+          runtime.chat.historyLoading.first { !it }
           assertTrue(model.refreshChatSessionBranches())
           assertEquals(
             selected.leafEntryId,
-            runtime.chatMessages.value
+            runtime.chat.messages.value
               .last()
               .entryId,
           )
@@ -198,22 +198,22 @@ class AndroidScreenshotFixtureRuntimeTest {
           assertTrue("Switching must still use the retained branch mode after reentry", model.switchChatSessionBranch(retainedSelection.leafEntryId))
           assertEquals(
             retainedSelection.leafEntryId,
-            runtime.chatSessionBranches.value
+            runtime.chat.sessionBranches.value
               .single { it.active }
               .leafEntryId,
           )
           assertEquals(
             retainedSelection.leafEntryId,
-            runtime.chatMessages.value
+            runtime.chat.messages.value
               .last()
               .entryId,
           )
-          assertEquals(0, runtime.pendingRunCount.value)
+          assertEquals(0, runtime.chat.pendingRunCount.value)
           model.enterScreenshotFixtureMode(scene)
           assertSame(runtime, app.ensureScreenshotFixtureRuntime())
           assertEquals(
             retainedSelection.leafEntryId,
-            runtime.chatSessionBranches.value
+            runtime.chat.sessionBranches.value
               .single { it.active }
               .leafEntryId,
           )
@@ -228,14 +228,14 @@ class AndroidScreenshotFixtureRuntimeTest {
           assertTrue(reentered.refreshChatSessionBranches())
           assertEquals(
             retainedSelection.leafEntryId,
-            runtime.chatSessionBranches.value
+            runtime.chat.sessionBranches.value
               .single { it.active }
               .leafEntryId,
           )
           assertTrue(reentered.switchChatSessionBranch(branches.last().leafEntryId))
           assertEquals(
             branches.last().leafEntryId,
-            runtime.chatMessages.value
+            runtime.chat.messages.value
               .last()
               .entryId,
           )
@@ -372,12 +372,15 @@ class AndroidScreenshotFixtureRuntimeTest {
       runtime.loadCurrentChat()
       drainWithMainLooper {
         withTimeout(5_000) {
-          runtime.chatMessages.first { it.isNotEmpty() }
-          runtime.chatHealthOk.first { it }
-          runtime.pendingRunCount.first { it > 0 }
-          assertEquals(1, runtime.pendingRunCount.value)
-          runtime.refreshChatSessionBranches()
-          assertTrue(runtime.chatSessionBranches.value.isEmpty())
+          runtime.chat.messages.first { it.isNotEmpty() }
+          runtime.chat.healthOk.first { it }
+          runtime.chat.pendingRunCount.first { it > 0 }
+          assertEquals(1, runtime.chat.pendingRunCount.value)
+          runtime.chat.refreshSessionBranches()
+          assertTrue(
+            runtime.chat.sessionBranches.value
+              .isEmpty(),
+          )
           val methods = ReflectionHelpers.getField<Set<String>>(runtime, "gatewayAdvertisedMethods")
           assertFalse(methods.contains("sessions.branches.list"))
           assertFalse(methods.contains("sessions.branches.switch"))
@@ -386,7 +389,7 @@ class AndroidScreenshotFixtureRuntimeTest {
           model.enterScreenshotFixtureMode(AndroidScreenshotScene.Branches)
           assertSame(runtime, app.ensureScreenshotFixtureRuntime())
           assertSame(request, runtimeRequester(runtime))
-          assertEquals(1, runtime.pendingRunCount.value)
+          assertEquals(1, runtime.chat.pendingRunCount.value)
           val advertises = runtimeMethodPredicate(runtime)
           val advertised = ReflectionHelpers.getField<Set<String>>(runtime, "gatewayAdvertisedMethods")
           assertEquals(
@@ -409,8 +412,11 @@ class AndroidScreenshotFixtureRuntimeTest {
             .filterNot { it in priorJobs }
             .toList()
             .joinAll()
-          assertEquals(1, runtime.pendingRunCount.value)
-          assertTrue(runtime.chatSessionBranches.value.isEmpty())
+          assertEquals(1, runtime.chat.pendingRunCount.value)
+          assertTrue(
+            runtime.chat.sessionBranches.value
+              .isEmpty(),
+          )
         }
       }
       val request = runtimeRequester(runtime)
