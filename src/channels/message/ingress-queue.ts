@@ -203,8 +203,8 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     shouldRecoverCorrupt?: (claim: ChannelIngressQueueCorruptClaim) => boolean | Promise<boolean>;
   }): Promise<number>;
   prune(options?: ChannelIngressQueuePruneOptions): Promise<number>;
-  /** Delete every state for this channel/account; callers must stop its producers and drain first. */
-  purge(): Promise<number>;
+  /** Core queues support identity resets; optional for existing plugin-supplied queue inputs. */
+  purge?(): Promise<number>;
 };
 
 /** Construction options for a channel/account-scoped ingress queue. */
@@ -1321,7 +1321,9 @@ export function createChannelIngressQueue<
     );
   };
 
-  const purge: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["purge"] = async () => {
+  const purge: NonNullable<
+    ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["purge"]
+  > = async () => {
     const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) =>

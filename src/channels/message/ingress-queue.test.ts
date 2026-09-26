@@ -70,8 +70,8 @@ describe("channel ingress queue", () => {
         await queue.fail("failed", { reason: "rejected" });
       }
 
-      expect(await queues[0].purge()).toBe(4);
-      expect(await queues[0].purge()).toBe(0);
+      expect(await queues[0].purge?.()).toBe(4);
+      expect(await queues[0].purge?.()).toBe(0);
       for (const state of states) {
         expect(await queues[0].enqueue(state, { text: "new identity" })).toMatchObject({
           kind: "accepted",

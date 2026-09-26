@@ -135,6 +135,16 @@ describe("monitorTelegramProvider", () => {
         botToken: "111111:token-a",
         updateId: 1,
       });
+      const purge = queue.purge;
+      queue.purge = undefined;
+      await expect(startMonitor({ token: "222222:token-b" }).task).rejects.toThrow(
+        /account "default".*restart.*host/,
+      );
+      expect(mocks.deleteOffset).not.toHaveBeenCalled();
+      expect(await queue.enqueue("1", { text: "unsupported reset" })).toMatchObject({
+        kind: "completed",
+      });
+      queue.purge = purge;
       await expect(startMonitor({ token: "222222:token-b" }).task).rejects.toThrow(
         /account "default".*restart.*interrupted reset/,
       );
@@ -152,6 +162,46 @@ describe("monitorTelegramProvider", () => {
         { id: "1", payload: { text: "bot B pending" } },
       ]);
       expect(mocks.sessions[1]?.getCommittedUpdateId()).toBe(1);
+    });
+  });
+
+  it.each([
+    { name: "same-bot token rotation", version: 3, botId: "111111", tokenFingerprint: "old" },
+    { name: "matching legacy identity", version: 2, botId: "111111", tokenFingerprint: null },
+    { name: "unknown legacy identity", version: 1, botId: null, tokenFingerprint: null },
+  ])("keeps queue rows for $name", async (identity) => {
+    await withStateDirEnv("telegram-same-bot-", async ({ stateDir }) => {
+      const store = await vi.importActual<typeof OffsetStore>("./update-offset-store.js");
+      let storedOffset: unknown = { ...identity, lastUpdateId: 2 };
+      const queue = createChannelIngressQueueForTests({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      });
+      mocks.runtime.mockReturnValue({
+        state: {
+          openChannelIngressQueue: () => queue,
+          openKeyedStore: () => ({
+            lookup: async () => storedOffset,
+            delete: async () => {
+              storedOffset = undefined;
+              return true;
+            },
+          }),
+        },
+      });
+      mocks.readOffset.mockImplementation(store.readTelegramUpdateOffset);
+      mocks.deleteOffset.mockImplementation(store.deleteTelegramUpdateOffset);
+      await queue.enqueue("1", { text: "pending" });
+      await queue.enqueue("2", { text: "delivered" });
+      await queue.complete("2");
+
+      await startMonitor({ token: "111111:token-b" }).task;
+
+      expect(await queue.listPending()).toMatchObject([{ id: "1", payload: { text: "pending" } }]);
+      expect(await queue.enqueue("2", { text: "duplicate" })).toMatchObject({ kind: "completed" });
+      expect(storedOffset).toBeUndefined();
+      expect(mocks.sessions[0]?.getCommittedUpdateId()).toBeNull();
     });
   });
   it("refuses a second live monitor for the same token", async () => {

@@ -155,12 +155,18 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       onRotationDetected: async (info) => {
         log(formatTelegramOffsetRotationMessage(account.accountId, info));
         try {
-          // Keep the old identity until the queue purge commits so interrupted resets retry.
-          await getTelegramRuntime()
-            .state.openChannelIngressQueue({
+          if (info.previousBotId !== null && info.previousBotId !== info.currentBotId) {
+            const queue = getTelegramRuntime().state.openChannelIngressQueue({
               accountId: account.accountId,
-            })
-            .purge();
+            });
+            if (!queue.purge) {
+              throw new Error(
+                "The host does not support ingress identity resets; update OpenClaw.",
+              );
+            }
+            // Keep the old identity until the queue purge commits so interrupted resets retry.
+            await queue.purge();
+          }
           await deleteTelegramUpdateOffset({ accountId: account.accountId });
         } catch (err) {
           throw new Error(
