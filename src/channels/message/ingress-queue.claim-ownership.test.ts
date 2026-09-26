@@ -133,7 +133,7 @@ describe("channel ingress claim ownership", () => {
       const queue = createTestIngressQueue(stateDir);
       let policyChanged = false;
       let stopped: Promise<number> | undefined;
-      let claimWorker: Worker | undefined;
+      let stopClaimWorker: (() => Promise<number>) | undefined;
       let claimRequest: number | undefined;
       let attempts = 0;
       // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver below.
@@ -151,7 +151,7 @@ describe("channel ingress claim ownership", () => {
             "type" in command &&
             command.type === "channelIngress.claimNext"
           ) {
-            claimWorker = this;
+            stopClaimWorker = () => this.terminate();
             claimRequest = request.id;
             attempts++;
           }
@@ -172,10 +172,10 @@ describe("channel ingress claim ownership", () => {
                 reply.id === claimRequest &&
                 "ok" in reply &&
                 reply.ok === false &&
-                claimWorker &&
+                stopClaimWorker &&
                 !stopped
               ) {
-                stopped = claimWorker.terminate();
+                stopped = stopClaimWorker();
                 return;
               }
               params.receiveResult(reply, pumping);
