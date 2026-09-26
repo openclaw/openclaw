@@ -1,86 +1,55 @@
-const WINDOWS_TRUSTED_INSTALLER_SID =
-  "s-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
-const WINDOWS_SAFE_DIRECTORY_ACL_TOKENS = new Set(
-  "AD CI GE GR I IO NP OI R RA RC RD REA RX S WD X".split(" "),
-);
-const WINDOWS_SAFE_EXECUTABLE_PARENT_ACL_TOKENS = new Set(
-  [...WINDOWS_SAFE_DIRECTORY_ACL_TOKENS].filter((token) => token !== "AD" && token !== "WD"),
-);
+import type { OwnerAndDaclResult } from "@openclaw/fs-safe/permissions";
 
-function isTrustedOwner(
-  stat: { uid?: number | null },
-  permissions: { ownerTrusted?: boolean; ownerSid?: string },
-  platform: NodeJS.Platform = process.platform,
-  allowWindowsTrustedInstaller = false,
-): boolean {
-  if (platform === "win32") {
+const TRUSTED_INSTALLER = "s-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+const TRUSTED_OWNERS = new Set(["s-1-5-18", "s-1-5-32-544"]);
+const WRITE_RIGHTS = 0x500d0156;
+const KNOWN_RIGHTS = 0xf01f01ff;
+// Read/execute plus adding children; executable parents exclude WD and AD.
+const SAFE_DIRECTORY_RIGHTS = 0xa01200af;
+
+export function trustedWindowsPlanPathFailure(
+  facts: OwnerAndDaclResult,
+  options: { directory: boolean; allowChildCreation: boolean; allowTrustedInstaller: boolean },
+): string | undefined {
+  if (facts.status !== "supported" || !facts.complete) {
+    return "permissions could not be verified";
+  }
+  const owner = facts.ownerSid.toLowerCase();
+  const user = facts.currentUserSid.toLowerCase();
+  if (
+    !(facts.isLocal && (owner === user || TRUSTED_OWNERS.has(owner))) &&
+    !(options.allowTrustedInstaller && owner === TRUSTED_INSTALLER)
+  ) {
+    return "path is not owned by the current user or root";
+  }
+  const grants = facts.aces.filter((ace) => {
+    const sid = ace.sid.toLowerCase();
     return (
-      permissions.ownerTrusted === true ||
-      (allowWindowsTrustedInstaller &&
-        permissions.ownerSid?.toLowerCase() === WINDOWS_TRUSTED_INSTALLER_SID)
+      ace.aceType === "allow" &&
+      !ace.flags.inheritOnly &&
+      sid !== user &&
+      !TRUSTED_OWNERS.has(sid) &&
+      sid !== TRUSTED_INSTALLER
     );
-  }
-  if (typeof process.getuid !== "function" || stat.uid == null) {
-    return false;
-  }
-  const uid = process.getuid();
-  return stat.uid === uid || stat.uid === 0;
-}
-
-function isSafeWindowsDirectoryAclEntry(
-  entry: { rawRights: string } | null,
-  allowChildCreation = true,
-): boolean {
-  if (!entry || typeof entry.rawRights !== "string") {
-    return false;
-  }
-  const tokens = [...entry.rawRights.matchAll(/\(([^)]+)\)/gu)].flatMap((match) =>
-    (match[1] ?? "")
-      .split(",")
-      .map((token) => token.trim().toUpperCase())
-      .filter(Boolean),
-  );
-  // Inherit-only entries do not grant rights on the directory itself. Descendants are
-  // inspected independently with their effective ACL and owner.
-  const safeTokens = allowChildCreation
-    ? WINDOWS_SAFE_DIRECTORY_ACL_TOKENS
-    : WINDOWS_SAFE_EXECUTABLE_PARENT_ACL_TOKENS;
-  return (
-    tokens.includes("IO") || (tokens.length > 0 && tokens.every((token) => safeTokens.has(token)))
-  );
-}
-
-function isSafeWindowsDirectoryAclEntries(
-  entries: Array<{ rawRights: string }>,
-  allowChildCreation = true,
-): boolean {
-  return entries.every((entry) => isSafeWindowsDirectoryAclEntry(entry, allowChildCreation));
-}
-
-function isSafeWindowsDirectoryAclSummary(
-  summary: string | undefined,
-  allowChildCreation = true,
-): boolean {
-  if (summary === "trusted-only") {
-    return true;
-  }
-  if (!summary) {
-    return false;
-  }
-  const entries = summary.split(", ").map((value) => {
-    const separatorIndex = value.lastIndexOf(":");
-    const rawRights = separatorIndex > 0 ? value.slice(separatorIndex + 1) : "";
-    return /^(?:\([^)]+\))+$/u.test(rawRights) ? { rawRights } : null;
   });
-  return (
-    entries.length > 0 &&
-    entries.every((entry) => entry !== null) &&
-    isSafeWindowsDirectoryAclEntries(entries, allowChildCreation)
-  );
+  if (!facts.daclPresent) {
+    return "path is writable by another user";
+  }
+  if (!grants.some((ace) => (ace.mask & WRITE_RIGHTS) !== 0)) {
+    return undefined;
+  }
+  const safeRights = options.allowChildCreation
+    ? SAFE_DIRECTORY_RIGHTS
+    : SAFE_DIRECTORY_RIGHTS & ~0x6;
+  // Preserve the inspector's coarse write gate and the rights its summary represented.
+  if (
+    options.directory &&
+    grants.every((ace) => {
+      const rights = ace.mask & KNOWN_RIGHTS;
+      return rights !== 0 && (rights & ~safeRights) === 0;
+    })
+  ) {
+    return undefined;
+  }
+  return "path is writable by another user";
 }
-
-export const trustedPlanPathPolicy = {
-  isSafeWindowsDirectoryAclEntries,
-  isSafeWindowsDirectoryAclSummary,
-  isTrustedOwner,
-};
