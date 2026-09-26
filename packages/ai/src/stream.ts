@@ -33,12 +33,19 @@ export function createLlmRuntime(
     const host = explicitHost ?? getDefaultAiTransportHost();
     const run = <T>(operation: () => T): T => runWithAiTransportHost(host, operation);
     const source = run(start);
-    return {
-      push: (event) => run(() => source.push(event)),
-      end: (message) => run(() => source.end(message)),
-      result: () => run(() => source.result()),
-      [Symbol.asyncIterator]() {
-        const iterator = run(() => source[Symbol.asyncIterator]());
+    return run(() => {
+      const push = source.push.bind(source);
+      const end = source.end.bind(source);
+      const result = source.result.bind(source);
+      const iterate = source[Symbol.asyncIterator].bind(source);
+      // Decorate the provider-owned mutable stream without replacing its identity.
+      // Native producer completion lives outside its mutable result() surface and
+      // must survive even when a process runtime outlives a provider module copy.
+      source.push = (event) => run(() => push(event));
+      source.end = (message) => run(() => end(message));
+      source.result = () => run(result);
+      source[Symbol.asyncIterator] = () => {
+        const iterator = run(iterate);
         const finish = iterator.return?.bind(iterator);
         const fail = iterator.throw?.bind(iterator);
         return {
@@ -46,8 +53,9 @@ export function createLlmRuntime(
           ...(finish ? { return: (value?: unknown) => run(() => finish(value)) } : {}),
           ...(fail ? { throw: (error?: unknown) => run(() => fail(error)) } : {}),
         };
-      },
-    };
+      };
+      return source;
+    });
   };
   function resolveApiProvider(api: Api) {
     const provider = registry.getApiProvider(api);

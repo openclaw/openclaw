@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { AssistantMessage, AssistantMessageEvent, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { createNativeInferenceStreamGuard } from "./native-inference-stream.js";
@@ -370,9 +370,18 @@ describe("worker native inference output owner", () => {
     const source = createAssistantMessageEventStream();
     const result = createNativeInferenceStreamGuard(native())(() => source);
     const events: AssistantMessageEvent[] = [];
+    const expectedText = "synthetic-ordinary text";
+    const earlyText = Promise.withResolvers<void>();
+    let streamedText = "";
     const drain = (async () => {
       for await (const event of result) {
         events.push(event);
+        if (event.type === "text_delta") {
+          streamedText += event.delta;
+          if (streamedText.length >= expectedText.length) {
+            earlyText.resolve();
+          }
+        }
       }
     })();
     source.push({ type: "start", partial: message([]) });
@@ -383,16 +392,24 @@ describe("worker native inference output owner", () => {
     });
     source.push({ type: "text_delta", contentIndex: 0, delta: "synthetic-" });
     source.push({ type: "text_delta", contentIndex: 0, delta: "ordinary text" });
-    await vi.waitFor(() => expect(events.filter((e) => e.type === "text_delta")).toHaveLength(2));
-    expect(events.some((e) => e.type === "done")).toBe(false);
-    source.push({
-      type: "done",
-      reason: "stop",
-      message: message([{ type: "text", text: "synthetic-ordinary text" }]),
-    });
-    source.end();
-    await drain;
-    expect((await result.result()).stopReason).toBe("stop");
+    try {
+      // The event stream may coalesce unread adjacent deltas. Require all text
+      // before sending a terminal event, regardless of provider packet boundaries.
+      await Promise.race([earlyText.promise, drain]);
+      expect(streamedText).toBe(expectedText);
+      expect(events.some((event) => event.type === "done")).toBe(false);
+      source.push({
+        type: "done",
+        reason: "stop",
+        message: message([{ type: "text", text: expectedText }]),
+      });
+      source.end();
+      await drain;
+      expect((await result.result()).stopReason).toBe("stop");
+    } finally {
+      source.end();
+      await Promise.allSettled([drain]);
+    }
   });
   it("retains object argument values across completed responses without concatenating their keys", async () => {
     const guard = createNativeInferenceStreamGuard(native());
