@@ -55,7 +55,12 @@ export function createCliEventHandlers(params: {
   // progress event would otherwise describe the output instead of the command.
   const toolArgsByCallId = new Map<
     string,
-    { args: Record<string, unknown>; tracked: boolean; startedAt: number }
+    {
+      args: Record<string, unknown>;
+      kind: CliToolUseStartDelta["kind"];
+      tracked: boolean;
+      startedAt: number;
+    }
   >();
   const emitToolEvent = (
     data: Parameters<typeof projectAgentToolActivity>[0] & {
@@ -107,7 +112,12 @@ export function createCliEventHandlers(params: {
   const emitToolUseStart = (event: CliToolUseStartDelta, tracked: boolean) => {
     observedCliActivity = true;
     // Empty arguments are meaningful: progress-card calls use {} to clear the card.
-    toolArgsByCallId.set(event.toolCallId, { args: event.args, tracked, startedAt: Date.now() });
+    toolArgsByCallId.set(event.toolCallId, {
+      args: event.args,
+      kind: event.kind,
+      tracked,
+      startedAt: Date.now(),
+    });
     recordToolSummary(event, false);
     if (!signaledToolExecutionStarted) {
       signaledToolExecutionStarted = true;
@@ -202,8 +212,12 @@ export function createCliEventHandlers(params: {
           ...(tracked && startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
-        // Native CLI tools have no loopback executed args; keep their request in the terminal item.
-        { args: executedArgs ?? startedArgs },
+        // An ambiguous MCP loopback has no authoritative executed args; native tools do.
+        {
+          args:
+            executedArgs ??
+            (!tracked || startedCall?.kind !== "mcp_tool_use" ? startedArgs : undefined),
+        },
       );
     }
   };

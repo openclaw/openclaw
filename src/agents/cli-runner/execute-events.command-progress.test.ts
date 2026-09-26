@@ -10,7 +10,7 @@ import type { CliToolTracking } from "./execute-tool-tracking.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 describe("Claude CLI command progress", () => {
-  it("keeps Bash command detail after the terminal item update", () => {
+  it("keeps native Bash detail without asserting ambiguous MCP execution", () => {
     const runId = "cli-bash-progress";
     const backend = {
       command: "claude",
@@ -114,6 +114,27 @@ describe("Claude CLI command progress", () => {
       expect(
         mergeChannelProgressDraftLine([startLine], endLine, { maxLines: 4 })[0]?.detail,
       ).toContain("echo retained");
+
+      handlers.emitCliToolUseStart({
+        toolCallId: "mcp-1",
+        name: "mcp__openclaw__exec",
+        kind: "mcp_tool_use",
+        args: { command: "requested command" },
+      });
+      handlers.emitCliToolResult({
+        toolCallId: "mcp-1",
+        name: "mcp__openclaw__exec",
+        isError: false,
+        result: "result with ambiguous execution",
+      });
+      const mcpEnd = events.find(
+        (event) =>
+          event.stream === "item" &&
+          event.data.phase === "end" &&
+          event.data.toolCallId === "mcp-1",
+      );
+      expect(mcpEnd?.data).toMatchObject({ status: "completed", name: "exec" });
+      expect(mcpEnd?.data.meta).toBeUndefined();
     } finally {
       dispose();
     }
