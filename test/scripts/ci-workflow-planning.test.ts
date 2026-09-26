@@ -5183,7 +5183,7 @@ describe("ci workflow guards", () => {
             "source-contracts",
             ...(eventName === "workflow_dispatch" ? ["plugin-sdk-api-diff"] : []),
             ...Array.from(
-              { length: eventName === "pull_request" ? 3 : 1 },
+              { length: eventName === "pull_request" ? 8 : 1 },
               () => "extension-package-boundary",
             ),
             ...Array.from(
@@ -5205,7 +5205,9 @@ describe("ci workflow guards", () => {
           eventName === "pull_request" &&
           row.group === "extension-package-boundary"
         ) {
-          expect(["1/3", "2/3", "3/3"]).toContain(row.boundary_shard);
+          expect(["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]).toContain(
+            row.boundary_shard,
+          );
           expect(row.check_name).toBe(
             `check-additional-extension-package-boundary-${row.boundary_shard.split("/")[0]}`,
           );
@@ -6120,7 +6122,8 @@ describe("ci workflow guards", () => {
     const rows: Array<{ group: string; boundary_shard: string }> = JSON.parse(
       manifest.outputs.check_additional_matrix!,
     ).include.filter((row: { group: string }) => row.group === "extension-package-boundary");
-    expect(rows.map((row) => row.boundary_shard)).toEqual(["1/3", "2/3", "3/3"]);
+    const shards = ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"];
+    expect(rows.map((row) => row.boundary_shard)).toEqual(shards);
     const step = readCiWorkflow().jobs["check-additional-shard"].steps.find(
       (candidate: WorkflowStep) => candidate.name === "Run additional check shard",
     );
@@ -6157,15 +6160,14 @@ describe("ci workflow guards", () => {
     };
     const compile = "run test:extensions:package-boundary:compile";
     const canary = "run test:extensions:package-boundary:canary";
-    for (const failScript of ["", `${compile} --shard=1/3`, canary]) {
+    for (const failScript of ["", `${compile} --shard=1/8`, canary]) {
       writeFileSync(callsPath, "");
       const runs = rows.map((row) => runRow(row, failScript));
-      expect(runs.map(({ status }) => status)).toEqual(failScript ? [1, 0, 0] : [0, 0, 0]);
+      expect(runs.map(({ status }) => status)).toEqual([failScript ? 1 : 0, 0, 0, 0, 0, 0, 0, 0]);
       expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual([
-        `${compile} --shard=1/3\t6GiB`,
+        `${compile} --shard=1/8\t6GiB`,
         `${canary}\tunset`,
-        `${compile} --shard=2/3\t6GiB`,
-        `${compile} --shard=3/3\t6GiB`,
+        ...shards.slice(1).map((shard) => `${compile} --shard=${shard}\t6GiB`),
       ]);
     }
     writeFileSync(callsPath, "");
@@ -6176,12 +6178,11 @@ describe("ci workflow guards", () => {
       `${canary}\tunset`,
     ]);
     writeFileSync(callsPath, "");
-    expect(rows.map((row) => runRow(row, "", "2GiB").status)).toEqual([0, 0, 0]);
+    expect(rows.map((row) => runRow(row, "", "2GiB").status)).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
     expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual([
-      `${compile} --shard=1/3\t2GiB`,
+      `${compile} --shard=1/8\t2GiB`,
       `${canary}\t2GiB`,
-      `${compile} --shard=2/3\t2GiB`,
-      `${compile} --shard=3/3\t2GiB`,
+      ...shards.slice(1).map((shard) => `${compile} --shard=${shard}\t2GiB`),
     ]);
   });
 

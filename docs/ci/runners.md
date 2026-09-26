@@ -15,7 +15,7 @@ variable. Hybrid PR core lint uses five separate rows and retains six separate
 extension rows. Current PR dependency scans run in three separate jobs, and three
 topology stripes divide the commands declared by `check:architecture` in
 `package.json`; malformed pipelines fail instead of dropping coverage.
-Extension package compilation uses three PR stripes drawn from its complete,
+Extension package compilation uses eight PR stripes drawn from its complete,
 source-size-ordered plugin inventory. Each stripe retains SDK preparation and
 the existing worker limits, with a `6GiB` Go memory target unless explicitly
 overridden. The first also runs the whole-inventory negative

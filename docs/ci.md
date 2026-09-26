@@ -21,7 +21,7 @@ GitHub-hosted runners.
 
 The PR failure monitor, preflight, static checks, artifact build, and Windows
 tests use free GitHub-hosted runners. PR hybrid core lint runs five independent stripes, with
-six separate extension stripes. Extension package compilation uses three PR stripes
+six separate extension stripes. Extension package compilation uses eight PR stripes
 with the complete plugin inventory and one negative canary. Windows retains its one-worker hosted budget on
 `windows-2025`. Hosted PR Node planning uses separate measured group costs,
 serial processes, and smaller file groups. Its limits are 210 compact rows and

@@ -22,10 +22,12 @@ bounds add no Blacksmith registrations. PR preflight, monitor, static checks,
 artifact build, Windows, and Node rows use hosted capacity; hourly main and
 manual/release routing retain the policies described below. Measure hosted
 assignment waits against the shared organization pool before expanding admission.
-The three PR extension-package compile stripes add two hosted jobs and repeat
+The eight PR extension-package compile stripes add seven hosted jobs and repeat
 SDK preparation within each job. They keep the complete plugin inventory and
 one negative canary; expected-job counts and hosted admission derive from the
-expanded matrix. Their `6GiB` Go memory target leaves space for the surrounding
+expanded matrix. With 125 plugins, each stripe compiles 15 or 16 to leave room
+for cold SDK preparation within the eight-minute job target. Native timings must
+still verify that target. Their `6GiB` Go memory target leaves space for the surrounding
 processes on hosted runners; existing overrides remain authoritative. Compiler
 deadlines and the additional-check concurrency cap of twelve remain unchanged.
 
