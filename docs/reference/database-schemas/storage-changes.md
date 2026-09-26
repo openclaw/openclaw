@@ -223,7 +223,8 @@ same operation's transaction and commit grants. Cancellation before native
 execution joins accepted work without replaying the command.
 
 Startup, schema mutation, and offline maintenance share one removable process-owner
-sidecar outside the installation's state directory. Ordinary database access
+sidecar. On Unix it lives under the selected state directory's temporary storage;
+on Windows it uses the user's OpenClaw locks directory. Ordinary database access
 checks that owner for conflicting maintenance without acquiring another lock.
 Workers obtain schema authority from their live host operation; serialized paths
 and environment selectors grant no authority. Normal release removes the owner
