@@ -1,8 +1,7 @@
-import type { Event, Filter, Relay } from "nostr-tools";
+import type { Event, Relay } from "nostr-tools";
 import { isNewerBuzzRevision } from "./event-order.js";
 import { catchUpBuzzRoomHistory } from "./history-catchup.js";
-import { BUZZ_INBOUND_MESSAGE_KINDS, isBuzzInboundMessageKind } from "./message-event.js";
-import { openBuzzRelaySubscription } from "./relay-subscription.js";
+import { isBuzzInboundMessageKind } from "./message-event.js";
 import {
   BUZZ_REPLAY_DISPATCH_MAX_PENDING,
   type BuzzReplayDispatchReservation,
@@ -10,15 +9,16 @@ import {
 import type { BuzzRoomMembershipNotification } from "./room-membership-notification.js";
 import { queryBuzzRoomMemberships } from "./room-membership-query.js";
 import {
-  BUZZ_ROOM_SYSTEM_KIND,
+  BUZZ_ROOM_METADATA_EDIT_KIND,
+  startBuzzRoomMembershipSubscription,
+} from "./room-membership-subscription.js";
+import {
   BUZZ_ROOM_MEMBERSHIP_KIND,
   parseBuzzRoomMembershipEvent,
   parseBuzzRoomMembershipChangeEvent,
   type BuzzRoomMembership,
 } from "./room-membership.js";
 
-const MEMBERSHIP_READY_TIMEOUT_MS = 10_000;
-const BUZZ_ROOM_METADATA_EDIT_KIND = 9_002;
 const MEMBERSHIP_REFRESH_DELAYS_MS = [100, 500, 1_500, 3_000] as const;
 const MEMBERSHIP_EVENT_CACHE_MAX_ENTRIES = 10_000;
 
@@ -53,10 +53,11 @@ async function sleepWithSignal(delayMs: number, signal?: AbortSignal): Promise<v
   });
 }
 
-export async function createBuzzRoomMembershipTracker(params: {
+export function createBuzzRoomMembershipTracker(params: {
   relay: Relay;
   relayPublicKey: string;
   channelIds: string[];
+  isRoomArchived?: (channelId: string) => boolean;
   botPublicKey: string;
   since: number;
   messageSince: (channelId: string) => number;
@@ -65,6 +66,7 @@ export async function createBuzzRoomMembershipTracker(params: {
   onMessageEvent: (
     event: Event,
     isMember: (channelId: string, publicKey: string) => boolean,
+    signal: AbortSignal,
     reservation?: BuzzReplayDispatchReservation,
   ) => void;
   onFatalError?: (error: Error) => void;
@@ -73,21 +75,50 @@ export async function createBuzzRoomMembershipTracker(params: {
   onMembershipsChanged?: (memberships: ReadonlyMap<string, BuzzRoomMembership>) => void;
   onRoomMetadataChanged?: (channelId: string) => void;
   signal?: AbortSignal;
-}): Promise<{
+}): {
+  ready: Promise<void>;
   memberships: () => ReadonlyMap<string, BuzzRoomMembership>;
   catchUpHistory: () => Promise<void>;
+  reconcileRooms: () => Promise<void>;
   handleNotification: (notification: BuzzRoomMembershipNotification) => boolean;
   close: () => Promise<void>;
-}> {
+} {
   type ExpectedMembership = "present" | "absent";
+  type RoomGeneration = { controller: AbortController; signal: AbortSignal };
   type RefreshState = {
+    room: RoomGeneration;
     generation: number;
     lastAttemptedGeneration: number;
     promise: Promise<void>;
   };
   type RestoringRoom = { historical: boolean; generation: number; until?: number };
 
-  const historicalRooms = new Set<string>();
+  const roomGenerations = new Map<string, RoomGeneration>();
+  const createRoomGeneration = (channelId: string): RoomGeneration => {
+    const controller = new AbortController();
+    const room = {
+      controller,
+      signal: params.signal
+        ? AbortSignal.any([controller.signal, params.signal])
+        : controller.signal,
+    };
+    roomGenerations.set(channelId, room);
+    return room;
+  };
+  const isCurrentRoom = (channelId: string, room: RoomGeneration) =>
+    roomGenerations.get(channelId) === room &&
+    !room.signal.aborted &&
+    !params.isRoomArchived?.(channelId);
+  const initialActiveRoomIds = params.channelIds.filter(
+    (channelId) => !params.isRoomArchived?.(channelId),
+  );
+  for (const channelId of initialActiveRoomIds) {
+    createRoomGeneration(channelId);
+  }
+  const roomSubscriptions = new Map<
+    string,
+    ReturnType<typeof startBuzzRoomMembershipSubscription>
+  >();
   const historyPages = new Map<string, { count: number; oldest: number }>();
   const seenEventIds = new Map<string, true>();
   const blockedRooms = new Set<string>();
@@ -96,15 +127,16 @@ export async function createBuzzRoomMembershipTracker(params: {
   const refreshes = new Map<string, RefreshState>();
   const restoringRooms = new Map<string, RestoringRoom>();
   let membershipQueryTail = Promise.resolve();
-  const memberships = await queryBuzzRoomMemberships(params);
-  params.signal?.throwIfAborted();
+  let memberships = new Map<string, BuzzRoomMembership>();
+  let initialized = false;
   const effectiveMemberships = (): ReadonlyMap<string, BuzzRoomMembership> => {
-    if (blockedRooms.size === 0 && deniedMembers.size === 0) {
-      return memberships;
-    }
     const effective = new Map<string, BuzzRoomMembership>();
     for (const [channelId, membership] of memberships) {
-      if (blockedRooms.has(channelId)) {
+      if (
+        blockedRooms.has(channelId) ||
+        !roomGenerations.has(channelId) ||
+        params.isRoomArchived?.(channelId)
+      ) {
         continue;
       }
       const denied = deniedMembers.get(channelId);
@@ -121,6 +153,8 @@ export async function createBuzzRoomMembershipTracker(params: {
     return effective;
   };
   const isMember = (channelId: string, publicKey: string) =>
+    roomGenerations.has(channelId) &&
+    !params.isRoomArchived?.(channelId) &&
     !blockedRooms.has(channelId) &&
     !deniedMembers.get(channelId)?.has(publicKey.trim().toLowerCase()) &&
     memberships.get(channelId)?.members.has(publicKey.trim().toLowerCase()) === true;
@@ -156,14 +190,18 @@ export async function createBuzzRoomMembershipTracker(params: {
     memberships.set(membership.roomId, membership);
     params.onMembershipsChanged?.(effectiveMemberships());
   };
-  const queryMembership = (channelId: string): Promise<BuzzRoomMembership | undefined> => {
+  const queryMembership = (
+    channelId: string,
+    room: RoomGeneration,
+  ): Promise<BuzzRoomMembership | undefined> => {
     const query = membershipQueryTail.then(async () => {
-      params.signal?.throwIfAborted();
+      room.signal.throwIfAborted();
       return (
         await queryBuzzRoomMemberships({
           relay: params.relay,
           relayPublicKey: params.relayPublicKey,
           channelIds: [channelId],
+          // Keep the shared relay query serialized until EOSE, even if this room retires.
           signal: params.signal,
         })
       ).get(channelId);
@@ -179,19 +217,25 @@ export async function createBuzzRoomMembershipTracker(params: {
     for (const delayMs of MEMBERSHIP_REFRESH_DELAYS_MS) {
       const generation = state.generation;
       state.lastAttemptedGeneration = generation;
-      await sleepWithSignal(delayMs, params.signal);
+      await sleepWithSignal(delayMs, state.room.signal);
+      if (!isCurrentRoom(channelId, state.room)) {
+        return;
+      }
       if (state.generation !== generation) {
         continue;
       }
       let refreshed: BuzzRoomMembership | undefined;
       try {
-        refreshed = await queryMembership(channelId);
-        params.signal?.throwIfAborted();
+        refreshed = await queryMembership(channelId, state.room);
+        state.room.signal.throwIfAborted();
       } catch (error) {
-        if (params.signal?.aborted) {
+        if (state.room.signal.aborted) {
           throw error;
         }
         continue;
+      }
+      if (!isCurrentRoom(channelId, state.room)) {
+        return;
       }
       if (state.generation !== generation || !refreshed) {
         continue;
@@ -224,28 +268,39 @@ export async function createBuzzRoomMembershipTracker(params: {
   };
 
   const refreshMembershipOnce = (channelId: string): Promise<void> => {
+    const room = roomGenerations.get(channelId);
+    if (!room || !isCurrentRoom(channelId, room)) {
+      return Promise.resolve();
+    }
     const current = refreshes.get(channelId);
     if (current) {
       current.generation += 1;
       return current.promise;
     }
     const state = {
+      room,
       generation: 1,
       lastAttemptedGeneration: 0,
       promise: Promise.resolve(),
     } satisfies RefreshState;
-    state.promise = refreshMembership(channelId, state).finally(() => {
-      if (refreshes.get(channelId) === state) {
-        refreshes.delete(channelId);
-      }
-      if (
-        state.generation !== state.lastAttemptedGeneration &&
-        pendingMemberships.has(channelId) &&
-        !params.signal?.aborted
-      ) {
-        void refreshMembershipOnce(channelId).catch(reportSystemEventError);
-      }
-    });
+    state.promise = refreshMembership(channelId, state)
+      .catch((error: unknown) => {
+        if (isCurrentRoom(channelId, room)) {
+          throw error;
+        }
+      })
+      .finally(() => {
+        if (refreshes.get(channelId) === state) {
+          refreshes.delete(channelId);
+        }
+        if (
+          state.generation !== state.lastAttemptedGeneration &&
+          pendingMemberships.has(channelId) &&
+          isCurrentRoom(channelId, room)
+        ) {
+          void refreshMembershipOnce(channelId).catch(reportSystemEventError);
+        }
+      });
     refreshes.set(channelId, state);
     return state.promise;
   };
@@ -298,8 +353,12 @@ export async function createBuzzRoomMembershipTracker(params: {
     params.onMembershipsChanged?.(effectiveMemberships());
     return refreshMembershipOnce(channelId);
   };
-  const handleRoomEvent = (event: Event, reservation?: BuzzReplayDispatchReservation) => {
-    if (params.signal?.aborted) {
+  const handleRoomEvent = (
+    event: Event,
+    room: RoomGeneration,
+    reservation?: BuzzReplayDispatchReservation,
+  ) => {
+    if (room.signal.aborted) {
       return;
     }
     const channelId = event.tags.find((tag) => tag[0] === "h")?.[1];
@@ -325,148 +384,70 @@ export async function createBuzzRoomMembershipTracker(params: {
       return;
     }
     if (isBuzzInboundMessageKind(event.kind)) {
-      params.onMessageEvent(event, isMember, reservation);
+      params.onMessageEvent(
+        event,
+        (roomId, publicKey) => isCurrentRoom(roomId, room) && isMember(roomId, publicKey),
+        room.signal,
+        reservation,
+      );
       return;
     }
     void handleSystemEvent(event)?.catch(reportSystemEventError);
   };
 
-  const skippedRooms = new Set<string>();
+  const skippedRooms = new Set(
+    params.channelIds.filter((channelId) => !roomGenerations.has(channelId)),
+  );
   const initialRoomIds: string[] = [];
-  for (const channelId of params.channelIds) {
-    if (memberships.get(channelId)?.roles.get(params.botPublicKey) !== "bot") {
-      skippedRooms.add(channelId);
-      params.onRoomUnavailable?.(
-        new Error(`Buzz bot does not have the Bot role in configured room ${channelId}`),
-      );
-    } else {
-      initialRoomIds.push(channelId);
-    }
-  }
-  if (params.channelIds.length > 0 && initialRoomIds.length === 0) {
-    throw new Error(
-      `Buzz bot does not have the Bot role in any configured room: ${params.channelIds.join(", ")}`,
-    );
-  }
 
-  const subscribeRoom = (channelId: string): Promise<void> => {
-    params.signal?.throwIfAborted();
-    return new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = (error?: unknown) => {
-        if (settled) {
-          return;
+  const subscribeRoom = (channelId: string, room: RoomGeneration): Promise<void> => {
+    room.signal.throwIfAborted();
+    historyPages.delete(channelId);
+    const subscription = startBuzzRoomMembershipSubscription({
+      relay: params.relay,
+      relayPublicKey: params.relayPublicKey,
+      channelId,
+      since: params.since,
+      messageSince: params.messageSince(channelId),
+      messageLimit: params.messageLimit,
+      signal: params.signal,
+      isCurrent: () => isCurrentRoom(channelId, room),
+      onEvent: (event, historical) => {
+        if (historical && isBuzzInboundMessageKind(event.kind)) {
+          const page = historyPages.get(channelId);
+          if (page) {
+            page.count += 1;
+            page.oldest = Math.min(page.oldest, event.created_at);
+          } else {
+            historyPages.set(channelId, { count: 1, oldest: event.created_at });
+          }
         }
-        settled = true;
-        clearTimeout(timeout);
-        params.signal?.removeEventListener("abort", onAbort);
-        if (error === undefined) {
-          resolve();
-        } else {
-          reject(
-            error instanceof Error
-              ? error
-              : new Error("Buzz room membership loading failed", { cause: error }),
-          );
+        handleRoomEvent(event, room);
+      },
+      onReady: () => {
+        const restoring = restoringRooms.get(channelId);
+        if (restoring) {
+          restoring.historical = false;
         }
-      };
-      const onAbort = () =>
-        finish(params.signal?.reason ?? new Error("Buzz membership loading aborted"));
-      const timeout = setTimeout(() => {
-        finish(new Error(`Timed out loading Buzz room membership changes for ${channelId}`));
-        params.relay.close();
-      }, MEMBERSHIP_READY_TIMEOUT_MS);
-      params.signal?.addEventListener("abort", onAbort, { once: true });
-      // System changes precede message history so revoked senders cannot enter the queue.
-      const filters: Filter[] = [
-        {
-          kinds: [BUZZ_ROOM_SYSTEM_KIND, BUZZ_ROOM_METADATA_EDIT_KIND],
-          "#h": [channelId],
-          since: params.since,
-        },
-        {
-          kinds: [BUZZ_ROOM_MEMBERSHIP_KIND],
-          authors: [params.relayPublicKey],
-          "#d": [channelId],
-          limit: 1,
-        },
-        {
-          kinds: [...BUZZ_INBOUND_MESSAGE_KINDS],
-          "#h": [channelId],
-          since: params.messageSince(channelId),
-          limit: params.messageLimit,
-        },
-      ];
-      try {
-        openBuzzRelaySubscription(
-          params.relay,
-          filters,
-          {
-            onevent: (event) => {
-              if (params.signal?.aborted) {
-                return;
-              }
-              if (!historicalRooms.has(channelId) && isBuzzInboundMessageKind(event.kind)) {
-                const page = historyPages.get(channelId);
-                if (page) {
-                  page.count += 1;
-                  page.oldest = Math.min(page.oldest, event.created_at);
-                } else {
-                  historyPages.set(channelId, { count: 1, oldest: event.created_at });
-                }
-              }
-              handleRoomEvent(event);
-            },
-            oneose: () => {
-              historicalRooms.add(channelId);
-              const restoring = restoringRooms.get(channelId);
-              if (restoring) {
-                restoring.historical = false;
-              }
-              finish();
-            },
-            onclose: (reason) => {
-              const error = new Error(
-                `Buzz membership subscription closed for ${channelId}: ${reason}`,
-              );
-              if (!historicalRooms.has(channelId)) {
-                finish(error);
-              } else if (
-                reason !== "shutdown" &&
-                reason !== "relay connection closed by us" &&
-                !params.signal?.aborted
-              ) {
-                reportSystemEventError(error);
-              }
-            },
-          },
-          // Buzz routes on #h while signed rosters retain #d for client validation.
-          filters.map((filter) => Object.assign({}, filter, { "#h": [channelId] })),
-        );
-      } catch (error) {
-        finish(error);
-      }
+      },
+      onError: reportSystemEventError,
     });
+    roomSubscriptions.set(channelId, subscription);
+    return subscription.ready;
   };
-
-  // Initial readiness has a fixed denominator; later grants own their own EOSE waiter.
-  const initialSubscriptions: Promise<void>[] = [];
-  try {
-    for (const channelId of initialRoomIds) {
-      initialSubscriptions.push(subscribeRoom(channelId));
-    }
-    await Promise.all(initialSubscriptions);
-  } catch (error) {
-    params.relay.close();
-    await Promise.allSettled(initialSubscriptions);
-    throw error;
-  }
 
   let historyTail = Promise.resolve();
   const catchUpHistory = (channelIds: string[], recoveryUntil?: number): Promise<void> => {
+    const rooms = channelIds.map((channelId) => ({
+      channelId,
+      room: roomGenerations.get(channelId),
+    }));
     const task = historyTail
       .then(async () => {
-        for (const channelId of channelIds) {
+        for (const { channelId, room } of rooms) {
+          if (!room || !isCurrentRoom(channelId, room)) {
+            continue;
+          }
           const page = historyPages.get(channelId);
           const until = recoveryUntil ?? page?.oldest;
           if (params.signal?.aborted) {
@@ -478,16 +459,34 @@ export async function createBuzzRoomMembershipTracker(params: {
           ) {
             continue;
           }
-          const outcome = await catchUpBuzzRoomHistory({
-            relay: params.relay,
-            channelId,
-            since: params.messageSince(channelId),
-            until,
-            limit: params.messageLimit,
-            reserveCapacity: params.reserveDispatchCapacity,
-            onEvent: handleRoomEvent,
-            signal: params.signal,
-          });
+          let outcome: Awaited<ReturnType<typeof catchUpBuzzRoomHistory>>;
+          try {
+            outcome = await catchUpBuzzRoomHistory({
+              relay: params.relay,
+              channelId,
+              since: params.messageSince(channelId),
+              until,
+              limit: params.messageLimit,
+              reserveCapacity: async (slots) => {
+                if (!isCurrentRoom(channelId, room)) {
+                  return undefined;
+                }
+                const reservation = await params.reserveDispatchCapacity(slots);
+                if (!isCurrentRoom(channelId, room)) {
+                  reservation?.release();
+                  return undefined;
+                }
+                return reservation;
+              },
+              onEvent: (event, reservation) => handleRoomEvent(event, room, reservation),
+              signal: params.signal,
+            });
+          } catch (error) {
+            if (!isCurrentRoom(channelId, room)) {
+              continue;
+            }
+            throw error;
+          }
           if (outcome === "timestamp-over-limit") {
             params.onHistoryError?.(
               new Error(
@@ -502,18 +501,24 @@ export async function createBuzzRoomMembershipTracker(params: {
     return task;
   };
 
-  type Restoration = { generation: number; promise: Promise<void> };
+  type Restoration = { room: RoomGeneration; generation: number; promise: Promise<void> };
   const restorations = new Map<string, Restoration>();
   const restoreRoom = async (channelId: string, state: Restoration): Promise<void> => {
-    while (!params.signal?.aborted) {
+    // Archive is not a membership grant: reconcile removals observed before it first.
+    if (pendingMemberships.has(channelId)) {
+      await refreshMembershipOnce(channelId);
+    }
+    while (isCurrentRoom(channelId, state.room)) {
       const generation = state.generation;
-      let refreshed = await queryMembership(channelId);
-      params.signal?.throwIfAborted();
+      let refreshed = await queryMembership(channelId, state.room);
+      if (!isCurrentRoom(channelId, state.room)) {
+        return;
+      }
       if (generation !== state.generation) {
         continue;
       }
       const current = memberships.get(channelId);
-      if (current && (!refreshed || isNewerBuzzRevision(current, refreshed))) {
+      if (current && refreshed && isNewerBuzzRevision(current, refreshed)) {
         refreshed = current;
       }
       if (!refreshed) {
@@ -525,22 +530,28 @@ export async function createBuzzRoomMembershipTracker(params: {
         return;
       }
       replaceMembership(refreshed);
-      params.signal?.throwIfAborted();
+      if (!isCurrentRoom(channelId, state.room)) {
+        return;
+      }
       // Once subscribed, even a pre-EOSE downgrade must revoke the account generation.
       skippedRooms.delete(channelId);
       const restoring: RestoringRoom = { historical: true, generation: 0 };
       restoringRooms.set(channelId, restoring);
-      await subscribeRoom(channelId);
-      while (!params.signal?.aborted) {
+      await subscribeRoom(channelId, state.room);
+      while (isCurrentRoom(channelId, state.room)) {
         // Live invalidations keep their existing bounded refresh and immediate sender denial.
         const refresh = refreshes.get(channelId);
         if (refresh) {
           await refresh.promise;
         }
-        params.signal?.throwIfAborted();
+        if (!isCurrentRoom(channelId, state.room)) {
+          return;
+        }
         const reconciliationGeneration = restoring.generation;
-        let confirmed = await queryMembership(channelId);
-        params.signal?.throwIfAborted();
+        let confirmed = await queryMembership(channelId, state.room);
+        if (!isCurrentRoom(channelId, state.room)) {
+          return;
+        }
         if (reconciliationGeneration !== restoring.generation || refreshes.has(channelId)) {
           continue;
         }
@@ -552,7 +563,9 @@ export async function createBuzzRoomMembershipTracker(params: {
           throw new Error(`Buzz room membership missing after restoration for ${channelId}`);
         }
         replaceMembership(confirmed);
-        params.signal?.throwIfAborted();
+        if (!isCurrentRoom(channelId, state.room)) {
+          return;
+        }
         restoringRooms.delete(channelId);
         await catchUpHistory([channelId], restoring.until);
         return;
@@ -561,31 +574,144 @@ export async function createBuzzRoomMembershipTracker(params: {
     }
   };
 
+  const startRestoration = (channelId: string): Promise<void> => {
+    if (!initialized) {
+      return ready.then(() => startRestoration(channelId));
+    }
+    if (
+      params.signal?.aborted ||
+      params.isRoomArchived?.(channelId) ||
+      !skippedRooms.has(channelId)
+    ) {
+      return Promise.resolve();
+    }
+    const room = roomGenerations.get(channelId) ?? createRoomGeneration(channelId);
+    const existing = restorations.get(channelId);
+    if (existing) {
+      if (existing.room === room) {
+        existing.generation += 1;
+        return existing.promise;
+      }
+      return existing.promise.then(() => startRestoration(channelId));
+    }
+    const state: Restoration = { room, generation: 1, promise: Promise.resolve() };
+    restorations.set(channelId, state);
+    state.promise = restoreRoom(channelId, state)
+      .catch((error: unknown) => {
+        if (isCurrentRoom(channelId, room)) {
+          reportSystemEventError(error);
+        }
+      })
+      .finally(() => {
+        if (restorations.get(channelId) === state) {
+          restorations.delete(channelId);
+        }
+      });
+    return state.promise;
+  };
+
+  const initialize = async () => {
+    memberships = await queryBuzzRoomMemberships({
+      ...params,
+      channelIds: initialActiveRoomIds,
+    });
+    params.signal?.throwIfAborted();
+    for (const channelId of initialActiveRoomIds) {
+      const room = roomGenerations.get(channelId);
+      if (!room || !isCurrentRoom(channelId, room)) {
+        skippedRooms.add(channelId);
+        continue;
+      }
+      if (memberships.get(channelId)?.roles.get(params.botPublicKey) !== "bot") {
+        skippedRooms.add(channelId);
+        params.onRoomUnavailable?.(
+          new Error(`Buzz bot does not have the Bot role in configured room ${channelId}`),
+        );
+      } else {
+        initialRoomIds.push(channelId);
+      }
+    }
+    if (
+      initialActiveRoomIds.some((channelId) => !params.isRoomArchived?.(channelId)) &&
+      initialRoomIds.length === 0 &&
+      !params.channelIds.some(
+        (channelId) => !roomGenerations.has(channelId) && !params.isRoomArchived?.(channelId),
+      )
+    ) {
+      throw new Error(
+        `Buzz bot does not have the Bot role in any configured room: ${params.channelIds.join(", ")}`,
+      );
+    }
+
+    // Initial readiness has a fixed denominator; later grants own their own EOSE waiter.
+    const initialSubscriptions: Promise<void>[] = [];
+    try {
+      for (const channelId of initialRoomIds) {
+        const room = roomGenerations.get(channelId);
+        if (room && isCurrentRoom(channelId, room)) {
+          initialSubscriptions.push(subscribeRoom(channelId, room));
+        }
+      }
+      await Promise.all(initialSubscriptions);
+    } catch (error) {
+      params.relay.close();
+      await Promise.allSettled(initialSubscriptions);
+      throw error;
+    }
+    initialized = true;
+  };
+  const ready = initialize();
+
   return {
+    ready,
     memberships: effectiveMemberships,
     catchUpHistory: () => catchUpHistory(initialRoomIds),
+    reconcileRooms: async () => {
+      const restore: string[] = [];
+      for (const channelId of params.channelIds) {
+        if (!params.isRoomArchived?.(channelId)) {
+          if (initialized && !roomGenerations.has(channelId)) {
+            restore.push(channelId);
+          }
+          continue;
+        }
+        const room = roomGenerations.get(channelId);
+        if (!room) {
+          continue;
+        }
+        roomGenerations.delete(channelId);
+        room.controller.abort(new Error(`Buzz room ${channelId} archived`));
+        skippedRooms.add(channelId);
+        refreshes.delete(channelId);
+        restoringRooms.delete(channelId);
+        historyPages.delete(channelId);
+        const subscription = roomSubscriptions.get(channelId);
+        if (subscription) {
+          roomSubscriptions.delete(channelId);
+          subscription.retire();
+        }
+      }
+      params.onMembershipsChanged?.(effectiveMemberships());
+      await Promise.all(restore.map(startRestoration));
+    },
     handleNotification: (notification) => {
       if (params.signal?.aborted || seenEventIds.has(notification.eventId)) {
+        return true;
+      }
+      if (params.isRoomArchived?.(notification.roomId)) {
+        markSystemEventSeen(notification.eventId);
         return true;
       }
       if (!skippedRooms.has(notification.roomId)) {
         return false;
       }
       markSystemEventSeen(notification.eventId);
-      const existing = restorations.get(notification.roomId);
-      if (existing) {
-        existing.generation += 1;
-        return true;
-      }
-      const state: Restoration = { generation: 1, promise: Promise.resolve() };
-      restorations.set(notification.roomId, state);
-      state.promise = restoreRoom(notification.roomId, state)
-        .catch(reportSystemEventError)
-        .finally(() => restorations.delete(notification.roomId));
+      void startRestoration(notification.roomId).catch(reportSystemEventError);
       return true;
     },
     close: async () => {
       await Promise.allSettled([
+        ready,
         ...[...restorations.values()].map((state) => state.promise),
         ...[...refreshes.values()].map((state) => state.promise),
         historyTail,

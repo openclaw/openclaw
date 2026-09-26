@@ -57,7 +57,7 @@ describe("Buzz archived room lifecycle", () => {
     await bus.close();
   });
 
-  it("rebuilds room subscriptions when an active room becomes archived", async () => {
+  it("keeps the bus connected when an active room becomes archived", async () => {
     relayMocks.roomMetadataEvents = [
       roomMetadata({ id: "room-metadata-active", createdAt: 1_700_000_000, archived: false }),
     ];
@@ -81,18 +81,13 @@ describe("Buzz archived room lifecycle", () => {
         tags: [["h", CHANNEL_ID]],
       });
 
-    await vi.waitFor(() =>
-      expect(onFatalError).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: `Buzz room ${CHANNEL_ID} archive status changed; rebuilding subscriptions`,
-        }),
-      ),
-    );
-    expect(relayMocks.close).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(bus.directory.activeRoomIds()).toEqual([]));
+    expect(onFatalError).not.toHaveBeenCalled();
+    expect(relayMocks.close).not.toHaveBeenCalled();
     await bus.close();
   });
 
-  it("rebuilds room subscriptions when an archived room becomes active", async () => {
+  it("subscribes in place when an initially archived room becomes active", async () => {
     relayMocks.roomMetadataEvents = [
       roomMetadata({ id: "room-metadata-archived", createdAt: 1_700_000_000, archived: true }),
     ];
@@ -100,26 +95,35 @@ describe("Buzz archived room lifecycle", () => {
     const bus = await startTestBus({
       onFatalError,
     });
-    relayMocks.subscriptions
-      .find((entry) => subscriptionIncludesKind(entry, BUZZ_MEMBER_ADDED_NOTIFICATION_KIND))
-      ?.handlers.onevent({
-        id: "restore-room",
-        kind: BUZZ_MEMBER_ADDED_NOTIFICATION_KIND,
-        pubkey: RELAY_PUBLIC_KEY,
-        created_at: 1_700_000_001,
-        content: JSON.stringify({ type: "member_added", channel_id: CHANNEL_ID }),
-        sig: "e".repeat(128),
-        tags: [
-          ["p", BOT_PUBLIC_KEY],
-          ["h", CHANNEL_ID],
-        ],
-      });
-
-    expect(onFatalError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: `Buzz room ${CHANNEL_ID} membership changed; rebuilding subscriptions`,
-      }),
+    relayMocks.roomMetadataEvents = [
+      roomMetadata({ id: "room-metadata-restored", createdAt: 1_700_000_001, archived: false }),
+    ];
+    const restoreNotification: Event = {
+      id: "restore-room",
+      kind: BUZZ_MEMBER_ADDED_NOTIFICATION_KIND,
+      pubkey: RELAY_PUBLIC_KEY,
+      created_at: 1_700_000_001,
+      content: JSON.stringify({ type: "member_added", channel_id: CHANNEL_ID }),
+      sig: "e".repeat(128),
+      tags: [
+        ["p", BOT_PUBLIC_KEY],
+        ["h", CHANNEL_ID],
+      ],
+    };
+    const notifications = relayMocks.subscriptions.find((entry) =>
+      subscriptionIncludesKind(entry, BUZZ_MEMBER_ADDED_NOTIFICATION_KIND),
     );
+    notifications?.handlers.onevent(restoreNotification);
+
+    await vi.waitFor(() =>
+      expect(relayMocks.subscriptions.some((entry) => subscriptionIncludesKind(entry, 9))).toBe(
+        true,
+      ),
+    );
+    notifications?.handlers.onevent(restoreNotification);
+    expect(bus.directory.activeRoomIds()).toEqual([CHANNEL_ID]);
+    expect(onFatalError).not.toHaveBeenCalled();
+    expect(relayMocks.close).not.toHaveBeenCalled();
     await bus.close();
   });
 });

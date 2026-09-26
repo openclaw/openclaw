@@ -296,7 +296,7 @@ export async function startBuzzBus(options: {
   let directoryRelay: ReturnType<typeof startBuzzDirectoryRelay> | undefined;
   let stopPresenceHeartbeat = () => {};
   let profileTask: Promise<void> | undefined;
-  let membershipTracker: Awaited<ReturnType<typeof createBuzzRoomMembershipTracker>> | undefined;
+  let membershipTracker: ReturnType<typeof createBuzzRoomMembershipTracker> | undefined;
   const bus: BuzzBus = {
     publicKey,
     directory,
@@ -362,11 +362,13 @@ export async function startBuzzBus(options: {
       relay,
       relayPublicKey,
       state: directory,
-      subscribedRoomIds: new Set(activeChannelIds),
       signal,
       onError: options.onDirectoryError,
       onFatalError: reportFatalError,
-      onRoomChanged: options.onRoomDirectoryChanged,
+      onRoomChanged: () => {
+        options.onRoomDirectoryChanged?.();
+        void membershipTracker?.reconcileRooms().catch(reportFatalError);
+      },
     });
     startBuzzRoomMembershipNotifications({
       relay,
@@ -375,86 +377,94 @@ export async function startBuzzBus(options: {
       configuredRoomIds: options.channelIds,
       since: sessionStartedAt,
       signal,
-      onNotification: (notification) =>
-        membershipTracker?.handleNotification(notification) ?? false,
+      onNotification: (notification) => {
+        if (directory.isRoomArchived(notification.roomId)) {
+          membershipTracker?.handleNotification(notification);
+          // Archived rooms have no live subscription; a signed notification refreshes metadata
+          // before the membership owner decides whether to restore the room.
+          void directoryRelay?.refreshRooms([notification.roomId]).catch(reportFatalError);
+          return true;
+        }
+        return membershipTracker?.handleNotification(notification) ?? false;
+      },
       onFatalError: reportFatalError,
     });
-    membershipTracker =
-      activeChannelIds.length > 0
-        ? await createBuzzRoomMembershipTracker({
-            relay,
-            relayPublicKey,
-            channelIds: activeChannelIds,
-            botPublicKey: publicKey,
-            since: sessionStartedAt,
-            messageSince: (channelId) => options.since?.(channelId) ?? sessionStartedAt,
-            messageLimit: resolveBuzzRoomHistoryLimit(activeChannelIds.length),
-            reserveDispatchCapacity: (slots) => dispatchQueue.reserveCapacity(slots),
-            onHistoryError: options.onHistoryError,
-            onRoomUnavailable: options.onRoomUnavailable,
-            onMessageEvent: (event, isMember, reservation) => {
-              if (signal.aborted || event.pubkey === publicKey) {
-                return;
+    membershipTracker = createBuzzRoomMembershipTracker({
+      relay,
+      relayPublicKey,
+      channelIds: options.channelIds,
+      isRoomArchived: (channelId) => directory.isRoomArchived(channelId),
+      botPublicKey: publicKey,
+      since: sessionStartedAt,
+      messageSince: (channelId) => options.since?.(channelId) ?? sessionStartedAt,
+      messageLimit: resolveBuzzRoomHistoryLimit(activeChannelIds.length),
+      reserveDispatchCapacity: (slots) => dispatchQueue.reserveCapacity(slots),
+      onHistoryError: options.onHistoryError,
+      onRoomUnavailable: options.onRoomUnavailable,
+      onMessageEvent: (event, isMember, roomSignal, reservation) => {
+        if (signal.aborted || event.pubkey === publicKey) {
+          return;
+        }
+        const message = parseBuzzMessageEvent(event);
+        if (!message || !isMember(message.channelId, event.pubkey)) {
+          return;
+        }
+        // Admit only room members to bounded workers; claim replay dedupe inside
+        // each worker so queued history cannot create unbounded in-flight state.
+        const admission = (reservation ?? dispatchQueue).enqueue(async () => {
+          await replayGuard.processGuarded(event, async () => {
+            const assertCurrent = () => {
+              roomSignal.throwIfAborted();
+              if (!isMember(message.channelId, event.pubkey)) {
+                throw new Error("Buzz sender is no longer a room member");
               }
-              const message = parseBuzzMessageEvent(event);
-              if (!message || !isMember(message.channelId, event.pubkey)) {
-                return;
-              }
-              // Admit only room members to bounded workers; claim replay dedupe inside
-              // each worker so queued history cannot create unbounded in-flight state.
-              const admission = (reservation ?? dispatchQueue).enqueue(async () => {
-                await replayGuard.processGuarded(event, async () => {
-                  const assertCurrent = () => {
-                    signal.throwIfAborted();
-                    if (!isMember(message.channelId, event.pubkey)) {
-                      throw new Error("Buzz sender is no longer a room member");
-                    }
-                  };
-                  // Queue waits and dedupe claims can outlive signed membership changes.
-                  // Throw rather than commit a cancelled message as successfully processed.
-                  assertCurrent();
-                  await options.onMessage(message, bus, signal, assertCurrent);
-                });
-              });
-              if (admission !== "overflow") {
-                return;
-              }
-              if (reservation) {
-                options.onHistoryError?.(
-                  new Error(
-                    `Buzz room ${message.channelId} returned more history than the ${BUZZ_REPLAY_DISPATCH_MAX_PENDING}-message pending limit allows`,
-                  ),
-                );
-                return;
-              }
-              void dispatchQueue.close();
-              reportFatalError(
-                new Error(
-                  `Buzz inbound replay exceeded the ${BUZZ_REPLAY_DISPATCH_MAX_PENDING}-message pending limit`,
-                ),
-              );
-            },
-            onFatalError: reportFatalError,
-            onMembershipsChanged: (memberships) => {
-              if (directory.replaceMemberships(memberships)) {
-                directoryRelay?.replaceProfilePublicKeys(directory.profilePublicKeys());
-              }
-            },
-            onRoomMetadataChanged: (channelId) => {
-              void directoryRelay?.refreshRooms([channelId]).catch((error: unknown) => {
-                if (!signal.aborted) {
-                  options.onDirectoryError?.(
-                    error instanceof Error
-                      ? error
-                      : new Error("Buzz room directory refresh failed", { cause: error }),
-                  );
-                }
-              });
-            },
-            signal,
-          })
-        : undefined;
-    directory.replaceMemberships(membershipTracker?.memberships() ?? new Map());
+            };
+            // Queue waits and dedupe claims can outlive signed membership changes.
+            // Throw rather than commit a cancelled message as successfully processed.
+            assertCurrent();
+            await options.onMessage(message, bus, roomSignal, assertCurrent);
+          });
+        });
+        if (admission !== "overflow") {
+          return;
+        }
+        if (reservation) {
+          options.onHistoryError?.(
+            new Error(
+              `Buzz room ${message.channelId} returned more history than the ${BUZZ_REPLAY_DISPATCH_MAX_PENDING}-message pending limit allows`,
+            ),
+          );
+          return;
+        }
+        void dispatchQueue.close();
+        reportFatalError(
+          new Error(
+            `Buzz inbound replay exceeded the ${BUZZ_REPLAY_DISPATCH_MAX_PENDING}-message pending limit`,
+          ),
+        );
+      },
+      onFatalError: reportFatalError,
+      onMembershipsChanged: (memberships) => {
+        if (directory.replaceMemberships(memberships)) {
+          directoryRelay?.replaceProfilePublicKeys(directory.profilePublicKeys());
+        }
+      },
+      onRoomMetadataChanged: (channelId) => {
+        void directoryRelay?.refreshRooms([channelId]).catch((error: unknown) => {
+          if (!signal.aborted) {
+            options.onDirectoryError?.(
+              error instanceof Error
+                ? error
+                : new Error("Buzz room directory refresh failed", { cause: error }),
+            );
+          }
+        });
+      },
+      signal,
+    });
+    await membershipTracker.ready;
+    await membershipTracker.reconcileRooms();
+    directory.replaceMemberships(membershipTracker.memberships());
     directoryRelay.replaceProfilePublicKeys(directory.profilePublicKeys());
     void membershipTracker?.catchUpHistory();
     stopPresenceHeartbeat = startBuzzPresenceHeartbeat({

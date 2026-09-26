@@ -225,6 +225,7 @@ export async function handleBuzzInbound(params: {
         if (!text.trim()) {
           return;
         }
+        signal.throwIfAborted();
         await bus.sendText({ ...replyTarget, text });
       },
       onError: (error) => {
@@ -237,6 +238,7 @@ export async function handleBuzzInbound(params: {
     replyPipeline: {
       typing: {
         start: async () => {
+          signal.throwIfAborted();
           await bus.sendTyping(replyTarget);
         },
         keepaliveIntervalMs: 3_000,

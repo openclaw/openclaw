@@ -274,8 +274,11 @@ The Gateway keeps running.
 
 Archived rooms are omitted from directory results and live room subscriptions.
 If a configured room is archived or restored while OpenClaw is connected, the
-plugin recycles only its Buzz connection so the subscription set matches the
-relay's current metadata. The Gateway keeps running.
+plugin updates that room's subscription in place. Replies in other rooms keep
+running on the same connection. Restoring a room checks its signed membership
+before resuming message delivery; work admitted before it was archived remains
+fenced. Actual connection failures and Bot-role revocations retain their existing
+account shutdown behavior.
 
 Each configured room uses one room-scoped relay subscription. OpenClaw reserves
 four of Buzz's 1,024 connection subscriptions for membership notifications and
