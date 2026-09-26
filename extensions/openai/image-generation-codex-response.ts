@@ -19,6 +19,8 @@ const contentSchema = z.object({
 const itemSchema = contentSchema.extend({
   result: z.string().nullish(),
   revised_prompt: z.string().nullish(),
+  size: z.string().nullish(),
+  quality: z.string().nullish(),
   status: z.string().nullish(),
   content: z.array(contentSchema).nullish(),
 });
@@ -191,10 +193,18 @@ export async function readCodexImageGenerationResponse(
     if (typeof item.result !== "string" || item.result.length === 0) {
       continue;
     }
+    const metadata =
+      item.size != null || item.quality != null
+        ? {
+            ...(item.size != null ? { size: item.size } : {}),
+            ...(item.quality != null ? { quality: item.quality } : {}),
+          }
+        : undefined;
     images.push({
       buffer: decodeCodexImagePayload(item.result),
       mimeType: params.mimeType,
       fileName: `image-${index + 1}.${params.extension}`,
+      ...(metadata ? { metadata } : {}),
       ...(item.revised_prompt ? { revisedPrompt: item.revised_prompt } : {}),
     });
   }

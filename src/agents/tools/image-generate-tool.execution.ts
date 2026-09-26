@@ -12,11 +12,13 @@ import type {
 } from "../../image-generation/types.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { readImageMetadataFromHeader } from "../../media/image-ops.js";
 import { getImageMetadata } from "../../media/media-services.js";
 import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
 import { formatGeneratedAttachmentLines } from "../generated-attachments.js";
 import { ToolInputError } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
+import { buildReturnedImageSettingsDetails } from "./image-generate-tool.returned-settings.js";
 import {
   imageGenerationTaskLifecycle,
   type ImageGenerationTaskHandle,
@@ -100,7 +102,6 @@ export async function executeImageGenerationJob(params: {
     sizeTranslatedToAspectRatio,
   } = resolveMediaGenerationResultGeometry(result, params.size);
   const appliedResolution = result.appliedResolution ?? normalizedResolution;
-
   const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "image");
   const savedImages = await persistGeneratedMediaBatch({
     subdir: GENERATED_IMAGE_MEDIA_SUBDIR,
@@ -127,6 +128,18 @@ export async function executeImageGenerationJob(params: {
     name: extractOriginalFilename(image.path),
     sizeBytes: image.size,
   }));
+  const returnedImageSettingsDetails = buildReturnedImageSettingsDetails({
+    images: result.images,
+    paths: savedImages.map((image) => image.path),
+    observedSizes: result.images.map((image) => {
+      const metadata = readImageMetadataFromHeader(image.buffer);
+      return metadata ? `${metadata.width}x${metadata.height}` : undefined;
+    }),
+    requestedSize: params.size,
+    requestedQuality: params.quality,
+    fallbackSize:
+      normalizedSize ?? (params.size && !sizeTranslatedToAspectRatio ? params.size : undefined),
+  });
   const lines = [
     `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
@@ -140,6 +153,7 @@ export async function executeImageGenerationJob(params: {
     taskHandle: params.taskHandle,
     warning,
     details: {
+      ...returnedImageSettingsDetails,
       ...buildMediaReferenceDetails({
         entries: params.loadedReferenceImages,
         singleKey: "image",
@@ -147,13 +161,9 @@ export async function executeImageGenerationJob(params: {
         getResolvedInput: (entry) => entry.resolvedInput,
       }),
       ...(appliedResolution ? { resolution: appliedResolution } : {}),
-      ...(normalizedSize || (params.size && !sizeTranslatedToAspectRatio)
-        ? { size: normalizedSize ?? params.size }
-        : {}),
       ...(normalizedAspectRatio || params.aspectRatio
         ? { aspectRatio: normalizedAspectRatio ?? params.aspectRatio }
         : {}),
-      ...(params.quality ? { quality: params.quality } : {}),
       ...(params.outputFormat ? { outputFormat: params.outputFormat } : {}),
       ...(params.background ? { background: params.background } : {}),
       ...(params.filename ? { filename: params.filename } : {}),
