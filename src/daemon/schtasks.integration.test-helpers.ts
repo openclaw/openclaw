@@ -15,10 +15,8 @@ import {
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
 import { launchFallbackTaskScript } from "./schtasks-runtime.js";
-import {
-  runObservedStartupLaunch,
-  writeStartupObserverFixture,
-} from "./schtasks.startup-observer.native-test-support.js";
+import { writeStartupObserverFixture } from "./schtasks.startup-observer-fixtures.test-support.js";
+import { runObservedStartupLaunch } from "./schtasks.startup-observer.native-test-support.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
 const POLL_INTERVAL_MS = 200;
