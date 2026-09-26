@@ -8,6 +8,8 @@ import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-clean
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resolveUserPath } from "../utils.js";
 import {
   createLazyPluginRuntime,
@@ -31,7 +33,7 @@ import * as sdkAlias from "./sdk-alias.js";
 afterEach(() => vi.restoreAllMocks());
 
 describe("plugin registration runtime admission", () => {
-  function fixture() {
+  function fixture(origin: "config" | "bundled" = "config") {
     const list = vi.fn(async () => ({ nodes: [] }));
     const runtime = createPluginRuntime();
     runtime.nodes.list = list;
@@ -43,7 +45,7 @@ describe("plugin registration runtime admission", () => {
     const record = createPluginRecord({
       id: "register-runtime",
       source: "/plugins/register-runtime/index.js",
-      origin: "config",
+      origin,
       enabled: true,
       configSchema: false,
     });
@@ -51,6 +53,36 @@ describe("plugin registration runtime admission", () => {
     const owner = expectDefined(getPluginInstance(record), "registration instance");
     return { builder, record, api, owner, list };
   }
+
+  it("rejects a retained ingress purge after runtime retirement without changing rows", async () => {
+    await withStateDirEnv("plugin-ingress-retirement-", async ({ stateDir }) => {
+      const { builder, record, api, owner } = fixture("bundled");
+      builder.registry.plugins.push(record);
+      const queue = api.runtime.state.openChannelIngressQueue<{ text: string }>({
+        accountId: "default",
+        stateDir,
+      });
+      try {
+        await queue.enqueue("active", { text: "active owner" });
+        expect(await queue.purge?.()).toBe(1);
+        await queue.enqueue("pending", { text: "replacement work" });
+        await queue.enqueue("claimed", { text: "in flight" });
+        await queue.claim("claimed");
+        const pending = await queue.listPending();
+        const claims = await queue.listClaims();
+        const purge = expectDefined(queue.purge?.bind(queue), "core purge");
+
+        revokePluginRecord(builder.registry, record);
+
+        await expect(purge()).rejects.toThrow("runtime is no longer active");
+        expect(await queue.listPending()).toEqual(pending);
+        expect(await queue.listClaims()).toEqual(claims);
+      } finally {
+        await owner.dispose();
+        closeOpenClawStateDatabaseForTest();
+      }
+    });
+  });
 
   it("retains an inspected harness until terminal CLI cleanup without reopening ordinary calls", async () => {
     const { builder, record, api, owner } = fixture();

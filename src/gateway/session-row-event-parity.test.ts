@@ -4,6 +4,7 @@ import { WebSocket } from "ws";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
@@ -60,7 +61,11 @@ it("delivers nested event rows identical to the full list for each viewer and cl
         parentSessionKey: key,
       },
     );
-    const connection = createGatewayConnectionState({ bootId: "row-parity", cfg });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "row-parity",
+      cfg,
+    });
     const context = requestContext(cfg);
     context.chatAbortControllers = connection.chatAbortControllers;
     connection.chatAbortControllers.set("current-run", {

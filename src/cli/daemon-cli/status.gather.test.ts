@@ -1337,6 +1337,7 @@ describe("gatherDaemonStatus", () => {
     serviceReadRuntime,
     inspectGatewayRestart,
     gatherStatus,
+    auditGatewayServiceConfig,
   });
 
   it("surfaces recent service restart handoffs only during deep status", async () => {

@@ -53,6 +53,7 @@ import {
   recordTaskRegistryProjectionWrite,
   selectLiveTaskFlowForSync,
   clearTaskProgressBatches,
+  clearTaskActivityOverlays,
 } from "./task-registry.process-state.js";
 import {
   deliverTaskRegistryObserverEvent,
@@ -115,16 +116,20 @@ export function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObs
   deliverTaskRegistryObserverEvent(createEvent, recordTaskRegistryPublication);
 }
 
+export function clearTaskActivity(taskId: string): void {
+  const activity = taskActivityByTaskId.get(taskId);
+  if (activity?.flushTimer) {
+    clearTimeout(activity.flushTimer);
+  }
+  activity?.preparedItems.clear();
+  taskActivityByTaskId.delete(taskId);
+}
+
 function clearTaskRegistryEphemeralState(): void {
   // Committed restore obligations outlive replacement of their in-memory projection.
   clearTaskFlowSyncRetries("live");
   clearTaskProgressBatches();
-  for (const activity of taskActivityByTaskId.values()) {
-    if (activity.flushTimer) {
-      clearTimeout(activity.flushTimer);
-    }
-  }
-  taskActivityByTaskId.clear();
+  clearTaskActivityOverlays();
   tasksWithPendingDelivery.clear();
 }
 
@@ -504,6 +509,7 @@ function installSnapshot(
         recordTaskRegistryProjectionWrite(recordWrites, taskId, true);
       }
       removeTaskIndexes(current);
+      clearTaskActivity(taskId);
       changed = tasks.delete(taskId) || changed;
       taskDeliveryStates.delete(taskId);
     }
@@ -699,7 +705,11 @@ export async function runTaskRegistryWorkerMutation<T>(
     dirtyScopes.add(scope);
     bumpTaskRegistryRevision(true, pending.readIdentity !== "preserved");
     try {
-      claimTaskRegistryPublication(pending, context.publicationRecords());
+      claimTaskRegistryPublication(
+        pending,
+        context.publicationRecords(),
+        context.publicationDeletions?.(),
+      );
       const { conflicted } = await reconcileTaskRegistryWorkerSnapshot({
         pending,
         assertCurrent: assertOwner,

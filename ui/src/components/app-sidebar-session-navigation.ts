@@ -7,7 +7,10 @@ import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import {
+  collectKnownSessionGroups,
+  type SidebarSessionsGrouping,
+} from "../lib/sessions/grouping.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
 import {
   composerDraftSearch,
@@ -41,7 +44,6 @@ import {
   buildSidebarSessionNavigationState,
   createSidebarSessionRowsComparator,
   collectKnownSidebarSessionCatalogIds,
-  collectKnownSidebarSessionGroups,
   extendSidebarSessionSelection,
   findSidebarMainSessionRow,
   findProjectedSidebarSession,
@@ -392,9 +394,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   readonly selectSession = (sessionKey: string, mainAgentId?: string) => {
-    const navigationState = this.getSessionNavigationState();
-    const sessionResultsByAgent = this.sessionData.sessionResultsByAgent;
-    const row = findProjectedSidebarSession({ sessionKey, navigationState, sessionResultsByAgent });
+    const row = this.findSidebarSessionByKey(sessionKey);
     const mainChat = mainAgentId !== undefined && this.sidebarAgentsMode === "roster";
     const face = mainChat ? "chat" : resolveSessionPreferredFace(row);
     const agentId = mainAgentId ?? this.sessionNavigationAgentId(row ?? { key: sessionKey });
@@ -409,6 +409,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       navigationKey: sessionKey,
     });
     runSessionNavigationIntent(this, {
+      agentId,
       commit: () => {
         if (this.sidebarAgentsMode === "roster") {
           this.expandAgent(agentId);
@@ -602,17 +603,12 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
   }
 
-  /** Newest visible session for an agent; the chip menu resumes here. */
-  private latestAgentSessionRow(agentId: string): SessionsListResult["sessions"][number] | null {
-    return resolveLatestSidebarAgentSession({
+  private agentResumeKey(agentId: string): string {
+    const latest = resolveLatestSidebarAgentSession({
       agentId,
       sessionData: this.sessionData,
       context: this.context,
     });
-  }
-
-  private agentResumeKey(agentId: string): string {
-    const latest = this.latestAgentSessionRow(agentId);
     return resolveSidebarAgentResumeKey(latest, agentId, this.sessionMainKey());
   }
 
@@ -649,15 +645,23 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       row: this.findSidebarSessionByKey(key),
       mainKey: this.sessionMainKey(),
     });
-    this.setApplicationSession(key, this.selectedAgentIdForSessions());
-    this.onNavigate?.("chat", {
-      ...target.options,
-      search: composerDraftSearch(t("chat.welcome.suggestions.whatCanYouDo")),
+    runSessionNavigationIntent(this, {
+      sessionKey: key,
+      agentId,
+      face: "chat",
+      commit: () => {
+        this.setApplicationSession(key, agentId);
+        this.onNavigate?.("chat", {
+          ...target.options,
+          search: composerDraftSearch(t("chat.welcome.suggestions.whatCanYouDo")),
+        });
+        return true;
+      },
     });
   }
 
   knownSessionGroups(): string[] {
-    return collectKnownSidebarSessionGroups(
+    return collectKnownSessionGroups(
       this.context?.sessions.state.groups ?? [],
       this.sessionData.sessionsResult?.sessions ?? [],
     );

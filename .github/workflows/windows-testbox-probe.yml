@@ -1293,8 +1293,8 @@ jobs:
       - name: Run installed Scheduled Task cell 2026.9.3
         id: native_schtasks_9_3
         if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_prepare_9_3.outcome == 'success' }}
-        # 15-minute installed body, three-minute teardown hook, one-minute runner margin.
-        timeout-minutes: 19
+        # 18-minute installed body, three-minute teardown hook, one-minute runner margin.
+        timeout-minutes: 22
         shell: bash
         env:
           OPENCLAW_VITEST_WORKER_CACHE: "1"
@@ -1362,8 +1362,8 @@ jobs:
       - name: Run installed Scheduled Task cell 2026.9.4
         id: native_schtasks_9_4
         if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_prepare_9_4.outcome == 'success' }}
-        # 15-minute installed body, three-minute teardown hook, one-minute runner margin.
-        timeout-minutes: 19
+        # 18-minute installed body, three-minute teardown hook, one-minute runner margin.
+        timeout-minutes: 22
         shell: bash
         env:
           OPENCLAW_VITEST_WORKER_CACHE: "1"

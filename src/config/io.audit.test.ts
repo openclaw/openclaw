@@ -623,27 +623,6 @@ describe("config io audit helpers", () => {
     expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual(expected);
   });
 
-  it("also accepts flattened audit record params from legacy call sites", async () => {
-    const home = await suiteRootTracker.make("append-flat");
-    const record = createRenameAuditRecord(home);
-
-    await appendConfigAuditRecord({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => home,
-      ...record,
-    });
-
-    const records = listConfigAuditRecordsForTests({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => home,
-    });
-    expect(records).toHaveLength(1);
-    const written = requireAuditRecord(records[0]);
-    expect(written.event).toBe("config.write");
-    expect(written.result).toBe("rename");
-    expect(written.nextHash).toBe("next-hash");
-  });
-
   it("redacts historical config audit entries while preserving file and directory modes", async () => {
     const home = await suiteRootTracker.make("scrub-historical");
     const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");

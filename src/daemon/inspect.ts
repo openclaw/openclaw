@@ -339,7 +339,6 @@ async function collectServiceFiles(params: {
 async function scanLaunchdDir(params: {
   dir: string;
   scope: "user" | "system";
-  reportManagedAsExtra?: boolean;
   managedLabel?: string;
   selectedName?: string;
   errors?: GatewayServiceInventory["errors"];
@@ -389,7 +388,7 @@ async function scanLaunchdDir(params: {
       marker,
       legacy: marker !== "openclaw" || isLegacyLabel(label),
       extra:
-        Boolean(params.reportManagedAsExtra) ||
+        params.scope === "system" ||
         (label !== resolveGatewayLaunchAgentLabel() &&
           !(
             marker === "openclaw" &&
@@ -504,7 +503,6 @@ async function scanGatewayServices(
         for (const svc of await scanLaunchdDir({
           dir: path.join(path.sep, "Library", "LaunchDaemons"),
           scope: "system",
-          reportManagedAsExtra: true,
           managedLabel: resolveLaunchAgentLabel(env),
           selectedName: resolveLaunchAgentLabel(env),
           errors,
@@ -622,6 +620,7 @@ async function scanGatewayServices(
             {
               requireEffective: true,
               requireLoaded: true,
+              profileScope: "registered",
               onLauncherContent: (content) => {
                 recognizableLauncher ||= Boolean(detectLauncherGatewayMarker(content));
               },

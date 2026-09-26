@@ -1,4 +1,4 @@
-// Launchd tests cover macOS service plist generation and command handling.
+import "./launchd-fs.mocks.test-support.js";
 import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -8,7 +8,6 @@ import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeout
 import type { PortListener } from "../infra/ports-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
-import type { ExecResult } from "./exec-file.js";
 import { launchAgentActivationRecoveryCases } from "./launchd-activation.test-support.js";
 import { registerLaunchdAncestryTests } from "./launchd-ancestry.test-support.js";
 import {
@@ -26,6 +25,8 @@ import {
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
 } from "./launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
+// Launchd tests cover macOS service plist generation and command handling.
+import { launchdTestState as state } from "./launchd-state.test-support.js";
 import {
   installLaunchAgent as installLaunchAgentImpl,
   disableCurrentOpenClawUpdateLaunchdJob,
@@ -48,43 +49,6 @@ import {
   uninstallLaunchAgent,
 } from "./launchd.js";
 
-const state = vi.hoisted(() => ({
-  launchctlCalls: [] as string[][],
-  listOutput: "",
-  printOutput: "",
-  printDisabledOutput: "",
-  printDisabledError: "",
-  printDisabledCode: 0,
-  printNotLoadedRemaining: 0,
-  printError: "",
-  printCode: 1,
-  printFailuresRemaining: 0,
-  bootstrapError: "",
-  bootstrapCode: 1,
-  bootstrapTermination: "exit" as ExecResult["termination"],
-  bootstrapLoadsServiceOnFailure: false,
-  bootstrapTransient: false,
-  kickstartError: "",
-  kickstartCode: 1,
-  kickstartFailuresRemaining: 0,
-  kickstartUnloadsService: false,
-  disableError: "",
-  disableCode: 1,
-  bootoutError: "",
-  bootoutCode: 1,
-  bootoutLeavesLoaded: false,
-  serviceLoaded: true,
-  serviceRunning: true,
-  serviceStates: new Map<string, "running" | "stopped" | "not-loaded">(),
-  fsRoot: "",
-  dirs: new Set<string>(),
-  dirModes: new Map<string, number>(),
-  files: new Map<string, string>(),
-  fileModes: new Map<string, number>(),
-  fileWrites: [] as Array<{ path: string; data: string }>,
-  cleanupProtectedPids: [] as Array<number | undefined>,
-  realExecFile: false,
-}));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   scheduleDetachedLaunchdMaintenancePark: vi.fn<
     (_params: unknown) => { ok: true; value: Promise<boolean> } | { ok: false; error: string }
@@ -498,13 +462,6 @@ vi.mock("../infra/ports-probe.js", () => ({
 vi.mock("./gateway-service-probe-hosts.js", () => ({
   resolveGatewayServiceProbeHosts: (params: unknown) => resolveGatewayServiceProbeHosts(params),
 }));
-
-vi.mock("node:fs/promises", async () => {
-  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  const { createLaunchdFileSystem } = await import("./launchd-fs.test-support.js");
-  const wrapped = createLaunchdFileSystem(actual, state);
-  return { ...wrapped, default: wrapped };
-});
 
 const filesystemDirs = useAutoCleanupTempDirTracker(afterEach);
 

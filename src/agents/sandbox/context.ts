@@ -161,17 +161,20 @@ function resolveSandboxSession(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  preparedRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 }) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
   }
 
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    agentId: params.agentId,
-    sessionKey: rawSessionKey,
-  });
+  const runtime = params.preparedRuntimeStatus
+    ? { ...params.preparedRuntimeStatus }
+    : resolveSandboxRuntimeStatus({
+        cfg: params.config,
+        agentId: params.agentId,
+        sessionKey: rawSessionKey,
+      });
   if (!runtime.sandboxed) {
     return null;
   }
@@ -226,6 +229,8 @@ type ResolveSandboxContextParams = {
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
+  /** Classification already prepared for this session's workspace setup. */
+  preparedRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 
 type ResolvedSandboxSession = NonNullable<ReturnType<typeof resolveSandboxSession>>;

@@ -7,9 +7,7 @@ import {
   getTaskMirroredFlowIds,
   prepareTaskFlowRegistryRead,
 } from "./task-flow-runtime-internal.js";
-import { clearTaskActivity } from "./task-registry-activity.js";
 import { isActiveTaskStatus } from "./task-registry-common.js";
-import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
 import { clearTaskFlowSyncRetries } from "./task-registry-flow-sync.js";
 import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
 import {
@@ -21,7 +19,6 @@ import {
 import {
   cloneTaskRecord,
   listTasksFromIndex,
-  cloneTaskRecordForObserver,
   normalizeTaskTimestamps,
   compareTasksNewestFirst,
   pickPreferredRunIdTask,
@@ -29,31 +26,19 @@ import {
 } from "./task-registry-records.js";
 import { controlRuntimeLoader, deliveryRuntimeLoader } from "./task-registry-runtime-loaders.js";
 import {
-  withTaskRegistryMutation,
-  bumpTaskRegistryRevision,
   clearTaskRegistryMemory,
-  emitTaskRegistryObserverEvent,
   ensureTaskRegistryReady,
   getTasksByRunId,
   taskRegistryLog,
   readTaskRegistryRevision,
   resetTaskRegistryRestoreState,
-  taskDeliveryStates,
   taskIdsByOwnerKey,
   taskIdsByParentFlowId,
   taskIdsByRelatedSessionKey,
   tasks,
 } from "./task-registry-state.js";
-import {
-  removeTaskIndexes,
-  recordTaskRegistryProjectionWrite,
-  getTaskRegistryProcessState,
-} from "./task-registry.process-state.js";
-import {
-  tryPersistTaskDelete,
-  getTaskRegistryStore,
-  resetTaskRegistryRuntimeForTests,
-} from "./task-registry.store.js";
+import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
+import { getTaskRegistryStore, resetTaskRegistryRuntimeForTests } from "./task-registry.store.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 import { resolveTaskSessionAgentId, taskMatchesRelatedSession } from "./task-session-identity.js";
 
@@ -530,41 +515,6 @@ export function resolveTaskForLookupToken(token: string): TaskRecord | undefined
   }
   return (
     getTaskById(lookup) ?? findTaskByRunId(lookup) ?? findLatestTaskForRelatedSessionKey(lookup)
-  );
-}
-
-export function deleteTaskRecordById(taskId: string): boolean {
-  return withTaskRegistryMutation(
-    () => {
-      ensureTaskRegistryReady();
-      const current = tasks.get(taskId);
-      if (!current) {
-        return false;
-      }
-      ensureLinkedTaskFlowRegistryReady(current);
-      // Persist the delete before mutating memory, as a single atomic store
-      // operation. If persistence fails, leave the in-memory record intact and
-      // report that no delete was applied.
-      if (!tryPersistTaskDelete(taskId)) {
-        return false;
-      }
-      const indexedCurrent = tasks.get(taskId);
-      if (indexedCurrent) {
-        removeTaskIndexes(indexedCurrent);
-      }
-      clearTaskActivity(taskId);
-      recordTaskRegistryProjectionWrite("task", taskId, true);
-      tasks.delete(taskId);
-      bumpTaskRegistryRevision();
-      taskDeliveryStates.delete(taskId);
-      emitTaskRegistryObserverEvent(() => ({
-        kind: "deleted",
-        taskId: current.taskId,
-        previous: cloneTaskRecordForObserver(current),
-      }));
-      return true;
-    },
-    () => false,
   );
 }
 

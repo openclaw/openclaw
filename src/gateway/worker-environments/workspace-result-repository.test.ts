@@ -20,6 +20,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
@@ -196,13 +197,13 @@ describe("repository workspace result ownership", () => {
     });
     const remote = synced.remoteWorkspaceDir;
     const initialCheckpointRef = store.get(repository.workspaceId)!.checkpointRef;
-    seedActivePlacement(executionMode, remote, synced.manifestRef);
-    const beginTurn = (claimId: string, markResultPending = true) => {
+    await seedActivePlacement(executionMode, remote, synced.manifestRef);
+    const beginTurn = async (claimId: string, markResultPending = true) => {
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
         throw new Error("expected an active repository placement");
       }
-      const turnClaim = placements.claimTurn({
+      const turnClaim = await placements.claimTurn({
         ...sessionTarget,
         claimId,
         runId: claimId,
@@ -214,7 +215,7 @@ describe("repository workspace result ownership", () => {
       return { placement, turnClaim };
     };
     const finishTurn = (
-      owned: ReturnType<typeof beginTurn>,
+      owned: Awaited<ReturnType<typeof beginTurn>>,
       publishAcceptedWorkspace?: () => Promise<void>,
     ) =>
       reconcileWorkspaceAfterTurn({
@@ -426,7 +427,7 @@ describe("repository workspace result ownership", () => {
 
   it("rejects editor writes during an admitted turn and fences writes if their placement starts draining", async () => {
     const f = await fixture("worker-turn");
-    const activeTurn = f.beginTurn("running-turn");
+    const activeTurn = await f.beginTurn("running-turn");
     const mutate = vi.fn(async () => ({ changed: true, value: "unexpected" }));
     await expect(
       f.mutations.mutate({ ...sessionTarget, assertCurrent: () => {}, mutate }),
@@ -472,11 +473,11 @@ describe("repository workspace result ownership", () => {
       const pinned = f.store.get(f.repository.workspaceId)!;
       expect(pinned.manifestHash).not.toBe(pinned.baseManifestHash);
       await fs.writeFile(path.join(f.remote, "first.txt"), "first turn\n");
-      const first = f.beginTurn("first");
+      const first = await f.beginTurn("first");
       await f.finishTurn(first);
       await fs.writeFile(path.join(f.remote, "second.txt"), "second turn\n");
-      await f.finishTurn(f.beginTurn("second"));
-      await f.finishTurn(f.beginTurn("read-only"));
+      await f.finishTurn(await f.beginTurn("second"));
+      await f.finishTurn(await f.beginTurn("read-only"));
       await f.mutations.mutate({
         ...sessionTarget,
         assertCurrent: () => {},
@@ -531,7 +532,7 @@ describe("repository workspace result ownership", () => {
 
   it("binds a staged repository result to its exact immutable session owner", async () => {
     const f = await fixture("worker-turn");
-    const { turnClaim } = f.beginTurn("source-binding");
+    const { turnClaim } = await f.beginTurn("source-binding");
     const foreign = f.store.create({
       agentId: sessionTarget.agentId,
       sessionKey: "agent:main:other-repository",
@@ -565,7 +566,7 @@ describe("repository workspace result ownership", () => {
     async ({ executionMode, materialized }) => {
       const f = await fixture(executionMode);
       await fs.writeFile(path.join(f.remote, "survives.txt"), "durable before restart\n");
-      const owned = f.beginTurn("interrupted", !materialized);
+      const owned = await f.beginTurn("interrupted", !materialized);
       const destination = path.join(root, "materialized-worktree");
       if (materialized) {
         placements.beginPlacementMove({
@@ -624,7 +625,7 @@ describe("repository workspace result ownership", () => {
             .where("environment_id", "=", owned.placement.environmentId),
         );
       }
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       const restarted = createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase(),
       });

@@ -15,7 +15,7 @@ final class RemindersService: RemindersServicing {
 
     func list(params: OpenClawRemindersListParams) async throws -> OpenClawRemindersListPayload {
         let status = self.reminderAuthorizationStatus()
-        guard EventKitAuthorization.allowsRead(status: status) else {
+        guard DevicePermissionStatusMap.eventKitRead(status) == .granted else {
             throw NSError(domain: "Reminders", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
             ])
@@ -58,7 +58,7 @@ final class RemindersService: RemindersServicing {
 
     func add(params: OpenClawRemindersAddParams) async throws -> OpenClawRemindersAddPayload {
         let status = self.reminderAuthorizationStatus()
-        guard EventKitAuthorization.allowsWrite(status: status) else {
+        guard DevicePermissionStatusMap.eventKitWrite(status) == .granted else {
             throw NSError(domain: "Reminders", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
             ])

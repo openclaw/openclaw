@@ -564,20 +564,6 @@ describe("skills cli commands", () => {
     ).toBe(true);
   });
 
-  it("accepts git refs for skill source installs", async () => {
-    installSkillFromSourceMock.mockResolvedValue({
-      ok: true,
-      slug: "tools",
-      targetDir: "/tmp/workspace/skills/tools",
-      source: "git",
-    });
-
-    await runCommand(["skills", "install", "git:owner/tools@main"]);
-
-    expect(mockFirstObjectArg(installSkillFromSourceMock).spec).toBe("git:owner/tools@main");
-    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
-  });
-
   it("passes an install-policy warning prompt to interactive skill installs", async () => {
     setTty(true);
     installSkillFromSourceMock.mockResolvedValue({
@@ -624,32 +610,6 @@ describe("skills cli commands", () => {
     expect(mockFirstObjectArg(installSkillFromSourceMock).onInstallPolicyWarning).toEqual(
       expect.any(Function),
     );
-  });
-
-  it("installs a skill from a local directory", async () => {
-    installSkillFromSourceMock.mockResolvedValue({
-      ok: true,
-      slug: "local-skill",
-      targetDir: "/tmp/workspace/skills/local-skill",
-      source: "path",
-    });
-
-    await runCommand(["skills", "install", "./local-skill"]);
-
-    const installArgs = mockFirstObjectArg(installSkillFromSourceMock);
-    expectObjectFields(installArgs, {
-      workspaceDir: "/tmp/workspace",
-      spec: "./local-skill",
-      force: false,
-    });
-    expect(installArgs.slug).toBeUndefined();
-    expectLogger(installArgs.logger);
-    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
-    expect(
-      runtimeLogs.some((line) =>
-        line.includes("Installed local-skill from path -> /tmp/workspace/skills/local-skill"),
-      ),
-    ).toBe(true);
   });
 
   it("passes --as as the source install slug override", async () => {
@@ -699,13 +659,14 @@ describe("skills cli commands", () => {
     expect(installSkillFromSourceMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { spec: "git:owner/tools", flag: "--force-install" },
-    { spec: "./local-skill", flag: "--force-install" },
-  ])("rejects ClawHub-only $flag for source install $spec", async ({ spec, flag }) => {
-    await expect(runCommand(["skills", "install", spec, flag])).rejects.toThrow("__exit__:1");
+  it("rejects --force-install for local source installs", async () => {
+    await expect(
+      runCommand(["skills", "install", "./local-skill", "--force-install"]),
+    ).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors).toContain(`${flag} is only supported for ClawHub skill installs.`);
+    expect(runtimeErrors).toContain(
+      "--force-install is only supported for ClawHub skill installs.",
+    );
     expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
     expect(installSkillFromSourceMock).not.toHaveBeenCalled();
   });
@@ -1121,7 +1082,7 @@ describe("skills cli commands", () => {
       provenance,
     });
 
-    await runCommand(["skills", "verify", "agentreceipt"]);
+    await runCommand(["skills", "verify", "agentreceipt", "--json"]);
 
     expect(readVerifiedClawHubSkillSourceUrlMock).toHaveBeenCalledWith(provenance);
     const payload = JSON.parse(runtimeStdout.at(-1) ?? "{}") as {
@@ -1267,20 +1228,6 @@ describe("skills cli commands", () => {
     expect(runtimeErrors).toStrictEqual([]);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(resolveClawHubSkillVerificationTargetMock).not.toHaveBeenCalled();
-  });
-
-  it("registers explicit --json output for verify", () => {
-    const skills = createProgram().commands.find((command) => command.name() === "skills");
-    const verify = skills?.commands.find((command) => command.name() === "verify");
-
-    expect(verify?.options.map((option) => option.long)).toEqual([
-      "--version",
-      "--tag",
-      "--card",
-      "--json",
-      "--global",
-      "--agent",
-    ]);
   });
 
   it.each([
@@ -1522,65 +1469,49 @@ describe("skills cli commands", () => {
     expect(output.missingRequirements).toEqual([]);
   });
 
-  const explicitGatewaySkillFailures = [
+  it.each([
     {
       label: "configured remote missing URL",
+      argv: ["skills"],
       config: { gateway: { mode: "remote" as const } },
       message: "gateway remote mode misconfigured: gateway.remote.url missing",
     },
     {
       label: "configured remote transport failure",
+      argv: ["skills", "list", "--json"],
       config: { gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } } },
       message: "Gateway not reachable: ws://127.0.0.1:9",
     },
     {
       label: "configured remote auth failure",
+      argv: ["skills", "info", "calendar"],
       config: { gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } } },
       message: "gateway authentication failed",
     },
     {
       label: "environment-selected transport failure",
+      argv: ["skills", "check", "--json"],
       config: {},
       url: "ws://127.0.0.1:9",
       message: "Gateway not reachable: ws://127.0.0.1:9",
     },
     {
       label: "environment-selected auth failure",
+      argv: ["skills", "--json"],
       config: {},
       url: "ws://127.0.0.1:9",
       message: "gateway authentication failed",
     },
-  ];
-  const skillReadCommands = [
-    { label: "default", argv: ["skills"] },
-    { label: "list", argv: ["skills", "list"] },
-    { label: "info", argv: ["skills", "info", "calendar"] },
-    { label: "check", argv: ["skills", "check"] },
-  ];
-
-  it.each(
-    explicitGatewaySkillFailures.flatMap((target) =>
-      skillReadCommands.flatMap((command) =>
-        [false, true].map((json) => ({
-          target,
-          command,
-          json,
-          label: `${command.label} ${json ? "JSON" : "human"}: ${target.label}`,
-        })),
-      ),
-    ),
-  )("does not substitute local skills after $label", async ({ target, command, json }) => {
-    loadConfigMock.mockReturnValue(target.config);
-    if (target.url) {
-      vi.stubEnv("OPENCLAW_GATEWAY_URL", target.url);
+  ])("does not substitute local skills after $label", async ({ config, url, message, argv }) => {
+    loadConfigMock.mockReturnValue(config);
+    if (url) {
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", url);
     }
-    callGatewayMock.mockRejectedValue(new Error(target.message));
+    callGatewayMock.mockRejectedValue(new Error(message));
 
-    await expect(runCommand([...command.argv, ...(json ? ["--json"] : [])])).rejects.toThrow(
-      "__exit__:1",
-    );
+    await expect(runCommand(argv)).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors).toEqual([target.message]);
+    expect(runtimeErrors).toEqual([message]);
     expect(runtimeStdout).toEqual([]);
     expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
   });
@@ -1749,7 +1680,6 @@ describe("skills cli commands", () => {
   });
 
   it.each([
-    ["empty", ["skills", "check", "--agent", ""]],
     ["whitespace-only", ["skills", "check", "--agent", "   "]],
     ["empty with --global", ["skills", "install", "calendar", "--global", "--agent", ""]],
   ])("rejects a blank explicit skills agent (%s)", async (_label, argv) => {

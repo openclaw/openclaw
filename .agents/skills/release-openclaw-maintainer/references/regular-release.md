@@ -42,9 +42,10 @@ The orchestrator probes three capabilities and otherwise falls back to today's
 manual commands: a publish parent at the tooling SHA that runs the dist-tag
 sync itself (`sync-beta` verifies for 20 minutes before dispatching the sync),
 a parent that sweeps its predecessors' stale children (`sweep_superseded_children`;
-otherwise the sweep commands are printed before dispatch), a parent approval
-receipt at the tooling SHA (otherwise child approval commands are printed;
-npm children still retain their own environment gate). Runs dispatched on `main` are reconciled by
+otherwise the sweep commands are printed before dispatch), and npm children
+that publish in `npm-publish` behind the parent approval receipt
+(`environment: npm-publish` in `openclaw-npm-release.yml` at the tooling SHA;
+otherwise child approval commands are printed). Runs dispatched on `main` are reconciled by
 workflow path, ref, the operator's own login, and a ten-minute window; two
 matches refuse instead of guessing.
 Pass `--plugin-sdk-api-acknowledgement` when the candidate reports SDK API
@@ -292,14 +293,15 @@ explicit publisher inputs override them. The candidate helper retains its
 explicit SDK acknowledgement when needed. Optional Windows source tag and
 candidate-approved digests are supplied together or both omitted.
 
-Wait for `npm-release` environment approval, plugin npm then core npm, parallel
+Wait for the parent's `npm-release` environment approval, plugin npm then core npm, parallel
 ClawHub, npm postpublish verification, Docker publication, dependency/release
 evidence, and GitHub finalization. Reuse successful immutable child artifacts
 on recovery; never rebuild or republish successful versions. The parent's
-approval receipt lets the ClawHub child skip its gate; each npm child still
-needs its own `npm-release` approval (the workflow token cannot approve it).
-ClawHub children must never be approved by hand; watch `pending_deployments`
-on every child per `$release-openclaw-ci` (Publish children). Children run on hosted
+approval receipt lets the npm and ClawHub children skip their human gates.
+The npm children publish in `npm-publish` from the same protected tooling tag
+and require the parent attempt to remain live. Direct human npm recovery still
+requires its own `npm-release` approval. ClawHub children must never be approved
+by hand; follow `$release-openclaw-ci` (Publish children). Children run on hosted
 `ubuntu-latest`; if that pool is saturated, let jobs queue normally without
 cancelling PR CI. Blacksmith testbox runs use a separate pool.
 

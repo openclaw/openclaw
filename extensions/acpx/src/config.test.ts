@@ -19,22 +19,33 @@ function expectedMcpServerArgs(params: { sourceEntry: string; distEntry: string 
 }
 
 describe("embedded acpx plugin config", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
-  it("resolves workspace stateDir and cwd by default", () => {
+  it("resolves state independently of the session working directory", () => {
     const workspaceDir = path.resolve("/tmp/openclaw-acpx");
+    const stateDir = path.resolve("/tmp/openclaw-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const resolved = resolveAcpxPluginConfig({
       rawConfig: undefined,
       workspaceDir,
     });
 
     expect(resolved.cwd).toBe(workspaceDir);
-    expect(resolved.stateDir).toBe(path.join(workspaceDir, "state"));
+    expect(resolved.stateDir).toBe(path.join(stateDir, "acpx"));
     expect(resolved.permissionMode).toBe("approve-reads");
     expect(resolved.nonInteractivePermissions).toBe("fail");
     expect(resolved.timeoutSeconds).toBe(120);
     expect(resolved.probeAgent).toBeUndefined();
     expect(resolved.agents).toStrictEqual({});
+    expect(
+      resolveAcpxPluginConfig({ rawConfig: { stateDir: workspaceDir }, stateDir }).stateDir,
+    ).toBe(workspaceDir);
+    expect(resolveAcpxPluginConfig({ rawConfig: {}, stateDir: workspaceDir }).stateDir).toBe(
+      path.join(workspaceDir, "acpx"),
+    );
   });
 
   it("keeps explicit timeoutSeconds config", () => {

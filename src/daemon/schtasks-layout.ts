@@ -4,8 +4,9 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { isValidProfileName, normalizeProfileName } from "../cli/profile-utils.js";
+import { normalizeProfileName } from "../cli/profile-utils.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import {
   decodeWindowsLauncherScript,
@@ -16,7 +17,12 @@ import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { normalizeWindowsTaskIdentity, resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayTaskScriptPath as resolveTaskScriptPath } from "./paths.js";
-import { probeScheduledTaskState, ScheduledTaskInspectionError } from "./schtasks-state-probe.js";
+import {
+  isScheduledTaskDefinitionAbsent,
+  probeScheduledTaskState,
+  ScheduledTaskInspectionError,
+} from "./schtasks-state-probe.js";
+import { resolveWindowsServiceCommandProfile } from "./service-env-merge.js";
 import { ServiceInspectionError } from "./service-inspection-error.js";
 import { publishServiceFile } from "./service-stage.js";
 import type {
@@ -290,24 +296,6 @@ export async function writeTaskXmlTempFile(xml: string): Promise<string> {
   return xmlPath;
 }
 
-export function resolveTaskUser(env: GatewayServiceEnv): string | null {
-  const username = env.USERNAME || env.USER || env.LOGNAME;
-  if (!username) {
-    return null;
-  }
-  if (username.includes("\\")) {
-    return username;
-  }
-  const domain = env.USERDOMAIN;
-  if (normalizeLowercaseStringOrEmpty(domain) === "workgroup") {
-    return username;
-  }
-  if (domain) {
-    return `${domain}\\${username}`;
-  }
-  return username;
-}
-
 export function shouldUseHiddenWindowsTaskLauncher(env: GatewayServiceEnv): boolean {
   const value = normalizeLowercaseStringOrEmpty(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER);
   return value === "1" || value === "true" || value === "yes";
@@ -415,17 +403,51 @@ async function readTaskLaunchers(
 
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
-  options?: GatewayServiceReadOptions & { onLauncherContent?: (content: string) => void },
+  options?: GatewayServiceReadOptions & {
+    onLauncherContent?: (content: string) => void;
+    /** Inventory reads a Task's profile without admitting it as the caller's selected service. */
+    profileScope?: "registered";
+  },
 ): Promise<GatewayServiceCommandConfig | null> {
   const requireEffective = options?.requireEffective || options?.requireLoaded;
+  const deadline =
+    options?.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs;
+  const remainingTimeout = () =>
+    deadline === undefined ? undefined : deadline - performance.now();
+  const assertInspectionDeadline = () => {
+    if (deadline !== undefined && performance.now() >= deadline) {
+      throw new ScheduledTaskInspectionError({
+        status: "unknown",
+        detail: "Scheduled Task inspection deadline expired.",
+        timeoutMs: 0,
+        diagnostic: { kind: "timeout", timeoutMs: 0 },
+      });
+    }
+  };
   try {
     const taskName = resolveTaskName(env);
     const registered = options?.requireLoaded
-      ? probeScheduledTaskState(taskName, options.timeoutMs)
+      ? probeScheduledTaskState(taskName, remainingTimeout())
       : undefined;
     if (registered?.status === "unknown") {
       throw new ScheduledTaskInspectionError(registered);
     }
+    assertInspectionDeadline();
+    const assertCommandProfile = (command: GatewayServiceCommandConfig) => {
+      if (!registered) {
+        return;
+      }
+      const profile = resolveWindowsServiceCommandProfile(command);
+      if (
+        profile.kind === "unavailable" ||
+        (options?.profileScope !== "registered" &&
+          profile.profile !==
+            (normalizeProfileName(resolveEnvironmentValue(env, "OPENCLAW_PROFILE", "win32")) ??
+              "default"))
+      ) {
+        throw new Error("Scheduled Task selector changed during inspection");
+      }
+    };
     const action = registered?.status === "found" ? registered.actions?.[0] : undefined;
     if (
       registered?.status === "found" &&
@@ -460,10 +482,11 @@ export async function readScheduledTaskCommand(
       ) {
         throw new Error("Task launcher changed during inspection");
       }
-      const current = probeScheduledTaskState(taskName, options?.timeoutMs);
+      const current = probeScheduledTaskState(taskName, remainingTimeout());
       if (current.status === "unknown") {
         throw new ScheduledTaskInspectionError(current);
       }
+      assertInspectionDeadline();
       if (
         current.status !== registered.status ||
         (registered.status === "found" &&
@@ -488,10 +511,12 @@ export async function readScheduledTaskCommand(
         throw new Error("Scheduled Task executable arguments cannot be inspected");
       }
       await assertRegistrationCurrent();
-      return {
+      const command = {
         programArguments: [action.path, ...splitArgsPreservingQuotes(argumentsText)],
         ...(action.workingDirectory ? { workingDirectory: action.workingDirectory } : {}),
       };
+      assertCommandProfile(command);
+      return command;
     }
     if (launchers?.length === 0) {
       await assertRegistrationCurrent();
@@ -565,15 +590,12 @@ export async function readScheduledTaskCommand(
       throw new Error("Missing Scheduled Task command");
     }
     await assertRegistrationCurrent({ path: scriptPath, content });
+    assertCommandProfile({ programArguments, environment });
     if (
       registered &&
       ((environment.OPENCLAW_WINDOWS_TASK_NAME &&
         normalizeWindowsTaskIdentity(environment.OPENCLAW_WINDOWS_TASK_NAME) !==
           normalizeWindowsTaskIdentity(taskName)) ||
-        (environment.OPENCLAW_PROFILE && !isValidProfileName(environment.OPENCLAW_PROFILE)) ||
-        (env.OPENCLAW_PROFILE &&
-          (normalizeProfileName(environment.OPENCLAW_PROFILE) ?? "default") !==
-            (normalizeProfileName(env.OPENCLAW_PROFILE) ?? "default")) ||
         (environment.OPENCLAW_TASK_SCRIPT &&
           path.win32.normalize(environment.OPENCLAW_TASK_SCRIPT).toLowerCase() !==
             path.win32.normalize(scriptPath).toLowerCase()))
@@ -602,51 +624,30 @@ export async function readScheduledTaskCommand(
     if (!requireEffective) {
       return null;
     }
+    const remaining = deadline === undefined ? undefined : deadline - performance.now();
     if (
       hasErrnoCode(error, "ENOENT") &&
-      (await isScheduledTaskDefinitionAbsent(env, options?.timeoutMs).catch(
-        (inspectionError: unknown) => {
-          if (inspectionError instanceof ServiceInspectionError) {
-            throw inspectionError;
-          }
-          return false;
-        },
-      ))
+      (remaining === undefined || remaining > 0) &&
+      (await isScheduledTaskDefinitionAbsent({
+        taskName: resolveTaskName(env),
+        resolveDefinitionPaths: () => [
+          resolveTaskScriptPath(env),
+          ...resolveStartupEntryPaths(env),
+        ],
+        deadline,
+      }).catch((inspectionError: unknown) => {
+        if (inspectionError instanceof ServiceInspectionError) {
+          throw inspectionError;
+        }
+        return false;
+      })) &&
+      (deadline === undefined || performance.now() < deadline)
     ) {
       return null;
     }
   }
   // Native failures can contain raw service credentials; expose only the closed diagnostic.
   throw new Error("Effective Scheduled Task service command could not be inspected.");
-}
-
-async function isScheduledTaskDefinitionAbsent(
-  env: GatewayServiceEnv,
-  timeoutMs?: number,
-): Promise<boolean> {
-  // A missing script can still belong to a registered task or Startup login item.
-  const probe = probeScheduledTaskState(resolveTaskName(env), timeoutMs);
-  if (probe.status === "unknown") {
-    throw new ScheduledTaskInspectionError(probe);
-  }
-  if (probe.status !== "missing") {
-    return false;
-  }
-  for (const pathname of [resolveTaskScriptPath(env), ...resolveStartupEntryPaths(env)]) {
-    try {
-      await fs.lstat(pathname);
-      return false;
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        return false;
-      }
-    }
-  }
-  const current = probeScheduledTaskState(resolveTaskName(env), timeoutMs);
-  if (current.status === "unknown") {
-    throw new ScheduledTaskInspectionError(current);
-  }
-  return current.status === "missing";
 }
 
 export function buildTaskScript({

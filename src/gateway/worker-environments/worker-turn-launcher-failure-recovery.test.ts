@@ -47,7 +47,7 @@ describe("worker turn launcher failure recovery", () => {
   afterEach(cleanupWorkerTurnLauncherTest);
 
   it("reports execution failure as primary when remote workspace recovery also fails", async () => {
-    seedActivePlacement("remote-exec");
+    await seedActivePlacement("remote-exec");
     const executionError = new Error("Codex node execution requires one-time approval");
     const environments: WorkerTurnEnvironmentService = {
       ...unusedEnvironments(),
@@ -100,7 +100,7 @@ describe("worker turn launcher failure recovery", () => {
   });
 
   it("terminalizes a journal-settled dead worker without waiting for blocked teardown", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const launchStarted = createDeferred();
     const finishLaunch = createDeferred();
     const teardownStarted = createDeferred();
@@ -211,12 +211,12 @@ describe("worker turn launcher failure recovery", () => {
   });
 
   it("does not destroy a replacement after failed-turn teardown loses its placement", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const active = placements.get(SESSION_ID);
     if (active?.state !== "active") {
       throw new Error("expected active placement");
     }
-    const turnClaim = placements.claimTurn({
+    const turnClaim = await placements.claimTurn({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
@@ -254,7 +254,7 @@ describe("worker turn launcher failure recovery", () => {
         expectedGeneration: reconciling.generation,
         recoveryError: "recovered elsewhere",
       });
-      const replacement = placements.startDispatch({
+      const replacement = await placements.startDispatch({
         sessionId: SESSION_ID,
         sessionKey: SESSION_KEY,
         agentId: "main",
@@ -270,12 +270,12 @@ describe("worker turn launcher failure recovery", () => {
   });
 
   it("persists launch context and cancellation diagnosis when failure details exceed the display bound", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const active = placements.get(SESSION_ID);
     if (active?.state !== "active") {
       throw new Error("expected active placement");
     }
-    const turnClaim = placements.claimTurn({
+    const turnClaim = await placements.claimTurn({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
@@ -318,12 +318,12 @@ describe("worker turn launcher failure recovery", () => {
   it.each(["worker-turn", "remote-exec"] as const)(
     "releases an exact %s claim after another lifecycle owner starts draining",
     async (executionMode) => {
-      seedActivePlacement(executionMode);
+      await seedActivePlacement(executionMode);
       const active = placements.get(SESSION_ID);
       if (active?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const turnClaim = placements.claimTurn({
+      const turnClaim = await placements.claimTurn({
         sessionId: active.sessionId,
         sessionKey: active.sessionKey,
         agentId: active.agentId,
@@ -361,7 +361,7 @@ describe("worker turn launcher failure recovery", () => {
   );
 
   it("keeps an active placement when tunnel startup fails before remote handoff", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const acknowledgeCredentialDelivery = vi.fn(async () => true);
     const stopTunnel = vi.fn(async () => {});
     const destroy = vi.fn(async () => attachedEnvironment());
@@ -401,7 +401,7 @@ describe("worker turn launcher failure recovery", () => {
   });
 
   it("fails impossible replay before handoff and keeps the active placement reusable", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const manager = openSessionManager();
     manager.appendMessage(
       makeAgentAssistantMessage({
@@ -480,7 +480,7 @@ describe("worker turn launcher failure recovery", () => {
   });
 
   it("preserves an unresolved rollback journal when pre-launch recovery conflicts", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const active = placements.get(SESSION_ID);
     if (active?.state !== "active") {
       throw new Error("expected active placement for journal recovery");
@@ -575,7 +575,7 @@ describe("worker turn launcher failure recovery", () => {
       expectedMessage: "device worker capacity remained full",
     },
   ])("keeps the placement active after $name", async ({ error, dispatched, expectedMessage }) => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const startReconcile = vi.spyOn(placements, "startReconcile");
     const stopTunnel = vi.fn(async () => {});
     const destroy = vi.fn(async () => attachedEnvironment());
@@ -646,7 +646,7 @@ describe("worker turn launcher failure recovery", () => {
   });
 
   it("preserves the admission diagnosis with bounded redacted process failure details", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const secret = "$SUPERSECRET123";
     const diagnosis =
       "worker admission deadline exceeded after 3 attempts to gateway.example:18789: connect failed: Opening handshake has timed out; ";

@@ -144,6 +144,7 @@ export async function runUpdatedInstallGatewayCommand(
     assertCurrent?: () => void;
     definitionRecovery?: UpdateServiceDefinitionRecovery;
     onWarnings?: (warnings: string[]) => void;
+    onGatewayStartAttempted?: () => void;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   },
   action: "install" | "restart",
@@ -277,6 +278,7 @@ export async function runUpdatedInstallGatewayCommand(
     bindChild?: (pid: number, argv?: readonly string[]) => void,
   ) => {
     const argv = [nodeRunner, entrypoint, ...args, ...(grant ? ["--update-executor", "run"] : [])];
+    params.onGatewayStartAttempted?.();
     const result = await runCommandWithTimeout(argv, {
       // The complete owned env must not regain selectors removed during capture.
       baseEnv: {},
@@ -387,6 +389,7 @@ export async function restartRetainedUpdateGatewayService(params: {
   stdout: NodeJS.WritableStream;
   assertCurrent: () => void;
   revalidate: () => Promise<void>;
+  onGatewayStartAttempted?: () => void;
   signal?: AbortSignal;
 }): Promise<GatewayServiceRestartResult> {
   const env = { ...params.env };
@@ -399,6 +402,7 @@ export async function restartRetainedUpdateGatewayService(params: {
         stdout: params.stdout,
         env,
         beforeMutation: params.revalidate,
+        onRestartAttempted: params.onGatewayStartAttempted,
         assertCurrent: () => {
           assertNative();
           assertCurrent();

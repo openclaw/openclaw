@@ -82,11 +82,11 @@ describe("offline device abandonment with retained physical cleanup", () => {
         patch: support.attachedPatch(environmentId, REQUEST.sessionId),
       });
       expect(attached.sharedHost).toBe(sharedHost);
-      const active = harness.placements.seedActive(attached.ownerEpoch);
+      const active = await harness.placements.seedActive(attached.ownerEpoch);
       if (active.state !== "active") {
         throw new Error("expected active placement");
       }
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...REQUEST,
         claimId: "abandoned-claim",
         runId: "abandoned-run",
@@ -288,7 +288,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
         let replacementClaim;
         if (replacement) {
           expect(replacement.ownerEpoch).toBeGreaterThan(attached.ownerEpoch);
-          seedActivePlacement(placements, {
+          await seedActivePlacement(placements, {
             environmentId: replacementId,
             ownerEpoch: replacement.ownerEpoch,
           });
@@ -297,7 +297,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
             await restartDisconnectedService();
             listNodes.mockResolvedValue(connectedNodes);
           }
-          replacementClaim = placements.claimTurn({
+          replacementClaim = await placements.claimTurn({
             ...REQUEST,
             claimId: "replacement-claim",
             runId: "replacement-run",

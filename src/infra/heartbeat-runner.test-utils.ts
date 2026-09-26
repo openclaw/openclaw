@@ -17,16 +17,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
 import { createJob } from "../cron/service/jobs.js";
 import { createCronServiceState } from "../cron/service/state.js";
-import {
-  loadCronJobsStoreSync,
-  resolveCronJobsStorePath,
-  saveCronJobsStoreWithRevisionNative,
-} from "../cron/store.js";
+import { resolveCronJobsStorePath, saveCronJobsStoreWithRevisionNative } from "../cron/store.js";
+import { cronStoreKey } from "../cron/store/key.js";
+import { loadCronStoreFromDatabase } from "../cron/store/load.kernel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -85,7 +84,10 @@ export async function seedHeartbeatScratchForTest(params: {
 }): Promise<string> {
   const agentId = params.agentId ?? "main";
   const storePath = params.storePath ?? resolveCronJobsStorePath();
-  const store = loadCronJobsStoreSync(storePath);
+  const store = loadCronStoreFromDatabase(
+    openOpenClawStateDatabase().db,
+    cronStoreKey(storePath),
+  ).store;
   const declarationKey = `heartbeat:${agentId}`;
   let job = store.jobs.find((entry) => entry.declarationKey === declarationKey);
   if (!job) {

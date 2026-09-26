@@ -151,7 +151,7 @@ it("retains safe native and RPC facts before an exit-zero status fails semantic 
     records,
     0,
     undefined,
-    "status",
+    { observeService: "status" },
   );
   expect(() => installedStatusSchema.parse(JSON.parse(stdout))).toThrow();
   expect(records[0]).toMatchObject({
@@ -214,7 +214,7 @@ it("retains bounded sanitized install outcome without private response fields", 
     records,
     0,
     undefined,
-    "install",
+    { observeService: "install" },
   );
   expect(JSON.parse(stdout).ok).toBe(true);
   expect(records[0]?.serviceOutput).toMatchObject({

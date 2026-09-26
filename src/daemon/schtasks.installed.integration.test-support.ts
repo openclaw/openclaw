@@ -19,6 +19,7 @@ import {
   doctorReportSchema,
   inspectDisabledDiscoveryTasks,
   inspectInstalledUpdateFailure,
+  runInstalledPublishedUpdate,
   type InstalledTask as Task,
 } from "./schtasks.installed-diagnostics.test-support.js";
 import {
@@ -36,7 +37,6 @@ import {
   readInstalledBuildIdentity,
   readPreparedCell,
   recordCapacityBoundary,
-  requiredCellSpace,
   samePath,
   verifyPreparedInstall,
 } from "./schtasks.installed-package.test-support.js";
@@ -123,9 +123,12 @@ export async function runInstalledLifecycle(
         commands,
         expectedExit,
         signal,
-        args[0] === "gateway" && (args[1] === "install" || args[1] === "status")
-          ? args[1]
-          : undefined,
+        {
+          observeService:
+            args[0] === "gateway" && (args[1] === "install" || args[1] === "status")
+              ? args[1]
+              : undefined,
+        },
       );
     } catch (error) {
       commandFailure = toErrorObject(error, "Installed Scheduled Task command failed");
@@ -332,29 +335,16 @@ export async function runInstalledLifecycle(
         installed: await hashInstall(installRoot),
       };
       await recordProgress("published-driver:hash-verified");
-      // This is the unchanged installed old CLI. No imported old controller or injected update marker.
-      const beforeUpdate = await recordCapacityBoundary(
-        inputPath,
+      observations.update = await runInstalledPublishedUpdate({
+        task: selected,
         input,
+        inputPath,
         key,
-        "before-published-update",
-      );
-      const { forecast } = requiredCellSpace(key);
-      const updateNeed =
-        forecast.upgradeStaging +
-        forecast.runtimeNpmCache +
-        forecast.retainedStateAndProof +
-        forecast.freeFloor;
-      assert.ok(
-        beforeUpdate.availableBytes >= updateNeed,
-        `Published updater needs ${updateNeed} additional available bytes under the provisional forecast; observed ${beforeUpdate.availableBytes}; update not started`,
-      );
-      const update = JSON.parse(
-        await cli(selected, ["update", "--yes", "--tag", input.tarball, "--json"]),
-      );
-      await recordCapacityBoundary(inputPath, input, key, "after-published-update");
-      const outcome = z.object({ status: z.literal("ok"), mode: z.literal("npm") }).parse(update);
-      observations.update = outcome;
+        commands,
+        signal,
+        observations,
+        recordProgress,
+      });
       await prepareInstalledPackage({ ...input, installRoot });
       await recordProgress("updated-candidate:hash-verified");
       const candidateIdentity = await readInstalledBuildIdentity(
@@ -501,7 +491,15 @@ export async function runInstalledLifecycle(
   } catch (error) {
     cellFailure = toErrorObject(error, "Installed Scheduled Task fixture failed");
     if (key !== "fresh" && tasks[0]) {
-      observations.updateFailure = await inspectInstalledUpdateFailure(tasks[0]);
+      try {
+        await inspectInstalledUpdateFailure({ task: tasks[0], commands, signal, observations });
+      } catch (inspectionError) {
+        cellFailure = new AggregateError(
+          [cellFailure, inspectionError],
+          "Installed update failure inspection failed",
+          { cause: cellFailure },
+        );
+      }
     }
     try {
       await recordProgress("before-native-cleanup", cellFailure);

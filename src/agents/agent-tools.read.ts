@@ -37,6 +37,7 @@ import {
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
 import { writeHostFile } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import {
@@ -156,24 +157,8 @@ function malformedXmlArgValuePathError(key: string): Error {
 }
 
 function getToolResultText(result: AgentToolResult<unknown>): string | undefined {
-  const content = Array.isArray(result.content) ? result.content : [];
-  const textBlocks = content
-    .map((block) => {
-      if (
-        block &&
-        typeof block === "object" &&
-        (block as { type?: unknown }).type === "text" &&
-        typeof (block as { text?: unknown }).text === "string"
-      ) {
-        return (block as { text: string }).text;
-      }
-      return undefined;
-    })
-    .filter((value): value is string => typeof value === "string");
-  if (textBlocks.length === 0) {
-    return undefined;
-  }
-  return textBlocks.join("\n");
+  const textBlocks = collectTextContentBlocks(result.content);
+  return textBlocks.length > 0 ? textBlocks.join("\n") : undefined;
 }
 
 function getReadResultContent(result: AgentToolResult<unknown>): string | undefined {

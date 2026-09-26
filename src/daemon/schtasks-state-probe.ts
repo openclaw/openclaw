@@ -1,5 +1,6 @@
 /** Locale-independent Task Scheduler registration and runtime facts. */
 import { spawnSync } from "node:child_process";
+import fs from "node:fs/promises";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode, isErrno } from "../infra/errno.js";
@@ -55,7 +56,15 @@ function queryTaskScheduler(
   taskName: string | undefined,
   timeoutMs?: number,
 ): { status: "ok"; value: unknown } | Exclude<ScheduledTaskStateProbe, { status: "found" }> {
-  // Registration queries also pay PowerShell's cold first-use cost.
+  if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 1)) {
+    return {
+      status: "unknown",
+      detail: "Scheduled Task inspection deadline expired.",
+      timeoutMs: 0,
+      diagnostic: { kind: "timeout", timeoutMs: 0 },
+    };
+  }
+  // spawnSync requires an integer; rounding up or using zero would extend the allowance.
   const probeTimeoutMs = resolvePositiveTimerTimeoutMs(
     timeoutMs,
     WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
@@ -195,6 +204,52 @@ export function probeScheduledTaskState(
         detail: "Scheduled Task probe returned invalid JSON.",
         diagnostic: { kind: "invalid-response" },
       };
+}
+
+export async function isScheduledTaskDefinitionAbsent({
+  taskName,
+  resolveDefinitionPaths,
+  deadline,
+}: {
+  taskName: string;
+  resolveDefinitionPaths: () => readonly string[];
+  deadline?: number;
+}): Promise<boolean> {
+  const remainingTimeout = () =>
+    deadline === undefined ? undefined : deadline - performance.now();
+  const expired = () => deadline !== undefined && performance.now() >= deadline;
+  if (expired()) {
+    return false;
+  }
+  // A missing script can still belong to a registered task or Startup login item.
+  const probe = probeScheduledTaskState(taskName, remainingTimeout());
+  if (probe.status === "unknown") {
+    throw new ScheduledTaskInspectionError(probe);
+  }
+  if (probe.status !== "missing" || expired()) {
+    return false;
+  }
+  for (const pathname of resolveDefinitionPaths()) {
+    if (expired()) {
+      return false;
+    }
+    try {
+      await fs.lstat(pathname);
+      return false;
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        return false;
+      }
+    }
+  }
+  if (expired()) {
+    return false;
+  }
+  const current = probeScheduledTaskState(taskName, remainingTimeout());
+  if (current.status === "unknown") {
+    throw new ScheduledTaskInspectionError(current);
+  }
+  return current.status === "missing" && !expired();
 }
 
 export function listScheduledTasks(timeoutMs?: number): ScheduledTaskSnapshot[] {

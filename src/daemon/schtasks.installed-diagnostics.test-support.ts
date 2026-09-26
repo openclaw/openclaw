@@ -7,7 +7,14 @@ import { z } from "zod";
 import { hashFile } from "../../scripts/lib/gateway-bench-installed-package.ts";
 import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
-import type { parseInstalledPreview } from "./schtasks.installed-package.test-support.js";
+import { sleep } from "../utils/sleep.js";
+import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
+import {
+  type parseInstalledPreview,
+  type readInput,
+  recordCapacityBoundary,
+  requiredCellSpace,
+} from "./schtasks.installed-package.test-support.js";
 
 export const doctorReportSchema = z.object({
   checksRun: z.number().int().positive(),
@@ -33,7 +40,7 @@ export type InstalledTask = {
   env: NodeJS.ProcessEnv;
 };
 
-export async function inspectInstalledUpdateFailure({
+export async function readInstalledUpdateProgress({
   env,
   stateDir,
 }: Pick<InstalledTask, "env" | "stateDir">) {
@@ -42,23 +49,205 @@ export async function inspectInstalledUpdateFailure({
     if (!record) {
       return { unavailable: "No recorded update run" };
     }
-    // The installed driver owns this ledger; retain only diagnostic progress, never its payloads.
+    const safeText = (value: string | null | undefined) =>
+      typeof value === "string"
+        ? redactSupportString(value, { env, stateDir }, { maxLength: 2_000 })
+        : value;
+    // Retain only the facts needed to distinguish update progress from failed native verification.
     return {
       phase: record.phase,
       status: record.status,
       createdAtMs: record.createdAtMs,
       updatedAtMs: record.updatedAtMs,
       finishedAtMs: record.finishedAtMs,
-      steps: record.steps.map(({ step, status, startedAtMs, endedAtMs }) => ({
+      after: { version: safeText(record.after.version), buildId: safeText(record.after.buildId) },
+      verification: {
+        serviceRunning: record.verification.serviceRunning,
+        pid: record.verification.pid,
+        port: record.verification.port,
+        runningVersion: safeText(record.verification.runningVersion),
+        runningBuildId: safeText(record.verification.runningBuildId),
+        versionMatch: record.verification.versionMatch,
+        channelsReady: record.verification.channelsReady,
+        readyz: record.verification.readyz,
+        settled: record.verification.settled,
+      },
+      steps: record.steps.map(({ step, status, startedAtMs, endedAtMs, detail }) => ({
         step: redactSupportString(step, { env, stateDir }),
         status,
         startedAtMs,
         endedAtMs,
+        detail:
+          /^warning:managed-service-reconciliation(?::\d+)?$/u.test(step) && detail
+            ? safeText(detail)
+            : undefined,
       })),
     };
   } catch {
     return { unavailable: "Recorded update progress could not be read" };
   }
+}
+
+export async function inspectInstalledUpdateFailure(params: {
+  task: InstalledTask;
+  commands: CommandRecord[];
+  signal: AbortSignal;
+  observations: Record<string, unknown>;
+}) {
+  const { task, commands, signal, observations } = params;
+  observations.updateFailure = await readInstalledUpdateProgress(task);
+  if (signal.aborted || commands.some((command) => !command.joined)) {
+    return;
+  }
+  // Inspect after the updater joins so diagnostics do not consume its execution allowance.
+  await run(
+    [task.entry, "--profile", task.profile, "gateway", "status", "--json", "--timeout", "5000"],
+    task.env,
+    task.rootDir,
+    commands,
+    0,
+    signal,
+    { observeService: "status" },
+  );
+}
+
+export function parseInstalledUpdateResult(value: unknown) {
+  const result = z
+    .object({
+      status: z.literal("ok"),
+      mode: z.literal("npm"),
+      steps: z.array(
+        z.object({
+          name: z.string(),
+          exitCode: z.number().int().nullable(),
+          durationMs: z.number(),
+        }),
+      ),
+    })
+    .parse(value);
+  const checks = new Set([
+    "candidate migration rehearsal",
+    "candidate doctor lint",
+    "candidate config validation",
+    "candidate plugin resolution",
+    "candidate migration continuation",
+    "candidate gateway canary",
+  ]);
+  const steps = result.steps.filter(({ name }) => checks.has(name));
+  for (const check of checks) {
+    assert.equal(
+      steps.findLast(({ name }) => name === check)?.exitCode,
+      0,
+      `Published updater must pass ${check}`,
+    );
+  }
+  return { status: result.status, mode: result.mode, steps };
+}
+
+export async function runInstalledPublishedUpdate(params: {
+  task: InstalledTask;
+  input: Awaited<ReturnType<typeof readInput>>;
+  inputPath: string;
+  key: "2026.9.3" | "2026.9.4";
+  commands: CommandRecord[];
+  signal: AbortSignal;
+  observations: Record<string, unknown>;
+  recordProgress: (phase: string, error?: Error) => Promise<void>;
+}) {
+  const { task, input, inputPath, key, commands, signal, observations, recordProgress } = params;
+  const before = await recordCapacityBoundary(inputPath, input, key, "before-published-update");
+  const { forecast } = requiredCellSpace(key);
+  const needed =
+    forecast.upgradeStaging +
+    forecast.runtimeNpmCache +
+    forecast.retainedStateAndProof +
+    forecast.freeFloor;
+  assert.ok(
+    before.availableBytes >= needed,
+    `Published updater needs ${needed} additional available bytes under the provisional forecast; observed ${before.availableBytes}; update not started`,
+  );
+  const startedAt = Date.now();
+  const stopObservation = new AbortController();
+  const completed = new Set<string>();
+  let observationFailure: Error | undefined;
+  const observation = (async () => {
+    while (!stopObservation.signal.aborted) {
+      try {
+        await sleep(15_000, stopObservation.signal);
+      } catch (error) {
+        if (stopObservation.signal.aborted) {
+          return;
+        }
+        throw error;
+      }
+      const progress = await readInstalledUpdateProgress(task);
+      if (stopObservation.signal.aborted) {
+        return;
+      }
+      if ("unavailable" in progress || progress.createdAtMs < startedAt) {
+        continue;
+      }
+      const newSteps = progress.steps.filter((step) => {
+        if (step.status !== "completed" || step.endedAtMs === undefined) {
+          return false;
+        }
+        const identity = JSON.stringify([progress.createdAtMs, step.step, step.endedAtMs]);
+        if (completed.has(identity)) {
+          return false;
+        }
+        completed.add(identity);
+        return true;
+      });
+      if (newSteps.length > 0) {
+        observations.updateProgress = progress;
+        await recordProgress("published-update:completed-step");
+      }
+    }
+  })().catch((error: unknown) => {
+    observationFailure = toErrorObject(error, "Installed update progress recording failed");
+  });
+  let output = "";
+  let failure: Error | undefined;
+  try {
+    // Execute the unchanged published CLI; the observer neither injects markers nor changes state.
+    output = await run(
+      [task.entry, "--profile", task.profile, "update", "--yes", "--tag", input.tarball, "--json"],
+      task.env,
+      task.rootDir,
+      commands,
+      0,
+      signal,
+      { commandBudget: "published-update" },
+    );
+  } catch (error) {
+    failure = toErrorObject(error, "Installed published update failed");
+  } finally {
+    stopObservation.abort();
+    // Join an in-flight read or evidence write before final command recording and native cleanup.
+    await observation;
+  }
+  if (observationFailure) {
+    failure = failure
+      ? new AggregateError(
+          [failure, observationFailure],
+          "Installed update and progress recording failed",
+        )
+      : observationFailure;
+  }
+  try {
+    await recordProgress("command:update", failure);
+  } catch (error) {
+    throw new AggregateError(
+      failure ? [failure, error] : [error],
+      "Installed update proof recording failed",
+      { cause: error },
+    );
+  }
+  if (failure) {
+    throw failure;
+  }
+  await recordCapacityBoundary(inputPath, input, key, "after-published-update");
+  return parseInstalledUpdateResult(JSON.parse(output));
 }
 
 export async function inspectDisabledDiscoveryTasks(params: {

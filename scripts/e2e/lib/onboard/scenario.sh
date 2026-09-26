@@ -164,9 +164,15 @@ run_wizard_cmd() {
   local log_path="$OPENCLAW_E2E_LOG_DIR/${case_name}.log"
   WIZARD_LOG_PATH="$log_path"
   export WIZARD_LOG_PATH
-  # Run under script to keep an interactive TTY for clack prompts.
-  openclaw_e2e_run_script_with_pty "$command" "$log_path" <"$input_fifo" >/dev/null 2>&1 &
+  # Anchor the FIFO before forking so a fast-exiting reader cannot strand open().
+  if ! exec 3<>"$input_fifo"; then
+    cleanup_wizard_case
+    return 1
+  fi
+  # Open stdin before dropping the inherited anchor; only the driver keeps a writer.
+  openclaw_e2e_run_script_with_pty "$command" "$log_path" <"$input_fifo" 3>&- >/dev/null 2>&1 &
   wizard_pid=$!
+  # Restore write-only semantics so an exited wizard still produces EPIPE.
   if ! exec 3>"$input_fifo"; then
     cleanup_wizard_case
     return 1

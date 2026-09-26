@@ -315,6 +315,7 @@ export async function startLaunchAgent({
 }
 
 export async function restartLaunchAgent({
+  onRestartAttempted,
   preserveDefinition,
   preserveAutoStart,
   stdout,
@@ -438,6 +439,7 @@ export async function restartLaunchAgent({
       });
     } else {
       assertCurrent?.();
+      onRestartAttempted?.();
       const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
       if (start.code === 0) {
         reportMutation("kickstart");

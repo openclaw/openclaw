@@ -333,6 +333,18 @@ describe("openclaw-file-preview-modal", () => {
     },
   );
 
+  it.each([
+    ["references/notes.constructor", "CONSTRUCTOR"],
+    ["references/notes.__proto__", "__PROTO__"],
+  ])("renders the fallback file-kind label for %s", async (path, label) => {
+    const modal = await renderPreview({
+      activePath: path,
+      previewFiles: [{ path, size: "12 B", contents: "Example file" }],
+    });
+
+    expect(modal.shadowRoot?.querySelector(".chip.accent")?.textContent).toBe(label);
+  });
+
   it("localizes generic file-kind chips", async () => {
     i18n.registerTranslation("pt-BR", {
       filePreview: {

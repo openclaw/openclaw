@@ -7,19 +7,24 @@ import { inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortListener } from "../infra/ports-types.js";
 import { tryAcquireGatewayLifecycleCleanupCoordinator } from "../infra/state-database-coordinator.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
-import {
-  getWindowsPowerShellExePath,
-  getWindowsSystem32ExePath,
-} from "../infra/windows-install-roots.js";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sleep } from "../utils.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { parseCmdScriptCommandLine } from "./cmd-argv.js";
 import { NODE_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { readScheduledTaskCommand, resolveTaskName } from "./schtasks-layout.js";
+import {
+  getSnapshotProcessId,
+  isCompleteWindowsProcessSnapshot,
+  readWindowsProcessSnapshot,
+  type WindowsProcessSnapshotEntry,
+} from "./schtasks-process-snapshot.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -30,10 +35,7 @@ import {
   WINDOWS_TASK_SUPERVISOR_FLAG,
 } from "./windows-task-supervisor-contract.js";
 
-type WindowsProcessSnapshotEntry = {
-  ProcessId?: number;
-  CommandLine?: string | null;
-};
+export { readWindowsProcessSnapshot } from "./schtasks-process-snapshot.js";
 
 const WINDOWS_FORCED_PROCESS_EXIT_TIMEOUT_MS = 15_000;
 
@@ -69,11 +71,6 @@ function matchesInstalledProgramArguments(
   return (
     actual.length === installed.length && actual.every((arg, index) => arg === installed[index])
   );
-}
-
-function getSnapshotProcessId(entry: WindowsProcessSnapshotEntry): number | null {
-  const pid = entry.ProcessId;
-  return typeof pid === "number" && Number.isFinite(pid) && pid > 0 ? pid : null;
 }
 
 export function findInstalledProcessPid(
@@ -409,10 +406,75 @@ export async function describeUnverifiedPortListeners(
   return ` Remaining listener(s): ${described.join(", ")}. If gateway.cmd redirects output, quote the entire redirection target, including environment variables.${hint}`;
 }
 
+/** A completed native snapshot distinguishes no match from unavailable inspection. */
+export async function readBoundedScheduledTaskProcess(
+  env: GatewayServiceEnv,
+  deadlineMs: number,
+  installedCommand?: GatewayServiceCommandConfig | null,
+): Promise<{ port: number; pid: number | null } | null> {
+  const remaining = () => {
+    const value = deadlineMs - performance.now();
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error("Scheduled Task inspection deadline expired.");
+    }
+    return value;
+  };
+  remaining();
+  const command =
+    installedCommand === undefined
+      ? await awaitWithinDeadline(
+          // Best-effort command reading only reads/parses the launcher file. Do
+          // not race strict native queries or release their children unjoined.
+          () =>
+            readScheduledTaskCommand(env, { timeoutMs: remaining() }).catch((error: unknown) => {
+              if (hasCommandProcessCleanupError(error)) {
+                throw error;
+              }
+              return null;
+            }),
+          deadlineMs,
+          () => performance.now(),
+        )
+      : installedCommand;
+  if (command === ABSOLUTE_DEADLINE_EXPIRED) {
+    throw new Error("Scheduled Task inspection deadline expired.");
+  }
+  remaining();
+  const port = resolveScheduledTaskCommandPort(env, command);
+  if (!port || !command?.programArguments.length) {
+    return null;
+  }
+  const snapshot = readWindowsProcessSnapshot(remaining());
+  remaining();
+  if (!snapshot || !snapshot.some((entry) => getSnapshotProcessId(entry) !== null)) {
+    return null;
+  }
+  const pid = shouldManageGatewayListenerPort(env)
+    ? findInstalledGatewayChildPid(snapshot, port, command.programArguments)
+    : findInstalledProcessPid(snapshot, port, command.programArguments, isNodeHostArgv);
+  // A positive exact match survives unrelated unreadable rows. Only a complete
+  // snapshot can prove no match; missing argv or PID can conceal this process.
+  const complete = pid !== null || isCompleteWindowsProcessSnapshot(snapshot);
+  remaining();
+  return complete ? { port, pid } : null;
+}
+
 export async function resolveListenerBackedScheduledTaskRuntime(
   env: GatewayServiceEnv,
+  deadlineMs?: number,
   installedCommand?: GatewayServiceCommandConfig | null,
 ): Promise<Pick<GatewayServiceRuntime, "status" | "pid" | "detail"> | null> {
+  if (deadlineMs !== undefined) {
+    // Scheduler state remains authoritative without an exact running process.
+    const observed = await readBoundedScheduledTaskProcess(env, deadlineMs, installedCommand);
+    return observed?.pid
+      ? {
+          status: "running",
+          pid: observed.pid,
+          detail: `Matching installed process detected for gateway port ${observed.port}.`,
+        }
+      : null;
+  }
   if (!shouldManageGatewayListenerPort(env)) {
     const matched = await resolveScheduledTaskNodeHostProcess(env, installedCommand);
     return matched
@@ -602,35 +664,6 @@ export async function waitForGatewayPortRelease(
     await sleep(250);
   }
   return false;
-}
-
-export function readWindowsProcessSnapshot(): WindowsProcessSnapshotEntry[] | null {
-  if (process.platform !== "win32") {
-    return null;
-  }
-  const processSnapshot = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-Command",
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
-    ],
-    { env: resolveServiceManagerEnv(), encoding: "utf8", timeout: 5_000, windowsHide: true },
-  );
-  if (processSnapshot.error || processSnapshot.status !== 0) {
-    return null;
-  }
-  let parsedSnapshot: unknown;
-  try {
-    parsedSnapshot = JSON.parse(processSnapshot.stdout.trim() || "[]");
-  } catch {
-    return null;
-  }
-  const entries = (Array.isArray(parsedSnapshot) ? parsedSnapshot : [parsedSnapshot]).filter(
-    (entry): entry is WindowsProcessSnapshotEntry => typeof entry === "object" && entry !== null,
-  );
-  // Healthy CIM includes PowerShell itself; empty output cannot prove target exit.
-  return entries.length > 0 ? entries : null;
 }
 
 export async function assertReplacementPortAvailableForTakeover(params: {

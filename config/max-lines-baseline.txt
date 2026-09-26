@@ -135,7 +135,6 @@ extensions/memory-wiki/src/compile.ts
 extensions/memory-wiki/src/query.test.ts
 extensions/memory-wiki/src/query.ts
 extensions/microsoft-foundry/index.test.ts
-extensions/microsoft-foundry/shared.ts
 extensions/migrate-hermes/config.test.ts
 extensions/migrate-hermes/secrets.test.ts
 extensions/msteams/src/channel.actions.test.ts

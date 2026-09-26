@@ -1,4 +1,3 @@
-// Qwen provider module implements model/runtime integration.
 import { buildDashscopeVideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { isQwenCodingPlanBaseUrl } from "./models.js";
 

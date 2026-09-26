@@ -16,7 +16,7 @@ import {
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { updateTask } from "./task-registry-mutation.js";
-import { deleteTaskRecordById, resetTaskRegistryForTests } from "./task-registry-query.js";
+import { resetTaskRegistryForTests } from "./task-registry-query.js";
 import {
   ensureTaskRegistryReadyAsync,
   runTaskRegistryWorkerMutation,
@@ -120,10 +120,9 @@ async function prepareOwner(kind: "task" | "flow"): Promise<OverlapOwner> {
       current: () => tasks.get(initial.taskId)?.task,
       synchronous(value) {
         if (value === undefined) {
-          expect(deleteTaskRecordById(initial.taskId)).toBe(true);
-        } else {
-          expect(updateTask(initial.taskId, { task: value })).not.toBeNull();
+          throw new Error("Task deletion requires its asynchronous retention owner");
         }
+        expect(updateTask(initial.taskId, { task: value })).not.toBeNull();
       },
     };
   }
@@ -429,7 +428,12 @@ describe("overlapping worker publication", () => {
 
   for (const kind of ["task", "flow"] as const) {
     for (const order of ["older first", "newer first"] as const) {
-      it.each(["none", "synchronous update", "synchronous ABA", "synchronous delete"] as const)(
+      it.each([
+        "none",
+        "synchronous update",
+        "synchronous ABA",
+        ...(kind === "flow" ? ["synchronous delete" as const] : []),
+      ] as const)(
         `${kind} retains the latest publication with ${order} and %s`,
         async (intervening) => {
           const owner = await prepareOwner(kind);

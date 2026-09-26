@@ -38,7 +38,6 @@ import {
 } from "./control-ui-routing.js";
 import { isControlUiSharePath } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import type { ControlUiRootState } from "./control-ui.js";
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
@@ -54,6 +53,7 @@ import {
   setDefaultSecurityHeaders,
   isWebSocketUpgradeRequest,
 } from "./http-common.js";
+import { finishGatewayHttpAuthorityError } from "./http-request-authority.js";
 import {
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
@@ -65,6 +65,7 @@ import {
   handleProviderOAuthCallback,
   PROVIDER_OAUTH_CALLBACK_PATH,
 } from "./provider-browser-auth.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
 import {
   getControlUiModule,
   getControlUiPluginAssetsModule,
@@ -719,6 +720,9 @@ export function createGatewayHttpServer(opts: {
 
       respondNotFound(res);
     } catch (err) {
+      if (finishGatewayHttpAuthorityError(res, err)) {
+        return;
+      }
       console.error("[gateway-http] unhandled error in request handler:", err);
       finishFailedGatewayHttpResponse(res);
     }
