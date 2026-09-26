@@ -117,11 +117,6 @@ export function createAgentsApiSession(options: {
   };
   signal.addEventListener("abort", onAbort, { once: true });
 
-  const assertSessionUsable = (session: { status: string; error: string | null }) => {
-    if (session.status === "failed") {
-      throw new Error(session.error ?? "Agents API session failed");
-    }
-  };
   const readAdmittedTurns = async (readClient: AgentsApiClient, readSignal: AbortSignal) => {
     const turns = await readClient.turns(sessionId, readSignal, baselineTurnId);
     readSignal.throwIfAborted();
@@ -164,9 +159,6 @@ export function createAgentsApiSession(options: {
     for (const turn of turns) {
       const items = itemsByTurn.get(turn.id) ?? [];
       for (const item of items) {
-        if (item.turn_id && item.turn_id !== turn.id) {
-          throw new Error("Agents API saved item belongs to a different turn");
-        }
         rememberItemTurn(item.id, turn.id);
         if (item.type === "message" && item.role === "user") {
           inputItems.add(item.id);
@@ -441,7 +433,9 @@ export function createAgentsApiSession(options: {
         assertCurrent();
         const session = await client.session(sessionId, signal);
         assertCurrent();
-        assertSessionUsable(session);
+        if (session.status === "failed") {
+          throw new Error(session.error ?? "Agents API session failed");
+        }
         if (session.status === "requires_action") {
           await relayFunctions();
           if (settled) {
