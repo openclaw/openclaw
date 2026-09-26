@@ -68,6 +68,8 @@ type InternalReplySessionOptions = {
   onDeliberateSilentTerminalReply?: () => void;
   /** Source-specific final delivery, e.g. a committed answer in the current WebChat history. */
   resolveReplyDelivery?: ReplyDeliveryObserver;
+  /** Heartbeat-owner policy: only an admitted current source permits implicit message replies. */
+  requireExplicitMessageTarget?: boolean;
   /** Retire the run's bundle MCP runtime at settlement. Set by one-shot isolated runs (isolated heartbeats) whose session ID is never reused. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers the child-completion wake until the visible waiting status is delivered. */

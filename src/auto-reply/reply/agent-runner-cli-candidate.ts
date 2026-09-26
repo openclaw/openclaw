@@ -400,8 +400,10 @@ export async function runCliFallbackCandidate(
             extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
             sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: turn.followupRun.run.taskSuggestionDeliveryMode,
-            // Heartbeat ambient routes are never implicit message recipients.
-            ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
+            // Ambient heartbeat routes need a target unless their owner admitted a current source.
+            ...(turn.isHeartbeat
+              ? { requireExplicitMessageTarget: turn.opts?.requireExplicitMessageTarget ?? true }
+              : {}),
             cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
             silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
             terminalReplyExpectation: turn.followupRun.run.terminalReplyExpectation,

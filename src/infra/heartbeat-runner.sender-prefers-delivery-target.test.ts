@@ -53,6 +53,7 @@ describe("runHeartbeatOnce", () => {
         });
 
         expect(sendSlack).toHaveBeenCalled();
+        expect(replySpy.mock.calls[0]?.[1]).toMatchObject({ requireExplicitMessageTarget: true });
       },
       { prefix: "openclaw-hb-" },
     );

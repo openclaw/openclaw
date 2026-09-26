@@ -52,7 +52,9 @@ describe("exec-completion reply on a WebChat-internal session (#147387)", () => 
         { sessionKey },
       );
 
-      const getReplyFromConfig = vi.fn().mockResolvedValue({ text: "COMPANION_COMPLETION_TEST" });
+      const getReplyFromConfig = vi
+        .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+        .mockResolvedValue({ text: "COMPANION_COMPLETION_TEST" });
       const result = await runHeartbeatOnce({
         cfg,
         agentId: "main",
@@ -64,9 +66,19 @@ describe("exec-completion reply on a WebChat-internal session (#147387)", () => 
 
       expect(result.status).toBe("ran");
       expect(getReplyFromConfig).toHaveBeenCalledOnce();
-      const [ctx] = getReplyFromConfig.mock.calls[0] as [Record<string, unknown>];
+      const [ctx] = getReplyFromConfig.mock.calls[0]!;
       expect(ctx.Body).toContain("Please relay the command output to the user");
       expect(ctx.Body).not.toContain("user delivery is disabled");
+      expect(getReplyFromConfig.mock.calls[0]?.[1]).toMatchObject({
+        requireExplicitMessageTarget: false,
+      });
+      expect(ctx).toMatchObject({
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "webchat",
+        OriginatingTo: sessionKey,
+        To: sessionKey,
+      });
     });
   });
 
@@ -106,6 +118,9 @@ describe("exec-completion reply on a WebChat-internal session (#147387)", () => 
       expect(getReplyFromConfig).toHaveBeenCalledOnce();
       const [ctx] = getReplyFromConfig.mock.calls[0] as [Record<string, unknown>];
       expect(ctx.Body).not.toContain("Please relay this reminder to the user");
+      expect(getReplyFromConfig.mock.calls[0]?.[1]).toMatchObject({
+        requireExplicitMessageTarget: true,
+      });
     });
   });
 
@@ -310,6 +325,53 @@ async function readProjectionMessages(scenario: ProjectionScenario) {
   return events.map(readTranscriptEventMessage).filter((message) => message?.role === "assistant");
 }
 
+it("keeps an encoded external destination subject to explicit targeting", async () => {
+  await withProjectionScenario(
+    async (scenario) => {
+      enqueueSystemEvent("Exec completed (encoded-route-proof, code 0) :: PRIVATE_OUTPUT", {
+        sessionKey: scenario.sessionKey,
+      });
+      const reply = vi.fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>().mockResolvedValue(
+        createHeartbeatToolResponsePayload({
+          outcome: "done",
+          notify: false,
+          summary: "private",
+        }),
+      );
+      const result = await runProjectionWake(scenario, reply);
+      expect(result.status).toBe("ran");
+      expect(reply).toHaveBeenCalledOnce();
+      expect(reply.mock.calls[0]?.[1]).toMatchObject({ requireExplicitMessageTarget: true });
+      expect(reply.mock.calls[0]?.[0].OriginatingChannel).toBeUndefined();
+    },
+    { sessionKey: "agent:main:telegram:direct:123456" },
+  );
+});
+
+it("keeps an isolated WebChat completion subject to explicit targeting", async () => {
+  await withProjectionScenario(async (scenario) => {
+    scenario.cfg.agents!.defaults!.heartbeat!.isolatedSession = true;
+    const isolatedKey = `${scenario.sessionKey}:heartbeat`;
+    await seedSessionStore(scenario.storePath, isolatedKey, {
+      sessionId: "isolated-source-policy",
+      heartbeatIsolatedBaseSessionKey: scenario.sessionKey,
+    });
+    enqueueSystemEvent("Exec completed (isolated-proof, code 0) :: PRIVATE_OUTPUT", {
+      sessionKey: isolatedKey,
+    });
+    const reply = vi
+      .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+      .mockResolvedValue(
+        createHeartbeatToolResponsePayload({ outcome: "done", notify: false, summary: "private" }),
+      );
+    const result = await runProjectionWake({ ...scenario, sessionKey: isolatedKey }, reply);
+    expect(result.status).toBe("ran");
+    expect(reply).toHaveBeenCalledOnce();
+    expect(reply.mock.calls[0]?.[1]).toMatchObject({ requireExplicitMessageTarget: true });
+    expect(reply.mock.calls[0]?.[0].OriginatingChannel).toBeUndefined();
+  });
+});
+
 it("preserves explicit target:none before target:last delivers in the same WebChat session", async () => {
   await withProjectionScenario(async (scenario) => {
     const heartbeat = scenario.cfg.agents?.defaults?.heartbeat;
@@ -334,6 +396,9 @@ it("preserves explicit target:none before target:last delivers in the same WebCh
       expect(reply).toHaveBeenCalledOnce();
       const context = reply.mock.calls[0]?.[0];
       const messages = await readProjectionMessages(scenario);
+      expect(reply.mock.calls[0]?.[1]).toMatchObject({
+        requireExplicitMessageTarget: target === "none",
+      });
       if (target === "none") {
         expect(messages).toEqual([]);
         expect(context?.Body).toContain("user delivery is disabled");
@@ -388,6 +453,9 @@ it.each([
       // user-visible publication differs.
       expect(result.status).toBe("ran");
       expect(reply).toHaveBeenCalledOnce();
+      expect(reply.mock.calls[0]?.[1]).toMatchObject({
+        requireExplicitMessageTarget: !publishes,
+      });
       expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
 
       const messages = await readProjectionMessages(scenario);
@@ -453,6 +521,7 @@ it.each([
   { name: "unstamped internal row", entry: { createdVia: undefined } },
   {
     name: "unopened hidden spawned child",
+    skipped: true,
     sessionKey: "agent:main:subagent:hidden-completion",
     entry: { createdVia: "spawn" as const },
   },
@@ -476,6 +545,12 @@ it.each([
       }),
     );
     await runProjectionWake(scenario, reply);
+    if ("skipped" in options) {
+      expect(reply).not.toHaveBeenCalled();
+    } else {
+      expect(reply).toHaveBeenCalledOnce();
+      expect(reply.mock.calls[0]?.[1]).toMatchObject({ requireExplicitMessageTarget: true });
+    }
     expect(await readProjectionMessages(scenario)).toEqual([]);
     expect(getLastHeartbeatEvent()?.status).not.toBe("sent");
   }, options);
