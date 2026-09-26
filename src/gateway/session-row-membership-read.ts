@@ -70,6 +70,17 @@ export function createSessionRowMembershipReadAccess(params: {
       : null;
   };
   return {
+    readMembership(query: records.Lookup) {
+      if (!params.isActive()) {
+        return undefined;
+      }
+      const row = params.lookup(query);
+      if (row && isIncognitoSessionKey(row.key)) {
+        return params.owner().describe(query)?.membership;
+      }
+      const members = row && membership.membership(row.storeTarget.storePath, row.key);
+      return members ? new Set(members) : undefined;
+    },
     readSource(row: records.MaterializedRow) {
       const source = params.stores().get(row.storeTarget.storePath);
       // Incognito rows retain their process-local locator and native lifetime guard.

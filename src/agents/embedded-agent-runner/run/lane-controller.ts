@@ -51,6 +51,13 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   setParams: (params: TParams) => void;
 }) {
   const initialParams = options.getParams();
+  const taskIdentity: CommandQueueEnqueueOptions["taskIdentity"] = {
+    taskKind:
+      initialParams.trigger === "cron" ? "cron" : initialParams.spawnedBy ? "spawn" : "turn",
+    sessionKey: initialParams.sessionKey,
+    runId: initialParams.runId,
+    requesterSessionKey: initialParams.spawnedBy ?? undefined,
+  };
   const sessionLanePolicy = resolveEmbeddedRunSessionLanePolicy(
     initialParams.trigger,
     initialParams.inputProvenance,
@@ -219,6 +226,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     withEmbeddedRunLaneTimeout(
       {
         ...opts,
+        taskIdentity,
         abortSignal,
         // Only the outer session lease may count queued global admission as
         // progress; an admitted global task must still time out when it stalls.

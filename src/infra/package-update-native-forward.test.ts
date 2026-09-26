@@ -410,6 +410,13 @@ it.skipIf(process.platform === "win32")(
           selection: current.selection,
           packageResources: [...custody.packageResources],
           stagingParent: custody.stagingParent(f.state),
+          missingDatabasePath: path.join(
+            f.root,
+            "agents",
+            "missing",
+            "agent",
+            "openclaw-agent.sqlite",
+          ),
         });
         vi.spyOn(prepared, "commitCompletion").mockRejectedValueOnce(
           new Error("simulated death before terminal acknowledgement"),

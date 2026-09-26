@@ -152,7 +152,7 @@ describe("worker placement startup cleanup ownership", () => {
           sessionKey: "agent:main:startup-fenced",
           agentId: "main",
         };
-        placements.claimTurn({
+        await placements.claimTurn({
           ...identity,
           owner: { kind: "local" },
           claimId: "startup-fenced-local-claim",

@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -21,7 +21,7 @@ describe("failed placement Gateway recovery", () => {
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
-  afterEach(() => closeOpenClawStateDatabaseForTest());
+  afterEach(() => closeStateDatabaseForTest());
 
   it.each([false, true])(
     "prepares the Gateway workspace before local admission only for explicit recovery (recover=%s)",
@@ -29,14 +29,14 @@ describe("failed placement Gateway recovery", () => {
       const prepareGatewayMove = vi.fn(async ({ assertCurrent }: { assertCurrent: () => void }) => {
         assertCurrent();
         expect(placementStore.get(REQUEST.sessionId)?.state).toBe("failed");
-        expect(() =>
+        await expect(
           placementStore.claimTurn({
             ...REQUEST,
             owner: { kind: "local" },
             claimId: "premature-local-turn",
             runId: "premature-local-run",
           }),
-        ).toThrow();
+        ).rejects.toThrow();
       });
       const harness = createHarness(database, placementStore, { prepareGatewayMove });
       const requested = placementStore.startDispatch(REQUEST);
@@ -64,13 +64,13 @@ describe("failed placement Gateway recovery", () => {
           }),
         );
       }
-      const localTurn = placementStore.claimTurn({
+      const localTurn = await placementStore.claimTurn({
         ...REQUEST,
         owner: { kind: "local" },
         claimId: "recovered-local-turn",
         runId: "recovered-local-run",
       });
-      placementStore.releaseTurn(localTurn);
+      await placementStore.releaseTurn(localTurn);
       expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     },
   );

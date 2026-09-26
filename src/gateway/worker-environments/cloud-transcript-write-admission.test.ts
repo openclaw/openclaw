@@ -125,7 +125,7 @@ describe("cloud transcript write admission", () => {
           if (!claim) {
             throw new Error("expected current worker claim");
           }
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         } else if (change === "environment") {
           environment.ownerEpoch += 1;
         } else if (change === "missing") {
@@ -177,7 +177,7 @@ describe("cloud transcript write admission", () => {
       if (placement?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const turnClaim = placements.claimTurn({
+      const turnClaim = await placements.claimTurn({
         ...sessionTarget,
         owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
         claimId: "report-claim",

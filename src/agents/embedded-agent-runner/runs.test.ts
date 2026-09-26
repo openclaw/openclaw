@@ -102,6 +102,26 @@ describe("embedded-agent runner run registry", () => {
     expect(abortNormal).not.toHaveBeenCalled();
   });
 
+  it("aborts remaining compacting-mode handles when one compacting probe throws", () => {
+    const abortFaulty = vi.fn();
+    const abortEligible = vi.fn();
+
+    setActiveEmbeddedRun("session-bad-compacting-probe", {
+      ...createEmbeddedRunHandle({ abort: abortFaulty }),
+      isCompacting: () => {
+        throw new Error("compaction probe unavailable");
+      },
+    });
+    setActiveEmbeddedRun(
+      "session-compacting-after-probe-failure",
+      createEmbeddedRunHandle({ isCompacting: true, abort: abortEligible }),
+    );
+
+    expect(() => abortEmbeddedAgentRun(undefined, { mode: "compacting" })).not.toThrow();
+    expect(abortFaulty).not.toHaveBeenCalled();
+    expect(abortEligible).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps queued reply operations out of compact abort checks", () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",

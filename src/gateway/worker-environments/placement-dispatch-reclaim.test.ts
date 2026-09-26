@@ -7,10 +7,10 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   BUNDLE_HASH,
@@ -37,7 +37,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -389,7 +389,7 @@ describe("worker placement dispatch reclaim", () => {
     const harness = createHarness(database, placementStore, { workspacePath });
     const active = await harness.service.dispatch(REQUEST);
 
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -552,8 +552,8 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
-  it("retires only the exact unclaimed safe placement generation", () => {
-    const claim = placementStore.claimTurn({
+  it("retires only the exact unclaimed safe placement generation", async () => {
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       owner: { kind: "local" },
       claimId: "retirement-claim",
@@ -566,7 +566,7 @@ describe("worker placement dispatch reclaim", () => {
         expectedGeneration: 0,
       }),
     ).toThrow("changed before retirement");
-    placementStore.releaseTurn(claim);
+    await placementStore.releaseTurn(claim);
     placementStore.retireSessionPlacement({
       sessionId: REQUEST.sessionId,
       expectedState: "local",
@@ -594,13 +594,13 @@ describe("worker placement dispatch reclaim", () => {
     });
   });
 
-  it("retires a reclaimed placement with its child rows and conflict projection", () => {
+  it("retires a reclaimed placement with its child rows and conflict projection", async () => {
     const harness = createHarness(database, placementStore);
     const active = harness.placements.seedActive(7);
     if (active.state !== "active") {
       throw new Error("expected active worker placement");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       owner: {
         kind: "worker",
@@ -614,7 +614,7 @@ describe("worker placement dispatch reclaim", () => {
       paths: ["conflicted.txt"],
       stagedResultRef: `refs/openclaw/worker-results/${claim.claimId}`,
     });
-    placementStore.releaseTurn(claim);
+    await placementStore.releaseTurn(claim);
 
     const basePack = Buffer.from("retirement workspace base pack");
     placementStore.beginWorkspaceReconciliation(
@@ -665,7 +665,7 @@ describe("worker placement dispatch reclaim", () => {
 
     expect(placementStore.get(active.sessionId)).toBeUndefined();
     expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
-    placementStore.claimTurn({
+    await placementStore.claimTurn({
       ...REQUEST,
       owner: { kind: "local" },
       claimId: "replacement-local-claim",

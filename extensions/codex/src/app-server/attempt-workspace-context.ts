@@ -1,28 +1,19 @@
 /** Workspace snapshots, per-turn workspace context, and memory-tool routing for Codex. */
 import path from "node:path";
 import {
+  buildAgentWorkspaceInstructionSnapshot,
   buildBootstrapContextForFiles,
+  prepareAgentWorkspaceContext,
   embeddedAgentLog,
-  resolveBootstrapFilesForRun,
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-mcp-projection";
-import {
-  buildMemorySystemPromptAddition,
-  prepareMemorySystemPromptAddition,
-} from "openclaw/plugin-sdk/core";
-import { readNonBlankString as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
 export const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
-const CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
-  "identity.md",
-  "soul.md",
-  "user.md",
-]);
 export const CODEX_MEMORY_CONTEXT_BASENAME = "memory.md";
 const CODEX_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
@@ -33,7 +24,9 @@ const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["memory.md", 60],
 ]);
 
-export type CodexBootstrapFile = Awaited<ReturnType<typeof resolveBootstrapFilesForRun>>[number];
+export type CodexBootstrapFile = Awaited<
+  ReturnType<typeof prepareAgentWorkspaceContext>
+>["bootstrapFiles"][number];
 type CodexBootstrapContext = {
   bootstrapFiles: CodexBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
@@ -70,13 +63,7 @@ export async function prepareCodexWorkspaceDeveloperInstructions(params: {
     config: params.config,
     agentId: params.agentId,
   });
-  return (
-    renderCodexWorkspaceDeveloperInstructions({
-      files: selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.workspaceDir),
-      header: "## OpenClaw Agent Workspace Instructions",
-      preamble: "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
-    }) ?? ""
-  );
+  return buildAgentWorkspaceInstructionSnapshot(contextFiles, params.workspaceDir).instructions;
 }
 
 /** Loads and partitions workspace snapshots, turn instructions, and memory references. */
@@ -88,10 +75,18 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   effectiveWorkspace: string;
   sessionKey: string;
   sessionAgentId: string;
-  memoryToolNames: readonly string[];
+  tools: readonly CodexDynamicToolSpec[];
   ringZeroActive: boolean;
   sandboxed?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
+  const availableToolNames = new Set(
+    flattenCodexDynamicToolFunctions(params.tools).map((tool) =>
+      normalizeCodexDynamicToolName(tool.name),
+    ),
+  );
+  const memoryToolNames = Array.from(CODEX_MEMORY_TOOL_NAMES).filter((name) =>
+    availableToolNames.has(name),
+  );
   const executionWorkspace = params.executionWorkspace ?? params.resolvedWorkspace;
   const inheritsAgentWorkspace = executionWorkspace !== params.resolvedWorkspace;
   const injectOpenClawContext = shouldInjectCodexOpenClawPromptContext(params.params);
@@ -109,15 +104,14 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       ? params.resolvedWorkspace
       : params.effectiveWorkspace;
     const memoryToolsAvailable =
-      params.memoryToolNames.length > 0 &&
+      memoryToolNames.length > 0 &&
       canRouteCodexWorkspaceMemoryThroughTools({
         config: params.params.config,
         agentId: params.params.agentId ?? params.sessionAgentId,
         workspaceDir: inheritsAgentWorkspace ? params.resolvedWorkspace : params.effectiveWorkspace,
       });
-    // Native Codex turns should read workspace MEMORY.md through tools when
-    // possible; pasting it into every prompt turns durable memory into policy.
-    const bootstrapFiles = await resolveBootstrapFilesForRun({
+    const prepared = await prepareAgentWorkspaceContext({
+      scope: "full",
       workspaceDir: params.resolvedWorkspace,
       config: params.params.config,
       sessionKey: params.sessionKey,
@@ -128,55 +122,37 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       warn: (message) => embeddedAgentLog.warn(message),
       contextMode: params.params.bootstrapContextMode,
       runKind: params.params.bootstrapContextRunKind,
+      memoryToolRouted: memoryToolsAvailable,
+      onMemoryPreparationError: (error) =>
+        embeddedAgentLog.warn("failed to prepare codex memory recall instructions", { error }),
+      memoryTools: injectOpenClawContext
+        ? {
+            toolNames: [...availableToolNames],
+            citationsMode: params.params.config?.memory?.citations,
+            sandboxed: params.sandboxed,
+          }
+        : undefined,
+      projectPath: (filePath) =>
+        remapCodexContextFilePath({
+          filePath,
+          sourceWorkspaceDir: params.resolvedWorkspace,
+          targetWorkspaceDir: promptWorkspace,
+        }),
+      nativeProjectDocBasenames: CODEX_NATIVE_PROJECT_DOC_BASENAMES,
+      contextFileOrder: CODEX_BOOTSTRAP_CONTEXT_ORDER,
+      promptMemoryWorkspaceDir: params.effectiveWorkspace,
     });
-    const memoryToolRoutedBootstrapFiles = memoryToolsAvailable
-      ? selectCodexWorkspaceMemoryReferenceFiles({
-          bootstrapFiles,
-          workspaceDir: params.resolvedWorkspace,
-        })
-      : [];
-    const memoryReferenceFiles = memoryToolRoutedBootstrapFiles.map((file) =>
-      remapCodexContextFilePath({
-        file: toCodexEmbeddedContextFile(file),
-        sourceWorkspaceDir: params.resolvedWorkspace,
-        targetWorkspaceDir: promptWorkspace,
-      }),
-    );
-    const contextFiles = buildBootstrapContextForFiles(
-      memoryToolsAvailable
-        ? bootstrapFiles.filter(
-            (file) =>
-              !isCodexWorkspaceRootMemoryBootstrapFile({
-                file,
-                workspaceDir: params.resolvedWorkspace,
-              }),
-          )
-        : bootstrapFiles,
-      {
-        config: params.params.config,
-        agentId: params.params.agentId ?? params.sessionAgentId,
-        warn: (message) => embeddedAgentLog.warn(message),
-      },
-    ).map((file) =>
-      remapCodexContextFilePath({
-        file,
-        sourceWorkspaceDir: params.resolvedWorkspace,
-        targetWorkspaceDir: promptWorkspace,
-      }),
-    );
-    const promptContextFiles = selectCodexWorkspacePromptContextFiles(contextFiles, {
-      excludeMemory: memoryToolsAvailable,
-      memoryWorkspaceDir: params.effectiveWorkspace,
-    });
+    const {
+      bootstrapFiles,
+      contextFiles,
+      promptContextFiles,
+      memoryReferenceFiles,
+      memoryToolRoutedBootstrapFiles,
+    } = prepared;
     const threadDeveloperInstructionFiles = includeAgentWorkspaceInstructions
-      ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.resolvedWorkspace)
+      ? prepared.instructionSnapshot.files
       : [];
-    const turnScopedDeveloperInstructionFiles = injectOpenClawContext
-      ? selectCodexWorkspaceDeveloperInstructionFiles(
-          contextFiles,
-          CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
-        )
-      : [];
+    const turnScopedDeveloperInstructionFiles = injectOpenClawContext ? prepared.personaFiles : [];
     return {
       bootstrapFiles,
       contextFiles,
@@ -186,31 +162,21 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       turnScopedDeveloperInstructionFiles,
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
-      memoryToolNames: [...params.memoryToolNames],
+      memoryToolNames,
       memoryToolRouted: memoryToolsAvailable,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
       // Empty is a captured snapshot too; a missing value still permits first capture.
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
-        ? (params.agentWorkspaceDeveloperInstructions ??
-          renderCodexWorkspaceDeveloperInstructions({
-            files: threadDeveloperInstructionFiles,
-            header: "## OpenClaw Agent Workspace Instructions",
-            preamble: "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
-          }) ??
-          "")
+        ? (params.agentWorkspaceDeveloperInstructions ?? prepared.instructionSnapshot.instructions)
         : undefined,
-      turnScopedDeveloperInstructions: renderCodexWorkspaceCollaborationDeveloperInstructions(
-        turnScopedDeveloperInstructionFiles,
-      ),
+      turnScopedDeveloperInstructions: injectOpenClawContext
+        ? prepared.personaInstructions
+        : undefined,
       memoryCollaborationInstructions: injectOpenClawContext
-        ? await renderCodexWorkspaceMemoryCollaborationInstructions({
+        ? renderCodexWorkspaceMemoryCollaborationInstructions({
             files: memoryReferenceFiles,
-            toolNames: params.memoryToolNames,
-            memoryToolRouted: memoryToolsAvailable,
-            citationsMode: params.params.config?.memory?.citations,
-            agentId: params.params.agentId ?? params.sessionAgentId,
-            agentSessionKey: params.sessionKey,
-            sandboxed: params.sandboxed,
+            toolNames: memoryToolNames,
+            memoryRecallInstructions: prepared.memoryRecallInstructions,
           })
         : undefined,
     };
@@ -256,113 +222,6 @@ function renderCodexWorkspaceBootstrapPromptContext(
   return lines.join("\n").trim();
 }
 
-function selectCodexWorkspacePromptContextFiles(
-  contextFiles: EmbeddedContextFile[],
-  options: { excludeMemory?: boolean; memoryWorkspaceDir?: string } = {},
-): EmbeddedContextFile[] {
-  const excludeMemory = options.excludeMemory ?? true;
-  return contextFiles
-    .filter((file) => {
-      const baseName = getCodexContextFileBasename(file.path);
-      return (
-        baseName &&
-        !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName) &&
-        !CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName) &&
-        (!excludeMemory ||
-          !isCodexWorkspaceRootMemoryContextFile({
-            file,
-            workspaceDir: options.memoryWorkspaceDir,
-          })) &&
-        !isMissingCodexBootstrapContextFile(file)
-      );
-    })
-    .toSorted(compareCodexContextFiles);
-}
-
-function selectCodexWorkspaceAgentProjectInstructionFiles(
-  contextFiles: EmbeddedContextFile[],
-  agentWorkspaceDir: string,
-): EmbeddedContextFile[] {
-  const agentProjectDocPath = path.join(path.resolve(agentWorkspaceDir), "AGENTS.md");
-  return selectCodexWorkspaceDeveloperInstructionFiles(
-    contextFiles,
-    CODEX_NATIVE_PROJECT_DOC_BASENAMES,
-  ).filter((file) => path.resolve(file.path) === agentProjectDocPath);
-}
-
-function selectCodexWorkspaceDeveloperInstructionFiles(
-  contextFiles: EmbeddedContextFile[],
-  basenames: ReadonlySet<string>,
-): EmbeddedContextFile[] {
-  return contextFiles
-    .filter((file) => {
-      const baseName = getCodexContextFileBasename(file.path);
-      return (
-        baseName &&
-        basenames.has(baseName) &&
-        !isMissingCodexBootstrapContextFile(file) &&
-        file.content.trim().length > 0
-      );
-    })
-    .toSorted(compareCodexContextFiles);
-}
-
-function renderCodexWorkspaceCollaborationDeveloperInstructions(
-  files: EmbeddedContextFile[],
-): string | undefined {
-  return renderCodexWorkspaceDeveloperInstructions({
-    files,
-    header: "## OpenClaw Agent Soul",
-    preamble:
-      "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly." +
-      (files.some((file) => file.personalUser === true)
-        ? " The personal users/<profile-id>/USER.md belongs to this session's selected person (assigned human owner, otherwise human creator). It supplements shared USER.md and overrides conflicting shared preferences, not higher-priority rules. Other participants do not change this personal context."
-        : ""),
-    wrapperTag: "AGENT_SOUL",
-  });
-}
-
-function renderCodexWorkspaceDeveloperInstructions(params: {
-  files: EmbeddedContextFile[];
-  header: string;
-  preamble: string;
-  wrapperTag?: string;
-}): string | undefined {
-  const { files, header, preamble, wrapperTag } = params;
-  if (files.length === 0) {
-    return undefined;
-  }
-  const lines = [header, "", preamble, ""];
-  if (wrapperTag) {
-    lines.push(`<${wrapperTag}>`, "");
-  }
-  for (const file of files) {
-    lines.push(`### ${file.path}`, "", file.content, "");
-  }
-  if (wrapperTag) {
-    lines.push(`</${wrapperTag}>`);
-  }
-  return lines.join("\n").trim();
-}
-
-function selectCodexWorkspaceMemoryReferenceFiles(params: {
-  bootstrapFiles: CodexBootstrapFile[];
-  workspaceDir: string;
-}): CodexBootstrapFile[] {
-  return params.bootstrapFiles
-    .filter((file) => {
-      return (
-        isCodexWorkspaceRootMemoryBootstrapFile({
-          file,
-          workspaceDir: params.workspaceDir,
-        }) &&
-        !file.missing &&
-        (file.content ?? "").trim().length > 0
-      );
-    })
-    .toSorted(compareCodexBootstrapFiles);
-}
-
 /**
  * Renders a memory-file reference that points Codex at memory tools instead of
  * embedding MEMORY.md contents.
@@ -389,51 +248,20 @@ function renderCodexWorkspaceMemoryReference(params: {
   return lines.join("\n").trim();
 }
 
-async function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   files: EmbeddedContextFile[];
   toolNames: readonly string[];
-  memoryToolRouted: boolean;
-  citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-}): Promise<string | undefined> {
-  const memoryRecallInstructions = params.memoryToolRouted
-    ? await renderCodexMemoryRecallInstructions(params)
+  memoryRecallInstructions?: string;
+}): string | undefined {
+  const memoryRecallInstructions = params.memoryRecallInstructions
+    ? [params.memoryRecallInstructions, renderCodexMemoryToolSearchBridge(params.toolNames)]
+        .filter(isNonEmptyString)
+        .join("\n")
+        .trim()
     : undefined;
-  const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
-    files: params.files,
-    toolNames: params.toolNames,
-  });
+  const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference(params);
   const sections = [memoryRecallInstructions, memoryReferenceInstructions].filter(isNonEmptyString);
   return sections.length > 0 ? sections.join("\n\n") : undefined;
-}
-
-async function renderCodexMemoryRecallInstructions(params: {
-  toolNames: readonly string[];
-  citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-}): Promise<string | undefined> {
-  const availableTools = new Set(params.toolNames);
-  const memoryPrompt = await prepareMemorySystemPromptAddition({
-    availableTools,
-    citationsMode: params.citationsMode,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-    sandboxed: params.sandboxed,
-  }).catch((error: unknown) => {
-    embeddedAgentLog.warn("failed to prepare codex memory recall instructions", { error });
-    return undefined;
-  });
-  if (!memoryPrompt) {
-    // Memory recall policy belongs to the active memory plugin.
-    // Codex-side fallback text can mask plugin lifecycle bugs or misdescribe third-party memory tools.
-    return undefined;
-  }
-  const toolSearchBridge = renderCodexMemoryToolSearchBridge(params.toolNames);
-  return [memoryPrompt, toolSearchBridge].filter(isNonEmptyString).join("\n").trim();
 }
 
 function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string | undefined {
@@ -445,14 +273,6 @@ function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string
     return undefined;
   }
   return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. When the memory guidance above calls for memory recall, use an already-loaded memory tool directly. If the needed memory tool is deferred and not currently callable, use \`tool_search\` to load it, then call that memory tool.`;
-}
-
-/** Lists available memory tool names understood by Codex workspace memory routing. */
-export function getCodexWorkspaceMemoryToolNames(tools: readonly CodexDynamicToolSpec[]): string[] {
-  const availableToolNames = new Set(
-    flattenCodexDynamicToolFunctions(tools).map((tool) => normalizeCodexDynamicToolName(tool.name)),
-  );
-  return Array.from(CODEX_MEMORY_TOOL_NAMES).filter((name) => availableToolNames.has(name));
 }
 
 function canRouteCodexWorkspaceMemoryThroughTools(params: {
@@ -469,55 +289,6 @@ function canRouteCodexWorkspaceMemoryThroughTools(params: {
   );
 }
 
-function isMissingCodexBootstrapContextFile(file: EmbeddedContextFile): boolean {
-  return file.content.trimStart().startsWith("[MISSING] Expected at:");
-}
-
-function toCodexEmbeddedContextFile(file: CodexBootstrapFile): EmbeddedContextFile {
-  return {
-    path: readNonEmptyString(file.path) ?? readNonEmptyString(file.name) ?? "",
-    content: file.content ?? "",
-    ...(file.personalUser === true ? { personalUser: true } : {}),
-  };
-}
-
-function isCodexWorkspaceRootMemoryBootstrapFile(params: {
-  file: CodexBootstrapFile;
-  workspaceDir: string;
-}): boolean {
-  return isCodexWorkspaceRootMemoryPath({
-    filePath: readNonEmptyString(params.file.path) ?? readNonEmptyString(params.file.name) ?? "",
-    workspaceDir: params.workspaceDir,
-  });
-}
-
-function isCodexWorkspaceRootMemoryContextFile(params: {
-  file: EmbeddedContextFile;
-  workspaceDir?: string;
-}): boolean {
-  if (!params.workspaceDir) {
-    return false;
-  }
-  return isCodexWorkspaceRootMemoryPath({
-    filePath: params.file.path,
-    workspaceDir: params.workspaceDir,
-  });
-}
-
-function isCodexWorkspaceRootMemoryPath(params: {
-  filePath: string;
-  workspaceDir: string;
-}): boolean {
-  const filePath = params.filePath.trim();
-  if (!filePath) {
-    return false;
-  }
-  const absolutePath = path.isAbsolute(filePath)
-    ? path.resolve(filePath)
-    : path.resolve(params.workspaceDir, filePath);
-  return absolutePath === path.join(path.resolve(params.workspaceDir), "MEMORY.md");
-}
-
 function isSameCodexWorkspacePath(left: string, right: string): boolean {
   return path.resolve(left) === path.resolve(right);
 }
@@ -527,11 +298,11 @@ function isSameCodexWorkspacePath(left: string, right: string): boolean {
  * workspace while preserving platform path separators.
  */
 function remapCodexContextFilePath(params: {
-  file: EmbeddedContextFile;
+  filePath: string;
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
-}): EmbeddedContextFile {
-  const relativePath = path.relative(params.sourceWorkspaceDir, params.file.path);
+}): string {
+  const relativePath = path.relative(params.sourceWorkspaceDir, params.filePath);
   if (
     !relativePath ||
     relativePath === ".." ||
@@ -539,43 +310,16 @@ function remapCodexContextFilePath(params: {
     path.isAbsolute(relativePath) ||
     params.sourceWorkspaceDir === params.targetWorkspaceDir
   ) {
-    return params.file;
+    return params.filePath;
   }
   const targetUsesPosixSeparators =
     params.targetWorkspaceDir.includes("/") && !params.targetWorkspaceDir.includes("\\");
   const normalizedRelativePath = targetUsesPosixSeparators
     ? relativePath.replaceAll("\\", "/")
     : relativePath.replaceAll("/", "\\");
-  return {
-    ...params.file,
-    path: targetUsesPosixSeparators
-      ? path.posix.join(params.targetWorkspaceDir, normalizedRelativePath)
-      : path.win32.join(params.targetWorkspaceDir, normalizedRelativePath),
-  };
-}
-
-function compareCodexContextFiles(left: EmbeddedContextFile, right: EmbeddedContextFile): number {
-  const leftPath = normalizeCodexContextFilePath(left.path);
-  const rightPath = normalizeCodexContextFilePath(right.path);
-  const leftBase = getCodexContextFileBasename(left.path);
-  const rightBase = getCodexContextFileBasename(right.path);
-  const leftOrder = CODEX_BOOTSTRAP_CONTEXT_ORDER.get(leftBase) ?? Number.MAX_SAFE_INTEGER;
-  const rightOrder = CODEX_BOOTSTRAP_CONTEXT_ORDER.get(rightBase) ?? Number.MAX_SAFE_INTEGER;
-  if (leftOrder !== rightOrder) {
-    return leftOrder - rightOrder;
-  }
-  if (leftBase !== rightBase) {
-    return leftBase.localeCompare(rightBase);
-  }
-  // Keep USER overlays in loader order: shared defaults precede the current person.
-  return leftBase === "user.md" ? 0 : leftPath.localeCompare(rightPath);
-}
-
-function compareCodexBootstrapFiles(left: CodexBootstrapFile, right: CodexBootstrapFile): number {
-  return compareCodexContextFiles(
-    toCodexEmbeddedContextFile(left),
-    toCodexEmbeddedContextFile(right),
-  );
+  return targetUsesPosixSeparators
+    ? path.posix.join(params.targetWorkspaceDir, normalizedRelativePath)
+    : path.win32.join(params.targetWorkspaceDir, normalizedRelativePath);
 }
 
 export function normalizeCodexContextFilePath(filePath: string): string {

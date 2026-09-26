@@ -1001,7 +1001,6 @@ export function createAgentEventHandler({
     const now = Date.now();
     run.rawBuffer = mergedRawText;
     run.bufferIsCurrent = opts?.isCurrent;
-    run.bufferUpdatedAt = now;
     if (!mergedRawText) {
       broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, "", opts);
       return;

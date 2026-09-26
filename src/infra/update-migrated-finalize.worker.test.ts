@@ -256,7 +256,12 @@ it.each([false, true])(
     };
     const completed = createDeferredCore();
     fixture.close.mockImplementation(async () => completed.resolve());
-    fixture.finish.mockResolvedValue(input.params.result);
+    fixture.finish.mockImplementation(async (_params, options) => {
+      if (restartPending) {
+        options.onGatewayStartAttempted?.();
+      }
+      return input.params.result;
+    });
     fixture.terminal.mockReturnValue({
       runId: "candidate-run",
       status: restartPending ? "running" : "succeeded",
@@ -279,7 +284,7 @@ it.each([false, true])(
           run: { ...input.params.opts.run, executorFence: fixture.fence },
         },
       },
-      { candidateRuntime: true },
+      { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },
     );
     expect(fixture.fence.assertCurrent).toHaveBeenCalled();
     expect(fixture.writeFile).toHaveBeenCalledExactlyOnceWith(
@@ -287,6 +292,7 @@ it.each([false, true])(
       JSON.stringify({
         result: input.params.result,
         exitCode: 0,
+        candidateStartAttempted: restartPending,
         ...(restartPending
           ? { restartRunId: "candidate-run" }
           : { terminalRunId: "candidate-run" }),
@@ -431,13 +437,14 @@ it.each([
       expect.objectContaining({
         opts: expect.objectContaining({ timeout: undefined }),
       }),
-      { candidateRuntime: true },
+      { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },
     );
     expect(fixture.writeFile).toHaveBeenCalledWith(
       input.resultPath,
       JSON.stringify({
         result: input.params.result,
         exitCode: 0,
+        candidateStartAttempted: true,
         restartRunId: "synthetic-run",
         executorDelegation: "pid-start-v1",
       }),
@@ -623,6 +630,7 @@ it.each([
       root: "/synthetic",
       configInputHash: "hash",
       repair: true,
+      databaseGenerations: { "/synthetic/agent.sqlite": null },
     });
     return undefined;
   });
@@ -635,6 +643,11 @@ it.each([
   }
 
   expect(doctor).toHaveBeenCalledOnce();
+  expect(doctor).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.anything(),
+    expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),
+  );
   if (stops) {
     expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ root: "/synthetic", phase: "prepare", shouldRestart: true }),

@@ -38,8 +38,6 @@ import type {
   GatewayConnectionTransport,
   PrepareGatewayAuthenticatedReceive,
 } from "./connection-transport.js";
-import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
-import { broadcastPresenceSnapshot } from "./presence-events.js";
 import { sanitizeWsLogValue, stringMetaValue } from "./ws-connection-diagnostics.js";
 import {
   buildHandshakeAuthLogKey,
@@ -164,7 +162,6 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     logWsControl,
     extraHandlers,
     getMethodRegistry,
-    broadcast,
     buildRequestContext,
   } = params;
   if (connectionWork.isClosing) {
@@ -485,7 +482,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
           reason: "disconnect",
           watchedSessions: undefined,
         });
-        broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+        buildRequestContext().publishPresence();
       }
       if (currentDisconnectedNodeId) {
         removeRemoteNodeInfo(currentDisconnectedNodeId);

@@ -1,24 +1,18 @@
 import path from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
-import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
 import {
   createUpdateDoctorConfigWarningStep,
   type UpdateDoctorConfigChange,
 } from "../../infra/update-doctor-config.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
-import {
-  canResolveRegistryVersionForPackageTarget,
-  verifyPackageUpdateRecovery,
-} from "../../infra/update-global.js";
+import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
-import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
-import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -34,6 +28,11 @@ import {
   resolveGitInstallDir,
   UpdatePreMutationError,
 } from "./shared.js";
+import { validateUpdateCandidateWithProgress } from "./update-command-candidate-validation.js";
+import {
+  captureUpdateDatabases,
+  restoreFailedUpdateDatabases,
+} from "./update-command-database-backup.js";
 import {
   inspectUpdateDatabaseContexts,
   revalidateUpdateDatabaseContexts,
@@ -63,7 +62,10 @@ import {
   type PackageInstallUpdateParams,
 } from "./update-command-package.js";
 import { captureOriginalUpdateRecoveryBaseline } from "./update-command-recovery-baseline.js";
-import { assertUpdateCommandRecovery } from "./update-command-recovery.js";
+import {
+  assertUpdateCommandRecovery,
+  readOriginalUpdateRecovery,
+} from "./update-command-recovery.js";
 import {
   collectServiceInspectionFailureFacts,
   resolveMutableUpdateFailure,
@@ -178,8 +180,23 @@ export async function executeMutableUpdate(
   };
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   let packageTransaction: PackageUpdateTransaction | undefined;
-  const onTransaction = (transaction: PackageUpdateTransaction) => {
+  let databaseCapture: Awaited<ReturnType<typeof captureUpdateDatabases>> | undefined;
+  const onTransaction = async (transaction: PackageUpdateTransaction) => {
     packageTransaction = transaction;
+    if (params.updateInstallKind === "package" && originalRun) {
+      const databaseBackupRoot =
+        transaction.reversePublication === undefined
+          ? transaction.backupRoot
+          : path.dirname(transaction.backupRoot);
+      databaseCapture = await captureUpdateDatabases({
+        // Atomic publication retires its anchor after success. Keep migration
+        // snapshots in a sibling so they remain durable recovery evidence.
+        backupRoot: databaseBackupRoot,
+        execution: params,
+        context: ownedManagedUpdateContext,
+        assertCurrent: assertExecutionCurrent,
+      });
+    }
   };
   let schemaVersions: UpdateStateSchemaVersion[] | undefined;
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
@@ -194,24 +211,25 @@ export async function executeMutableUpdate(
   };
   let candidateFailureReason: string | undefined;
   let doctorConfigWrites = false;
+  let doctorEntered = false;
   const doctorConfigChanges: UpdateDoctorConfigChange[] = [];
   let validatedConfigSnapshot: { config: OpenClawConfig; hash?: string | null } | undefined;
-  const getDoctorContext: PackageInstallUpdateParams["getDoctorContext"] = () =>
-    preparePackageDoctorContext({
+  const getDoctorContext: PackageInstallUpdateParams["getDoctorContext"] = () => {
+    doctorEntered = true;
+    return preparePackageDoctorContext({
       capable: doctorConfigWrites,
       runId: originalRun?.runId,
       executorFence: originalRun?.executorFence,
       requester: requesterAuthority?.requester,
       inputHash: validatedConfigSnapshot?.hash,
       changes: doctorConfigChanges,
+      databaseBackup: databaseCapture?.backup,
       assertCurrent: assertExecutionCurrent,
       assertBoundChildCurrent,
       onStateHandoff,
     });
-  const originalRecovery = () =>
-    params.installKind === "git"
-      ? readCurrentGitUpdateRecovery(params.root, updateStepTimeoutMs)
-      : verifyPackageUpdateRecovery(params.root);
+  };
+  const originalRecovery = () => readOriginalUpdateRecovery(params, updateStepTimeoutMs);
   const gitMutationRoots =
     params.updateInstallKind === "git"
       ? params.switchToGit
@@ -433,25 +451,11 @@ export async function executeMutableUpdate(
       const snapshot =
         validatedConfigSnapshot ??
         (await readUpdateCandidateSource(env, params.legacyConfigPlan, { configValidation }));
-      const validation = await validateUpdateCandidateCanary({
-        root,
-        config: snapshot.config,
-        stateDir: resolveStateDir(env),
-        env,
-        assertCurrent: assertExecutionCurrent,
-        nodeRunner: params.packageUpdateNodeRunner,
-        timeoutMs: params.timeoutMs,
-        onProgress: (step) => {
-          assertExecutionCurrent();
-          if (originalRun) {
-            recordUpdateRunStep(originalRun.runId, step, { env: originalRun.env });
-          }
-          defaultRuntime[opts.json ? "error" : "log"](
-            `${step.step}: ${step.detail ?? step.status}`,
-          );
-        },
-        onStep: (step) => params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 }),
-      });
+      const validation = await validateUpdateCandidateWithProgress(
+        { root, config: snapshot.config, env, assertCurrent: assertExecutionCurrent },
+        params,
+        originalRun,
+      );
       assertExecutionCurrent();
       doctorConfigChanges.push(...(validation.doctorConfigChanges ?? []));
       if (validation.status === "ok") {
@@ -650,7 +654,9 @@ export async function executeMutableUpdate(
             gitContextPrepared = true;
           }
         },
-        onTransaction,
+        onTransaction: (transaction) => {
+          packageTransaction = transaction;
+        },
         onConfigSnapshot,
         getDoctorContext,
         // Foreign inspection metadata cannot authorize backup or Doctor writes.
@@ -700,6 +706,20 @@ export async function executeMutableUpdate(
   if (candidateFailureReason && result.status === "error") {
     result.reason = candidateFailureReason;
   }
+  result.steps = databaseCapture ? [databaseCapture.step, ...result.steps] : result.steps;
+  const doctorSettled = doctorEntered && !hasCommandProcessCleanupError(failure?.cause);
+  if (databaseCapture?.backup && originalRun && result.status === "error" && doctorSettled) {
+    // Execution has not entered finalization or admitted any candidate Gateway.
+    // Restore before schema inspection can hand an incompatible ledger to the candidate.
+    await restoreFailedUpdateDatabases({
+      backup: databaseCapture.backup,
+      result,
+      runId: originalRun.runId,
+      env: ownedManagedUpdateContext?.env ?? originalRun.env,
+      assertCurrent: () => assertExecutionCurrent("restore"),
+      progress: params.progress,
+    });
+  }
   return {
     result,
     failure,
@@ -708,6 +728,7 @@ export async function executeMutableUpdate(
     ownedManagedUpdateContext,
     recoveryEnv,
     packageTransaction,
+    databaseBackup: databaseCapture?.backup,
     schemaVersions,
     candidateSchemaVersions,
     previousSchemaVersions,

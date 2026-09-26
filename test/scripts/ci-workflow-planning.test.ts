@@ -9635,6 +9635,7 @@ describe("ci workflow guards", () => {
       "macos-node",
       "macos-swift",
       "ios-build",
+      "ios-release-e2e",
       "ios-screenshot-shard",
       "ios-screenshot-evidence",
       "android",
@@ -10062,10 +10063,12 @@ describe("ci workflow guards", () => {
     (selected, result, exit) => {
       const workflow = readCiWorkflow();
       const jobs: string[] = workflow.jobs["ci-gate"].needs.slice(2);
+      const qualificationSha = "a".repeat(40);
       const jobResults = renderCiGateEnvironment(
         {
           eventName: selected ? "workflow_dispatch" : "pull_request",
           runnerProfile: "hybrid",
+          sha: qualificationSha,
           additionalNeeds: {
             "check-plan": {
               outputs: {
@@ -10075,11 +10078,15 @@ describe("ci workflow guards", () => {
               },
             },
           },
-          preflightOutputs: Object.fromEntries(
-            Object.keys(workflow.jobs.preflight.outputs)
-              .filter((key) => key.startsWith("run_"))
-              .map((key) => [key, String(selected)]),
-          ),
+          preflightOutputs: {
+            ...Object.fromEntries(
+              Object.keys(workflow.jobs.preflight.outputs)
+                .filter((key) => key.startsWith("run_"))
+                .map((key) => [key, String(selected)]),
+            ),
+            validation_tier: "full",
+            checkout_revision: qualificationSha,
+          },
         },
         Object.fromEntries(jobs.map((job) => [job, result])),
       );

@@ -91,7 +91,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
         throw new Error("expected active placement");
       }
       if (operation === "recovery") {
-        const claim = placements.claimTurn({
+        const claim = await placements.claimTurn({
           ...REQUEST,
           claimId: "pending-claim",
           runId: "pending-run",

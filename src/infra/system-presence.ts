@@ -1,4 +1,4 @@
-// Detects system command availability for setup and diagnostics.
+// Ephemeral connection presence and observed activity, shared by Gateway readers.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import {

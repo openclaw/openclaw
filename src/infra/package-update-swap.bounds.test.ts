@@ -108,7 +108,9 @@ describe("package verification bounds", () => {
         const activated = await swapStagedPackageInstall({
           ...params,
           timeoutMs,
-          onTransaction: (transaction) => transactions.push(transaction),
+          onTransaction: (transaction) => {
+            transactions.push(transaction);
+          },
         });
         expect(activated.status).toBe("committed");
         expect(activated.step.advisory).toBeUndefined();
@@ -288,7 +290,9 @@ describe("package verification bounds", () => {
       const transactions: PackageUpdateTransaction[] = [];
       const result = await swapStagedPackageInstall({
         ...params,
-        onTransaction: (transaction) => transactions.push(transaction),
+        onTransaction: (transaction) => {
+          transactions.push(transaction);
+        },
       });
       expect(result.status).toBe("committed");
       expect(transactions).toHaveLength(1);

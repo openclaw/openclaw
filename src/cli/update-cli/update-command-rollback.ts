@@ -29,8 +29,10 @@ import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
 import { rollbackOriginalUpdateGeneration } from "./update-command-recovery-rollback.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import type {
   RollbackFailedUpdateParams,
   RollbackFailedUpdateResult,
@@ -65,9 +67,8 @@ export async function rollbackFailedUpdate(
   };
   const env = before?.serviceEnv ?? opts.run?.env ?? process.env;
   // beforeActivate captures B, then the activation owner registers this reverse
-  // transaction synchronously before any package/config/state effect. Without
-  // that transaction publication never began, so existing untouched-runtime
-  // recovery remains the only owner. Once registered, never downgrade to it.
+  // transaction before any package/config/state effect. Once publication began,
+  // the sealed generation remains the sole rollback owner.
   if (!opts.recovery && run?.recoveryBaseline && packageTransaction?.reversePublication) {
     return rollbackOriginalUpdateGeneration(params);
   }
@@ -176,6 +177,9 @@ export async function rollbackFailedUpdate(
       const kind = entry.path === sharedPath ? "state" : "agent";
       const supported = params.previousSchemaVersions?.[kind];
       if (supported === undefined || version > supported) {
+        if (params.databaseBackup && run && packageTransaction) {
+          return false;
+        }
         throw new Error(
           `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${version}; retained previous package support is ${supported ?? "unknown"}. Keep the update installed.`,
         );
@@ -274,7 +278,29 @@ export async function rollbackFailedUpdate(
       return failed("rollback-state-unverified");
     }
     if (!(await stateUnchanged())) {
-      return failed("state-migrated-no-rollback");
+      // Compatible databases stay in place: update ledger writes alone must
+      // not force snapshot restoration or prevent package-only rollback.
+      if (!params.databaseBackup || !run || !packageTransaction) {
+        return failed("state-migrated-no-rollback");
+      }
+      let restored: boolean;
+      try {
+        restored = await restoreFailedUpdateDatabases({
+          backup: params.databaseBackup,
+          result,
+          runId: run.runId,
+          env,
+          assertCurrent,
+        });
+      } catch (cause) {
+        // A partial restore must not reopen the ledger through ordinary failure reporting.
+        throw new UpdateCommandPendingRecoveryFailure(result, formatErrorMessage(cause), {
+          cause,
+        });
+      }
+      if (!restored || !(await stateUnchanged())) {
+        return failed("state-migrated-no-rollback");
+      }
     }
     await packageTransaction?.assertRollbackSafe?.();
     assertCurrent();
@@ -456,6 +482,9 @@ export async function rollbackFailedUpdate(
         }
       : stopped;
     failureReason = "service-revalidation-failed";
+    if (stopped.windowsTaskAutoStartRecovery) {
+      params.onGatewayStartAttempted?.();
+    }
     await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
       stopped,
       true,
@@ -508,6 +537,7 @@ export async function rollbackFailedUpdate(
     let verificationFailure: string | undefined;
     let verifiedAtMs: number | undefined;
     const restartOutcome = await maybeRestartService({
+      onGatewayStartAttempted: params.onGatewayStartAttempted,
       shouldRestart: true,
       result,
       opts,
@@ -563,7 +593,10 @@ export async function rollbackFailedUpdate(
       ...(verifiedAtMs === undefined ? {} : { verifiedAtMs }),
     };
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
+    if (
+      error instanceof UpdateCommandPendingRecoveryFailure ||
+      hasCommandProcessCleanupError(error)
+    ) {
       throw error;
     }
     const detail = formatErrorMessage(error);

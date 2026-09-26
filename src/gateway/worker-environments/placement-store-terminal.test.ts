@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
@@ -40,7 +40,7 @@ describe("worker placement terminal persistence", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -92,12 +92,12 @@ describe("worker placement terminal persistence", () => {
     return active;
   }
 
-  function pendingResult(identity = SESSION) {
+  async function pendingResult(identity = SESSION) {
     const active = store.get(identity.sessionId);
     if (active?.state !== "active") {
       throw new Error("expected active placement");
     }
-    const claim = store.claimTurn({
+    const claim = await store.claimTurn({
       ...identity,
       owner: placementTurnOwner(active),
       claimId: `claim-${identity.sessionId}`,
@@ -113,9 +113,9 @@ describe("worker placement terminal persistence", () => {
     return { active, claim, pending };
   }
 
-  it("records a clean terminal timestamp when reclaiming an accepted result", () => {
+  it("records a clean terminal timestamp when reclaiming an accepted result", async () => {
     const active = advanceToActive();
-    const { claim } = pendingResult();
+    const { claim } = await pendingResult();
     store.startWorkspaceResultDrain(claim);
     expect(() => store.completeWorkspaceResultAndReleaseTurn(claim)).toThrow(
       "workspace result was not accepted",
@@ -170,9 +170,9 @@ describe("worker placement terminal persistence", () => {
     });
   });
 
-  it("atomically fails a pending result and preserves its bounded reason across restart", () => {
+  it("atomically fails a pending result and preserves its bounded reason across restart", async () => {
     advanceToActive();
-    const { claim, pending } = pendingResult();
+    const { claim, pending } = await pendingResult();
     const closedClaims: WorkerSessionTurnClaim[] = [];
     const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
       closedClaims.push(closedClaim);
@@ -194,7 +194,7 @@ describe("worker placement terminal persistence", () => {
     expect(closedClaims).toEqual([claim]);
     unregister();
 
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     const reopened = store.get(SESSION.sessionId);
@@ -202,9 +202,9 @@ describe("worker placement terminal persistence", () => {
     expect(reopened?.terminalReason).toBe(failed.terminalReason);
   });
 
-  it("atomically abandons an offline remote-exec result while preserving its exact active owner", () => {
+  it("atomically abandons an offline remote-exec result while preserving its exact active owner", async () => {
     advanceToActive(SESSION, "paired-device-environment", "remote-exec");
-    const { active, claim } = pendingResult();
+    const { active, claim } = await pendingResult();
     const closedClaims: WorkerSessionTurnClaim[] = [];
     const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
       closedClaims.push(closedClaim);
@@ -226,7 +226,7 @@ describe("worker placement terminal persistence", () => {
     expect(store.listPendingWorkspaceResults()).toEqual([]);
     expect(closedClaims).toEqual([claim]);
 
-    const fresh = store.claimTurn({
+    const fresh = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "local",
@@ -248,61 +248,64 @@ describe("worker placement terminal persistence", () => {
     "journaled",
     "stale-claim",
     "other-gateway",
-  ] as const)("does not abandon a %s workspace result after node transport loss", (resultState) => {
-    const executionMode = resultState === "worker-owned" ? "worker-turn" : "remote-exec";
-    advanceToActive(SESSION, "paired-device-environment", executionMode);
-    const { active, claim } = pendingResult();
-    if (resultState === "accepted") {
-      store.acceptWorkspaceResult(claim);
-    } else if (resultState === "staged") {
-      store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/preserved-result");
-    } else if (resultState === "journaled") {
-      const basePack = Buffer.from("pending remote workspace snapshot");
-      store.beginWorkspaceReconciliation(
-        {
-          sessionId: active.sessionId,
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-          placementGeneration: active.generation,
-        },
-        {
-          version: 1,
-          temporaryNonce: "a".repeat(32),
-          baseManifestRef: active.workspaceBaseManifestRef,
-          currentManifestRef: `sha256:${"c".repeat(64)}`,
-          baseEntries: [],
-          appliedEntries: [],
-          baseTree: "f".repeat(40),
-          basePackSha256: createHash("sha256").update(basePack).digest("hex"),
-          basePack,
-        },
-      );
-    }
+  ] as const)(
+    "does not abandon a %s workspace result after node transport loss",
+    async (resultState) => {
+      const executionMode = resultState === "worker-owned" ? "worker-turn" : "remote-exec";
+      advanceToActive(SESSION, "paired-device-environment", executionMode);
+      const { active, claim } = await pendingResult();
+      if (resultState === "accepted") {
+        store.acceptWorkspaceResult(claim);
+      } else if (resultState === "staged") {
+        store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/preserved-result");
+      } else if (resultState === "journaled") {
+        const basePack = Buffer.from("pending remote workspace snapshot");
+        store.beginWorkspaceReconciliation(
+          {
+            sessionId: active.sessionId,
+            environmentId: active.environmentId,
+            ownerEpoch: active.activeOwnerEpoch,
+            placementGeneration: active.generation,
+          },
+          {
+            version: 1,
+            temporaryNonce: "a".repeat(32),
+            baseManifestRef: active.workspaceBaseManifestRef,
+            currentManifestRef: `sha256:${"c".repeat(64)}`,
+            baseEntries: [],
+            appliedEntries: [],
+            baseTree: "f".repeat(40),
+            basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+            basePack,
+          },
+        );
+      }
 
-    const cancellationStore =
-      resultState === "other-gateway"
-        ? createWorkerSessionPlacementStore({ database, now: () => nowMs })
-        : store;
-    const cancellationClaim =
-      resultState === "stale-claim" ? { ...claim, runId: "replacement-run" } : claim;
-    expect(() =>
-      cancellationStore.cancelWorkspaceResultAndReleaseTurn(cancellationClaim, {
-        reason: "node-disconnect",
-      }),
-    ).toThrow("workspace result owner changed before cancellation");
-    expect(store.get(active.sessionId)).toMatchObject({
-      state: "active",
-      generation: active.generation,
-      turnClaim: { claimId: claim.claimId },
-    });
-    expect(store.listPendingWorkspaceResults()).toMatchObject([
-      { sessionId: active.sessionId, claimId: claim.claimId },
-    ]);
-  });
+      const cancellationStore =
+        resultState === "other-gateway"
+          ? createWorkerSessionPlacementStore({ database, now: () => nowMs })
+          : store;
+      const cancellationClaim =
+        resultState === "stale-claim" ? { ...claim, runId: "replacement-run" } : claim;
+      expect(() =>
+        cancellationStore.cancelWorkspaceResultAndReleaseTurn(cancellationClaim, {
+          reason: "node-disconnect",
+        }),
+      ).toThrow("workspace result owner changed before cancellation");
+      expect(store.get(active.sessionId)).toMatchObject({
+        state: "active",
+        generation: active.generation,
+        turnClaim: { claimId: claim.claimId },
+      });
+      expect(store.listPendingWorkspaceResults()).toMatchObject([
+        { sessionId: active.sessionId, claimId: claim.claimId },
+      ]);
+    },
+  );
 
-  it("does not fail a pending result while its session operation is running", () => {
+  it("does not fail a pending result while its session operation is running", async () => {
     advanceToActive();
-    const { claim, pending } = pendingResult();
+    const { claim, pending } = await pendingResult();
     const binding = claim;
     store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
@@ -340,7 +343,7 @@ describe("worker placement terminal persistence", () => {
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
 
-  it("does not leak terminal diagnostics between sessions sharing an environment", () => {
+  it("does not leak terminal diagnostics between sessions sharing an environment", async () => {
     const sharedEnvironmentId = "environment-shared";
     advanceToActive(SESSION, sharedEnvironmentId);
     const otherIdentity = {
@@ -349,7 +352,7 @@ describe("worker placement terminal persistence", () => {
       sessionKey: "agent:main:placement-terminal-other",
     };
     const second = advanceToActive(otherIdentity, sharedEnvironmentId);
-    const { pending } = pendingResult();
+    const { pending } = await pendingResult();
 
     const failed = store.failWorkspaceResultAndReleaseTurn(
       pending,
@@ -368,9 +371,9 @@ describe("worker placement terminal persistence", () => {
     });
   });
 
-  it("rolls back placement failure when pending-result removal aborts", () => {
+  it("rolls back placement failure when pending-result removal aborts", async () => {
     advanceToActive();
-    const { active, claim, pending } = pendingResult();
+    const { active, claim, pending } = await pendingResult();
     database.db.exec(`
       CREATE TRIGGER reject_pending_result_delete
       BEFORE DELETE ON worker_workspace_pending_results

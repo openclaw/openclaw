@@ -106,7 +106,7 @@ export type StagedPackageSwapParams = {
   assertCurrent?: () => void;
   reserveInstallSlot?: (root: string) => void;
   onLiveMutation?: () => void;
-  onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   timeoutMs?: number;
   activation?: PackageActivationOptions;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };

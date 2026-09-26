@@ -451,7 +451,7 @@ export async function swapStagedPackageInstall(
             }
           }
         : rootLink?.verifyRuntime;
-      params.onTransaction(
+      await params.onTransaction(
         withPackageReverseTransaction(
           {
             backupRoot,

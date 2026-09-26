@@ -2953,8 +2953,8 @@ describe("agents.files.list", () => {
     expect(mocks.rootOpen).not.toHaveBeenCalled();
   });
 
-  it("falls back to fixed-path lstat when safe stat is unavailable", async () => {
-    mocks.rootStat.mockRejectedValue(createErrnoError("helper-unavailable"));
+  it("keeps rejected root observations out of file listing metadata", async () => {
+    mocks.rootStat.mockRejectedValue(new FsSafeError("path-mismatch", "workspace changed"));
     mocks.fsLstat.mockImplementation(async (filePath: unknown) => {
       if (filePath === "/workspace/main/AGENTS.md") {
         return makeFileStat({ size: 23, mtimeMs: 6789 });
@@ -2971,10 +2971,9 @@ describe("agents.files.list", () => {
     const file = files.find((entry) => entry.name === "AGENTS.md");
     expectRecordFields(file, {
       name: "AGENTS.md",
-      missing: false,
-      size: 23,
+      missing: true,
     });
-    expect(mocks.rootStat).toHaveBeenCalled();
+    expect(file).not.toHaveProperty("size");
   });
 });
 

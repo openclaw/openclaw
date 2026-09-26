@@ -14,7 +14,7 @@ import {
 } from "./server-chat-state.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
-import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
@@ -43,7 +43,11 @@ export function createGatewayConnectionState(params: {
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>
-      createPresenceRecipientProjection({ cfg: loadRuntimeConfig(), presence }),
+      createPresenceRecipientProjection({
+        cfg: loadRuntimeConfig(),
+        presence,
+        projection: sessionRowProjection,
+      }),
     sessionMessageSubscribers,
     canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) => {
       try {
@@ -128,21 +132,45 @@ export function createGatewayConnectionState(params: {
       }
       const now = Date.now();
       const ancestors = projection.ancestorRows(record);
+      let projectedAgentRuns = projection.state.rowContext.projectedAgentRuns;
+      let registrations: (readonly [string, ChatAbortControllerEntry])[] = [];
+      let projectRun: ReturnType<typeof createVisibleActiveSessionRunProjector> | undefined;
       return (client) => {
         if (!projection.isCurrent(record)) {
           return undefined;
         }
-        const { projectedAgentRuns } = projection.state.rowContext;
+        if (
+          !projectRun ||
+          registrations.length !== chatAbortControllers.size ||
+          // Compare copied fields: registrations can mutate in place between recipients.
+          registrations.some(([runId, previous]) => {
+            const current = chatAbortControllers.get(runId);
+            return (
+              !current ||
+              current.sessionKey !== previous.sessionKey ||
+              current.sessionId !== previous.sessionId ||
+              current.agentId !== previous.agentId ||
+              current.projectSessionActive !== previous.projectSessionActive ||
+              current.controlUiVisible !== previous.controlUiVisible
+            );
+          }) ||
+          projectedAgentRuns !== projection.state.rowContext.projectedAgentRuns
+        ) {
+          registrations = Array.from(chatAbortControllers, ([runId, entry]) => [
+            runId,
+            { ...entry },
+          ]);
+          projectedAgentRuns = projection.state.rowContext.projectedAgentRuns;
+          projectRun = createVisibleActiveSessionRunProjector(
+            { chatAbortControllers: new Map(registrations) },
+            projectedAgentRuns,
+          );
+        }
         const presentation = prepareProjectedSessionPresentation(
           projection,
           client,
           now,
-          (selection) =>
-            resolveVisibleActiveSessionRunState({
-              ...selection,
-              context: { chatAbortControllers },
-              projectedAgentRunIndex: projectedAgentRuns,
-            }),
+          projectRun,
         );
         const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
         const { row } = presentation.snapshot(query, enrichment);

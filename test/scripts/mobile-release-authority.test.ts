@@ -18,6 +18,7 @@ import { applyMobileReleasePlan, planMobileRelease } from "../../scripts/mobile-
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
+import { registerBoundedSignalTests } from "./mobile-release-process.test-support.js";
 
 const REPOSITORY = "openclaw/openclaw";
 const TARGET_REF = "release/2026.9.2-mobile";
@@ -3419,7 +3420,7 @@ fi
           {
             environment?: string;
             if?: unknown;
-            needs?: string;
+            needs?: string | string[];
             "runs-on"?: string;
             steps: Array<{
               "continue-on-error"?: unknown;
@@ -3439,14 +3440,14 @@ fi
       expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
       expect(Object.keys(workflow.jobs)).toEqual(
         platform === "ios"
-          ? ["authorize", "release", "recover-record", "inspect"]
+          ? ["authorize", "qualify", "release", "recover-record", "inspect"]
           : ["authorize", "release", "recover-record"],
       );
       expect(workflow.jobs.authorize?.environment).toBeUndefined();
       expect(workflow.jobs.release?.environment).toBe(environment);
       expect(workflow.jobs["recover-record"]?.environment).toBe(environment);
       const authorityCheckouts = Object.values(workflow.jobs).flatMap((job) =>
-        job.steps.filter(
+        (job.steps ?? []).filter(
           (step) =>
             typeof step.with?.["sparse-checkout"] === "string" &&
             step.with["sparse-checkout"].includes(".github/actions/mobile-release-authority"),
@@ -3468,7 +3469,7 @@ fi
       if (!release) {
         throw new Error(`${file}: missing release job`);
       }
-      expect(release.needs).toBe("authorize");
+      expect(release.needs).toEqual(platform === "ios" ? ["authorize", "qualify"] : "authorize");
       expect(release["runs-on"]).toBe(releaseRunner);
       expect(release.if).toBe(
         "inputs.operation == 'upload-and-record' && needs.authorize.outputs.approved == 'true'",
@@ -3667,7 +3668,7 @@ fi
       }
 
       const secretPlacements = Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
-        job.steps.flatMap((step) => {
+        (job.steps ?? []).flatMap((step) => {
           const serialized = JSON.stringify(step);
           return ["GH_APP_PRIVATE_KEY", "MATCH_PASSWORD"]
             .filter((secret) => serialized.includes(`secrets.${secret}`))
@@ -3852,7 +3853,7 @@ fi
         string,
         {
           environment?: string;
-          steps: Array<{
+          steps?: Array<{
             env?: Record<string, string>;
             name: string;
             run?: string;
@@ -3861,7 +3862,7 @@ fi
       >;
     };
     const placements = Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
-      job.steps.flatMap((step) =>
+      (job.steps ?? []).flatMap((step) =>
         Object.entries(step.env ?? {})
           .filter(([, value]) => value.includes("TESTFLIGHT_INTERNAL_GROUP"))
           .map(([envName, value]) => ({
@@ -3891,7 +3892,7 @@ fi
       },
     ]);
 
-    const uploadStep = workflow.jobs.release?.steps.find((step) =>
+    const uploadStep = workflow.jobs.release?.steps?.find((step) =>
       step.run?.includes("pnpm ios:release:upload"),
     );
     expect(uploadStep?.env).toMatchObject({
@@ -3899,7 +3900,7 @@ fi
       SCAN_DEPLOYMENT_TARGET_VERSION: project.options?.deploymentTarget?.iOS,
     });
     const scanPlacements = Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
-      job.steps.flatMap((step) =>
+      (job.steps ?? []).flatMap((step) =>
         Object.entries(step.env ?? {})
           .filter(([envName]) => envName.startsWith("SCAN_"))
           .map(([envName, value]) => ({ envName, jobName, stepName: step.name, value })),
@@ -4471,6 +4472,8 @@ fi
     expect(unsafeCommandCount).toBe(0);
   });
 
+  registerBoundedSignalTests();
+
   it("bounds owned child process trees", async () => {
     const runnerTemp = tempRoots.make("openclaw-ios-keychain-process-runner-");
     if (process.platform !== "win32") {
@@ -4515,7 +4518,10 @@ try {
 }
 const processIds = fs.readFileSync(${JSON.stringify(pidFile)}, "utf8").trim().split("\\n").map(Number);
 let processGroupAlive = true;
-try { process.kill(-processIds[0], 0); } catch { processGroupAlive = false; }
+try { process.kill(-processIds[0], 0); } catch (error) {
+  if (error?.code !== "ESRCH") throw error;
+  processGroupAlive = false;
+}
 process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message, processGroupAlive, processIds }));
 `;
         const result = spawnSync(

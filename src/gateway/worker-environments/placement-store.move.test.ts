@@ -120,7 +120,7 @@ describe("worker session placement moves", () => {
       sessionId: active.sessionId,
       ownerEpoch: active.activeOwnerEpoch,
     });
-    const workerClaim = store.claimTurn({
+    const workerClaim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",
@@ -245,14 +245,14 @@ describe("worker session placement moves", () => {
     expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
   });
 
-  it("permits draining an active placement with a pending workspace result when abandoning source", () => {
+  it("permits draining an active placement with a pending workspace result when abandoning source", async () => {
     const active = advanceToActive();
     seedAttachedEnvironment({
       environmentId: active.environmentId,
       sessionId: active.sessionId,
       ownerEpoch: active.activeOwnerEpoch,
     });
-    const claim = store.claimTurn({
+    const claim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",

@@ -198,7 +198,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   beforeActivate?: () => Promise<void>;
   assertCurrent?: () => void;
   reserveInstallSlot?: (root: string) => void;
-  onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   activation?: PackageActivationOptions;
   expectedGitCheckout?: GitRuntimeIdentity;
   activateGitRoot?: string;

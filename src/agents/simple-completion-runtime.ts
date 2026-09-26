@@ -470,6 +470,7 @@ async function prepareSimpleCompletionModelCore(
       model: preparedModel,
       cfg: params.cfg,
       auth: { mode: resolvedAuth.mode, authFlow: resolvedAuth.authFlow },
+      agentId: params.agentId,
     }),
     providerRuntimeHandle,
   );

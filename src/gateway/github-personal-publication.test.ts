@@ -12,16 +12,14 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   disconnectUserGitHubConnection,
   readUserGitHubConnection,
   updateUserGitHubConnection,
 } from "../state/user-github-connections.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   readPersonalGitHubPublication,
   requirePersonalGitHubPublicationConfirmation,
@@ -443,7 +441,7 @@ describe("personal publication authority and recovery", () => {
       ),
     ).toThrow("not found");
     const count = commands.length;
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     coordinator = createTestGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
     });
@@ -476,7 +474,7 @@ describe("personal publication authority and recovery", () => {
     async (state) => {
       let selectedAction = action;
       if (state === "turn") {
-        placements.claimTurn({
+        await placements.claimTurn({
           ...action,
           claimId: "busy",
           runId: "busy-run",
@@ -492,7 +490,7 @@ describe("personal publication authority and recovery", () => {
         const active = seedActivePlacement(placements, { environmentId: "remote", ownerEpoch: 1 });
         selectedAction = { ...action, sessionId: active.sessionId, sessionKey: REQUEST.sessionKey };
         if (state === "reconciliation") {
-          const claim = placements.claimTurn({
+          const claim = await placements.claimTurn({
             ...active,
             claimId: "pending",
             runId: "pending-run",
@@ -521,14 +519,14 @@ describe("personal publication authority and recovery", () => {
     const pending = coordinator.requestPersonalForSession(request(), action);
     await Promise.race([entered.promise, pending]);
     try {
-      expect(() =>
+      await expect(
         placements.claimTurn({
           ...action,
           claimId: "later",
           runId: "later-run",
           owner: { kind: "local" },
         }),
-      ).toThrow("being published");
+      ).rejects.toThrow("being published");
       await expect(acquireWorktreeRunLease("worktree-1")).rejects.toThrow("in use");
       await expect(
         coordinator.requestPersonalForSession(
@@ -547,13 +545,13 @@ describe("personal publication authority and recovery", () => {
       release.resolve();
     }
     await expect(pending).resolves.toMatchObject({ status: "published" });
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       ...action,
       claimId: "after",
       runId: "after-run",
       owner: { kind: "local" },
     });
-    placements.releaseTurn(claim);
+    await placements.releaseTurn(claim);
   });
 
   it.each(["socket", "scope", "disconnect", "reconnect", "merge", "session"] as const)(
@@ -688,7 +686,7 @@ describe("personal publication authority and recovery", () => {
       publisher: { source: "personal", ...account },
     });
     const count = commands.length;
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
     coordinator = createTestGitHubPublicationCoordinator({ placements });
     requirePersonalGitHubPublicationConfirmation(placements.workspaceResultInstanceId());

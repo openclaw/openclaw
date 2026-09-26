@@ -115,6 +115,23 @@ Heartbeat-timeout records also capture these facts before termination:
 - `bufferedBytes`: aggregate local WebSocket buffering at the timeout decision,
   not the delivery status of an individual ping.
 
+## Command-lane diagnostics
+
+`[diagnostic] lane wait exceeded` is emitted when a queued task starts after
+waiting at least its warning threshold (normally 2 seconds). `waitedMs` measures
+that wait; `queueAhead` and `activeAhead` describe enqueue-time contention,
+while `activeNow` and `queueBehind` describe the lane when the task starts.
+
+Both this warning and `lane task error` include the enqueue-time `taskKind`,
+`sessionKey`, `runId`, and `requesterSessionKey` when the caller supplies them.
+These are structured log fields and appear on the same console line, allowing
+subagent queue contention to be attributed without a separate registry lookup.
+Embedded runs supply `spawn`, `turn`, or `cron` as the task kind; their session
+key identifies the waiting or failed session, and their requester key is the
+spawning parent when present. Queued manual cron runs supply their accepted run ID.
+Unknown fields are omitted. Identity is diagnostic provenance, not authority,
+and does not change admission, ordering, or warning thresholds.
+
 ## Stability recorder
 
 The Gateway records a bounded, payload-free stability stream by default when

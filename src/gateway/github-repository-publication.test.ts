@@ -641,7 +641,7 @@ describe("repository checkpoint GitHub publication", () => {
       try {
         if (blocker === "pending result") {
           seedPublicationWorker(blocked.placements, "pending-publication-worker", "remote-exec");
-          const pendingClaim = blocked.placements.claimTurn({
+          const pendingClaim = await blocked.placements.claimTurn({
             sessionId: REQUEST.sessionId,
             sessionKey: REQUEST.sessionKey,
             agentId: REQUEST.agentId,
@@ -706,7 +706,7 @@ describe("repository checkpoint GitHub publication", () => {
     async ({ executionMode, publication }) => {
       const f = await repositoryFixture(undefined, REQUEST);
       seedPublicationWorker(f.placements, "in-turn-worker", executionMode);
-      const claim = f.placements.claimTurn({
+      const claim = await f.placements.claimTurn({
         sessionId: REQUEST.sessionId,
         sessionKey: REQUEST.sessionKey,
         agentId: REQUEST.agentId,
@@ -775,7 +775,7 @@ describe("repository checkpoint GitHub publication", () => {
       const f = await repositoryFixture(undefined, REQUEST);
       if (executionMode) {
         seedPublicationWorker(f.placements, "run-scoped-worker", executionMode);
-        f.placements.claimTurn({
+        await f.placements.claimTurn({
           sessionId: REQUEST.sessionId,
           sessionKey: REQUEST.sessionKey,
           agentId: REQUEST.agentId,
@@ -807,7 +807,7 @@ describe("repository checkpoint GitHub publication", () => {
 
   it("does not treat a pure Gateway-local claim as a repository worker owner", async () => {
     const f = await repositoryFixture();
-    const claim = f.placements.claimTurn({
+    const claim = await f.placements.claimTurn({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
@@ -840,13 +840,13 @@ describe("repository checkpoint GitHub publication", () => {
         runId: "owned-run",
         owner: { kind: "local" as const, environmentId: "owned-worker", ownerEpoch: 7 },
       };
-      const claim = f.placements.claimTurn(input);
+      const claim = await f.placements.claimTurn(input);
       if (mismatch === "replaced claim") {
         const prepare = mocks.prepareIdentity.getMockImplementation()!;
         mocks.prepareIdentity.mockImplementationOnce(async (...args) => {
           const identity = await prepare(...args);
-          f.placements.releaseTurn(claim);
-          f.placements.claimTurn({
+          await f.placements.releaseTurn(claim);
+          await f.placements.claimTurn({
             ...input,
             claimId: "replacement-claim",
             runId: "replacement-run",
@@ -904,7 +904,7 @@ describe("repository checkpoint GitHub publication", () => {
           ...step,
         });
       }
-      const claim = f.placements.claimTurn({
+      const claim = await f.placements.claimTurn({
         sessionId: SESSION_ID,
         sessionKey: SESSION_KEY,
         agentId: "main",

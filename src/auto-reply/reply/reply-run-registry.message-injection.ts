@@ -3,6 +3,7 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isEmbeddedRunHandleCompacting } from "../../agents/embedded-agent-runner/runs.probes.js";
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
@@ -189,7 +190,10 @@ export function resolveReplyMessageInjectionRejection(params: {
     return { reason: "injection_unavailable" };
   }
   try {
-    if (!injection.isAvailable()) {
+    if (
+      !injection.isAvailable() ||
+      isEmbeddedRunHandleCompacting(operation.sessionId, backend) !== false
+    ) {
       return { reason: "injection_unavailable" };
     }
   } catch (error) {

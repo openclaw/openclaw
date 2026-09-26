@@ -32,7 +32,7 @@ describe("worker placement restart continuity", () => {
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }
-      const claim = placementStore.claimTurn({
+      const claim = await placementStore.claimTurn({
         ...REQUEST,
         claimId: "surviving-node-claim",
         runId: "surviving-node-run",
@@ -93,7 +93,7 @@ describe("worker placement restart continuity", () => {
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }
-      const claim = placementStore.claimTurn({
+      const claim = await placementStore.claimTurn({
         ...REQUEST,
         claimId: "claim-1",
         runId: "run-1",
@@ -151,7 +151,7 @@ describe("worker placement restart continuity", () => {
         active.activeOwnerEpoch,
       );
       expect(restarted.environments.destroy).not.toHaveBeenCalled();
-      const replacement = restartedStore.claimTurn({
+      const replacement = await restartedStore.claimTurn({
         ...REQUEST,
         claimId: "replacement-claim",
         runId: "replacement-run",

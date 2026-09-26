@@ -408,6 +408,22 @@ describe("detectChangedScope", () => {
     });
   });
 
+  it.each([
+    ["scripts/install-simslim.sh", true],
+    ["scripts/ios-simulator-prepare.sh", true],
+    ["scripts/install-simslim.sh.bak", false],
+    ["scripts/ios-simulator-prepare-extra.sh", false],
+    ["scripts/lib/ios-simulator-prepare.sh", false],
+    ["scripts/unrelated.sh", false],
+  ])("routes only exact simulator helper paths: %s", (helperPath, enabled) => {
+    expect(detectChangedScope([helperPath])).toMatchObject({
+      runIosBuild: enabled,
+      runMacos: false,
+      runAndroid: false,
+    });
+    expect(shouldRunIosScreenshots([helperPath])).toBe(enabled);
+  });
+
   it("enables node lane for non-native non-doc files by fallback", () => {
     expect(detectChangedScope(["README.md"])).toEqual({
       runNode: false,

@@ -2528,6 +2528,9 @@ platform :ios do
 
     selected_devices.each do |device|
       device_udid = device.fetch("udid")
+      unless ENV.fetch("OPENCLAW_CI_SIMSLIM_BINARY", "").empty?
+        sh("/bin/bash", File.expand_path("../../../scripts/ios-simulator-prepare.sh", __dir__), device_udid)
+      end
       sh("xcrun", "simctl", "bootstatus", device_udid, "-b")
       sh("xcrun", "simctl", "status_bar", device_udid, "override", *Shellwords.split(SNAPSHOT_STATUS_BAR_ARGUMENTS))
       begin

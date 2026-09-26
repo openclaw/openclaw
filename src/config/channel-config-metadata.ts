@@ -7,6 +7,7 @@ import {
   SENSITIVE_URL_HINT_TAG,
 } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
@@ -26,8 +27,6 @@ type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
   originRank: number;
 };
-
-type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
 
 export type ChannelDmPolicyMetadata = {
   id: string;

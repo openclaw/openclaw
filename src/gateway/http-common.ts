@@ -68,6 +68,10 @@ export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
 }
 
 export function sendUnauthorized(res: ServerResponse) {
+  if (res.headersSent || res.writableEnded || res.destroyed) {
+    return finishFailedGatewayHttpResponse(res);
+  }
+  res.removeHeader("Set-Cookie");
   sendJson(res, 401, {
     error: { message: "Unauthorized", type: "unauthorized" },
   });

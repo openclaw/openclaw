@@ -1,6 +1,7 @@
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import type { UpdateRunResult } from "../../infra/update-run-result.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -15,6 +16,7 @@ export type RollbackFailedUpdateParams = {
   result: UpdateRunResult;
   previousRoot: string;
   packageTransaction?: PackageUpdateTransaction;
+  databaseBackup?: UpdateDatabaseBackup;
   rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
   schemaVersions?: UpdateStateSchemaVersion[];
   candidateSchemaVersions?: OpenClawSchemaVersions;
@@ -22,6 +24,7 @@ export type RollbackFailedUpdateParams = {
   previousVerified?: boolean;
   originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   allowGatewayRestart?: boolean;
+  onGatewayStartAttempted?: () => void;
   configSnapshot: ConfigFileSnapshot;
   activationConfig?: UpdateConfigSnapshot;
   opts: UpdateCommandOptions;

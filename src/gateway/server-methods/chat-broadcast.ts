@@ -178,7 +178,6 @@ export function broadcastChatDelta(
   const run = params.context.chatRunState.getOrCreate(params.runId);
   run.buffer = text;
   run.bufferIsCurrent = params.isCurrent;
-  run.bufferUpdatedAt = Date.now();
   run.liveTextGroup ??= new AbortController();
   // Command snapshots share the run's bounded queue and retire with its abort owner.
   broadcastChatFrame(

@@ -216,7 +216,7 @@ describe("worker turn launcher failure recovery", () => {
     if (active?.state !== "active") {
       throw new Error("expected active placement");
     }
-    const turnClaim = placements.claimTurn({
+    const turnClaim = await placements.claimTurn({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
@@ -275,7 +275,7 @@ describe("worker turn launcher failure recovery", () => {
     if (active?.state !== "active") {
       throw new Error("expected active placement");
     }
-    const turnClaim = placements.claimTurn({
+    const turnClaim = await placements.claimTurn({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
@@ -323,7 +323,7 @@ describe("worker turn launcher failure recovery", () => {
       if (active?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const turnClaim = placements.claimTurn({
+      const turnClaim = await placements.claimTurn({
         sessionId: active.sessionId,
         sessionKey: active.sessionKey,
         agentId: active.agentId,

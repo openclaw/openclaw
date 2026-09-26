@@ -409,7 +409,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: supported read-only admitted operator scopes for tool presentation.
       // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
       // +5: approved meeting participation contract: four types and one callable (#152327).
-      4577,
+      // +2: shared workspace context preparation and bounded instruction snapshots.
+      4579,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -571,7 +572,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: supported read-only readGatewayToolOperatorScopes callable.
       // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
       // +1: approved runMeetingParticipationWithBrowser callable (#152327).
-      2685,
+      // +2: shared workspace context preparation and bounded instruction snapshots.
+      2687,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

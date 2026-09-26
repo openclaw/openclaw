@@ -38,6 +38,8 @@ export type GatewayServiceManageArgs = {
 };
 
 export type GatewayServiceControlArgs = {
+  /** Retained POSIX recovery observes attempts before a native restart can accept writes. */
+  onRestartAttempted?: () => void;
   /** Correlation only: native stop needs live update authority and transferred helpers also revalidate their lease. */
   updateHandoff?: { root: string; runId: string };
   /** Revalidate captured binding after native lock and config admission, before effects. */

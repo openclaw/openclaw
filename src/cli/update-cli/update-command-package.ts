@@ -14,6 +14,7 @@ import {
   markPackagePostInstallDoctorAdvisory,
 } from "../../infra/package-update-verification-step.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
   formatUpdateDoctorConfigWriteRefusal,
   getUpdateDoctorConfigFailureReason,
@@ -65,6 +66,7 @@ import {
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
+import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 import { withUpdateDoctorChild } from "./update-command-doctor-child.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 export async function readPackageUpdateIdentity(root: string) {
@@ -92,6 +94,7 @@ type PackageDoctorOptions = {
         requester?: Readonly<UpdateRequester>;
         inputHash: string;
         changes: UpdateDoctorConfigChange[];
+        databaseBackup?: UpdateDatabaseBackup;
         assertCurrent: () => void;
         assertBoundChildCurrent: () => void;
         onStateHandoff?: () => void;
@@ -106,6 +109,7 @@ export function preparePackageDoctorContext(params: {
   requester?: Readonly<UpdateRequester>;
   inputHash?: string | null;
   changes: UpdateDoctorConfigChange[];
+  databaseBackup?: UpdateDatabaseBackup;
   assertCurrent: () => void;
   assertBoundChildCurrent: () => void;
   onStateHandoff?: () => void;
@@ -123,6 +127,7 @@ export function preparePackageDoctorContext(params: {
     requester: params.requester,
     inputHash: params.inputHash ?? hashConfigRaw(null),
     changes: params.changes,
+    databaseBackup: params.databaseBackup,
     assertCurrent: params.assertCurrent,
     assertBoundChildCurrent: params.assertBoundChildCurrent,
     onStateHandoff: params.onStateHandoff,
@@ -179,6 +184,16 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     failure?: { error: unknown },
   ) => {
     let completionFailure = failure;
+    if (context?.databaseBackup) {
+      const receipt = recordUpdateDatabaseWrites(
+        context.databaseBackup,
+        doctorResult?.databaseWrites,
+        doctorStep,
+      );
+      if (receipt) {
+        params.progress?.onStepComplete?.({ ...receipt, index: 0, total: 0 });
+      }
+    }
     try {
       const refusal = doctorResult?.configWriteRefusal;
       const configWriteRefusal = refusal
@@ -272,6 +287,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         termination: doctorStep.termination,
         advisory: doctorStep.advisory,
         warnings: doctorStep.warnings,
+        diagnostics: doctorStep.diagnostics,
         failureFacts: doctorStep.failureFacts,
         doctorLintFindings: doctorStep.doctorLintFindings,
         configChanges: doctorStep.configChanges,
@@ -323,7 +339,11 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
             {
               root: params.root,
               context: { ...context, assertRequesterCurrent: context.assertBoundChildCurrent },
-              input: { configInputHash: context.inputHash, repair: doctorPolicy.fix },
+              input: {
+                configInputHash: context.inputHash,
+                repair: doctorPolicy.fix,
+                databaseGenerations: context.databaseBackup?.sourceGenerations,
+              },
             },
             runDoctor,
           )
@@ -428,7 +448,7 @@ export type PackageInstallUpdateParams = {
   beforeActivate: () => Promise<void>;
   assertCurrent?: () => void;
   reserveInstallSlot?: (root: string) => void;
-  onTransaction: (transaction: PackageUpdateTransaction) => void;
+  onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
   getDoctorContext?: PackageDoctorOptions["getDoctorContext"];
   activation?: PackageActivationOptions;

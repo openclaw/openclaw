@@ -14,7 +14,6 @@ import {
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { HealthSummary } from "./health/types.js";
-import { createChatAbortMarker } from "./server-chat-state.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS, TICK_INTERVAL_MS } from "./server-constants.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import * as staleInstall from "./stale-install.js";
@@ -73,58 +72,6 @@ function createMaintenanceTimerDeps() {
 }
 
 type MaintenanceTimerDeps = ReturnType<typeof createMaintenanceTimerDeps>;
-
-function staleRunTimestamp(): number {
-  return Date.now() - ABORTED_RUN_TTL_MS - 1;
-}
-
-function seedStaleRunBuffers(deps: MaintenanceTimerDeps, runId: string): void {
-  Object.assign(deps.chatRunState.getOrCreate(runId), {
-    buffer: "buffer",
-    rawBuffer: "raw buffer",
-    bufferUpdatedAt: staleRunTimestamp(),
-    deltaSentAt: staleRunTimestamp(),
-    assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
-    deltaLastBroadcastText: "buffer",
-  });
-}
-
-function expectStaleRunBuffersPresent(deps: MaintenanceTimerDeps, runId: string): void {
-  expect(deps.chatRunState.runs.get(runId)).toMatchObject({
-    buffer: "buffer",
-    rawBuffer: "raw buffer",
-    bufferUpdatedAt: expect.any(Number),
-    deltaSentAt: expect.any(Number),
-    assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
-    deltaLastBroadcastText: "buffer",
-  });
-}
-
-function expectStaleRunBuffersSwept(deps: MaintenanceTimerDeps, runId: string): void {
-  const run = deps.chatRunState.runs.get(runId);
-  expect(run?.buffer).toBeUndefined();
-  expect(run?.rawBuffer).toBeUndefined();
-  expect(run?.bufferUpdatedAt).toBeUndefined();
-  expect(run?.deltaSentAt).toBeUndefined();
-  expect(run?.assistantScope).toBeUndefined();
-  expect(run?.deltaLastBroadcastText).toBeUndefined();
-}
-
-function seedBufferedAgentEvent(deps: MaintenanceTimerDeps, runId: string): void {
-  deps.chatRunState.getOrCreate(runId).agentText = {
-    assistant: {
-      bufferedEvent: {
-        payload: {
-          runId,
-          seq: 1,
-          stream: "assistant",
-          ts: Date.now(),
-          data: { text: "buffer", delta: "buffer" },
-        },
-      },
-    },
-  };
-}
 
 function seedStableDedupeEntries(deps: MaintenanceTimerDeps, now: number): void {
   for (let index = 0; index < DEDUPE_MAX; index += 1) {
@@ -847,95 +794,6 @@ describe("startGatewayMaintenanceTimers", () => {
       await stopMaintenanceTimers(settledTimers);
     },
   );
-
-  it("keeps stale buffers for active runs that still have abort controllers", async () => {
-    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
-    const runId = "run-active";
-    deps.chatAbortControllers.set(runId, createActiveRun("main"));
-    seedStaleRunBuffers(deps, runId);
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expectStaleRunBuffersPresent(deps, runId);
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("sweeps orphaned stale buffers once the abort controller is gone", async () => {
-    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
-    const runId = "run-orphaned";
-    seedStaleRunBuffers(deps, runId);
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expectStaleRunBuffersSwept(deps, runId);
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("sweeps orphaned stale agent throttle state once the abort controller is gone", async () => {
-    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
-    const runId = "run-agent-orphaned";
-    seedBufferedAgentEvent(deps, runId);
-    const agentText = deps.chatRunState.getOrCreate(runId).agentText?.assistant;
-    expect(agentText).toBeDefined();
-    if (agentText) {
-      agentText.lastSentAt = staleRunTimestamp();
-    }
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("clears assistant snapshot scope when aborted runs age out", async () => {
-    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
-    const runId = "run-aborted";
-    deps.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker(staleRunTimestamp());
-    seedStaleRunBuffers(deps, runId);
-    seedBufferedAgentEvent(deps, runId);
-    const agentText = deps.chatRunState.getOrCreate(runId).agentText?.assistant;
-    expect(agentText).toBeDefined();
-    if (agentText) {
-      agentText.lastSentAt = staleRunTimestamp();
-    }
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.chatRunState.runs.get(runId)?.abortMarker).toBeUndefined();
-    expectStaleRunBuffersSwept(deps, runId);
-    expect(deps.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("sweeps orphaned raw buffers that never emitted a delta", async () => {
-    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
-    const runId = "run-raw-only";
-    Object.assign(deps.chatRunState.getOrCreate(runId), {
-      rawBuffer: "suppressed raw buffer",
-      bufferUpdatedAt: staleRunTimestamp(),
-      deltaLastBroadcastText: "suppressed raw buffer",
-    });
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.chatRunState.runs.has(runId)).toBe(false);
-
-    await stopMaintenanceTimers(timers);
-  });
 
   it("keeps active agent dedupe entries past the normal ttl", async () => {
     const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();

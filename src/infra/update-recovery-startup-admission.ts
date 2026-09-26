@@ -108,6 +108,9 @@ export async function admitSelectedRuntimeUpdateRecoveryPublication(
     const results: unknown[] = [];
     for (const database of manifests.prepared.databases ?? []) {
       const entry = manifests.prepared.entries.find((item) => item.sourcePath === database.path);
+      if (entry?.kind === "missing" && entry.sqlite && !entry.directory) {
+        continue;
+      }
       if (entry?.kind !== "file" || !entry.sqlite) {
         throw new Error(`Target preflight lacks a prepared database payload: ${database.path}`);
       }

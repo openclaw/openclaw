@@ -94,6 +94,7 @@ type PendingLiveTextFlush = {
 };
 
 type ChatRunRecord = {
+  lastActivityAt: number;
   registrations?: ChatRunEntry[];
   rawBuffer?: string;
   buffer?: string;
@@ -105,8 +106,6 @@ type ChatRunRecord = {
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
   canvasBlocks?: ChatCanvasBlock[];
-  /** Last time any buffered assistant text changed, including suppressed raw buffers. */
-  bufferUpdatedAt?: number;
   deltaSentAt?: number;
   assistantScope?: AssistantTextSnapshot["scope"];
   managedMediaUrls?: Set<string>;
@@ -131,15 +130,17 @@ function createChatRunRecordStore(): ChatRunRecordStore {
   const getOrCreate = (runId: string) => {
     const existing = runs.get(runId);
     if (existing) {
+      existing.lastActivityAt = Date.now();
       return existing;
     }
-    const record: ChatRunRecord = {};
+    const record: ChatRunRecord = { lastActivityAt: Date.now() };
     runs.set(runId, record);
     return record;
   };
   const releaseIfEmpty = (runId: string) => {
     const record = runs.get(runId);
-    if (!record || Object.keys(record).length > 0) {
+    // Activity metadata alone does not retain a run.
+    if (!record || Object.keys(record).length > 1) {
       return;
     }
     runs.delete(runId);
@@ -204,6 +205,7 @@ export type ChatRunState = {
   runs: Map<string, ChatRunRecord>;
   registry: ChatRunRegistry;
   toolEventRecipients: ToolEventRecipientRegistry;
+  /** Acquire mutable state and record activity; readers use runs.get. */
   getOrCreate: (runId: string) => ChatRunRecord;
   resolveBuffer: (
     runId: string,
@@ -252,7 +254,6 @@ export function createChatRunState(): ChatRunState {
     delete record.planSnapshot;
     delete record.progressSnapshot;
     delete record.canvasBlocks;
-    delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
     delete record.assistantScope;
     delete record.managedMediaUrls;

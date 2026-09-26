@@ -82,6 +82,11 @@ import {
   type EmbeddedRunWaiter,
   type EmbeddedAgentQueueFailureReason,
 } from "./run-state.js";
+import {
+  isEmbeddedRunHandleAbortable,
+  isEmbeddedRunHandleCompacting,
+  isEmbeddedRunHandleSupersedable,
+} from "./runs.probes.js";
 
 export type { EmbeddedAgentQueueHandle, EmbeddedAgentQueueMessageOptions } from "./run-state.js";
 
@@ -485,32 +490,6 @@ function resolveEmbeddedInjection(
   }
 }
 
-function isEmbeddedRunHandleAbortable(
-  sessionId: string,
-  handle: EmbeddedAgentQueueHandle,
-): boolean {
-  try {
-    return handle.isAbortable?.() !== false;
-  } catch (err) {
-    diag.warn(
-      `abort failed: sessionId=${sessionId} reason=abortable_check_failed err=${String(err)}`,
-    );
-    return false;
-  }
-}
-
-function isEmbeddedRunHandleSupersedable(runId: string, handle: EmbeddedAgentQueueHandle): boolean {
-  if (!isEmbeddedRunHandleAbortable(runId, handle)) {
-    return false;
-  }
-  try {
-    return handle.isStopped?.() !== true && handle.isAborted?.() !== true;
-  } catch (err) {
-    diag.warn(`supersede failed: runId=${runId} reason=lifecycle_check_failed err=${String(err)}`);
-    return false;
-  }
-}
-
 export function isEmbeddedAgentRunAbortableForRunId(runId: string): boolean {
   const normalizedRunId = runId.trim();
   if (!normalizedRunId) {
@@ -775,7 +754,8 @@ function prepareEmbeddedAgentQueueMessage(
     diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
     return reject("stale_run");
   }
-  if (handle.isCompacting()) {
+  // An indeterminate compaction probe fails closed: steering is refused, not delivered.
+  if (isEmbeddedRunHandleCompacting(sessionId, handle) !== false) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
     return reject("compacting");
   }
@@ -902,7 +882,11 @@ export function abortEmbeddedAgentRun(
   });
   let aborted = false;
   for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-    if (replyOwnedSessionIds.has(id) || (mode === "compacting" && !handle.isCompacting())) {
+    // An indeterminate compaction probe skips the handle rather than aborting an unknown state.
+    if (
+      replyOwnedSessionIds.has(id) ||
+      (mode === "compacting" && isEmbeddedRunHandleCompacting(id, handle) !== true)
+    ) {
       continue;
     }
     if (!isEmbeddedRunHandleAbortable(id, handle)) {

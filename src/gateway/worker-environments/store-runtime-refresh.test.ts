@@ -321,7 +321,7 @@ describe("worker environment runtime refresh", () => {
 
   it("preserves a recovery-only claim and its pending workspace result", async () => {
     const { environment, placements, placement, input } = await seedRefresh("attached");
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       ...REQUEST,
       claimId: "interrupted-claim",
       runId: "interrupted-run",

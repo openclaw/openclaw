@@ -27,7 +27,10 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
+import {
+  advancePlacementFixtureToActive,
+  createPlacementTurnClaimFixtureOps,
+} from "./placement-test-fixtures.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
 import {
   bindWorkerTurnOwner,
@@ -65,7 +68,7 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
   "retains prepared %s claims across compatible transitions and metadata",
   async (mode) => {
     const active = mode === "local" ? undefined : advanceToActive(mode);
-    const claim = store.claimTurn({
+    const claim = await store.claimTurn({
       ...SESSION,
       claimId: "claim-prepared-continuity",
       runId: "run-prepared-continuity",
@@ -100,7 +103,7 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
 
 it("prepares a persisted failed remote-exec local claim without changing its release contract", async () => {
   const active = advanceToActive("remote-exec");
-  const claim = store.claimTurn({
+  const claim = await store.claimTurn({
     ...SESSION,
     claimId: "claim-failed-remote-exec",
     runId: "run-failed-remote-exec",
@@ -121,7 +124,7 @@ it("prepares a persisted failed remote-exec local claim without changing its rel
     expect(authority.isCurrent()).toBe(true);
     store.fail({ sessionId: claim.sessionId, recoveryError: "cleanup is still pending" });
     expect(authority.isCurrent()).toBe(true);
-    store.releaseTurn(claim);
+    await store.releaseTurn(claim);
     expect(authority.isCurrent()).toBe(false);
   } finally {
     authority.release();
@@ -136,7 +139,7 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
     runId: "run-reused-after-release",
     owner: placementTurnOwner(active),
   };
-  const claim = store.claimTurn(input);
+  const claim = await store.claimTurn(input);
   const instance = createOperationalRunInstanceRef(claim.runId);
   const delegated = claimAgentRunDelegatedAuthority(instance);
   await bindWorkerTurnOwner(store, claim, undefined, instance, sessionTarget, () => {});
@@ -164,7 +167,7 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
     expect(() =>
       runOpenClawStateWriteTransaction(
         () => {
-          store.releaseTurn(claim);
+          createPlacementTurnClaimFixtureOps(database).releaseTurn(claim);
           expect(validate(identity)).toBe(false);
           expect(closed).not.toHaveBeenCalled();
           throw new Error("roll back outer placement transaction");
@@ -178,8 +181,9 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
 
     const replacement = runOpenClawStateWriteTransaction(
       () => {
-        store.releaseTurn(claim);
-        return store.claimTurn(input);
+        const claims = createPlacementTurnClaimFixtureOps(database);
+        claims.releaseTurn(claim);
+        return claims.claimTurn(input);
       },
       { database },
     );
@@ -223,7 +227,7 @@ it("rejects a prepared reader reply after an identical claim was released and re
     runId: "run-delayed-preparation",
     owner: placementTurnOwner(active),
   };
-  const claim = store.claimTurn(input);
+  const claim = await store.claimTurn(input);
   const read = store.readProjection.bind(store);
   const observed = createDeferredCore();
   const resume = createDeferredCore();
@@ -236,8 +240,8 @@ it("rejects a prepared reader reply after an identical claim was released and re
   const preparing = store.prepareTurnClaimAuthority(claim);
   try {
     await observed.promise;
-    store.releaseTurn(claim);
-    const replacement = store.claimTurn(input);
+    await store.releaseTurn(claim);
+    const replacement = await store.claimTurn(input);
     resume.resolve();
     await expect(preparing).rejects.toThrow("turn claim authority changed");
     const current = await store.prepareTurnClaimAuthority(replacement);
@@ -251,7 +255,7 @@ it("rejects a prepared reader reply after an identical claim was released and re
 
 it("does not publish an execution owner when its final authority check fails", async () => {
   const active = advanceToActive();
-  const claim = store.claimTurn({
+  const claim = await store.claimTurn({
     ...SESSION,
     claimId: "claim-failed-binding",
     runId: "run-failed-binding",
@@ -279,7 +283,7 @@ it.each(["preparing", "bound"] as const)(
   "rejects a closed %s claim before consulting its original source",
   async (phase) => {
     const active = advanceToActive();
-    const claim = store.claimTurn({
+    const claim = await store.claimTurn({
       ...SESSION,
       claimId: "claim-source-read-order",
       runId: "run-source-read-order",
@@ -293,7 +297,7 @@ it.each(["preparing", "bound"] as const)(
       phase === "preparing"
         ? vi.spyOn(store, "prepareTurnClaimAuthority").mockImplementationOnce(async (input) => {
             const authority = await prepare(input);
-            store.releaseTurn(claim);
+            await store.releaseTurn(claim);
             return authority;
           })
         : undefined;
@@ -310,7 +314,7 @@ it.each(["preparing", "bound"] as const)(
         await expect(binding).rejects.toThrow("worker turn authority changed");
       } else {
         const { capability, takeFinishingOutcome } = await binding;
-        store.releaseTurn(claim);
+        await store.releaseTurn(claim);
         assertSourceCurrent.mockClear();
         expect(capability.receiptAuthority).toThrow("worker turn authority changed");
         expect(() => takeFinishingOutcome("synthetic-credential")).toThrow(
@@ -327,7 +331,7 @@ it.each(["preparing", "bound"] as const)(
 
 it("retains the original session target while claim authority is prepared", async () => {
   const active = advanceToActive();
-  const claim = store.claimTurn({
+  const claim = await store.claimTurn({
     ...SESSION,
     claimId: "claim-target-snapshot",
     runId: "run-target-snapshot",
@@ -355,7 +359,7 @@ it("retains the original session target while claim authority is prepared", asyn
   } finally {
     await Promise.allSettled([binding]);
     if (store.validateTurnClaim(claim)) {
-      store.releaseTurn(claim);
+      await store.releaseTurn(claim);
     }
     releaseAgentRunDelegatedAuthority(delegated);
   }
@@ -363,7 +367,7 @@ it("retains the original session target while claim authority is prepared", asyn
 
 it("does not adopt a same-claim successor while execution identity preparation returns", async () => {
   const active = advanceToActive();
-  const claim = store.claimTurn({
+  const claim = await store.claimTurn({
     ...SESSION,
     claimId: "claim-owner-replacement",
     runId: "run-owner-replacement",
@@ -416,7 +420,7 @@ it("does not adopt a same-claim successor while execution identity preparation r
   } finally {
     binding.mockRestore();
     if (store.validateTurnClaim(claim)) {
-      store.releaseTurn(claim);
+      await store.releaseTurn(claim);
     }
     admission.close();
   }
@@ -424,7 +428,7 @@ it("does not adopt a same-claim successor while execution identity preparation r
 
 it("does not read the worker source when its claim closes during run admission", async () => {
   const active = advanceToActive();
-  const claim = store.claimTurn({
+  const claim = await store.claimTurn({
     ...SESSION,
     claimId: "claim-admission-source-order",
     runId: "run-admission-source-order",
@@ -438,8 +442,8 @@ it("does not read the worker source when its claim closes during run admission",
       agentId: SESSION.agentId,
       ingress: { kind: "worker", boundary: "test.worker-admission-source", state: "present" },
     },
-    onAdmitted: () => {
-      store.releaseTurn(claim);
+    onAdmitted: async () => {
+      await store.releaseTurn(claim);
     },
   });
   const assertSourceCurrent = vi.fn();
@@ -472,7 +476,7 @@ it("does not read the worker source when its claim closes during run admission",
 
 it("keeps authority revoked when COMMIT succeeds but its outcome is lost", async () => {
   const active = advanceToActive();
-  const claim = store.claimTurn({
+  const claim = await store.claimTurn({
     ...SESSION,
     claimId: "claim-lost-commit",
     runId: "run-lost-commit",
@@ -488,7 +492,7 @@ it("keeps authority revoked when COMMIT succeeds but its outcome is lost", async
     }
   });
   try {
-    expect(() => store.releaseTurn(claim)).toThrow(failure);
+    expect(() => createPlacementTurnClaimFixtureOps(database).releaseTurn(claim)).toThrow(failure);
     expect(authority.isCurrent()).toBe(false);
     const persisted = new DatabaseSync(database.path, { readOnly: true });
     try {
@@ -508,13 +512,13 @@ it("keeps authority revoked when COMMIT succeeds but its outcome is lost", async
 
 it("shares claim revocation across facades while restart clearing leaves worker claims live", async () => {
   const active = advanceToActive();
-  const worker = store.claimTurn({
+  const worker = await store.claimTurn({
     ...SESSION,
     claimId: "claim-shared-facade",
     runId: "run-shared-facade",
     owner: placementTurnOwner(active),
   });
-  const local = store.claimTurn({
+  const local = await store.claimTurn({
     sessionId: "session-local-restart",
     agentId: "main",
     sessionKey: "agent:main:local-restart",
@@ -535,7 +539,7 @@ it("shares claim revocation across facades while restart clearing leaves worker 
     expect(workerAuthority.isCurrent()).toBe(true);
     facade.authorizeWorkerTurnTools(worker, ["sessions_send"]);
     expect(workerAuthority.isCurrent()).toBe(true);
-    facade.releaseTurn(worker);
+    await facade.releaseTurn(worker);
     expect(workerAuthority.isCurrent()).toBe(false);
   } finally {
     workerAuthority.release();
@@ -551,7 +555,7 @@ it("does not adopt an identical claim from a replacement database", async () => 
     runId: "run-replaced-database",
     owner: placementTurnOwner(active),
   };
-  const original = store.claimTurn(input);
+  const original = await store.claimTurn(input);
   const authority = await store.prepareTurnClaimAuthority(original);
   const pathname = database.path;
   await closeStateDatabaseForTest();
@@ -559,7 +563,7 @@ it("does not adopt an identical claim from a replacement database", async () => 
   database = openOpenClawStateDatabase({ path: pathname });
   store = createWorkerSessionPlacementStore({ database });
   const replacementPlacement = advanceToActive();
-  const replacement = store.claimTurn({
+  const replacement = await store.claimTurn({
     ...input,
     owner: placementTurnOwner(replacementPlacement),
   });

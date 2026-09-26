@@ -54,6 +54,7 @@ import {
   attachWorkerTurnExecutionIdentityStore,
   deferWorkerTurnClaimClosed,
 } from "./placement-turn-claim-events.js";
+import { createPlacementTurnClaimWorkerOps } from "./placement-turn-claims-store.js";
 import {
   createPlacementTurnClaimOps,
   registerWorkerTurnClaimClosedHandler,
@@ -128,6 +129,7 @@ export function createWorkerSessionPlacementStore(
   const store = {
     ...createPlacementWorkspaceReservationOps(runtime),
     ...createPlacementTurnClaimOps(runtime),
+    ...createPlacementTurnClaimWorkerOps({ path, now: options.now }),
     ...createPlacementPendingFailureOps(runtime),
     ...createPlacementMoveOps(runtime),
     ...createPlacementWorkspaceJournalOps(runtime),

@@ -246,7 +246,7 @@ describe("worker session placement activation", () => {
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
       };
-      const claim = store.claimTurn({
+      const claim = await store.claimTurn({
         ...SESSION,
         owner:
           executionMode === "worker-turn"
@@ -255,7 +255,7 @@ describe("worker session placement activation", () => {
         claimId: "activation-claim",
         runId: "activation-run",
       });
-      store.releaseTurn(claim);
+      await store.releaseTurn(claim);
       expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
 
       await closeOpenClawStateDatabaseAsync();

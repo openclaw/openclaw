@@ -25,6 +25,7 @@ export async function createUnchangedReversePreparation(params: {
   packageResources: PackageActivationReversePreparation["packageResources"];
   stagingParent: string;
   preparedValue?: string;
+  missingDatabasePath?: string;
 }) {
   const capture = path.join(params.root, "reverse-generations");
   const configPath = path.join(path.dirname(params.state), "openclaw.json");
@@ -57,7 +58,12 @@ export async function createUnchangedReversePreparation(params: {
                 baselineSha256: references[0]!.manifestSha256,
                 candidateSha256: references[1]!.manifestSha256,
               },
-      databases: [{ path: params.state, role: "global" }],
+      databases: [
+        { path: params.state, role: "global" },
+        ...(params.missingDatabasePath
+          ? [{ path: params.missingDatabasePath, role: "agent" as const, agentId: "missing" }]
+          : []),
+      ],
       runId: params.runId,
       installRoot: params.packageRoot,
       stateDir: path.dirname(params.state),
@@ -66,9 +72,15 @@ export async function createUnchangedReversePreparation(params: {
       creator: { host: "reverse-helper-test", pid: process.pid, startIdentity: "1" },
       drivers: [],
       createdAt: new Date().toISOString(),
-      roots: [path.dirname(params.state)],
+      roots: [
+        path.dirname(params.state),
+        ...(params.missingDatabasePath ? [params.missingDatabasePath] : []),
+      ],
       excludedRoots: [],
-      protectedPaths: [`${configPath}.lock`],
+      protectedPaths: [
+        `${configPath}.lock`,
+        ...(params.missingDatabasePath ? [params.missingDatabasePath] : []),
+      ],
       entries: [
         { kind: "directory", sourcePath: path.dirname(params.state), mode: 0o700 },
         { kind: "missing", sourcePath: configPath, sqlite: false, directory: false },
@@ -81,6 +93,16 @@ export async function createUnchangedReversePreparation(params: {
           sha256: createHash("sha256").update(payload).digest("hex"),
           size: payload.length,
         },
+        ...(params.missingDatabasePath
+          ? [
+              {
+                kind: "missing" as const,
+                sourcePath: params.missingDatabasePath,
+                sqlite: true,
+                directory: false,
+              },
+            ]
+          : []),
       ],
     };
     const raw = `${JSON.stringify(manifest)}\n`;
@@ -101,6 +123,9 @@ export async function createUnchangedReversePreparation(params: {
       { sourcePath: path.dirname(params.state), kind: "directory" },
       { sourcePath: configPath, kind: "missing" },
       { sourcePath: params.state, kind: "file", sqlite: true },
+      ...(params.missingDatabasePath
+        ? [{ sourcePath: params.missingDatabasePath, kind: "missing" as const, sqlite: true }]
+        : []),
     ],
     assertCurrent: () => {},
   });

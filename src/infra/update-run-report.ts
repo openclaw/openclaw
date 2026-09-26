@@ -309,6 +309,14 @@ export function renderUpdateRunReport(
     if (step.snapshotCapacity) {
       lines.push(formatUpdateSnapshotCapacity(step.snapshotCapacity));
     }
+    if (
+      step.detail &&
+      (step.step.startsWith("diagnostic:database snapshot") ||
+        step.step.startsWith("diagnostic:database migration writes") ||
+        step.step.startsWith("diagnostic:database rollback"))
+    ) {
+      lines.push(step.detail);
+    }
     if (step.configWriteRefusal) {
       lines.push(formatUpdateDoctorConfigWriteRefusal(step.configWriteRefusal));
     }

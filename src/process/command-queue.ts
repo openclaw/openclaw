@@ -394,6 +394,7 @@ function drainLane(
         diag.warn(
           `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
             `activeAhead=${entry.activeAheadAtEnqueue} activeNow=${activeBeforeStart} queueBehind=${state.queue.length}`,
+          entry.taskIdentity,
         );
       }
       logLaneDequeue(lane, waitedMs, state.queue.length);
@@ -418,8 +419,8 @@ function drainLane(
           const isProbeLane = isQuietProbeLane(lane);
           if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
             diag.error(
-              `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${formatErrorMessage(err)}"`,
-              { errorName: readErrorName(err) || undefined },
+              `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error=${JSON.stringify(formatErrorMessage(err))}`,
+              { errorName: readErrorName(err) || undefined, ...entry.taskIdentity },
             );
           } else if (!isProbeLane) {
             diag.debug(
@@ -591,6 +592,7 @@ export function enqueueCommandInLane<T>(
       warnAfterMs,
       queuedAheadAtEnqueue: 0,
       activeAheadAtEnqueue: 0,
+      taskIdentity: opts?.taskIdentity ? { ...opts.taskIdentity } : undefined,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
       taskTimeoutSubscribe: opts?.taskTimeoutSubscribe,

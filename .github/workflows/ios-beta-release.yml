@@ -93,9 +93,19 @@ jobs:
           actor: ${{ github.actor }}
           triggering-actor: ${{ github.triggering_actor }}
 
+  qualify:
+    needs: authorize
+    if: inputs.operation == 'upload-and-record' && needs.authorize.outputs.approved == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ios-release-e2e.yml
+    with:
+      target_sha: ${{ needs.authorize.outputs.target_sha }}
+      mode: stock
+
   release:
     name: Upload and record iOS beta
-    needs: authorize
+    needs: [authorize, qualify]
     if: inputs.operation == 'upload-and-record' && needs.authorize.outputs.approved == 'true'
     permissions:
       actions: read

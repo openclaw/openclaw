@@ -279,7 +279,7 @@ it.for(cases)(
       offlineDeviceSeeded = true;
       const active = seedActivePlacement(placements, { environmentId, ownerEpoch: 1 });
       const source = { generation: active.generation, environmentId, ownerEpoch: 1 };
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         sessionId,
         sessionKey,
         agentId,

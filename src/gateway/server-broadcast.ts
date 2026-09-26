@@ -171,6 +171,7 @@ type ClientDelivery = {
 
 export function createGatewayBroadcaster(params: {
   clients: GatewayClientRegistry;
+  // Reused arrays are immutable snapshots; the projection still checks each recipient's authority.
   preparePresenceProjection?: (
     presence: SystemPresence[],
   ) => (client: GatewayWsClient) => SystemPresence[];
@@ -300,6 +301,7 @@ export function createGatewayBroadcaster(params: {
         metadataInvalidation !== undefined ||
         isSessionReadInvalidation(event, payload, isTargeted));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
+    let presenceFragments: Map<SystemPresence[], string> | undefined;
     let projectSession: ((client: GatewayWsClient) => unknown) | undefined;
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
@@ -595,10 +597,15 @@ export function createGatewayBroadcaster(params: {
             throw new Error("presence recipient projection unavailable");
           }
           projectPresence ??= params.preparePresenceProjection(presencePayload.presence);
-          payloadFragment = serializeFrameField("payload", {
-            ...presencePayload,
-            presence: projectPresence(c),
-          });
+          // Preserve source reads before checking the recipient's current authority.
+          const projectedPayload = { ...presencePayload, presence: projectPresence(c) };
+          const reusable =
+            Object.keys(projectedPayload).length === 1 && !("toJSON" in projectedPayload);
+          const cached = reusable ? presenceFragments?.get(projectedPayload.presence) : undefined;
+          payloadFragment = cached ?? serializeFrameField("payload", projectedPayload);
+          if (reusable && cached === undefined) {
+            (presenceFragments ??= new Map()).set(projectedPayload.presence, payloadFragment);
+          }
         }
         if (projectSession) {
           const projected = projectSession(c);

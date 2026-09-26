@@ -3,10 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createGatewayPortalService } from "../portals/portal-service.js";
 import * as httpListen from "../server/http-listen.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -50,7 +48,7 @@ describe("worker portal tool execution", () => {
   let root: string;
   let placements: WorkerSessionPlacementStore;
   let identity: WorkerConnectionIdentity;
-  let sourceClaim: ReturnType<WorkerSessionPlacementStore["claimTurn"]>;
+  let sourceClaim: Awaited<ReturnType<WorkerSessionPlacementStore["claimTurn"]>>;
   let sourceEnvironmentEpoch: number;
   let sourceNodeDeviceId: string | null;
   let sourceSshEndpoint: { host: string } | null;
@@ -115,7 +113,7 @@ describe("worker portal tool execution", () => {
       expectedGeneration: placement.generation,
       patch: { activeOwnerEpoch: SOURCE.ownerEpoch },
     });
-    sourceClaim = placements.claimTurn({
+    sourceClaim = await placements.claimTurn({
       sessionId: SOURCE.sessionId,
       agentId: SOURCE.agentId,
       sessionKey: SOURCE.sessionKey,
@@ -192,7 +190,7 @@ describe("worker portal tool execution", () => {
     await Promise.all([...actualServices].map((service) => service.closeAll()));
     actualServices.clear();
     vi.restoreAllMocks();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -312,7 +310,7 @@ describe("worker portal tool execution", () => {
       }),
     ).rejects.toThrow("Worker source environment changed");
 
-    placements.releaseTurn(sourceClaim);
+    await placements.releaseTurn(sourceClaim);
     await expect(
       execute({
         identity,
@@ -347,7 +345,7 @@ describe("worker portal tool execution", () => {
     const { service, httpServers } = useActualPortalService();
     portalOpen.mockImplementationOnce(async (params) => {
       const portal = await service.open(params);
-      placements.releaseTurn(sourceClaim);
+      await placements.releaseTurn(sourceClaim);
       return portal;
     });
 
@@ -392,8 +390,8 @@ describe("worker portal tool execution", () => {
     let successor: ReturnType<typeof execute> | undefined;
     try {
       await bindStarted;
-      placements.releaseTurn(sourceClaim);
-      const nextClaim = placements.claimTurn({
+      await placements.releaseTurn(sourceClaim);
+      const nextClaim = await placements.claimTurn({
         sessionId: SOURCE.sessionId,
         agentId: SOURCE.agentId,
         sessionKey: SOURCE.sessionKey,

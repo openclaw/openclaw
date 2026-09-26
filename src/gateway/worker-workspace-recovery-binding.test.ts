@@ -262,7 +262,7 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
   if (active.state !== "active") {
     throw new Error("Recovery fixture did not activate");
   }
-  const claim = placements.claimTurn({
+  const claim = await placements.claimTurn({
     ...REQUEST,
     claimId: "recovery-binding-claim",
     runId: "recovery-binding-run",

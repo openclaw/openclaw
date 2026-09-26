@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { toTrajectoryToolDefinitions } from "./runtime.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 
 function arrayReturning(value: unknown): unknown[] {
   return Object.defineProperty([], "slice", {
@@ -8,6 +10,39 @@ function arrayReturning(value: unknown): unknown[] {
 }
 
 describe("trajectory tool definition preparation", () => {
+  it("rechecks changed schemas and current secret registrations after repeated projections", () => {
+    const writes: string[] = [];
+    const description = "trajectory-fixture-value";
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "tool-projection",
+      writer: {
+        filePath: "/unused/trajectory.jsonl",
+        write: (line) => writes.push(line),
+        flush: async () => undefined,
+      },
+    });
+    const record = (text: string) =>
+      recorder?.recordEvent("context.compiled", {
+        tools: toTrajectoryToolDefinitions([{ name: "sample", parameters: { description: text } }]),
+      });
+    try {
+      record(description);
+      record(description);
+      registerSecretValueForRedaction(description);
+      record(description);
+      record("Authorization: Bearer synthetic-changed-value");
+
+      expect(writes).toHaveLength(4);
+      expect(writes[0]).toContain(description);
+      expect(writes[1]).toContain(description);
+      expect(writes[2]).not.toContain(description);
+      expect(writes[3]).not.toContain("synthetic-changed-value");
+      expect(JSON.parse(writes[3]!).data.tools[0].parameters.description).toContain("redacted");
+    } finally {
+      resetSecretRedactionRegistryForTest();
+    }
+  });
+
   it("preserves truncation metadata without probing its records as native headers", () => {
     const has = vi.spyOn(Headers.prototype, "has");
     try {
