@@ -22,6 +22,7 @@ import {
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
 import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
 
 /** Source and run facts live only for one history operation, on its admitted database. */
@@ -78,7 +79,7 @@ export function createBoundSessionHistorySubagentProjection(
 }
 
 export function createReadonlySessionHistoryReader(target: PreparedSessionHistoryReadTarget) {
-  const sourceDatabases = target.sourceDatabases;
+  let sourceDatabases = target.sourceDatabases;
   const readSnapshot = <T>(read: (projection: CurrentTranscriptProjection) => T): T => {
     const result = withScopedOpenClawAgentDatabaseReadOnly(
       (database) =>
@@ -123,7 +124,10 @@ export function createReadonlySessionHistoryReader(target: PreparedSessionHistor
     subagentCoordination: createBoundSessionHistorySubagentProjection(
       readSnapshot,
       target.stateDatabase,
-      () => sourceDatabases,
+      () =>
+        (sourceDatabases ??= target.sourceDiscovery
+          ? resolveGatewaySessionStoreReadSources(target.sourceDiscovery).sources
+          : undefined),
     ),
   };
 }

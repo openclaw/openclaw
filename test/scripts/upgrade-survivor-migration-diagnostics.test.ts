@@ -20,9 +20,15 @@ const baselineGatewayLogs = [
   "missing-load-path/baseline-gateway.log",
   "missing-load-path/baseline-gateway-convergence-refusal.log",
 ];
-const baselineCronRunLogs = ["default", "ops"].flatMap((owner) =>
-  ["out", "err"].map((extension) => `legacy-operator-run-survivor-${owner}-owner.${extension}`),
-);
+const cronCliLogs = [
+  ...["default", "ops"].flatMap((owner) =>
+    ["out", "err"].map((extension) => `legacy-operator-run-survivor-${owner}-owner.${extension}`),
+  ),
+  "legacy-operator-post-update-transcript-0.out",
+  "legacy-operator-post-update-transcript-0.err",
+  "legacy-operator-candidate-transcript-1-earlier.out",
+  "legacy-operator-candidate-transcript-1-earlier.err",
+];
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
 function fixture() {
@@ -418,7 +424,7 @@ it("publishes bounded and redacted baseline Gateway, Cron run, and agent-turn fa
   for (const name of baselineGatewayLogs) {
     fs.writeFileSync(path.join(f.artifacts, name), `Baseline startup failed: token=${secret}\n`);
   }
-  for (const name of baselineCronRunLogs) {
+  for (const name of cronCliLogs) {
     fs.writeFileSync(
       path.join(f.artifacts, name),
       `Published Cron run failed: token=${secret}\n` + "Cron run diagnostic line\n".repeat(1000),
@@ -438,7 +444,7 @@ it("publishes bounded and redacted baseline Gateway, Cron run, and agent-turn fa
   for (const name of baselineGatewayLogs) {
     expect(report.logs[name]).toContain("Baseline startup failed");
   }
-  for (const name of baselineCronRunLogs) {
+  for (const name of cronCliLogs) {
     expect(report.logs[name]).toContain("Published Cron run failed");
     expect(Buffer.byteLength(JSON.stringify(report.logs[name]))).toBeLessThanOrEqual(16 * 1024);
     expect(report.omissions[name]).toBe("redacted output truncated at a complete line (16 KiB)");
@@ -801,7 +807,7 @@ it("does not reuse sibling or startup observations when an attempt fails before 
   );
   const logs = [
     ...turnLogs,
-    ...baselineCronRunLogs,
+    ...cronCliLogs,
     ...baselineGatewayLogs,
     "sibling-refusal-update.json",
     "sibling-refusal-status.json",

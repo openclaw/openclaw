@@ -10,12 +10,20 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { cronStoreKey } from "../../cron/store/key.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
+import {
+  forbidMainThreadSql,
+  observeMainThreadSql,
+} from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { cronHandlers } from "./cron.js";
 import { withHistoryState } from "./task-history.test-support.js";
@@ -36,9 +44,14 @@ async function withCronTranscript(
 }
 
 async function setup() {
+  const profile = ensureProfileForEmail("cron-reader@example.test");
   const baseKey = "agent:main:cron:history-job";
   const oldScope = { agentId: "main", sessionKey: baseKey, sessionId: "old-cron" };
-  await upsertSessionEntryCore(oldScope, { sessionId: oldScope.sessionId, updatedAt: 1 });
+  await upsertSessionEntryCore(oldScope, {
+    sessionId: oldScope.sessionId,
+    updatedAt: 1,
+    createdActor: { type: "human", source: "profile", id: profile.id },
+  });
   for (const content of ["Old first", "Old second", "Old last"]) {
     await appendTranscriptMessage(oldScope, { message: { role: "assistant", content } });
   }
@@ -62,7 +75,6 @@ async function setup() {
     sessionId: latest.sessionId,
     updatedAt: 2,
     visibility: "shared",
-    createdActor: { type: "human", source: "profile", id: "another-owner" },
   });
   await appendTranscriptMessage(latest, {
     message: { role: "assistant", content: "Latest run only" },
@@ -144,35 +156,103 @@ async function setup() {
     });
     return { respond, payload: respond.mock.calls[0]?.[1] as CronHistoryResult | undefined };
   };
-  return { cron, storePath, baseKey, alias, oldScope, latest, job, task, context, query };
+  return { cron, storePath, baseKey, alias, oldScope, latest, job, task, context, query, profile };
 }
 
-it("pages the exact archived Cron generation without following its reused alias", async () => {
-  await withCronTranscript(async ({ job, query }) => {
-    const first = await query({ id: job.id, runId: "public-old-run", limit: 2 });
-    expect(first.respond.mock.calls[0]?.[0]).toBe(true);
-    expect(first.payload?.messages).toMatchObject([
-      { content: "Old second" },
-      { content: "Old last" },
-    ]);
-    const next = await query({
-      id: job.id,
-      runAtMs: 10,
-      limit: 2,
-      cursor: expectDefined(first.payload?.nextCursor, "older page cursor"),
+it("pages the exact archived Cron generation for a limited caller without main-thread SQL", async () => {
+  await withCronTranscript(async ({ job, query, cron, storePath, profile }) => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "limited",
+          definitions: {
+            limited: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+          },
+        },
+      },
+    };
+    const context = await createHistoryReadContext({
+      cron,
+      cronStorePath: storePath,
+      getRuntimeConfig: () => cfg,
     });
-    expect(next.payload?.messages).toMatchObject([{ content: "Old first" }]);
-    expect(next.payload?.nextCursor).toBeUndefined();
-    const invalid = await query({
-      id: job.id,
-      runId: "public-old-run",
-      sessionKey: "agent:main:private",
-    });
-    expect(invalid.respond.mock.calls[0]).toMatchObject([
-      false,
-      undefined,
-      { code: "INVALID_REQUEST" },
-    ]);
+    const options = { client: identifiedClient(["operator.read"], profile.id) };
+    prepareGatewayRecipientProfile(options.client);
+    expect(operatorSessionCap(options.client, cfg)).toBe("none");
+    const observation = observeMainThreadSql();
+    const forbidden = forbidMainThreadSql("Cron history performed main-thread SQL");
+    try {
+      const first = await query(
+        { id: job.id, runId: "public-old-run", limit: 2 },
+        options,
+        context,
+      );
+      const failures: string[] = [];
+      for (const call of observation.calls) {
+        for (const result of call.mock.results) {
+          if (result.type === "throw" && result.value instanceof Error) {
+            failures.push(result.value.stack ?? result.value.message);
+          }
+        }
+      }
+      expect(observation.count(), failures.join("\n")).toBe(0);
+      expect(first.respond.mock.calls[0]?.[0], JSON.stringify(first.respond.mock.calls)).toBe(true);
+      expect(first.payload?.messages).toMatchObject([
+        { content: "Old second" },
+        { content: "Old last" },
+      ]);
+      const next = await query(
+        {
+          id: job.id,
+          runAtMs: 10,
+          limit: 2,
+          cursor: expectDefined(first.payload?.nextCursor, "older page cursor"),
+        },
+        options,
+        context,
+      );
+      expect(next.payload?.messages).toMatchObject([{ content: "Old first" }]);
+      expect(next.payload?.nextCursor).toBeUndefined();
+      const invalid = await query(
+        {
+          id: job.id,
+          runId: "public-old-run",
+          sessionKey: "agent:main:private",
+        },
+        options,
+        context,
+      );
+      expect(invalid.respond.mock.calls[0]).toMatchObject([
+        false,
+        undefined,
+        { code: "INVALID_REQUEST" },
+      ]);
+      for (const [method, params, expected] of [
+        ["cron.get", { id: job.id }, { id: job.id }],
+        ["cron.list", { includeDisabled: true }, { jobs: [{ id: job.id }] }],
+        ["cron.runs", { id: job.id }, { entries: [], total: 0 }],
+        ["cron.runs", { scope: "all" }, { entries: [], total: 0 }],
+      ] as const) {
+        const respond = vi.fn<RespondFn>();
+        await expectDefined(
+          cronHandlers[method],
+          method,
+        )({
+          req: { type: "req", id: method, method, params },
+          params,
+          client: options.client,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+        });
+        expect(respond.mock.calls[0]?.[0], method).toBe(true);
+        expect(respond.mock.calls[0]?.[1], method).toMatchObject(expected);
+      }
+      observation.expectIdle();
+    } finally {
+      forbidden.restore();
+      observation.restore();
+    }
   });
 });
 

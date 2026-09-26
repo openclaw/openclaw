@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
@@ -5,6 +6,7 @@ import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHistoryHandler } from "./cron-history.js";
+import { cronHandlers } from "./cron.js";
 import { createCronJob } from "./cron.validation.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
@@ -51,10 +53,23 @@ vi.mock("./chat-history-handler.js", () => ({
     opts.respond(true, { messages: [{ role: "assistant", content: "private" }] });
   },
 }));
+vi.mock("../../cron/delivery-preview.js", () => ({
+  resolveCronDeliveryPreview: async () => ({}),
+  resolveCronDeliveryPreviews: async ({ jobs }: { jobs: unknown[] }) => {
+    expect(jobs).toEqual([]);
+    publication.verified = true;
+    publication.afterVerification();
+    return {};
+  },
+}));
 
-it.each(["client", "grant"] as const)(
-  "rechecks %s authority synchronously after retained-state verification",
-  async (change) => {
+it.each([
+  { method: "cron.history", change: "client" },
+  { method: "cron.history", change: "grant" },
+  { method: "cron.list", change: "off-page grant" },
+] as const)(
+  "$method rechecks $change authority before final publication",
+  async ({ method, change }) => {
     const cron = new CronService({
       storePath: "/synthetic/cron",
       cronEnabled: false,
@@ -70,6 +85,18 @@ it.each(["client", "grant"] as const)(
     });
     vi.spyOn(cron, "readJob").mockResolvedValue(job);
     vi.spyOn(cron, "getJob").mockReturnValue(job);
+    vi.spyOn(cron, "listPage").mockImplementation(async (_options, matchesJob) => {
+      expect(matchesJob?.(job)).toBe(true);
+      return {
+        jobs: [],
+        total: 1,
+        offset: 1,
+        limit: 1,
+        hasMore: false,
+        nextOffset: null,
+        snapshotRevision: "fixture:off-page",
+      };
+    });
     const instance = createOperationalRunInstanceRef("publication-run");
     const claim = { jobId: job.id, expiresAtMs: Date.now() + 60_000 };
     const client: GatewayClient = {
@@ -100,10 +127,14 @@ it.each(["client", "grant"] as const)(
       }
     };
     const respond = vi.fn<RespondFn>();
-    const params = { id: job.id, runId: "public" };
+    const params =
+      method === "cron.history" ? { id: job.id, runId: "public" } : { offset: 1, limit: 1 };
     try {
-      await cronHistoryHandler({
-        req: { type: "req", id: "history", method: "cron.history", params },
+      const invocation = expectDefined(
+        method === "cron.history" ? cronHistoryHandler : cronHandlers[method],
+        "Cron read handler",
+      )({
+        req: { type: "req", id: "history", method, params },
         params,
         client,
         respond,
@@ -115,6 +146,13 @@ it.each(["client", "grant"] as const)(
         isWebchatConnect: () => false,
         hasCurrentClientAuthority: () => current,
       });
+      if (method === "cron.list") {
+        await expect(invocation).rejects.toThrow("Cron list visibility changed");
+        expect(respond).not.toHaveBeenCalled();
+        expect(publication.verified).toBe(true);
+        return;
+      }
+      await invocation;
       expect(publication.verified).toBe(true);
       expect(respond.mock.calls).toHaveLength(1);
       expect(respond.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);

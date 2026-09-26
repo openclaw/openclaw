@@ -245,7 +245,7 @@ function renderTaskObservation(task: TaskSummary, props: BackgroundTasksProps) {
   </div>`;
 }
 
-export function renderTaskTranscript(params: {
+function renderTaskTranscript(params: {
   host: TaskTranscriptHost;
   task: TaskSummary;
   transcriptSessionKey?: string;

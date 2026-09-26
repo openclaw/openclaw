@@ -14,9 +14,13 @@ import { cronStoreKey } from "../../cron/store/key.js";
 import { readCronRunRecords } from "../../cron/store/read-only.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { cronJobMatchesCallerScope, readCronCallerScope } from "./cron-caller-scope.js";
-import { cronJobIsVisible, resolveCronSessionVisibility } from "./cron-visibility.js";
+import { assertCronReadCurrent } from "./cron-job-access.js";
+import {
+  createCronSessionVisibility,
+  cronJobIsVisible,
+  cronJobVisibilityTarget,
+} from "./cron-visibility.js";
 import type { GatewayRequestHandler } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -48,14 +52,11 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
       ),
     );
   const storeKey = cronStoreKey(context.cronStorePath);
+  const sessionVisibility = createCronSessionVisibility(client, () => context.getRuntimeConfig());
   const assertAllowed = (sessionKey?: string, agentId?: string) => {
-    opts.signal?.throwIfAborted();
-    if (opts.hasCurrentClientAuthority?.() === false) {
-      throw new Error("Cron history authority closed");
-    }
-    assertActiveAgentRuntimeAuthority(client, context);
+    assertCronReadCurrent(opts);
     const callerScope = readCronCallerScope(client);
-    const visibility = resolveCronSessionVisibility(client, context.getRuntimeConfig());
+    const visibility = sessionVisibility.resolve();
     const job = context.cron.getJob(params.id);
     const defaultAgentId = context.cron.getDefaultAgentId();
     if (
@@ -72,6 +73,10 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
   };
   try {
     await context.cron.readJob(params.id);
+    assertCronReadCurrent(opts);
+    await sessionVisibility.prepare([
+      cronJobVisibilityTarget(context.cron.getJob(params.id), context.cron.getDefaultAgentId()),
+    ]);
     assertAllowed();
     const select = async () =>
       (await readCronRunRecords(storeKey, params.id)).flatMap((record) => {
@@ -157,6 +162,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
       fail();
       return;
     }
+    await sessionVisibility.prepare([{ sessionKey: physical.sessionKey, agentId }]);
     assertCurrent(physical.sessionKey);
     const { handleChatHistoryRequest } = await import("./chat-history-handler.js");
     assertCurrent(physical.sessionKey);
@@ -210,5 +216,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
     });
   } catch {
     fail();
+  } finally {
+    sessionVisibility.release();
   }
 };
