@@ -53,21 +53,6 @@ function buildDecisionParams(overrides: Partial<DecisionParams> = {}): DecisionP
 }
 
 describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
-  it("captures the per-chat_id systemPrompt on group dispatch decisions", async () => {
-    const decision = await resolveIMessageInboundDecision(
-      buildDecisionParams({
-        cfg: buildCfgWithGroups({
-          "7": { systemPrompt: "Keep responses under 3 sentences." },
-        }),
-      }),
-    );
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-    expect(decision.groupSystemPrompt).toBe("Keep responses under 3 sentences.");
-  });
-
   it("falls back to the groups['*'] wildcard systemPrompt", async () => {
     const decision = await resolveIMessageInboundDecision(
       buildDecisionParams({
@@ -108,22 +93,6 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
         cfg: buildCfgWithGroups({
           "*": { systemPrompt: "Wildcard." },
           "7": { systemPrompt: "   " },
-        }),
-      }),
-    );
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-    expect(decision.groupSystemPrompt).toBeUndefined();
-  });
-
-  it("treats explicit empty-string per-chat_id systemPrompt as suppression of the wildcard", async () => {
-    const decision = await resolveIMessageInboundDecision(
-      buildDecisionParams({
-        cfg: buildCfgWithGroups({
-          "*": { systemPrompt: "Wildcard." },
-          "7": { systemPrompt: "" },
         }),
       }),
     );

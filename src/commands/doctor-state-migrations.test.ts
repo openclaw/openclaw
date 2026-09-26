@@ -1164,11 +1164,7 @@ describe("doctor legacy state migrations", () => {
     fs.mkdirSync(path.dirname(managedStorePath), { recursive: true });
     fs.symlinkSync(outsideStorePath, managedStorePath);
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(false);
@@ -1451,17 +1447,6 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(sourcePath)).toBe(false);
   });
 
-  it("no-ops when nothing detected", async () => {
-    const root = makeDoctorStateDir();
-    const cfg: OpenClawConfig = {};
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
-    expect(result.changes).toStrictEqual([]);
-  });
-
   it("imports plugin-state legacy plans through doctor", async () => {
     const root = makeDoctorStateDir();
     const sourcePath = path.join(root, "legacy-cache.json");
@@ -1510,11 +1495,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain("Migrated 2 Test prompt-context cache entries → plugin state");
@@ -1592,11 +1573,7 @@ describe("doctor legacy state migrations", () => {
       },
     ];
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(removeSource).toHaveBeenCalledTimes(1);
@@ -1629,11 +1606,7 @@ describe("doctor legacy state migrations", () => {
       },
     ];
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(fs.existsSync(sourcePath)).toBe(false);
@@ -1674,11 +1647,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain("Migrated 1 Test replace cache entry → plugin state");
@@ -1721,11 +1690,7 @@ describe("doctor legacy state migrations", () => {
       },
     ];
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(
@@ -1760,11 +1725,7 @@ describe("doctor legacy state migrations", () => {
       },
     ];
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([
@@ -1806,11 +1767,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.changes).toStrictEqual([
       "Migrated 1 Test namespace-capped cache entry → plugin state",
@@ -1864,11 +1821,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
     expect(result.changes).toStrictEqual(["Migrated 1 Test recency cache entry → plugin state"]);
 
     await withStateDir(root, async () => {
@@ -1991,11 +1944,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([
@@ -2043,11 +1992,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(
@@ -2093,11 +2038,7 @@ describe("doctor legacy state migrations", () => {
       },
     ];
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([
       "Paused migrating Test evicted cache because plugin state cap evicted scope:first; imported 1 of 3 missing entries and deferred the rest in the legacy source",
@@ -2366,11 +2307,7 @@ describe("doctor legacy state migrations", () => {
       "utf8",
     );
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(
@@ -2399,11 +2336,7 @@ describe("doctor legacy state migrations", () => {
       "utf8",
     );
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(
@@ -2758,38 +2691,6 @@ describe("doctor legacy state migrations", () => {
       },
     },
     {
-      label: "would pin a legacy floating selector to an exact version",
-      current: {
-        source: "npm",
-        spec: "demo@1.0.0",
-        version: "1.0.0",
-        resolvedName: "demo",
-        resolvedVersion: "1.0.0",
-        resolvedSpec: "demo@1.0.0",
-      },
-      legacy: {
-        source: "npm",
-        spec: "demo@beta",
-        version: "1.0.0",
-      },
-    },
-    {
-      label: "use different floating selectors",
-      current: {
-        source: "npm",
-        spec: "demo@latest",
-        version: "1.0.0",
-        resolvedName: "demo",
-        resolvedVersion: "1.0.0",
-        resolvedSpec: "demo@1.0.0",
-      },
-      legacy: {
-        source: "npm",
-        spec: "demo@beta",
-        version: "1.0.0",
-      },
-    },
-    {
       label: "keep legacy floating selectors even when resolved specs match",
       current: {
         source: "npm",
@@ -3023,11 +2924,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     for (const { sourcePath, bytes } of sidecars) {

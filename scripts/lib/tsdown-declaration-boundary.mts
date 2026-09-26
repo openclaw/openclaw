@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { BuildContext, UserConfig, Rolldown } from "tsdown";
-import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
+import { createDeclarationInputBoundary, resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import type { NativeDeclaration } from "./native-declaration-emitter.mts";
 
 type Plugin = Rolldown.Plugin;
@@ -106,6 +106,9 @@ function prepareDeclarationBoundary({ options }: BuildContext) {
         ...options.dts,
         cwd: boundary.assert(options.dts.cwd ?? options.cwd),
         generator: "tsgo" as const,
+        // The bundler recognizes only stable 7.0 automatically. The compiler
+        // owner selects the checkout's pinned native executable for every build.
+        tsgo: { ...options.dts.tsgo, path: resolveRepoToolBinPath("tsgo", { cwd: boundary.root }) },
       }
     : undefined;
   if (dts) {

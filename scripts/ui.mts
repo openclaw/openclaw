@@ -11,14 +11,12 @@ import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
-import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
 const requireFromUi = createRequire(path.join(uiDir, "package.json"));
 
-const WINDOWS_CMD_EXE_EXTENSIONS = new Set([".cmd", ".bat"]);
 const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
 
 type UiBuildEnvironmentSources = {
@@ -121,48 +119,18 @@ function usage(): void {
   process.stderr.write("Usage: node scripts/ui.js <install|dev|build|test> [...args]\n");
 }
 
-/**
- * Returns whether Windows needs cmd.exe for a command shim.
- */
-export function shouldUseCmdExeForCommand(
-  cmd: string,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  if (platform !== "win32") {
-    return false;
-  }
-  const extension = path.extname(cmd).toLowerCase();
-  return WINDOWS_CMD_EXE_EXTENSIONS.has(extension);
-}
-
-/**
- * Builds the spawn call for a UI command, including Windows cmd.exe wrapping.
- */
-export function resolveSpawnCall(
+function resolveSpawnCall(
   cmd: string,
   args: string[],
   envOverride?: NodeJS.ProcessEnv,
   params: UiSpawnParams = {},
 ): UiSpawnCall {
-  const platform = params.platform ?? process.platform;
   const options: UiSpawnCall["options"] = {
     cwd: params.cwd ?? uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
     shell: false,
   };
-
-  if (shouldUseCmdExeForCommand(cmd, platform)) {
-    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(options.env);
-    return {
-      command: comSpec,
-      args: ["/d", "/s", "/c", buildCmdExeCommandLine(cmd, args)],
-      options: {
-        ...options,
-        windowsVerbatimArguments: true,
-      },
-    };
-  }
 
   return {
     command: cmd,

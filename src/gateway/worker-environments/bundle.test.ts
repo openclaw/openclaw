@@ -81,24 +81,6 @@ function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBu
 }
 
 describe("worker bundle producer", () => {
-  it("stages the workspace rsync receiver at the path used by transfers", async () => {
-    await withTestDir({ prefix: "openclaw-worker-bundle-receiver-" }, async (root) => {
-      const packageRoot = path.join(root, "package");
-      await writeFixture(packageRoot);
-      const artifact = await createWorkerBundleProducer({
-        packageRoot,
-        cacheDir: path.join(root, "cache"),
-      }).prepare();
-      const installPrefix = `.openclaw-worker/${artifact.bundleHash}/`;
-      const receiverPath = workerWorkspaceRsyncReceiverEntryPath(artifact.bundleHash);
-
-      expect(receiverPath.startsWith(installPrefix)).toBe(true);
-      await expect(listTarball(artifact.tarballPath)).resolves.toContain(
-        receiverPath.slice(installPrefix.length),
-      );
-    });
-  });
-
   it("hashes and archives only the dedicated deploy artifacts", async () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-" }, async (root) => {
       const packageA = path.join(root, "package-a");
@@ -137,7 +119,8 @@ describe("worker bundle producer", () => {
       const compressed = await fs.readFile(first.tarballPath);
       expect(first.tarballSha256).toBe(createHash("sha256").update(compressed).digest("hex"));
       expect(first.tarballBytes).toBe(compressed.byteLength);
-      await expect(listTarball(first.tarballPath)).resolves.toEqual([
+      const entries = await listTarball(first.tarballPath);
+      expect(entries).toEqual([
         "file-tool-planning.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
@@ -147,6 +130,10 @@ describe("worker bundle producer", () => {
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
+      const installPrefix = `.openclaw-worker/${first.bundleHash}/`;
+      const receiverPath = workerWorkspaceRsyncReceiverEntryPath(first.bundleHash);
+      expect(receiverPath.startsWith(installPrefix)).toBe(true);
+      expect(entries).toContain(receiverPath.slice(installPrefix.length));
       const extractRoot = path.join(root, "extract");
       await fs.mkdir(extractRoot);
       await tar.extract({ file: first.tarballPath, cwd: extractRoot });

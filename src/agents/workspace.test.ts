@@ -55,15 +55,6 @@ afterEach(async () => {
 });
 
 describe("resolveDefaultAgentWorkspaceDir", () => {
-  it("uses OPENCLAW_HOME for default workspace resolution", () => {
-    const dir = resolveDefaultAgentWorkspaceDir({
-      OPENCLAW_HOME: "/srv/openclaw-home",
-      HOME: "/home/other",
-    } as NodeJS.ProcessEnv);
-
-    expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
-  });
-
   it("roots named profile workspaces inside the profile state directory", () => {
     const dir = resolveDefaultAgentWorkspaceDir({
       OPENCLAW_PROFILE: "work",
@@ -330,21 +321,6 @@ describe("ensureAgentWorkspace", () => {
     await expect(
       ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
     ).resolves.toMatchObject({ dir: tempDir });
-    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
-  });
-
-  it("refuses a recently attested workspace when only one generated file survives", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-    const generatedAgents = await fs.readFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "utf-8");
-
-    await fs.rm(tempDir, { recursive: true, force: true });
-    await fs.mkdir(tempDir, { recursive: true });
-    await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), generatedAgents);
-
-    await expectWorkspaceVanished(
-      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
-    );
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
   });
 

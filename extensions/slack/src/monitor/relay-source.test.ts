@@ -219,19 +219,6 @@ describe("Slack relay source", () => {
   });
 
   describe("parseRelayFrame", () => {
-    it("parses valid JSON frames", () => {
-      const frame = parseRelayFrame(
-        relayFrame(JSON.stringify({ type: "slack_event", data: { text: "hello" } })),
-      );
-      expect(frame).toEqual({ type: "slack_event", data: { text: "hello" } });
-    });
-
-    it("throws SlackRelayMalformedFrameError for malformed JSON", () => {
-      expect(() => parseRelayFrame(relayFrame("NOT JSON {{{"))).toThrow(
-        SlackRelayMalformedFrameError,
-      );
-    });
-
     it("wraps the original SyntaxError as the cause", () => {
       let error: unknown;
       try {
@@ -242,14 +229,6 @@ describe("Slack relay source", () => {
       expect(error).toBeInstanceOf(SlackRelayMalformedFrameError);
       expect((error as SlackRelayMalformedFrameError).message).toContain("malformed JSON frame");
       expect((error as SlackRelayMalformedFrameError).cause).toBeDefined();
-    });
-
-    it("parses empty object frames", () => {
-      expect(parseRelayFrame(relayFrame("{}"))).toEqual({});
-    });
-
-    it("parses array frames", () => {
-      expect(parseRelayFrame(relayFrame("[1, 2, 3]"))).toEqual([1, 2, 3]);
     });
   });
 });

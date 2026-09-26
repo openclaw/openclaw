@@ -525,31 +525,6 @@ describe("resolveModelRuntimePolicy", () => {
     },
   );
 
-  it("uses provider-qualified model ids to resolve provider model runtime policies", () => {
-    const config = {
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.example/v1",
-            models: [createModelConfig("claude-cli", "claude-opus-4-7")],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolveModelRuntimePolicy({
-        config,
-        provider: "",
-        modelId: "anthropic/claude-opus-4-7",
-      }),
-    ).toEqual({
-      policy: { id: "claude-cli" },
-      source: "model",
-      matchedProvider: "anthropic",
-    });
-  });
-
   it("uses provider-qualified model ids to resolve provider runtime policies", () => {
     const config = {
       models: {

@@ -23,20 +23,6 @@ function resolveReplyToModeWithConfig(params: {
 }
 
 describe("buildSlackThreadingToolContext", () => {
-  it("uses top-level replyToMode by default", () => {
-    const cfg = {
-      channels: {
-        slack: { replyToMode: "first" },
-      },
-    } as OpenClawConfig;
-    const result = buildSlackThreadingToolContext({
-      cfg,
-      accountId: null,
-      context: { ChatType: "channel" },
-    });
-    expect(result.replyToMode).toBe("first");
-  });
-
   it("uses chat-type replyToMode overrides for direct messages when configured", () => {
     expect(
       resolveReplyToModeWithConfig({

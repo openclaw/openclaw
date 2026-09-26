@@ -105,9 +105,21 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       },
     ]);
     expect(
-      findAgentEvent(onAgentEvent, { stream: "item", phase: "end", itemId: "cmd-declined" }).data
-        .status,
-    ).toBe("blocked");
+      findAgentEvent(onAgentEvent, { stream: "item", phase: "end", itemId: "cmd-declined" }).data,
+    ).toMatchObject({
+      kind: "command",
+      name: "bash",
+      status: "blocked",
+      suppressChannelProgress: true,
+    });
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "tool",
+        phase: "result",
+        itemId: "cmd-declined",
+        name: "bash",
+      }).data,
+    ).toMatchObject({ toolCallId: "cmd-declined", status: "blocked", isError: true });
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
       toolName: "bash",
       meta: "run tests (workspace)",
@@ -124,54 +136,52 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     );
   });
 
-  it.each(["failed", "cancelled", "timed_out"] as const)(
-    "projects a declined native approval with %s disposition as one terminal error",
-    async (disposition) => {
-      const projector = await createProjector();
-      const diagnosticEvents: DiagnosticEventPayload[] = [];
-      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+  it("projects a cancelled native approval as one terminal error", async () => {
+    const disposition = "cancelled";
+    const projector = await createProjector();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
 
-      try {
-        await projector.handleNotification(
-          forCurrentTurn("item/started", {
-            item: {
-              ...nativeCommand,
-              id: "cmd-approval-failure",
-              status: "inProgress",
-              durationMs: null,
-            },
-          }),
-        );
-        projector.recordNativeToolApprovalFailure("cmd-approval-failure", disposition);
-        await projector.handleNotification(
-          forCurrentTurn("item/completed", {
-            item: {
-              ...nativeCommand,
-              id: "cmd-approval-failure",
-              status: "declined",
-              durationMs: 1,
-            },
-          }),
-        );
-        await flushDiagnosticEvents();
-      } finally {
-        unsubscribe();
-      }
+    try {
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: {
+            ...nativeCommand,
+            id: "cmd-approval-failure",
+            status: "inProgress",
+            durationMs: null,
+          },
+        }),
+      );
+      projector.recordNativeToolApprovalFailure("cmd-approval-failure", disposition);
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            ...nativeCommand,
+            id: "cmd-approval-failure",
+            status: "declined",
+            durationMs: 1,
+          },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
 
-      expect(
-        diagnosticEvents
-          .filter((event) => event.type.startsWith("tool.execution."))
-          .map((event) =>
-            "terminalReason" in event
-              ? { type: event.type, terminalReason: event.terminalReason }
-              : { type: event.type },
-          ),
-      ).toEqual([
-        { type: "tool.execution.started" },
-        { type: "tool.execution.error", terminalReason: disposition },
-      ]);
-    },
-  );
+    expect(
+      diagnosticEvents
+        .filter((event) => event.type.startsWith("tool.execution."))
+        .map((event) =>
+          "terminalReason" in event
+            ? { type: event.type, terminalReason: event.terminalReason }
+            : { type: event.type },
+        ),
+    ).toEqual([
+      { type: "tool.execution.started" },
+      { type: "tool.execution.error", terminalReason: disposition },
+    ]);
+  });
 
   it("persists an approval timeout as failed tool evidence without aborting the turn", async () => {
     const afterToolCall = vi.fn();

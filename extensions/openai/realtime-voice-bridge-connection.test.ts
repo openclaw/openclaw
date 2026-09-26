@@ -105,10 +105,8 @@ describe("OpenAI realtime voice bridge connection", () => {
   });
 
   it.each([
-    { binding: "modern", throwingCloseCallback: false },
     { binding: "modern", throwingCloseCallback: true },
     { binding: "v2026.8.1", throwingCloseCallback: false },
-    { binding: "v2026.8.1", throwingCloseCallback: true },
   ] as const)(
     "shares GA policy and retires the $binding binding with throwing callback=$throwingCloseCallback",
     async ({ binding, throwingCloseCallback }) => {

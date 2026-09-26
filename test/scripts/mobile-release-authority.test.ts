@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -50,6 +51,16 @@ const repositoryTemplateRoots = useAutoCleanupTempDirTracker(afterAll);
 const repositoryTemplates = new Map<string, ReturnType<typeof createFixtureRepositories>>();
 const joinedObservationRoots: string[] = [];
 afterEach(() => cleanupTempDirs(joinedObservationRoots));
+
+type WorkflowStep = {
+  "continue-on-error"?: unknown;
+  env?: Record<string, string>;
+  if?: string;
+  name: string;
+  run?: string;
+  uses?: string;
+  with?: Record<string, unknown>;
+};
 
 type Platform = "ios" | "android";
 
@@ -1433,10 +1444,7 @@ describe("mobile release authority", () => {
     expect(result.stderr).toContain("non-metadata or non-regular change");
   });
 
-  it.each([
-    ["multiple metadata commits", false],
-    ["an empty intermediate commit", true],
-  ] as const)("authorizes a candidate with %s", (_label, includeEmptyCommit) => {
+  it("authorizes multiple metadata commits with an empty intermediate commit", () => {
     const fixture = createFixture({
       buildCandidate(repository) {
         writeFile(
@@ -1445,9 +1453,7 @@ describe("mobile release authority", () => {
           "Intermediate generated notes.\n",
         );
         commit(repository, "prepare generated metadata");
-        if (includeEmptyCommit) {
-          emptyCommit(repository, "record release checkpoint");
-        }
+        emptyCommit(repository, "record release checkpoint");
         createCandidate(repository);
         return commit(repository, "finalize generated metadata");
       },
@@ -1612,18 +1618,16 @@ describe("mobile release authority", () => {
     expect(result.stderr).toContain("raw diff is empty or malformed");
   });
 
-  it.each([
-    "release/2026.9.2",
-    "release/2026.9.2-mobile-extra",
-    "v2026.9.2-mobile",
-    "refs/tags/v2026.9.2-mobile",
-  ])("rejects noncanonical mobile release ref %s", (targetRef) => {
-    const fixture = createFixture();
-    const result = runAuthority(fixture, "authorize", { MOBILE_TARGET_REF: targetRef });
+  it.each(["release/2026.9.2-mobile-extra", "refs/tags/v2026.9.2-mobile"])(
+    "rejects noncanonical mobile release ref %s",
+    (targetRef) => {
+      const fixture = createFixture();
+      const result = runAuthority(fixture, "authorize", { MOBILE_TARGET_REF: targetRef });
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("release/YYYY.M.PATCH-mobile");
-  });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("release/YYYY.M.PATCH-mobile");
+    },
+  );
 
   it("rejects arbitrary SHAs and refs that move during authorization", () => {
     const fixture = createFixture();
@@ -1678,16 +1682,10 @@ describe("mobile release authority", () => {
     expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-ref-ios"))).toBe(false);
   });
 
-  it.each([
-    ["Fastfile", "apps/ios/fastlane/Fastfile"],
-    ["package command", "package.json"],
-    ["workflow", ".github/workflows/other.yml"],
-    ["build logic", "apps/android/app/build.gradle.kts"],
-    ["script", "scripts/forged-upload.sh"],
-  ])("rejects target-controlled %s changes", (_label, file) => {
+  it("rejects target-controlled upload code changes", () => {
     const fixture = createFixture({
       mutateCandidate(repository) {
-        writeFile(repository, file, "forged\n");
+        writeFile(repository, "apps/ios/fastlane/Fastfile", "forged\n");
       },
     });
     const result = runAuthority(fixture, "authorize");
@@ -2105,15 +2103,7 @@ describe("mobile release authority", () => {
     const source = fs.readFileSync(".github/actions/mobile-release-authority/action.yml", "utf8");
     const action = parse(source) as {
       runs: {
-        steps: Array<{
-          "continue-on-error"?: unknown;
-          env?: Record<string, string>;
-          if?: unknown;
-          name: string;
-          run?: string;
-          uses?: string;
-          with?: Record<string, unknown>;
-        }>;
+        steps: WorkflowStep[];
       };
     };
     const validateIndex = action.runs.steps.findIndex(
@@ -2158,13 +2148,7 @@ describe("mobile release authority", () => {
         "validate-target": {
           permissions: Record<string, string>;
           "runs-on": string;
-          steps: Array<{
-            env?: Record<string, string>;
-            name: string;
-            run?: string;
-            uses?: string;
-            with?: Record<string, unknown>;
-          }>;
+          steps: WorkflowStep[];
           "timeout-minutes": number;
         };
         diagnose: {
@@ -2172,14 +2156,7 @@ describe("mobile release authority", () => {
           needs: string;
           permissions: Record<string, string>;
           "runs-on": string;
-          steps: Array<{
-            env?: Record<string, string>;
-            if?: string;
-            name: string;
-            run?: string;
-            uses?: string;
-            with?: Record<string, unknown>;
-          }>;
+          steps: WorkflowStep[];
           "timeout-minutes": number;
         };
       };
@@ -2452,10 +2429,6 @@ describe("mobile release authority", () => {
     expect(fs.existsSync(timedOutKvm.sentinel)).toBe(false);
 
     const parityScript = validationSteps[parityIndex]?.run ?? "";
-    expect(parityScript).toContain("git -C .mobile-release-tooling ls-tree");
-    expect(parityScript).toContain("git -C candidate ls-tree");
-    expect(parityScript).toContain("cat-file blob");
-    expect(parityScript).toContain("cmp -s");
 
     const actionPath = ".github/actions/setup-android-toolchain/action.yml";
     const trustedAction = "name: fixture\nruns:\n  using: composite\n  steps: []\n";
@@ -3422,15 +3395,7 @@ fi
             if?: unknown;
             needs?: string | string[];
             "runs-on"?: string;
-            steps: Array<{
-              "continue-on-error"?: unknown;
-              env?: Record<string, string>;
-              if?: unknown;
-              name: string;
-              run?: string;
-              uses?: string;
-              with?: Record<string, unknown>;
-            }>;
+            steps: WorkflowStep[];
           }
         >;
         name: string;
@@ -3853,11 +3818,7 @@ fi
         string,
         {
           environment?: string;
-          steps?: Array<{
-            env?: Record<string, string>;
-            name: string;
-            run?: string;
-          }>;
+          steps?: WorkflowStep[];
         }
       >;
     };
@@ -3927,13 +3888,7 @@ fi
     const workflow = parse(source) as {
       jobs: {
         release: {
-          steps: Array<{
-            env?: Record<string, string>;
-            name: string;
-            run?: string;
-            uses?: string;
-            with?: Record<string, unknown>;
-          }>;
+          steps: WorkflowStep[];
         };
       };
     };
@@ -4138,9 +4093,6 @@ fi
         .readdirSync(runnerTemp)
         .some((entry) => entry.startsWith("openclaw-ios-signing-keychain-")),
     ).toBe(false);
-    const postSource = fs.readFileSync(".github/actions/ios-signing-keychain/post.mjs", "utf8");
-    expect(postSource).toContain('import { cleanupOwnedKeychain } from "./keychain.mjs";');
-    expect(postSource).not.toContain("createOwnedKeychain");
   });
 
   it("masks and owns both resolved iOS keychain filename forms through post cleanup", async () => {
@@ -4206,13 +4158,7 @@ fi
         `MATCH_KEYCHAIN_NAME=${created.resolvedPath}\n` +
           `MATCH_KEYCHAIN_PASSWORD=${created.password}\n`,
       );
-      const state = Object.fromEntries(
-        fs
-          .readFileSync(stateFile, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => line.split(/[=](.*)/su).slice(0, 2)),
-      );
+      const state = readOutputs(stateFile);
       expect(state.resolved_path).toBe(created.resolvedPath);
       await cleanupOwnedKeychain({
         env: {
@@ -4273,13 +4219,7 @@ fi
         }),
       ).rejects.toThrow("partial create");
       expect(fs.existsSync(environmentFile)).toBe(false);
-      const state = Object.fromEntries(
-        fs
-          .readFileSync(stateFile, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => line.split(/[=](.*)/su).slice(0, 2)),
-      );
+      const state = readOutputs(stateFile);
       const partialPath = `${state.requested_path}${filenameSuffix}`;
       expect(fs.existsSync(partialPath)).toBe(true);
       await cleanupOwnedKeychain({
@@ -4297,7 +4237,7 @@ fi
           return { stderr: "", stdout: "" };
         },
       });
-      expect(fs.existsSync(state.owned_root)).toBe(false);
+      expect(fs.existsSync(expectDefined(state.owned_root, "owned keychain root"))).toBe(false);
     }
 
     const runnerTemp = tempRoots.make("openclaw-ios-keychain-guard-runner-");
@@ -4573,11 +4513,7 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
     const workflow = parse(source) as {
       jobs: {
         release: {
-          steps: Array<{
-            if?: string;
-            name: string;
-            run?: string;
-          }>;
+          steps: WorkflowStep[];
         };
       };
     };

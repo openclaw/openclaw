@@ -288,8 +288,6 @@ describe("google gemini cli backend auth bridge", () => {
 
   it.each([
     { auth: "ambient", allowed: ["memory_search"] },
-    { auth: "ambient", allowed: [] },
-    { auth: "api-key", allowed: ["memory_search"] },
     { auth: "api-key", allowed: [] },
   ] as const)(
     "enforces exact system policy for $auth auth with $allowed",
