@@ -65,7 +65,9 @@ describe("skill_workshop terminal lifecycle", () => {
       }),
     ).rejects.toThrow("Only rejected proposals can be purged");
     await tool.execute("reject-purge", { action: "reject", proposal_id: id });
-    await expect(tool.execute("purge-no-hash", { action: "purge", proposal_id: id })).rejects.toThrow();
+    await expect(
+      tool.execute("purge-no-hash", { action: "purge", proposal_id: id }),
+    ).rejects.toThrow();
     const inspected = await tool.execute("inspect-purge", { action: "inspect", proposal_id: id });
     const rejectedRevision = (inspected.details as { revisionHash: string }).revisionHash;
     await expect(
@@ -75,7 +77,9 @@ describe("skill_workshop terminal lifecycle", () => {
         expected_revision_hash: rejectedRevision,
       }),
     ).resolves.toMatchObject({ details: { proposalId: id, purged: true } });
-    await expect(fs.access(path.join(testState.stateDir, "skill-workshop", "proposals", id))).rejects.toThrow();
+    await expect(
+      fs.access(path.join(testState.stateDir, "skill-workshop", "proposals", id)),
+    ).rejects.toThrow();
   });
 
   it("disposes of proposals without reading damaged draft artifacts", async () => {
