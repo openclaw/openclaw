@@ -1,3 +1,4 @@
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 // Google provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { generatedMusicAssetFromBase64 } from "openclaw/plugin-sdk/music-generation";
@@ -139,85 +140,119 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
           `Google music generation supports at most ${GOOGLE_MAX_INPUT_IMAGES} reference images.`,
         );
       }
-      const auth = await resolveApiKeyForProvider({
-        provider: "google",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
+      // Credential preparation (OAuth refresh, profile lock) shares the request's
+      // timeout budget, so the abort signal must cover it — not only the HTTP call.
+      // Only requests that explicitly configure a timeout get credential abort
+      // coverage; an omitted timeout keeps the existing behavior (no absolute
+      // deadline on credential preparation, only the per-request DEFAULT_TIMEOUT_MS
+      // fallback used by the HTTP/SDK layer).
+      //
+      // Timeout contract:
+      // - Explicit timeout: one deadline is created before credential lookup so
+      //   the abort signal and the SDK deadline share the same budget; each SDK
+      //   attempt receives only the remaining time, not a fresh full timeout.
+      // - Omitted timeout: the deadline is created after credential lookup
+      //   (matching main) with DEFAULT_TIMEOUT_MS, preserving the shared 180-second
+      //   retry ceiling so a no-audio retry cannot each take a full default budget.
+      const hasExplicitTimeout = typeof req.timeoutMs === "number";
+      const { signal, cleanup } = buildTimeoutAbortSignal({
+        timeoutMs: req.timeoutMs,
+        operation: "Google music generation",
       });
-      if (!auth.apiKey) {
-        throw new Error("Google API key missing");
-      }
-
-      const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_MUSIC_MODEL;
-      if (req.format) {
-        const supportedFormats = resolveSupportedFormats(model);
-        if (!supportedFormats.includes(req.format)) {
-          throw new Error(
-            `Google music generation model ${model} supports ${supportedFormats.join(", ")} output.`,
-          );
-        }
-      }
-
-      const configuredBaseUrl = resolveConfiguredGoogleMusicBaseUrl(req);
-      const operationTimeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-      const deadline = createProviderOperationDeadline({
-        timeoutMs: operationTimeoutMs,
-        label: "Google music generation",
-      });
-      let generated: ReturnType<typeof extractTracks> | undefined;
-      // Lyria promises audio for successful Clip responses, but has returned
-      // unblocked text-only payloads transiently. Never retry explicit stops.
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const client = createGoogleGenAI({
-          apiKey: auth.apiKey,
-          httpOptions: {
-            ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
-            timeout: resolveProviderOperationTimeoutMs({
-              deadline,
-              defaultTimeoutMs: operationTimeoutMs,
-            }),
-          },
+      try {
+        signal?.throwIfAborted();
+        const explicitDeadline = hasExplicitTimeout
+          ? createProviderOperationDeadline({
+              timeoutMs: req.timeoutMs,
+              label: "Google music generation",
+            })
+          : undefined;
+        const auth = await resolveApiKeyForProvider({
+          provider: "google",
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          store: req.authStore,
+          ...(signal ? { signal } : {}),
         });
-        const response = (await client.models.generateContent({
+        signal?.throwIfAborted();
+        if (!auth.apiKey) {
+          throw new Error("Google API key missing");
+        }
+
+        const deadline =
+          explicitDeadline ??
+          createProviderOperationDeadline({
+            timeoutMs: DEFAULT_TIMEOUT_MS,
+            label: "Google music generation",
+          });
+
+        const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_MUSIC_MODEL;
+        if (req.format) {
+          const supportedFormats = resolveSupportedFormats(model);
+          if (!supportedFormats.includes(req.format)) {
+            throw new Error(
+              `Google music generation model ${model} supports ${supportedFormats.join(", ")} output.`,
+            );
+          }
+        }
+
+        const configuredBaseUrl = resolveConfiguredGoogleMusicBaseUrl(req);
+        let generated: ReturnType<typeof extractTracks> | undefined;
+        // Lyria promises audio for successful Clip responses, but has returned
+        // unblocked text-only payloads transiently. Never retry explicit stops.
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const client = createGoogleGenAI({
+            apiKey: auth.apiKey,
+            httpOptions: {
+              ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+              timeout: resolveProviderOperationTimeoutMs({
+                deadline,
+                defaultTimeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+              }),
+            },
+          });
+          const response = (await client.models.generateContent({
+            model,
+            contents: [
+              { text: buildMusicPrompt(req) },
+              ...(req.inputImages ?? []).map((image) => ({
+                inlineData: {
+                  mimeType: normalizeOptionalString(image.mimeType) || "image/png",
+                  data: image.buffer?.toString("base64") ?? "",
+                },
+              })),
+            ],
+            config: {
+              responseModalities: ["AUDIO", "TEXT"],
+            },
+          })) as GoogleGenerateMusicResponse;
+          generated = extractTracks({ payload: response, model });
+          if (generated.tracks.length > 0) {
+            break;
+          }
+          const terminalReason = resolveTerminalNoAudioReason(response);
+          if (terminalReason) {
+            throw new Error(`Google music generation returned no audio: ${terminalReason}`);
+          }
+        }
+        if (!generated || generated.tracks.length === 0) {
+          throw new Error("Google music generation response missing audio data");
+        }
+        const { tracks, lyrics } = generated;
+        return {
+          tracks,
+          ...(lyrics.length > 0 ? { lyrics } : {}),
           model,
-          contents: [
-            { text: buildMusicPrompt(req) },
-            ...(req.inputImages ?? []).map((image) => ({
-              inlineData: {
-                mimeType: normalizeOptionalString(image.mimeType) || "image/png",
-                data: image.buffer?.toString("base64") ?? "",
-              },
-            })),
-          ],
-          config: {
-            responseModalities: ["AUDIO", "TEXT"],
+          metadata: {
+            inputImageCount: req.inputImages?.length ?? 0,
+            instrumental: req.instrumental === true,
+            ...(normalizeOptionalString(req.lyrics) ? { requestedLyrics: true } : {}),
+            ...(req.format ? { requestedFormat: req.format } : {}),
           },
-        })) as GoogleGenerateMusicResponse;
-        generated = extractTracks({ payload: response, model });
-        if (generated.tracks.length > 0) {
-          break;
-        }
-        const terminalReason = resolveTerminalNoAudioReason(response);
-        if (terminalReason) {
-          throw new Error(`Google music generation returned no audio: ${terminalReason}`);
-        }
+        };
+      } finally {
+        cleanup();
       }
-      if (!generated || generated.tracks.length === 0) {
-        throw new Error("Google music generation response missing audio data");
-      }
-      const { tracks, lyrics } = generated;
-      return {
-        tracks,
-        ...(lyrics.length > 0 ? { lyrics } : {}),
-        model,
-        metadata: {
-          inputImageCount: req.inputImages?.length ?? 0,
-          instrumental: req.instrumental === true,
-          ...(normalizeOptionalString(req.lyrics) ? { requestedLyrics: true } : {}),
-          ...(req.format ? { requestedFormat: req.format } : {}),
-        },
-      };
     },
   };
 }
