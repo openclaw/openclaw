@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { StatementSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "./openclaw-state-db-readonly.js";
@@ -15,12 +16,12 @@ import {
   setUserPreferences,
 } from "./user-preferences.js";
 import {
-  listUserProfileGitHubLogins,
   prepareUserProfileGitHubAttribution,
   resolveUserProfileGitHubAttribution,
 } from "./user-profile-github-identity.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
 import { resolveCanonicalCachedGitHubIdentity } from "./user-profile-reads.js";
+import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
@@ -31,6 +32,7 @@ import {
   setAvatar,
   syncGitHubIdentity,
 } from "./user-profiles.js";
+import { executeUserProfileCommand } from "./user-profiles.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -82,6 +84,70 @@ function syncEmailGitHubProfile(
 }
 
 describe("multi-account people", () => {
+  it("bounds directory materialization while preserving merged-profile filtering and account order", () => {
+    const options = stateOptions();
+    const database = openOpenClawStateDatabase(options);
+    ensureUserProfilesSchema(options, database);
+    const directory = (limit: number) =>
+      executeUserProfileCommand({ type: "userProfiles.directory", input: { limit } }, options);
+    expect(directory(2)).toEqual({ profiles: [], truncated: false });
+
+    const insertProfile = database.db.prepare(
+      "INSERT INTO user_profiles (id, merged_into, created_at, updated_at) VALUES (?, ?, ?, 1)",
+    );
+    for (const id of ["c", "b", "a", "d"]) {
+      insertProfile.run(id, null, id === "d" ? 2 : 1);
+    }
+    insertProfile.run("merged", "a", 0);
+    database.db.exec(`
+      INSERT INTO user_profile_emails (email, profile_id, binding_id, created_at)
+        VALUES ('a@example.test', 'a', 'binding-a', 1), ('c@example.test', 'c', 'binding-c', 1);
+      INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at)
+        VALUES ('github', '12', 'a', 'person-work', 1),
+               ('github', '11', 'a', 'person', 1),
+               ('github', 'invalid', 'a', 'unverified', 1),
+               ('github', '13', 'a', NULL, 1),
+               ('github', '20', 'c', 'off-page', 1);
+    `);
+
+    const rowsRead: number[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted native receiver.
+    const nativeAll = StatementSync.prototype.all;
+    const reads = vi.spyOn(StatementSync.prototype, "all").mockImplementation(function (
+      this: StatementSync,
+      ...args
+    ) {
+      const rows = nativeAll.apply(this, args);
+      if (/\bfrom "user_(?:profiles|profile_emails|profile_identities)"/iu.test(this.sourceSQL)) {
+        rowsRead.push(rows.length);
+      }
+      return rows;
+    });
+    try {
+      expect(directory(2)).toEqual({
+        profiles: [
+          { id: "a", logins: ["person", "person-work"] },
+          { id: "b", logins: [] },
+        ],
+        truncated: true,
+      });
+      expect(rowsRead.length).toBeLessThanOrEqual(2);
+      expect(rowsRead.every((count) => count <= 3)).toBe(true);
+    } finally {
+      reads.mockRestore();
+    }
+    expect(directory(0)).toEqual({ profiles: [], truncated: true });
+    expect(directory(4)).toEqual({
+      profiles: [
+        { id: "a", logins: ["person", "person-work"] },
+        { id: "b", logins: [] },
+        { id: "c", logins: ["off-page"] },
+        { id: "d", logins: [] },
+      ],
+      truncated: false,
+    });
+  });
+
   it("does not initialize missing profile storage during attribution reads", async () => {
     const options = stateOptions();
     expect(await resolveUserProfileGitHubAttribution(["missing-person"], options)).toEqual(
@@ -218,10 +284,12 @@ describe("multi-account people", () => {
     expect(
       listUserProfilesSync(options).filter((profile) => profile.mergedInto === null),
     ).toHaveLength(1);
-    expect(listUserProfileGitHubLogins(options).get(person.id)?.toSorted()).toEqual([
-      "person",
-      "person-work",
-    ]);
+    expect(
+      executeUserProfileCommand({ type: "userProfiles.directory", input: { limit: 10 } }, options),
+    ).toEqual({
+      profiles: [{ id: person.id, logins: ["person", "person-work"] }],
+      truncated: false,
+    });
     const signInAlias = ensureProfileForTailscaleIdentity(
       { login: `${secondary.canonicalLogin}@github` },
       options,
@@ -299,10 +367,12 @@ describe("multi-account people", () => {
       githubIdentity: { login: "primary-person" },
     });
     expect(getProfileAvatar(older.id, options)?.bytes).toEqual(new Uint8Array([4, 5]));
-    expect(listUserProfileGitHubLogins(options).get(target.id)?.toSorted()).toEqual([
-      "older-work",
-      "primary-person",
-    ]);
+    expect(
+      executeUserProfileCommand({ type: "userProfiles.directory", input: { limit: 10 } }, options),
+    ).toEqual({
+      profiles: [{ id: target.id, logins: ["older-work", "primary-person"] }],
+      truncated: false,
+    });
     expect(getUserPreferences(target.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({
       [GIT_COAUTHOR_PREFERENCE_KEY]: false,
     });

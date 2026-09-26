@@ -234,48 +234,34 @@ function resolveStartupVerificationTimestamp(nowMs: unknown): string {
   );
 }
 
-function shouldHonorCooldown(params: {
+function resolveStartupVerificationRetryAfterMs(params: {
   state: MatrixStartupVerificationState | null;
   verification: MatrixOwnDeviceVerificationStatus;
   stateCooldownMs: number;
   nowMs: number;
-}): boolean {
+}): number | undefined {
   if (!params.state || params.stateCooldownMs <= 0) {
-    return false;
+    return undefined;
   }
   if (
     params.state.userId &&
     params.verification.userId &&
     params.state.userId !== params.verification.userId
   ) {
-    return false;
+    return undefined;
   }
   if (
     params.state.deviceId &&
     params.verification.deviceId &&
     params.state.deviceId !== params.verification.deviceId
   ) {
-    return false;
+    return undefined;
   }
-  return (
-    resolveRetryAfterMs({
-      attemptedAt: params.state.attemptedAt,
-      cooldownMs: params.stateCooldownMs,
-      nowMs: params.nowMs,
-    }) !== undefined
-  );
-}
-
-function hasPendingSelfVerification(
-  verifications: Array<{
-    isSelfVerification: boolean;
-    completed: boolean;
-    pending: boolean;
-  }>,
-): boolean {
-  return verifications.some(
-    (entry) => entry.isSelfVerification && !entry.completed && entry.pending,
-  );
+  return resolveRetryAfterMs({
+    attemptedAt: params.state.attemptedAt,
+    cooldownMs: params.stateCooldownMs,
+    nowMs: params.nowMs,
+  });
 }
 
 export async function ensureMatrixStartupVerification(params: {
@@ -299,37 +285,25 @@ export async function ensureMatrixStartupVerification(params: {
       env: params.env,
       stateDir: params.stateDir,
     }));
-  const stateDir = params.stateDir ?? path.dirname(statePath);
-
-  if (verification.verified) {
-    await clearStartupVerificationState({
-      auth: params.auth,
-      env: params.env,
-      stateDir,
-      legacyFilePath: statePath,
-    });
-    return {
-      kind: "verified",
-      verification,
-    };
-  }
-
+  const stateLocation = {
+    auth: params.auth,
+    env: params.env,
+    stateDir: params.stateDir ?? path.dirname(statePath),
+    legacyFilePath: statePath,
+  };
   const mode = params.accountConfig.startupVerification ?? DEFAULT_STARTUP_VERIFICATION_MODE;
-  if (mode === "off") {
-    await clearStartupVerificationState({
-      auth: params.auth,
-      env: params.env,
-      stateDir,
-      legacyFilePath: statePath,
-    });
+  if (verification.verified || mode === "off") {
+    await clearStartupVerificationState(stateLocation);
     return {
-      kind: "disabled",
+      kind: verification.verified ? "verified" : "disabled",
       verification,
     };
   }
 
   const verifications = await params.client.crypto.listVerifications().catch(() => []);
-  if (hasPendingSelfVerification(verifications)) {
+  if (
+    verifications.some((entry) => entry.isSelfVerification && !entry.completed && entry.pending)
+  ) {
     return {
       kind: "pending",
       verification,
@@ -342,32 +316,26 @@ export async function ensureMatrixStartupVerification(params: {
   const cooldownMs = cooldownHours * 60 * 60 * 1000;
   const nowMs = params.nowMs ?? Date.now();
   const attemptedAt = resolveStartupVerificationTimestamp(nowMs);
-  const state = await readStartupVerificationState({
-    auth: params.auth,
-    env: params.env,
-    stateDir,
-    legacyFilePath: statePath,
-  });
+  const state = await readStartupVerificationState(stateLocation);
   const stateCooldownMs = resolveStateCooldownMs(state, cooldownMs);
-  if (shouldHonorCooldown({ state, verification, stateCooldownMs, nowMs })) {
+  const retryAfterMs = resolveStartupVerificationRetryAfterMs({
+    state,
+    verification,
+    stateCooldownMs,
+    nowMs,
+  });
+  if (retryAfterMs !== undefined) {
     return {
       kind: "cooldown",
       verification,
-      retryAfterMs: resolveRetryAfterMs({
-        attemptedAt: state?.attemptedAt,
-        cooldownMs: stateCooldownMs,
-        nowMs,
-      }),
+      retryAfterMs,
     };
   }
 
   try {
     const request = await params.client.crypto.requestVerification({ ownUser: true });
     await writeStartupVerificationState({
-      auth: params.auth,
-      env: params.env,
-      stateDir,
-      legacyFilePath: statePath,
+      ...stateLocation,
       state: {
         userId: verification.userId,
         deviceId: verification.deviceId,
@@ -386,10 +354,7 @@ export async function ensureMatrixStartupVerification(params: {
   } catch (err) {
     const error = formatErrorMessage(err);
     await writeStartupVerificationState({
-      auth: params.auth,
-      env: params.env,
-      stateDir,
-      legacyFilePath: statePath,
+      ...stateLocation,
       state: {
         userId: verification.userId,
         deviceId: verification.deviceId,

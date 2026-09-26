@@ -398,7 +398,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
     name,
     description: catalog?.detail.skills.find((skill) => skill.name === name)?.description,
   }));
-  const tools: Array<{ name: string; description?: string }> =
+  const tools: PluginToolPreview[] =
     props.tools ?? names(props.inspection?.declared.tools ?? catalog?.detail.contracts?.tools);
   return renderSettingsPage(
     renderPluginDetailShell({
@@ -458,11 +458,13 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
       ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills, icons.bookOpenText)}
       ${renderPluginCapabilitySection(
         t("pluginsPage.detailTools"),
-        tools.map(({ name, description }) => ({
+        tools.map(({ name, description, parameters }) => ({
           name,
           description,
           onOpen:
-            description?.trim() && props.onOpenTool ? () => props.onOpenTool?.(name) : undefined,
+            (description?.trim() || parameters?.length) && props.onOpenTool
+              ? () => props.onOpenTool?.(name)
+              : undefined,
         })),
         icons.wrench,
       )}

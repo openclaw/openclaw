@@ -4,7 +4,6 @@ import type {
   ChannelResolveResult,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-// Matrix plugin module implements resolve targets behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 import { isMatrixQualifiedUserId, normalizeMatrixMessagingTarget } from "./matrix/target-ids.js";

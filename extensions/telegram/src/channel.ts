@@ -158,6 +158,14 @@ async function deleteStartupBotInfoCache(accountId: string): Promise<void> {
   await deleteCachedTelegramBotInfo({ accountId }).catch(() => undefined);
 }
 
+async function clearTelegramAccountRuntimeCache(accountId: string): Promise<void> {
+  const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
+  await Promise.all([
+    deleteTelegramUpdateOffset({ accountId }),
+    deleteStartupBotInfoCache(accountId),
+  ]);
+}
+
 function resolveTelegramAuditCollector() {
   return (
     getOptionalTelegramRuntime()?.channel?.telegram?.collectTelegramUnmentionedGroupIds ??
@@ -800,19 +808,11 @@ export const telegramPlugin = createChatChannelPlugin({
         const previousToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
         const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
         if (previousToken !== nextToken) {
-          const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
-          await Promise.all([
-            deleteTelegramUpdateOffset({ accountId }),
-            deleteStartupBotInfoCache(accountId),
-          ]);
+          await clearTelegramAccountRuntimeCache(accountId);
         }
       },
       onAccountRemoved: async ({ accountId }) => {
-        const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
-        await Promise.all([
-          deleteTelegramUpdateOffset({ accountId }),
-          deleteStartupBotInfoCache(accountId),
-        ]);
+        await clearTelegramAccountRuntimeCache(accountId);
       },
     },
     heartbeat: {

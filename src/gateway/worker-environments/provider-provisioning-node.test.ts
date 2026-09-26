@@ -823,7 +823,7 @@ describe("node worker provider provisioning", () => {
       environmentId: result.environmentId,
       ownerEpoch: attachedCredential.ownerEpoch,
     });
-    const turnClaim = placements.claimTurn({
+    const turnClaim = await placements.claimTurn({
       sessionId: REQUEST.sessionId,
       sessionKey: REQUEST.sessionKey,
       agentId: REQUEST.agentId,

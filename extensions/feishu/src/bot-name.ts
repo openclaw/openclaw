@@ -1,4 +1,3 @@
-// Feishu plugin module implements bot sender name resolution.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { createFeishuClient } from "./client.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -28,10 +27,6 @@ const cache = new Map<string, CacheEntry>();
 const breakerByAccount = new Map<string, BreakerState>();
 const permissionBackoffUntilByAccount = new Map<string, number>();
 const inflight = new Map<string, Promise<string | undefined>>();
-
-function resolveCacheKey(accountId: string, openId: string): string {
-  return `${accountId}::${openId}`;
-}
 
 function readCache(key: string): CacheEntry | undefined {
   const entry = cache.get(key);
@@ -75,10 +70,6 @@ function recordFailure(accountId: string): void {
     state.openUntil = Date.now() + BREAKER_OPEN_MS;
   }
   breakerByAccount.set(accountId, state);
-}
-
-function recordSuccess(accountId: string): void {
-  breakerByAccount.delete(accountId);
 }
 
 function readFeishuErrorCode(error: unknown): number | undefined {
@@ -150,7 +141,7 @@ async function resolveUncachedBotName(params: {
     return undefined;
   }
 
-  recordSuccess(account.accountId);
+  breakerByAccount.delete(account.accountId);
   const name = result.data?.bots?.[openId]?.name?.trim();
   writeCache(cacheKey, {
     ...(name ? { name } : {}),
@@ -175,7 +166,7 @@ export async function resolveFeishuBotName(params: {
     }
     permissionBackoffUntilByAccount.delete(params.account.accountId);
   }
-  const key = resolveCacheKey(params.account.accountId, openId);
+  const key = `${params.account.accountId}::${openId}`;
   const cached = readCache(key);
   if (cached) {
     return cached.name;
