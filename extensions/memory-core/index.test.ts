@@ -156,6 +156,19 @@ describe("buildPromptSection", () => {
     expect(result[1]).not.toContain("then use memory_get");
   });
 
+  it("limits informational unregistered guidance to combined results without warnings", () => {
+    const prompt = buildMemoryPromptSection({
+      availableTools: new Set(["memory_search"]),
+    }).join("\n");
+
+    expect(prompt).toContain("without corpus to search the configured sources");
+    expect(prompt).toContain("Use corpus=all only when compiled wiki supplements are needed");
+    expect(prompt).toContain("top-level warning or action guidance");
+    expect(prompt).toContain(
+      "In a multi-corpus result without a top-level warning or action guidance, treat an optional corpus outcome of not-registered as informational",
+    );
+  });
+
   it("limits the guidance to memory_get when only get is available", () => {
     const result = buildMemoryPromptSection({
       availableTools: new Set(["memory_get"]),
@@ -255,12 +268,17 @@ describe("buildPromptSection", () => {
     expect(defaultSearchScope.includes("indexed session transcripts")).toBe(sourceCase.sessions);
     expect(lazy.get.description).not.toContain("indexed session transcripts");
     expect(lazy.search.description).toContain("Corpus outcomes cover each requested corpus");
+    expect(lazy.search.description).toContain("Omit `corpus` to search those configured sources");
+    expect(lazy.search.description).toContain(
+      "An optional corpus outcome of not-registered in a multi-corpus result is informational",
+    );
     expect(lazy.search.description).toContain("results are partial");
     expect(lazy.get.description).toContain("status=ok");
     expect(lazy.get.description).toContain("status=not_found");
     expect(lazy.get.description).toContain("results are partial");
-    expect(prompt).toContain("Report partial, unavailable, or stale recall");
-    expect(prompt).toContain("warning and action guidance");
+    expect(prompt).toContain("Report recall as partial, unavailable, or stale when");
+    expect(prompt).toContain("top-level warning or action guidance");
+    expect(prompt).toContain("disabled=true or stale=true");
   });
 });
 
