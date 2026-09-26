@@ -2,10 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   hasSessionTranscriptMessage,
+  patchSessionEntryCore,
   resolveSessionTranscriptRuntimeTarget,
-  updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import { readSessionEntryInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -96,7 +96,12 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(
   },
   assertCurrent: () => void,
 ): Promise<ConfigSessionEntry | undefined> {
-  const entry = await readSessionEntryInWorker(params, assertCurrent);
+  const entry = await withSessionEntryReadOnlyInWorker(params, assertCurrent, async (read) => {
+    if (!read.ok) {
+      throw read.error;
+    }
+    return read.value;
+  });
   assertCurrent();
   if (!entry?.quotaSuspension) {
     return entry;
@@ -106,7 +111,7 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(
   if (!maintenance.patch) {
     return entry;
   }
-  const updated = await updateSessionEntry(
+  const updated = await patchSessionEntryCore(
     {
       agentId: params.agentId,
       storePath: params.storePath,

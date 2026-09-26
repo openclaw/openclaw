@@ -19,14 +19,12 @@ const sessionAccessorMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore:
     vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
-  updateSessionEntry:
-    vi.fn<typeof import("../../../config/sessions/session-accessor.js").updateSessionEntry>(),
 }));
 
 const sessionEntryReadMocks = vi.hoisted(() => ({
-  readSessionEntryInWorker:
+  withSessionEntryReadOnlyInWorker:
     vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryInWorker
+      typeof import("../../../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
     >(),
 }));
 
@@ -42,8 +40,7 @@ beforeEach(() => {
   sessionAccessorMocks.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
   sessionAccessorMocks.loadSessionEntry.mockReset();
   sessionAccessorMocks.patchSessionEntryCore.mockReset().mockResolvedValue(null);
-  sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(null);
-  sessionEntryReadMocks.readSessionEntryInWorker.mockReset();
+  sessionEntryReadMocks.withSessionEntryReadOnlyInWorker.mockReset();
 });
 
 it.each([0, 2])(
@@ -266,7 +263,9 @@ describe("fixed-store session bootstrap", () => {
       sessionId: "ops-session",
       updatedAt: 1,
     };
-    sessionEntryReadMocks.readSessionEntryInWorker.mockResolvedValueOnce(entry);
+    sessionEntryReadMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
+      async (_target, _assert, consume) => consume({ ok: true, value: entry }),
+    );
 
     const target = {
       agentId: "ops",
@@ -278,17 +277,20 @@ describe("fixed-store session bootstrap", () => {
     expect(await loadAttemptSessionEntryAfterQuotaMaintenance(target, assertCurrent)).toEqual(
       entry,
     );
-    expect(sessionEntryReadMocks.readSessionEntryInWorker).toHaveBeenCalledWith(
+    expect(sessionEntryReadMocks.withSessionEntryReadOnlyInWorker).toHaveBeenCalledWith(
       target,
       assertCurrent,
+      expect.any(Function),
     );
     expect(sessionAccessorMocks.loadSessionEntry).not.toHaveBeenCalled();
-    expect(sessionAccessorMocks.updateSessionEntry).not.toHaveBeenCalled();
+    expect(sessionAccessorMocks.patchSessionEntryCore).not.toHaveBeenCalled();
   });
 
   it("rejects a quota read whose attempt closes before the result is consumed", async () => {
     const read = createDeferred<SessionEntry | undefined>();
-    sessionEntryReadMocks.readSessionEntryInWorker.mockReturnValueOnce(read.promise);
+    sessionEntryReadMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
+      async (_target, _assert, consume) => consume({ ok: true, value: await read.promise }),
+    );
     const failure = new Error("attempt closed during quota read");
     let current = true;
     const loading = loadAttemptSessionEntryAfterQuotaMaintenance(
@@ -302,7 +304,21 @@ describe("fixed-store session bootstrap", () => {
     current = false;
     read.resolve({ sessionId: "ops-session", updatedAt: 1 });
     await expect(loading).rejects.toBe(failure);
-    expect(sessionAccessorMocks.updateSessionEntry).not.toHaveBeenCalled();
+    expect(sessionAccessorMocks.patchSessionEntryCore).not.toHaveBeenCalled();
+  });
+
+  it("propagates a failed quota precheck without mutating the session", async () => {
+    const failure = new Error("session metadata unavailable");
+    sessionEntryReadMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
+      async (_target, _assert, consume) => consume({ ok: false, error: failure }),
+    );
+    await expect(
+      loadAttemptSessionEntryAfterQuotaMaintenance(
+        { agentId: "ops", sessionKey: "global", storePath: "/tmp/shared-sessions.json" },
+        () => {},
+      ),
+    ).rejects.toBe(failure);
+    expect(sessionAccessorMocks.patchSessionEntryCore).not.toHaveBeenCalled();
   });
 
   it.each(["resume", "refresh", "expire", "cancel"] as const)(
@@ -342,11 +358,13 @@ describe("fixed-store session bootstrap", () => {
               quotaSuspension:
                 transition === "expire" ? undefined : { ...currentSuspension, state: "resuming" },
             };
-      sessionEntryReadMocks.readSessionEntryInWorker.mockResolvedValueOnce(entry);
+      sessionEntryReadMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
+        async (_target, _assert, consume) => consume({ ok: true, value: entry }),
+      );
       const entered = createDeferred();
       const committed = createDeferred<SessionEntry>();
       const assertCurrent = vi.fn();
-      sessionAccessorMocks.updateSessionEntry.mockImplementationOnce(
+      sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(
         async (_target, update, options) => {
           entered.resolve();
           expect(await update(currentEntry)).toEqual(expectedPatch);
