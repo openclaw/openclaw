@@ -396,6 +396,7 @@ export type CodexTurnStartParams = JsonObject & {
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
   effort?: string | null;
+  outputSchema?: JsonObject;
   personality?: CodexPersonality | null;
   environments?: CodexTurnEnvironmentParams[] | null;
   collaborationMode?: {

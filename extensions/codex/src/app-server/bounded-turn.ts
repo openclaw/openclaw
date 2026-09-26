@@ -12,6 +12,10 @@ import {
 } from "./attempt-client-cleanup.js";
 import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-bridge.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
+import {
+  buildOutputSchemaFallbackPrompt,
+  isCodexOutputSchemaUnsupported,
+} from "./bounded-turn-output-schema.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
@@ -76,6 +80,7 @@ export type CodexBoundedTurnOptions = {
 type CodexBoundedTurnResult = {
   text: string;
   items: CodexThreadItem[];
+  submittedInput: CodexUserInput[];
   model: string;
   nativeSelection: { model: string; modelProvider?: string | null };
   managedHooksEnabled: boolean;
@@ -110,6 +115,7 @@ type CodexBoundedTurnParams = {
   taskLabel: string;
   developerInstructions: string;
   input: CodexUserInput[];
+  outputSchema?: JsonObject;
   requiredModalities: string[];
   isolation: "configured-transport" | "private-stdio";
   threadConfig?: JsonObject;
@@ -234,6 +240,8 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   }
   const timeout = setTimeout(() => abortRun(timeoutError), Math.max(1, remainingRunMs));
   timeout.unref?.();
+  let retrySelection = false;
+  let retryWithoutOutputSchema = false;
   const requestOptions = {
     timeoutMs,
     signal: abortController.signal,
@@ -344,6 +352,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
                     modelId: modelSelection.model,
                     supportedReasoningEfforts: modelSelection.supportedReasoningEfforts,
                   }),
+            ...(params.outputSchema ? { outputSchema: params.outputSchema } : {}),
           } satisfies CodexTurnStartParams,
           requestOptions,
         ),
@@ -392,6 +401,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       return {
         text,
         items: result.items,
+        submittedInput: params.input,
         usage: result.usage,
         model: modelSelection.id,
         nativeSelection: { model: thread.model, modelProvider: thread.modelProvider },
@@ -409,11 +419,15 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         timeoutError,
       );
     }
-    if (
-      !ownsClient ||
-      !isCodexAppServerStartSelectionChangedError(error) ||
-      selectionAttempt !== 0
+    if (params.outputSchema && isCodexOutputSchemaUnsupported(error)) {
+      retryWithoutOutputSchema = true;
+    } else if (
+      ownsClient &&
+      isCodexAppServerStartSelectionChangedError(error) &&
+      selectionAttempt === 0
     ) {
+      retrySelection = true;
+    } else {
       throw error;
     }
   } finally {
@@ -424,13 +438,38 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       await closeCodexStartupClientBestEffort(client);
     }
   }
-  return await runBoundedCodexAppServerTurnInWorkspace(
-    params,
-    appServer,
-    workspace,
-    selectionAttempt + 1,
-    { deadline, timeoutMs: totalTimeoutMs },
-  );
+  if (retryWithoutOutputSchema && params.outputSchema) {
+    // Codex accepts a stricter schema subset than llm-task validates. Preserve the
+    // caller's existing user-level prompt behavior within the original deadline.
+    const { outputSchema, ...fallbackParams } = params;
+    return await runBoundedCodexAppServerTurnInWorkspace(
+      {
+        ...fallbackParams,
+        input: [
+          ...fallbackParams.input,
+          {
+            type: "text",
+            text: buildOutputSchemaFallbackPrompt(outputSchema),
+            text_elements: [],
+          },
+        ],
+      },
+      appServer,
+      workspace,
+      selectionAttempt,
+      { deadline, timeoutMs: totalTimeoutMs },
+    );
+  }
+  if (retrySelection) {
+    return await runBoundedCodexAppServerTurnInWorkspace(
+      params,
+      appServer,
+      workspace,
+      selectionAttempt + 1,
+      { deadline, timeoutMs: totalTimeoutMs },
+    );
+  }
+  throw new Error("Codex bounded turn selection retry exited unexpectedly");
 }
 
 function resolveBoundedThreadConfig(

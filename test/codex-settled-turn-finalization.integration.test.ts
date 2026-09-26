@@ -74,6 +74,7 @@ describe("registered Codex finalizer host silence contract", () => {
     const result = {
       text,
       items: [],
+      submittedInput: [{ type: "text" as const, text: fixture.params.prompt, text_elements: [] }],
       model: "synthetic-finalizer-model",
       nativeSelection: { model: "synthetic-finalizer-model", modelProvider: "openai" },
       managedHooksEnabled: false,

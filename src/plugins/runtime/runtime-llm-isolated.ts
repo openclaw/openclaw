@@ -6,6 +6,7 @@ import { buildConfiguredModelCatalog } from "../../agents/model-selection-shared
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import {
   createLlmCompleteError as completionError,
   createLlmOperatorAuthorizationError,
@@ -14,6 +15,33 @@ import {
 import type { LlmCompleteParams, LlmIsolatedAgentRuntimeCompleteParams } from "./types-core.js";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+// Keep either native or prompt-fallback schema context within the review-approved budget.
+const MAX_OUTPUT_SCHEMA_UTF8_BYTES = 1_024;
+
+function snapshotOutputSchema(
+  schema: LlmIsolatedAgentRuntimeCompleteParams["outputSchema"],
+): LlmIsolatedAgentRuntimeCompleteParams["outputSchema"] {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return undefined;
+  }
+  if (!boundedJsonUtf8Bytes(schema, MAX_OUTPUT_SCHEMA_UTF8_BYTES).complete) {
+    return undefined;
+  }
+  try {
+    const serialized = JSON.stringify(schema);
+    if (!serialized || Buffer.byteLength(serialized, "utf8") > MAX_OUTPUT_SCHEMA_UTF8_BYTES) {
+      return undefined;
+    }
+    const snapshot: unknown = JSON.parse(serialized);
+    if (snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)) {
+      // SAFETY: JSON.parse produced a non-array object, matching JsonSchemaObject's structure.
+      return snapshot as LlmIsolatedAgentRuntimeCompleteParams["outputSchema"];
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function requireIsolatedUserPrompt(params: LlmCompleteParams): string {
   if (
@@ -126,6 +154,7 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
 }): Promise<IsolatedCompletionResult> {
   params.assertCurrent?.();
   const prompt = requireIsolatedUserPrompt(params.request);
+  const outputSchema = snapshotOutputSchema(params.request.outputSchema);
   const timeoutMs = resolveIsolatedTimeoutMs(params.request.execution.timeoutMs);
   assertIsolatedReasoningSupported({
     cfg: params.cfg,
@@ -171,6 +200,7 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
         timeoutMs,
         abortSignal: controller.signal,
         thinkLevel: params.request.reasoning,
+        ...(outputSchema ? { outputSchema } : {}),
         streamParams: {
           maxTokens: asFiniteNumber(params.request.maxTokens),
           temperature: asFiniteNumber(params.request.temperature),

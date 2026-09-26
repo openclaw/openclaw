@@ -62,6 +62,7 @@ function passiveItem(type: string, fields: Record<string, unknown> = {}): CodexT
 
 describe("passive native turn items", () => {
   const prompt = "Summarize the conversation.";
+  const submittedInput = [{ type: "text" as const, text: prompt, text_elements: [] }];
   const managedHooks = { allowManagedHookPrompts: true };
 
   it("accepts typed managed-hook fragments without allowing another user prompt", () => {
@@ -78,11 +79,36 @@ describe("passive native turn items", () => {
       passiveItem("agentMessage", { text: "Revised answer." }),
     ];
     expect(() =>
-      assertCodexPassiveTurnItems(items, prompt, "completion", managedHooks),
+      assertCodexPassiveTurnItems(items, submittedInput, "completion", managedHooks),
     ).not.toThrow();
-    expect(() => assertCodexPassiveTurnItems(items, prompt, "completion")).toThrow(
+    expect(() => assertCodexPassiveTurnItems(items, submittedInput, "completion")).toThrow(
       "unexpected native item: hookPrompt",
     );
+  });
+
+  it("accepts an exact schema-fallback echo with an attested managed-hook continuation", () => {
+    const fallbackInput = [
+      ...submittedInput,
+      {
+        type: "text" as const,
+        text: "Return JSON matching the supplied schema.",
+        text_elements: [],
+      },
+    ];
+    const items = [
+      passiveItem("userMessage", { content: fallbackInput }),
+      passiveItem("hookPrompt", {
+        fragments: [{ text: "Revise the answer.", hookRunId: "managed-stop-1" }],
+      }),
+      passiveItem("agentMessage", { text: "Revised answer." }),
+    ];
+
+    expect(() =>
+      assertCodexPassiveTurnItems(items, fallbackInput, "completion", managedHooks),
+    ).not.toThrow();
+    expect(() =>
+      assertCodexPassiveTurnItems(items, fallbackInput.toReversed(), "completion", managedHooks),
+    ).toThrow("unexpected native item: userMessage");
   });
 
   it.each([
@@ -96,7 +122,7 @@ describe("passive native turn items", () => {
     expect(() =>
       assertCodexPassiveTurnItems(
         [passiveItem("hookPrompt", { fragments })],
-        prompt,
+        submittedInput,
         "completion",
         managedHooks,
       ),
@@ -111,7 +137,7 @@ describe("passive native turn items", () => {
       ],
     });
     expect(() =>
-      assertCodexPassiveTurnItems([continuation], prompt, "completion", managedHooks),
+      assertCodexPassiveTurnItems([continuation], submittedInput, "completion", managedHooks),
     ).toThrow("unexpected native item: userMessage");
   });
 
@@ -119,7 +145,12 @@ describe("passive native turn items", () => {
     "does not admit %s with managed hooks enabled",
     (type) => {
       expect(() =>
-        assertCodexPassiveTurnItems([passiveItem(type)], prompt, "completion", managedHooks),
+        assertCodexPassiveTurnItems(
+          [passiveItem(type)],
+          submittedInput,
+          "completion",
+          managedHooks,
+        ),
       ).toThrow(`unexpected native item: ${type}`);
     },
   );

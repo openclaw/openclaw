@@ -58,8 +58,18 @@ function createParams(): IsolatedParams {
     workspaceDir: "/tmp/workspace",
     systemPrompt: "Name the conversation.",
     prompt: "Help me plan a garden.",
+    outputSchema: {
+      type: "object",
+      properties: { title: { type: "string" } },
+      required: ["title"],
+      additionalProperties: false,
+    },
     timeoutMs: 5_000,
   } as unknown as IsolatedParams;
+}
+
+function submittedInput() {
+  return [{ type: "text", text: createParams().prompt, text_elements: [] }];
 }
 
 describe("runCodexIsolatedCompletion", () => {
@@ -73,6 +83,7 @@ describe("runCodexIsolatedCompletion", () => {
     mocks.runBoundedTurn.mockResolvedValue({
       text: "Garden Planning",
       model: "gpt-5.4",
+      submittedInput: submittedInput(),
       usage: { input: 7, output: 3, cacheRead: 2, total: 10 },
       items: [
         {
@@ -123,6 +134,12 @@ describe("runCodexIsolatedCompletion", () => {
         requireNoExternalCapabilities: true,
         developerInstructions: "Name the conversation.",
         input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
+        outputSchema: {
+          type: "object",
+          properties: { title: { type: "string" } },
+          required: ["title"],
+          additionalProperties: false,
+        },
       }),
     );
     expect(mocks.runBoundedTurn.mock.calls[0]?.[0]).not.toHaveProperty("modelProvider");
@@ -183,6 +200,7 @@ describe("runCodexIsolatedCompletion", () => {
     mocks.runBoundedTurn.mockResolvedValue({
       text: "Garden Planning",
       model: "gpt-5.4",
+      submittedInput: submittedInput(),
       managedHooksEnabled: true,
       items: [
         {
@@ -211,6 +229,7 @@ describe("runCodexIsolatedCompletion", () => {
       mocks.runBoundedTurn.mockResolvedValue({
         text: "Garden Planning",
         model: "gpt-5.4",
+        submittedInput: submittedInput(),
         managedHooksEnabled,
         items: [
           {
@@ -231,6 +250,7 @@ describe("runCodexIsolatedCompletion", () => {
     mocks.runBoundedTurn.mockResolvedValue({
       text: "Garden Planning",
       model: "gpt-5.4",
+      submittedInput: submittedInput(),
       managedHooksEnabled: true,
       items: [{ id: "tool", type: "commandExecution" }],
     });

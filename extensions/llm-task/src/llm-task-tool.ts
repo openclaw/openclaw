@@ -188,6 +188,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         "Do not include commentary.",
         "Do not call tools.",
       ].join(" ");
+      const outputSchema =
+        params.schema && typeof params.schema === "object" && !Array.isArray(params.schema)
+          ? (params.schema as JsonSchemaObject)
+          : undefined;
 
       const result = await api.runtime.llm.complete({
         messages: [
@@ -203,6 +207,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         temperature: streamParams.temperature,
         signal,
         purpose: "llm-task",
+        ...(outputSchema ? { outputSchema } : {}),
         execution: {
           mode: "isolated-agent-runtime",
           authProfileId,
@@ -218,10 +223,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         throw new Error("LLM returned invalid JSON");
       }
 
-      const schema = params.schema;
-      if (schema && typeof schema === "object" && !Array.isArray(schema)) {
+      if (outputSchema) {
         const validation = validateJsonSchemaValue({
-          schema: schema as JsonSchemaObject,
+          schema: outputSchema,
           cacheKey: "llm-task.result",
           value: parsed,
           cache: false,

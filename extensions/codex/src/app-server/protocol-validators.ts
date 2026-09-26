@@ -22,6 +22,7 @@ import {
   type CodexThreadStartResponse,
   type CodexTurnCompletedNotification,
   type CodexTurnStartResponse,
+  type CodexUserInput,
 } from "./protocol.js";
 
 export function readSupervisionResponseThreadId(value: unknown): unknown {
@@ -302,10 +303,10 @@ export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResp
   return assertCodexShape(validateTurnStartResponse, value, "turn/start response");
 }
 
-/** Prompt echoes and attested managed-hook continuations cannot admit native capabilities. */
+/** Exact input echoes and attested managed-hook continuations cannot admit native capabilities. */
 export function assertCodexPassiveTurnItems(
   items: readonly CodexThreadItem[],
-  prompt: string,
+  submittedInput: readonly CodexUserInput[],
   taskLabel: string,
   options: { allowManagedHookPrompts?: boolean } = {},
 ): void {
@@ -331,12 +332,18 @@ export function assertCodexPassiveTurnItems(
     }
     if (item.type === "userMessage" && !promptEchoSeen) {
       const content = Array.isArray(item.content) ? item.content : [];
-      const input = content[0];
       if (
-        content.length === 1 &&
-        isJsonObject(input) &&
-        input.type === "text" &&
-        input.text === prompt
+        submittedInput.length > 0 &&
+        content.length === submittedInput.length &&
+        submittedInput.every((expected, index) => {
+          const echoed = content[index];
+          return (
+            expected.type === "text" &&
+            isJsonObject(echoed) &&
+            echoed.type === "text" &&
+            echoed.text === expected.text
+          );
+        })
       ) {
         promptEchoSeen = true;
         continue;

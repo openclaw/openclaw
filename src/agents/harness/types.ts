@@ -196,6 +196,8 @@ export type AgentHarnessIsolatedCompletionParamsV2 = Omit<
   "model" | "auth" | "sourceAuthFingerprint"
 > & {
   authorization: AgentHarnessIsolatedCompletionAuthorization;
+  /** Advisory final-output schema; harnesses without native support may ignore it. */
+  outputSchema?: import("../../shared/json-schema.types.js").JsonSchemaObject;
 };
 export type AgentHarnessIsolatedCompletionResult = {
   /** The single assistant completion. Core rejects tool-shaped or failed results. */
