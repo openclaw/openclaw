@@ -345,6 +345,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       environmentId: provisioned.environmentId,
       ownerEpoch: provisioned.ownerEpoch,
       sessionId: request.sessionId,
+      assertCurrent: assertAttachmentCurrent,
       ...(params.environment.preparation
         ? {
             placementBinding: {
