@@ -1030,16 +1030,8 @@ function exactVersionFromOverrideSpec(spec: unknown) {
 
 function exactOverrideRulesFromOverrides(overrides: unknown) {
   const normalized = normalizeOverrides(overrides);
-  const scopedNames = new Set(
-    Object.values(normalized).flatMap((spec) =>
-      isRecord(spec) ? Object.keys(spec).filter((name) => name !== ".") : [],
-    ),
-  );
   return Object.fromEntries(
     Object.entries(normalized).flatMap<[string, string]>(([name, spec]) => {
-      if (scopedNames.has(name)) {
-        return [];
-      }
       const version = exactVersionFromOverrideSpec(spec);
       return version === null ? [] : [[name, version]];
     }),
@@ -1080,6 +1072,25 @@ type OverrideViolation = {
   packagePath: Array<{ name: string; path: string }>;
   path: string;
 };
+
+function scopedOverrideNamesFromOverrides(overrides: OverrideMap) {
+  const names = new Set<string>();
+  const visit = (value: unknown) => {
+    if (!isRecord(value)) {
+      return;
+    }
+    for (const [selector, spec] of Object.entries(value)) {
+      if (selector !== ".") {
+        names.add(parsePnpmPackageKey(selector)?.name ?? selector);
+        visit(spec);
+      }
+    }
+  };
+  for (const spec of Object.values(overrides)) {
+    visit(spec);
+  }
+  return names;
+}
 
 function collectOverrideViolations(
   lockfile: unknown,
@@ -1169,11 +1180,17 @@ function normalizeNpmLockOverrides(
   if (Object.keys(overrideRules).length === 0) {
     return;
   }
+  const scopedNames = scopedOverrideNamesFromOverrides(npmLockOverrides);
+  const validationRules = Object.fromEntries(
+    Object.entries(overrideRules).filter(([name]) => !scopedNames.has(name)),
+  );
 
   const npmLock = parseJsonObject(readFileSync(npmLockPath, "utf8"));
+  // npm owns scoped override resolution. Use the broader root rules only to find
+  // dependency shrinkwraps that can bypass npm's resolver, then rerun npm without them.
   const disabled = disableDependencyShrinkwrapOverrideConflictSources(npmLock, overrideRules);
   if (disabled.length === 0) {
-    const violations = collectOverrideViolations(npmLock, overrideRules);
+    const violations = collectOverrideViolations(npmLock, validationRules);
     if (violations.length > 0) {
       throw new Error(
         `generated package-lock.json violates workspace overrides: ${describeOverrideViolations(violations)}`,
@@ -1189,7 +1206,7 @@ function normalizeNpmLockOverrides(
   runNpm(npmInstallArgs, tempDir, env);
 
   const normalized = parseJsonObject(readFileSync(npmLockPath, "utf8"));
-  const remaining = collectOverrideViolations(normalized, overrideRules);
+  const remaining = collectOverrideViolations(normalized, validationRules);
   if (remaining.length > 0) {
     throw new Error(
       `generated package-lock.json violates workspace overrides after disabling ${disabled.join(", ")}: ${describeOverrideViolations(remaining)}`,
@@ -1675,6 +1692,7 @@ export {
   parsePnpmPackageKey,
   parseLockPackagePath,
   readNpmLockOverrides,
+  scopedOverrideNamesFromOverrides,
   shouldUseLegacyPeerDepsForNpmLock,
   npmLockPackageDirsForChangedPaths,
 };

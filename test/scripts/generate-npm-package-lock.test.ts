@@ -22,6 +22,7 @@ import {
   resolvePnpmLockOverridePlan,
   resolvePackageDirs,
   resolveNpmLockJobs,
+  scopedOverrideNamesFromOverrides,
   shouldUseLegacyPeerDepsForNpmLock,
   npmLockPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-package-lock.mts";
@@ -149,6 +150,12 @@ describe("generate-npm-package-lock", () => {
       bar: { "foo@1": "2" },
       "bar@>=1 <2": { "@scope/foo@>=3 <4": "4" },
     });
+  });
+
+  it("finds scoped dependency names through nested npm override policy", () => {
+    expect([
+      ...scopedOverrideNamesFromOverrides({ parent: { middle: { forked: "1.0.0" } } }),
+    ]).toEqual(["middle", "forked"]);
   });
 
   it.each([false, true])(
@@ -479,6 +486,44 @@ describe("generate-npm-package-lock", () => {
     expect(
       lockfile.packages["node_modules/@openclaw/codex/node_modules/protobufjs"],
     ).toBeUndefined();
+  });
+
+  it("repairs scoped forks retained beneath an unrelated shrinkwrapped parent", () => {
+    const lockfile = {
+      packages: {
+        "": { dependencies: { parent: "1.0.0", unrelated: "1.0.0" } },
+        "node_modules/parent": {
+          version: "1.0.0",
+          dependencies: { middle: "1.0.0" },
+        },
+        "node_modules/middle": {
+          version: "1.0.0",
+          dependencies: { forked: "^1.0.0" },
+        },
+        "node_modules/forked": { version: "1.0.0" },
+        "node_modules/unrelated": {
+          version: "1.0.0",
+          dependencies: { forked: "^1.0.0" },
+          hasShrinkwrap: true,
+        },
+        "node_modules/unrelated/node_modules/forked": { version: "1.0.0" },
+      },
+    };
+    const overrides = {
+      forked: "2.0.0",
+      "parent@1.0.0": { forked: "1.0.0" },
+    };
+    const overrideRules = exactOverrideRulesFromOverrides(overrides);
+
+    expect(
+      collectOverrideViolations(lockfile, overrideRules).map(({ path: lockPath }) => lockPath),
+    ).toEqual(["node_modules/forked", "node_modules/unrelated/node_modules/forked"]);
+    expect(disableDependencyShrinkwrapOverrideConflictSources(lockfile, overrideRules)).toEqual([
+      "node_modules/unrelated",
+    ]);
+    expect(lockfile.packages["node_modules/forked"]).toEqual({ version: "1.0.0" });
+    expect(lockfile.packages["node_modules/unrelated"]).not.toHaveProperty("hasShrinkwrap");
+    expect(lockfile.packages["node_modules/unrelated/node_modules/forked"]).toBeUndefined();
   });
 
   it("detects npm package-lock entries that bypass the pnpm lock", () => {
