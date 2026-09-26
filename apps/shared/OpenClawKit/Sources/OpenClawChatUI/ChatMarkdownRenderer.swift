@@ -207,16 +207,15 @@ struct ChatMarkdownRenderSnapshot {
         let segments = ChatMarkdownBlockSegmenter.segments(
             markdown: processed.cleaned,
             isComplete: isComplete)
-        let lastProseIndex: Int?
-        if preparesReveal, !isComplete {
-            lastProseIndex = segments.lastIndex {
+        let lastProseIndex: Int? = if preparesReveal, !isComplete {
+            segments.lastIndex {
                 if case .prose = $0 {
                     return true
                 }
                 return false
             }
         } else {
-            lastProseIndex = nil
+            nil
         }
         self.blocks = segments.enumerated().map { index, block in
             Self.renderedBlock(
