@@ -398,8 +398,11 @@ final class QuickChatWindowPicker {
             appKitRect: appKitRect,
             screenFrame: screenFrame,
             displayBounds: displayBounds)
-        self.captureImage(mode: .area, label: String(localized: "Selected area"), fileName: "area-screenshot.jpg") {
-            [screenCaptureService] in
+        self.captureImage(
+            mode: .area,
+            label: String(localized: "Selected area"),
+            fileName: "area-screenshot.jpg")
+        { [screenCaptureService] in
             try await screenCaptureService.captureArea(captureRect).imageData
         }
     }

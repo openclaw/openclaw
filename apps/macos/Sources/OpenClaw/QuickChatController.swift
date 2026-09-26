@@ -622,8 +622,10 @@ final class QuickChatController: NSObject {
         let menu = NSMenu()
         for agent in self.model.agents {
             let title = agent.emoji.map { "\($0) \(agent.name)" } ?? agent.name
-            menu.addItem(quickChatMenuItem(title: title, selected: agent.id == self.model.selectedAgentID) {
-                [weak self] in
+            menu.addItem(quickChatMenuItem(
+                title: title,
+                selected: agent.id == self.model.selectedAgentID)
+            { [weak self] in
                 guard let self else { return }
                 self.model.selectAgent(agent.id)
                 if let route = self.model.routingTarget {
