@@ -83,42 +83,45 @@ describe("command CI ownership and parallel timing", () => {
     },
   );
 
-  it("scales command work by usable forks while preserving file and direct-sample floors", () => {
-    const group = {
-      configs: ["test/vitest/vitest.commands.config.ts"],
-      includePatterns: Array.from(
-        { length: 12 },
-        (_, index) => `src/commands/fixture-${index}.test.ts`,
-      ),
-      timing_key: "fixture#file-parallel-2",
-    };
-    const observations = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
-    expect(estimateCommandWorkerSeconds(group, 120, 8, "blacksmith")).toEqual({
-      timingKey: "fixture#file-parallel-8",
-      seconds: 30,
-    });
-    expect(
-      estimateCommandWorkerSeconds(
-        { ...group, includePatterns: group.includePatterns.slice(0, 3) },
-        120,
-        8,
-        "blacksmith",
-      ).seconds,
-    ).toBe(80);
-    expect(
-      estimateCommandWorkerSeconds(
-        {
-          ...group,
-          includePatterns: ["src/commands/doctor-config-preflight.refusal.process.test.ts"],
-        },
-        194.3,
-        8,
-        "blacksmith",
-      ).seconds,
-    ).toBe(194.3);
-    observations.mockReturnValue({ "fixture#file-parallel-8": 45 });
-    expect(estimateCommandWorkerSeconds(group, 120, 8, "blacksmith").seconds).toBe(45);
-  });
+  it.each(["blacksmith", "hybrid"])(
+    "scales %s command work while preserving file and direct-sample floors",
+    (runnerBackend) => {
+      const group = {
+        configs: ["test/vitest/vitest.commands.config.ts"],
+        includePatterns: Array.from(
+          { length: 12 },
+          (_, index) => `src/commands/fixture-${index}.test.ts`,
+        ),
+        timing_key: "fixture#file-parallel-2",
+      };
+      const observations = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
+      expect(estimateCommandWorkerSeconds(group, 120, 8, runnerBackend)).toEqual({
+        timingKey: "fixture#file-parallel-8",
+        seconds: 30,
+      });
+      expect(
+        estimateCommandWorkerSeconds(
+          { ...group, includePatterns: group.includePatterns.slice(0, 3) },
+          120,
+          8,
+          runnerBackend,
+        ).seconds,
+      ).toBe(80);
+      expect(
+        estimateCommandWorkerSeconds(
+          {
+            ...group,
+            includePatterns: ["src/commands/doctor-config-preflight.refusal.process.test.ts"],
+          },
+          194.3,
+          8,
+          runnerBackend,
+        ).seconds,
+      ).toBe(194.3);
+      observations.mockReturnValue({ "fixture#file-parallel-8": 45 });
+      expect(estimateCommandWorkerSeconds(group, 120, 8, runnerBackend).seconds).toBe(45);
+    },
+  );
 
   it("projects serial timings once, retaining complete history and indivisible files", async () => {
     const config = "test/vitest/vitest.commands.config.ts";
@@ -129,6 +132,7 @@ describe("command CI ownership and parallel timing", () => {
     const memoryFile = "src/commands/doctor-session-sqlite.memory.test.ts";
     const legacy = { [owner]: 200, [memoryOwner]: 1000 };
     let observations: ReturnType<typeof testTimings.readCompactGroupTimings> = legacy;
+    const fixtureShards = [{ name: "agentic", config: "fixture.config.ts", projects: [config] }];
     vi.resetModules();
     vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => ({
       ...(await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>()),
@@ -137,7 +141,7 @@ describe("command CI ownership and parallel timing", () => {
     }));
     vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
       ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
-      fullSuiteVitestShards: [{ name: "agentic", config: "fixture.config.ts", projects: [config] }],
+      fullSuiteVitestShards: fixtureShards,
     }));
     vi.doMock("../vitest/vitest.unit-fast-paths.mjs", () => ({
       getUnitFastTestFiles: () => [],
@@ -203,6 +207,34 @@ describe("command CI ownership and parallel timing", () => {
           (group) => parseCompactSplitTimingKey(group.timing_key!)?.parentShardName === timingKey,
         ),
       ).toBe(true);
+
+      fixtureShards.push({
+        name: "agentic-gateway-server-isolated",
+        config: "fixture-gateway.config.ts",
+        projects: ["test/vitest/vitest.gateway-server-isolated.config.ts"],
+      });
+      observations = {
+        [owner]: 200,
+        [timingKey]: 100,
+        [memoryOwner]: 1000,
+        "agentic-gateway-server-isolated": 80,
+      };
+      const affordable = create().find((job) =>
+        job.groups.some((group) => group.shard_name === owner),
+      )!;
+      expect(
+        affordable.groups.some((group) => group.shard_name === "agentic-gateway-server-isolated"),
+      ).toBe(true);
+      observations = { ...observations, [`${owner}#file-parallel-8`]: 250 };
+      const admission = create();
+      const commandJob = admission.find((job) =>
+        job.groups.some((group) => group.shard_name === owner),
+      )!;
+      // Sharing the Gateway's serial 8-worker allocation would cost 250+80s.
+      // Reserve that worker-specific sample before deciding whether rows can share.
+      expect(commandJob.groups).toHaveLength(1);
+      expect(commandJob.groups[0]?.includePatterns?.toSorted()).toEqual(files.toSorted());
+      expect(commandJob.predictedTestSeconds).toBeLessThanOrEqual(300);
     } finally {
       vi.doUnmock("../../scripts/lib/list-test-files.mts");
       vi.doUnmock("../vitest/vitest.test-shards.mjs");
@@ -297,15 +329,19 @@ describe("command CI ownership and parallel timing", () => {
         runnerBackend: "blacksmith",
         includeReleaseOnlyPluginShards: false,
       });
-      const jobs = ownerNames.map((name) =>
-        plan.findIndex((shard) => shard.groups.some((group) => group.shard_name === name)),
+      const placements = plan.flatMap((job, jobIndex) =>
+        job.groups
+          .filter((group) => ownerNames.includes(group.shard_name.replace(/-hosted-\d+$/u, "")))
+          .map((group) => ({ group, jobIndex })),
       );
-      expect(jobs.every((job) => job >= 0)).toBe(true);
-      expect(new Set(jobs).size).toBe(jobs.length);
+      expect(
+        new Set(placements.map(({ group }) => group.shard_name.replace(/-hosted-\d+$/u, ""))),
+      ).toEqual(new Set(ownerNames));
+      expect(new Set(placements.map(({ jobIndex }) => jobIndex)).size).toBe(placements.length);
       expect(
         plan
           .flatMap((shard) => shard.groups)
-          .filter((group) => ownerNames.includes(group.shard_name))
+          .filter((group) => ownerNames.includes(group.shard_name.replace(/-hosted-\d+$/u, "")))
           .every((group) => group.runner === DEFAULT_NODE_TEST_RUNNER),
       ).toBe(true);
     }

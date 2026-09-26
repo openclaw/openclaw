@@ -119,12 +119,12 @@ qualification.
 The change adds three actual Blacksmith registrations on ordinary hybrid main
 and same-repository PRs. Trusted fork PRs using the logical GitHub profile emit
 five core-lint rows, so their increase can be six including the gate. A fresh
-current-source audit totals 70 potentially self-hosted non-Node rows across the
+current-source audit totals 71 potentially self-hosted non-Node rows across the
 supported automatic main/PR profiles. This conservative union includes five
 core-lint rows, five core-type rows, five Windows rows, and thirteen UI E2E rows;
 its profile maxima do not all coexist. The six extension-lint rows stay hosted.
 
-Retain an 84-row non-Node allowance, leaving fourteen rows reserved above that
+Retain an 84-row non-Node allowance, leaving thirteen rows reserved above that
 union. With the unchanged 70/130 Node caps and four-main/21-PR arrival envelope,
 `4 × (70 + 84) + 21 × (130 + 84) = 5,110`. That leaves 890 below the 6,000
 operating target from the reported 10,000-per-five-minute registration limit.
@@ -132,6 +132,55 @@ This replaces the stale historical `80 + 3 + 1` explanation without spending
 headroom or changing matrix caps. Manual/frozen release jobs and other workflows
 are outside this conditional arrival envelope; it does not establish complete
 organization-wide usage.
+
+## Ratchet admission before Node tests
+
+The five newest broad green PR runs at the September 26 sampling cutoff
+(`36208949888`, `36208857347`, `36208617238`, `36208552952`, and `36208291831`)
+spent 148–173 seconds in hosted `checks-fast-baseline-ratchets`. Checkout took
+31–33 seconds, dependency setup 27–52 seconds, and the ratchets 73–111 seconds.
+Node rows wait for this job, so its full wall is on their critical path.
+Preflight took 89–120 seconds, including 48–83 seconds of manifest planning;
+these hybrid runs already skipped preflight's exact dependency restore.
+
+Trusted same-repository hybrid PR first attempts, automatic main runs, and admitted qualification dispatches
+now request the existing Blacksmith 4-class for the ratchet job. Nearby default-Blacksmith runs `36208877388` and
+`36209067188` measured complete ratchet jobs of 85 and 91 seconds. Their setup
+took 12–15 seconds and ratchets 39–40 seconds. These different-head observations
+project 57–88 seconds less Node admission delay; the changed workflow still
+needs an exact-head run to establish the saving.
+
+Using the slower 91-second observation, the route adds at most a modeled
+`4 × 91 / 60 = 6.07` Blacksmith vCPU-minutes per eligible run. It adds no jobs
+and one actual hybrid Blacksmith registration. The job already belonged to the
+potentially self-hosted non-Node union under the default backend, so the existing
+84-row allowance and 5,110-registration envelope stay unchanged. Hosted routing
+remains for the GitHub override, hybrid retries, ordinary manual or frozen targets, untrusted
+contributors, and noncanonical repositories. Ratchet checks, merge-tree
+validation, Node admission, dependency reconciliation, and deadlines are unchanged.
+
+The same five runs spent 165–209 seconds in the separate `check-plan` prerequisite.
+Its compiler inventory queries took most of the 93–154-second materialization
+step; every narrowed type/lint row waits for that result. Those runs' central
+test-type checks finished 629–667 seconds after workflow start, so advancing only
+Node admission cannot meet the ten-minute PR objective.
+
+`check-plan` therefore uses the existing 4-class under the same hybrid
+admission, restoring exact dependencies only for eligible same-repository jobs
+on an actual self-hosted runner. The route adds one Blacksmith registration
+within the existing non-Node reserve. Keeping the full observed 209-second
+hosted wall as its conservative cost estimate adds 13.93 vCPU-minutes, or 20
+vCPU-minutes with the ratchet estimate. No planner speedup is assumed in this
+cost bound. Native proof must establish the materialization and whole-workflow
+wall; compiler coverage, selected graphs, and all hosted fallbacks remain intact.
+
+The broad fallback PR qualification does not select `check-plan`. Its observed
+wall can validate the broad Node path, but cannot establish the new narrowed
+type/lint critical-path improvement. That claim needs a separate native run
+whose changed-file plan selects this prerequisite.
+
+These two control-job changes apply only to the hybrid backend. RunsOn retains
+hosted ratchets and check planning, including qualification dispatches.
 
 ## RunsOn remains unqualified
 

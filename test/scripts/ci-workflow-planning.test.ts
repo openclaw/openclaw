@@ -2496,6 +2496,8 @@ describe("ci workflow guards", () => {
       expect(actual).toContain("preflight");
       expect(actual).not.toContain("ci-gate");
       expect(actual).not.toContain("check-lint-hosted-core-shard");
+      expect(actual).toContain("checks-baseline-ratchets");
+      expect(actual).not.toContain("check-plan");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
         Number(ordinary.outputs.hybrid_hosted_base_rows) + 2,
       );

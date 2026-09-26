@@ -78,6 +78,7 @@ type ChangedNodeTestShard = {
   includePatterns?: string[];
   planConcurrency?: number;
   predictedSeconds?: number;
+  predictedTestSeconds?: number;
   pretestBuildMode?: VitestPretestBuildMode;
   requiresDist: boolean;
   runner: string;

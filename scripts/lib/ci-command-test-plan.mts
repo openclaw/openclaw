@@ -136,7 +136,7 @@ export function estimateCommandWorkerSeconds(
       (fallbackSeconds * Math.max(1, Math.min(2, files.length))) /
         Math.max(1, Math.min(maxWorkers, files.length)),
       commandFileSecondsFloor(files, runnerBackend),
-      measured * (runnerBackend === "hybrid" ? COMPACT_HYBRID_GROUP_SECONDS_SCALE : 1),
+      measured,
     ),
   };
 }

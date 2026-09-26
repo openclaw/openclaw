@@ -145,7 +145,7 @@ describe("runtime placement observations", () => {
       );
       expect(corpusJob).toBeDefined();
       expect(handoffJob).toBeDefined();
-      // These recorded workloads exceed the shared 440s budget, including
+      // These recorded workloads exceed the shared 360s budget, including
       // preparation. Added files must not make the known reader appear cheap.
       expect(corpusJob).not.toBe(handoffJob);
     } finally {
@@ -217,9 +217,15 @@ describe("runtime placement observations", () => {
       shard_name: `reader-${id}`,
       timing_key: generation.timingKeys[0]!,
     };
+    const sibling = {
+      ...descriptor,
+      shard_name: `ordinary-${id}`,
+      includePatterns: [`src/ordinary-${id}.test.ts`],
+      timing_key: generation.timingKeys[1]!,
+    };
     const [begin, end] = compactLog(20, descriptor.timing_key).split("\n");
     return [
-      `2026-08-27T23:00:00Z   OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
+      `2026-08-27T23:00:00Z   OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor, sibling])}`,
       begin,
       `2026-08-27T23:00:01Z [shard:${descriptor.shard_name}] [test] preparing ${group.pretestBuildMode} runtime before Vitest workers`,
       end,
@@ -336,15 +342,18 @@ describe("runtime placement observations", () => {
         infrastructure,
         ...(gatewayRecipient ? [] : ["test/vitest/vitest.gateway-database-workers.config.ts"]),
       ]);
-      // Synthetic recipients must not inherit production costs that split their fixture jobs.
-      const compactSpy = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
-        gatewayRecipient
-          ? {
-              "agentic-gateway-server-isolated": 30,
-              "agentic-agents-core-subagents": 20,
-            }
-          : {},
+      // Keep full inventories, but make spare placement capacity independent of
+      // growing production prices. Runtime observations below supply the overload.
+      const compactCosts = new Proxy<Record<string, number>>(
+        { "agentic-gateway-server-isolated": 30, "agentic-agents-core-subagents": 20 },
+        {
+          get: (target, key) =>
+            typeof key === "string" ? (target[key] ?? 39) : Reflect.get(target, key),
+        },
       );
+      const compactSpy = vi
+        .spyOn(testTimings, "readCompactGroupTimings")
+        .mockReturnValue(compactCosts);
       const spy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
       const options = {
         compactMode,
@@ -408,11 +417,11 @@ describe("runtime placement observations", () => {
           includePatterns: group.includePatterns!,
           pretestBuildMode: "runtime",
           seconds: group.configs.includes(runtimeConfig)
-            ? 200
+            ? 180
             : group.includePatterns?.includes(
                   "src/infra/update-managed-service-handoff-lifecycle.test.ts",
                 )
-              ? 300
+              ? 250
               : 20,
         }));
         spy.mockImplementation((profile) => (profile === "blacksmith" ? blacksmith : []));
@@ -479,7 +488,7 @@ describe("runtime placement observations", () => {
           }
         }
         for (const job of changed) {
-          expect(job.predictedSeconds).toBeLessThanOrEqual(440);
+          expect(job.predictedSeconds).toBeLessThanOrEqual(360);
           expect(job.planConcurrency).toBe(1);
           expect(job.groups.every((group) => !isExclusiveCompactShardName(group.shard_name))).toBe(
             true,
@@ -510,11 +519,12 @@ describe("runtime placement observations", () => {
           before.map((job) => [job.checkName, job.runner, job.groups]),
         );
         const readerJob = unmeasured.find((job) =>
-          job.groups.some((group) => group.configs.includes(runtimeConfig)),
+          job.groups.some((group) => group.includePatterns?.includes(selected[0]!)),
         )!;
-        // The 300s sibling costs 261s in hybrid plus one 100s build. Unknown readers
-        // retain a positive cost instead of disappearing from that shared estimate.
-        expect(readerJob.predictedSeconds).toBeGreaterThan(361);
+        // Known siblings cost 218s + a 39s cold floor, plus one 60s build.
+        // The unknown reader still contributes positive cost within the 360s budget.
+        expect(readerJob.predictedSeconds).toBeGreaterThan(317);
+        expect(readerJob.predictedSeconds).toBeLessThanOrEqual(360);
         spy.mockImplementation((profile) =>
           profile === "blacksmith"
             ? blacksmith.map((entry) => Object.assign({}, entry, { seconds: 1_000 }))
@@ -525,7 +535,7 @@ describe("runtime placement observations", () => {
         expect(unfit.map((job) => [job.checkName, job.runner, job.groups])).toEqual(
           before.map((job) => [job.checkName, job.runner, job.groups]),
         );
-        expect(unfit.some((job) => (job.predictedSeconds ?? 0) > 440)).toBe(true);
+        expect(unfit.some((job) => (job.predictedSeconds ?? 0) > 360)).toBe(true);
       } finally {
         spy.mockRestore();
         compactSpy.mockRestore();
@@ -1062,6 +1072,284 @@ it.todo("retains todo coverage");
     });
   });
 
+  it("keeps mixed worker ceilings out of compact weights and keys runtime observations by their inherited ceiling", () => {
+    const descriptor = {
+      configs: ["test/vitest/reader.config.ts"],
+      includePatterns: ["src/reader.test.ts"],
+      shard_name: "reader",
+      timing_key: createCompactSplitTimingGeneration({
+        configs: ["test/vitest/reader.config.ts"],
+        parentShardName: "reader-parent",
+        stripes: [["src/reader.test.ts"]],
+      }).timingKeys[0]!,
+    };
+    const previous: CiTestTimings = {
+      ...baseline,
+      compactGroupSeconds: {
+        blacksmith: { [descriptor.timing_key]: 100, "reader-parent": 100 },
+        github: {},
+      },
+    };
+    const log = (workers: number, groupWorkers?: number, jobWorkers?: number) => {
+      const [begin, end] = compactLog(40, descriptor.timing_key).split("\n");
+      return [
+        `2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: ${workers}`,
+        `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_ENV_JSON: ${JSON.stringify(jobWorkers ? { OPENCLAW_VITEST_MAX_WORKERS: String(jobWorkers) } : null, null, 2)}`,
+        `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([{ ...descriptor, ...(groupWorkers ? { env: { OPENCLAW_VITEST_MAX_WORKERS: String(groupWorkers) } } : {}) }])}`,
+        begin,
+        "2026-08-27T23:00:01Z [shard:reader] [test] preparing runtime runtime before Vitest workers",
+        end,
+      ].join("\n");
+    };
+    const runs = [2, 8, 8].map((workers, index) =>
+      timingRun(index + 1, [
+        { kind: "compact", labels: ["blacksmith-32vcpu-ubuntu-2404"], text: log(workers) },
+        { kind: "compact", labels: ["ubuntu-24.04"], text: log(4) },
+      ]),
+    );
+    const mixed = refitTestTimings(runs, previous);
+    expect(mixed.timings.compactGroupSeconds).toEqual({
+      blacksmith: previous.compactGroupSeconds.blacksmith,
+      github: { [descriptor.timing_key]: 40, "reader-parent": 40 },
+    });
+    expect(mixed.rejectedWorkerKeys).toEqual({
+      blacksmith: ["reader-parent", descriptor.timing_key].toSorted(),
+      github: [],
+    });
+    expect(mixed.timings.runtimePlacementTimings.blacksmith).toEqual([
+      {
+        configs: descriptor.configs,
+        includePatterns: descriptor.includePatterns,
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "8" },
+        pretestBuildMode: "runtime",
+        seconds: 40,
+      },
+    ]);
+    // Both the job JSON and group pins can lower, but never raise, an inherited ceiling.
+    const pinned = refitTestTimings(
+      [log(8, 2), log(2, 8), log(8, 8, 2)].map((text, index) =>
+        timingRun(index + 1, [
+          { kind: "compact", labels: ["blacksmith-32vcpu-ubuntu-2404"], text },
+        ]),
+      ),
+    );
+    expect(pinned.rejectedWorkerKeys.blacksmith).toEqual([]);
+    expect(pinned.timings.compactGroupSeconds.blacksmith).toEqual({
+      [descriptor.timing_key]: 40,
+      "reader-parent": 40,
+    });
+    expect(pinned.timings.runtimePlacementTimings.blacksmith[0]?.env).toEqual({
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
+    const subset = refitTestTimings(
+      [log(8, 2), log(2, 8)].map((text, index) =>
+        timingRun(index + 1, [
+          {
+            kind: "compact",
+            labels: ["blacksmith-32vcpu-ubuntu-2404"],
+            text: text.replaceAll(
+              `[shard:${descriptor.timing_key}]`,
+              `[shard:bun:${descriptor.timing_key}]`,
+            ),
+          },
+        ]),
+      ),
+    );
+    expect(subset.rejectedWorkerKeys.blacksmith).toEqual([]);
+    expect(subset.timings.compactGroupSeconds.blacksmith).toEqual({
+      [`bun:${descriptor.timing_key}`]: 40,
+      "bun:reader-parent": 40,
+    });
+    expect(subset.timings.runtimePlacementTimings.blacksmith).toEqual([]);
+    const admissionLog = log(8).replace(
+      encodeNodeTestGroups([descriptor]),
+      encodeNodeTestGroups([
+        {
+          ...descriptor,
+          fallbackMaxWorkers: 2,
+          minTotalMemoryBytes: 28 * 1024 ** 3,
+        },
+      ]),
+    );
+    for (const { label, gib, plans, cpus, runner, frozen, expected } of [
+      {
+        label: "qualified",
+        gib: 32,
+        plans: 1,
+        cpus: 8,
+        runner: "self-hosted",
+        frozen: "false",
+        expected: 8,
+      },
+      {
+        label: "memory floor",
+        gib: 27,
+        plans: 1,
+        cpus: 8,
+        runner: "self-hosted",
+        frozen: "false",
+        expected: 2,
+      },
+      {
+        label: "overlapping plans",
+        gib: 32,
+        plans: 2,
+        cpus: 8,
+        runner: "self-hosted",
+        frozen: "false",
+        expected: 2,
+      },
+      {
+        label: "constrained CPU",
+        gib: 32,
+        plans: 1,
+        cpus: 4,
+        runner: "self-hosted",
+        frozen: "false",
+        expected: 2,
+      },
+      {
+        label: "hosted",
+        gib: 32,
+        plans: 1,
+        cpus: 8,
+        runner: "github-hosted",
+        frozen: "false",
+        expected: 2,
+      },
+      {
+        label: "frozen target",
+        gib: 32,
+        plans: 1,
+        cpus: 8,
+        runner: "self-hosted",
+        frozen: "true",
+        expected: 2,
+      },
+      {
+        label: "missing resources",
+        gib: undefined,
+        plans: 1,
+        cpus: 8,
+        runner: "self-hosted",
+        frozen: "false",
+        expected: undefined,
+      },
+      {
+        label: "missing runner",
+        gib: 32,
+        plans: 1,
+        cpus: 8,
+        runner: undefined,
+        frozen: "false",
+        expected: undefined,
+      },
+    ]) {
+      const text = [
+        ...(runner ? [`2026-08-27T23:00:00Z RUNNER_ENVIRONMENT: ${runner}`] : []),
+        `2026-08-27T23:00:00Z FROZEN_TARGET: ${frozen}`,
+        ...(gib
+          ? [
+              `2026-08-27T23:00:00Z [shard:resources] logicalCpuCount=${cpus} totalMemoryBytes=${gib * 1024 ** 3} requested plans=${plans} admitted plans=${plans}`,
+            ]
+          : []),
+        admissionLog,
+      ].join("\n");
+      const result = refitTestTimings(
+        [1, 2].map((id) =>
+          timingRun(id, [{ kind: "compact", labels: ["blacksmith-32vcpu-ubuntu-2404"], text }]),
+        ),
+        previous,
+      );
+      expect(result.timings.compactGroupSeconds.blacksmith[descriptor.timing_key], label).toBe(
+        expected === undefined ? 100 : 40,
+      );
+      expect(
+        result.timings.runtimePlacementTimings.blacksmith[0]?.env.OPENCLAW_VITEST_MAX_WORKERS,
+        label,
+      ).toBe(expected?.toString());
+      expect(result.rejectedWorkerKeys.blacksmith, label).toEqual(
+        expected === undefined ? ["reader-parent", descriptor.timing_key].toSorted() : [],
+      );
+    }
+    const wholeConfigLog = log(8).replace(
+      encodeNodeTestGroups([descriptor]),
+      encodeNodeTestGroups([
+        {
+          ...descriptor,
+          includePatterns: undefined,
+          fallbackMaxWorkers: 2,
+          minTotalMemoryBytes: 28 * 1024 ** 3,
+        },
+      ]),
+    );
+    const wholeConfigRuns = [27, 32].map((gib, index) =>
+      timingRun(index + 1, [
+        {
+          kind: "compact",
+          labels: ["blacksmith-32vcpu-ubuntu-2404"],
+          text: [
+            "2026-08-27T23:00:00Z RUNNER_ENVIRONMENT: self-hosted",
+            "2026-08-27T23:00:00Z FROZEN_TARGET: false",
+            `2026-08-27T23:00:00Z [shard:resources] logicalCpuCount=8 totalMemoryBytes=${gib * 1024 ** 3} requested plans=1 admitted plans=1`,
+            wholeConfigLog,
+          ].join("\n"),
+        },
+      ]),
+    );
+    const whole = refitTestTimings(wholeConfigRuns, previous);
+    expect(whole.timings.compactGroupSeconds.blacksmith).toEqual(
+      previous.compactGroupSeconds.blacksmith,
+    );
+    expect(whole.rejectedWorkerKeys.blacksmith).toEqual(
+      ["reader-parent", descriptor.timing_key].toSorted(),
+    );
+    expect(whole.timings.runtimePlacementTimings.blacksmith).toEqual([]);
+    for (const suffix of ["#workers-4", "#file-parallel-4"]) {
+      const namedKey = createCompactSplitTimingGeneration({
+        configs: descriptor.configs,
+        parentShardName: `reader${suffix}`,
+        stripes: [descriptor.includePatterns],
+      }).timingKeys[0]!;
+      const namedLog = admissionLog
+        .replace(
+          encodeNodeTestGroups([
+            { ...descriptor, fallbackMaxWorkers: 2, minTotalMemoryBytes: 28 * 1024 ** 3 },
+          ]),
+          encodeNodeTestGroups([
+            {
+              ...descriptor,
+              timing_key: namedKey,
+              env: { OPENCLAW_VITEST_MAX_WORKERS: "4" },
+              fallbackMaxWorkers: 2,
+              minTotalMemoryBytes: 28 * 1024 ** 3,
+            },
+          ]),
+        )
+        .replaceAll(`[shard:${descriptor.timing_key}]`, `[shard:${namedKey}]`);
+      const previousNamed: CiTestTimings = {
+        ...baseline,
+        compactGroupSeconds: { blacksmith: { [namedKey]: 100 }, github: {} },
+      };
+      for (const gib of [27, 32]) {
+        const text = [
+          "2026-08-27T23:00:00Z RUNNER_ENVIRONMENT: self-hosted",
+          "2026-08-27T23:00:00Z FROZEN_TARGET: false",
+          `2026-08-27T23:00:00Z [shard:resources] logicalCpuCount=8 totalMemoryBytes=${gib * 1024 ** 3} requested plans=1 admitted plans=1`,
+          namedLog,
+        ].join("\n");
+        const samples = [1, 2].map((id) =>
+          timingRun(id, [{ kind: "compact", labels: ["blacksmith-32vcpu-ubuntu-2404"], text }]),
+        );
+        const result = refitTestTimings(samples, previousNamed);
+        expect(result.timings.compactGroupSeconds.blacksmith[namedKey], `${suffix} ${gib}GiB`).toBe(
+          gib === 27 ? 100 : 40,
+        );
+        expect(result.rejectedWorkerKeys.blacksmith.includes(namedKey)).toBe(gib === 27);
+      }
+    }
+  });
+
   it("retains measured parent costs across split inventory changes without double-counting retries", () => {
     const parentShardName = "agentic-control-plane-agent-chat";
     const generations = [0, 1, 2].map((index) =>
@@ -1106,6 +1394,49 @@ it.todo("retains todo coverage");
     expect(refitTestTimings([runs[0]!]).timings.compactGroupSeconds).toEqual({
       blacksmith: {},
       github: {},
+    });
+  });
+
+  it("does not promote selected PR generations into full-parent samples", () => {
+    const parent = "changed-agentic-cli";
+    const child = createCompactSplitTimingGeneration({
+      configs: ["test/vitest/vitest.cli.config.ts"],
+      parentShardName: parent,
+      stripes: [["src/cli/selected.test.ts"]],
+    }).timingKeys[0]!;
+    const previous: CiTestTimings = {
+      ...baseline,
+      compactGroupSeconds: { blacksmith: { [parent]: 1_000 }, github: {} },
+    };
+    const runs = [20, 40, 60].map((seconds, index) =>
+      Object.assign(
+        timingRun(index + 1, [
+          {
+            kind: "compact",
+            labels: ["blacksmith-8vcpu-ubuntu-2404"],
+            text: `${compactLog(seconds, child)}\n${compactLog(600, parent)}`,
+          },
+        ]),
+        { pullRequestMergeRef: true, completeInventory: false },
+      ),
+    );
+    // Neither selected generations nor repeated unsplit PR spans prove the
+    // full owner inventory. Only the exact selected child can refit.
+    const expected = {
+      [parent]: 1_000,
+      [child]: 40,
+    };
+    expect(refitTestTimings(runs, previous).timings.compactGroupSeconds.blacksmith).toEqual(
+      expected,
+    );
+    const fragments = runs.flatMap((run) => [{ ...run, pullRequestMergeRef: false }, run]);
+    expect(refitTestTimings(fragments, previous).timings.compactGroupSeconds.blacksmith).toEqual(
+      expected,
+    );
+    const main = runs.map((run) => Object.assign({}, run, { pullRequestMergeRef: false }));
+    expect(refitTestTimings(main, previous).timings.compactGroupSeconds.blacksmith).toEqual({
+      [parent]: 600,
+      [child]: 40,
     });
   });
 
@@ -1516,7 +1847,7 @@ describe("CI timing sampler provenance", () => {
                 : timings.repoE2eFileSeconds["test/release.e2e.test.ts"],
           ).toBe(40);
           expect(result.stderr).toContain(
-            `Skipped ${source} run 1: jobs completed after frozen UTC cutoff ${sampleNow}.`,
+            `Skipped ${source === "tooling" ? "pull-request" : source} run 1: jobs completed after frozen UTC cutoff ${sampleNow}.`,
           );
           const requests = fixture.requests();
           expect(requests.some((args) => args[1]?.includes("/runs/1/attempts/2/jobs?"))).toBe(true);
@@ -1638,22 +1969,29 @@ describe("CI timing sampler provenance", () => {
     );
   });
 
-  it("samples PR merge-ref tooling without replacing main, release, or UI measurements", () => {
+  it("samples contributing PR compact and tooling jobs while retaining partial-plan history and runner identity", () => {
+    const gatewayGroup = createCompactSplitTimingGeneration({
+      configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+      parentShardName: "agentic-gateway-methods-hosted-2",
+      stripes: [["src/gateway/selected.test.ts"]],
+    }).timingKeys[0]!;
     withSamplerFixture(
       {
         baseline: retained,
         runs: [samplerRun(1), samplerRun(2)],
-        toolingRuns: [3, 4].map((id) =>
+        toolingRuns: [7, 8, 3, 4, 5].map((id) =>
           samplerRun(id, { event: "pull_request", head_branch: "feature" }),
         ),
         jobs: [
           samplerJob(11, 1),
           samplerJob(21, 2),
-          ...[3, 4].flatMap((id) => [
+          samplerJob(81, 8, { log: "No complete shard spans" }),
+          ...[3, 4, 5].flatMap((id) => [
             samplerJob(id * 10 + 1, id, {
+              name: `checks-node-${id === 3 ? "changed-" : id === 4 ? "changed-config-" : ""}compact-large-1`,
               log: [
-                samplerToolingLog(id === 3 ? 30 : 50),
-                compactLog(900),
+                samplerToolingLog((id - 2) * 20),
+                compactLog((id - 2) * 100 + 700, gatewayGroup),
                 uiLog({ [measuredFile]: 900 }),
               ].join("\n"),
             }),
@@ -1661,25 +1999,39 @@ describe("CI timing sampler provenance", () => {
               name: "checks-ui-e2e (1/6)",
               log: uiLog({ [measuredFile]: 900 }),
             }),
+            samplerJob(id * 10 + 3, id, {
+              name: "checks-node-changed-config-compact-small-1",
+              labels: ["ubuntu-24.04"],
+              log: compactLog(600, gatewayGroup),
+            }),
           ]),
         ],
       },
       (fixture) => {
-        const result = fixture.invoke();
+        const result = fixture.invoke(false, 3);
         expect(result.status, result.stderr).toBe(0);
         const timings = ciTestTimingsSchema.parse(JSON.parse(fixture.contents()));
         expect(timings).toMatchObject({
-          compactGroupSeconds: retained.compactGroupSeconds,
           runtimePlacementTimings: retained.runtimePlacementTimings,
           repoE2eFileSeconds: retained.repoE2eFileSeconds,
           uiE2e: retained.uiE2e,
         });
-        expect(timings.compactGroupSeconds).toEqual(retained.compactGroupSeconds);
+        expect(timings.compactGroupSeconds).toEqual({
+          blacksmith: {
+            ...retained.compactGroupSeconds.blacksmith,
+            [gatewayGroup]: 900,
+          },
+          github: { ...retained.compactGroupSeconds.github, [gatewayGroup]: 600 },
+        });
         expect(timings.toolingFileSeconds).toEqual({
           blacksmith: { ...retained.toolingFileSeconds.blacksmith, [toolingFile]: 40 },
           github: retained.toolingFileSeconds.github,
         });
-        expect(result.stdout).toContain("PR tooling measurements execute the merge-ref");
+        expect(result.stdout).toContain(
+          "PR compact and tooling measurements execute the merge-ref",
+        );
+        expect(result.stdout).toContain("Independent PR compact contributors: 3");
+        expect(timings.source).toContain("pull_request merge-ref runs: 3, 4, 5");
         const request = fixture.requests().find((args) => args[1]?.includes("event=pull_request"));
         expect(request).toBeDefined();
         const params = new URL(request![1]!, "https://api.github.com").searchParams;
@@ -1687,8 +2039,11 @@ describe("CI timing sampler provenance", () => {
         expect(params.get("created")).toBe(`2026-08-21T12:00:00.000Z..${sampleNow}`);
         expect(params.has("branch")).toBe(false);
         expect(
-          fixture.requests().some((args) => /\/jobs\/(?:32|42)\/logs$/u.test(args[1] ?? "")),
+          fixture.requests().some((args) => /\/jobs\/(?:32|42|52)\/logs$/u.test(args[1] ?? "")),
         ).toBe(false);
+        expect(
+          fixture.requests().filter((args) => /\/jobs\/(?:31|41|51)\/logs$/u.test(args[1] ?? "")),
+        ).toHaveLength(3);
       },
     );
   });
@@ -1723,7 +2078,12 @@ describe("CI timing sampler provenance", () => {
         baseline: retained,
         runs: [],
         toolingRuns: [samplerRun(3, { event: "pull_request", head_branch: "feature" })],
-        jobs: [samplerJob(31, 3, { log: samplerToolingLog(40) })],
+        jobs: [
+          samplerJob(31, 3, {
+            name: "checks-node-changed-config-compact-large-1",
+            log: `${samplerToolingLog(40)}\n${compactLog(900)}`,
+          }),
+        ],
       },
       (fixture) => {
         const dryRun = fixture.invoke(true, 2, [3]);
@@ -1776,7 +2136,7 @@ describe("CI timing sampler provenance", () => {
     },
   );
 
-  it("does not let a retried PR satisfy the ordinary two-run tooling minimum", () => {
+  it("does not let a retried PR satisfy the ordinary two-run compact or tooling minimum", () => {
     withSamplerFixture(
       {
         baseline: retained,
@@ -1785,8 +2145,11 @@ describe("CI timing sampler provenance", () => {
         jobs: [
           samplerJob(11, 1),
           samplerJob(21, 2),
-          samplerJob(31, 3, { log: samplerToolingLog(30) }),
-          samplerJob(32, 3, { run_attempt: 2, log: samplerToolingLog(50) }),
+          samplerJob(31, 3, { log: `${samplerToolingLog(30)}\n${compactLog(900, "pr-only")}` }),
+          samplerJob(32, 3, {
+            run_attempt: 2,
+            log: `${samplerToolingLog(50)}\n${compactLog(900, "pr-only")}`,
+          }),
         ],
       },
       (fixture) => {

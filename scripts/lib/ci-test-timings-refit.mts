@@ -6,13 +6,16 @@ import {
   type CiTestTimings,
   type RuntimePlacementTiming,
 } from "./ci-test-timings-schema.mts";
+import { isConstrainedCiCheckHost } from "./local-check-runtime.mts";
 import { parseCompactSplitTimingKey } from "./vitest-shard-metadata.mts";
 
 export type CiTimingRun = {
   id: number;
   createdAt: string;
-  /** Failed workflows supply positive samples, never evidence that absent keys disappeared. */
+  /** Failed workflows and selected PR plans never prove absent keys disappeared. */
   completeInventory: boolean;
+  /** The workflow/job SHA identifies the PR head, while tests run its merge-ref. */
+  pullRequestMergeRef?: boolean;
   logs: (
     | { kind: "uiE2e" | "repoE2e"; text: string }
     | { kind: "compact" | "tooling"; text: string; labels: string[] }
@@ -20,13 +23,16 @@ export type CiTimingRun = {
 };
 
 type Samples = Map<string, number[]>;
+type WorkerCeilings = Map<string, Set<number | "unspecified" | "ambiguous">>;
 
 type RuntimeTimingGroup = {
   shard_name: string;
   timing_key?: string;
   configs: string[];
-  includePatterns: string[];
+  includePatterns?: string[] | null;
   env?: Record<string, string>;
+  fallbackMaxWorkers?: number;
+  minTotalMemoryBytes?: number;
 };
 
 function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
@@ -55,9 +61,17 @@ function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
         "configs" in group &&
         strings(group.configs) &&
         group.configs.length > 0 &&
-        "includePatterns" in group &&
-        strings(group.includePatterns) &&
-        group.includePatterns.length > 0 &&
+        (!("includePatterns" in group) ||
+          group.includePatterns === null ||
+          strings(group.includePatterns)) &&
+        (!("fallbackMaxWorkers" in group) ||
+          (typeof group.fallbackMaxWorkers === "number" &&
+            Number.isSafeInteger(group.fallbackMaxWorkers) &&
+            group.fallbackMaxWorkers > 0)) &&
+        (!("minTotalMemoryBytes" in group) ||
+          (typeof group.minTotalMemoryBytes === "number" &&
+            Number.isSafeInteger(group.minTotalMemoryBytes) &&
+            group.minTotalMemoryBytes > 0)) &&
         (!("env" in group) ||
           (typeof group.env === "object" &&
             group.env !== null &&
@@ -88,6 +102,85 @@ function recordSample(samples: Samples, key: string, value: number) {
 
 function seconds(value: string, unit: string): number {
   return Number(value) / (unit === "ms" ? 1000 : 1);
+}
+
+function parseWorkerCeiling(value: unknown): number | null | undefined {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  if (typeof value !== "string" || !/^[1-9]\d*$/u.test(value)) {
+    return null;
+  }
+  const workers = Number(value);
+  return Number.isSafeInteger(workers) ? workers : null;
+}
+
+function intersectWorkerCeilings(...values: (number | null | undefined)[]) {
+  if (values.includes(null)) {
+    return null;
+  }
+  const ceilings = values.filter((value): value is number => typeof value === "number");
+  return ceilings.length > 0 ? Math.min(...ceilings) : undefined;
+}
+
+function readLogEnv(text: string, key: string): string | null | undefined {
+  const values = new Set(
+    [
+      ...text.matchAll(
+        new RegExp(
+          `\\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z\\s+${key}: (\\{\\n[\\s\\S]*?\\n\\}|[^\\n]*)$`,
+          "gmu",
+        ),
+      ),
+    ].map((match) => match[1]!.trim()),
+  );
+  return values.size > 1 ? null : [...values][0];
+}
+
+function readJobWorkerCeiling(text: string) {
+  const inherited = parseWorkerCeiling(readLogEnv(text, "OPENCLAW_VITEST_MAX_WORKERS"));
+  const encoded = readLogEnv(text, "OPENCLAW_NODE_TEST_ENV_JSON");
+  if (encoded === null) {
+    return null;
+  }
+  let override: number | null | undefined;
+  if (encoded) {
+    try {
+      const value: unknown = JSON.parse(encoded);
+      if (value !== null) {
+        override =
+          typeof value === "object" && !Array.isArray(value)
+            ? parseWorkerCeiling(
+                "OPENCLAW_VITEST_MAX_WORKERS" in value
+                  ? value.OPENCLAW_VITEST_MAX_WORKERS
+                  : undefined,
+              )
+            : null;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return intersectWorkerCeilings(inherited, override);
+}
+
+function readWorkerResources(text: string) {
+  const matches = [
+    ...text.matchAll(
+      /\d{4}-\d\d-\d\dT[\d:.]+Z\s+\[shard:resources\] logicalCpuCount=(\d+) totalMemoryBytes=(\d+) requested plans=(\d+) admitted plans=(\d+)$/gmu,
+    ),
+  ];
+  if (matches.length !== 1) {
+    return undefined;
+  }
+  const values = matches[0]!.slice(1).map(Number);
+  if (
+    !values.every((value) => Number.isSafeInteger(value) && value > 0) ||
+    values[3]! > values[2]!
+  ) {
+    return undefined;
+  }
+  return { logicalCpuCount: values[0]!, totalMemoryBytes: values[1]!, admittedPlans: values[3]! };
 }
 
 function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
@@ -135,11 +228,17 @@ function readCompactLog(
   samples: { blacksmith: Samples; github: Samples },
   runtimeSamples: { blacksmith: Samples; github: Samples },
   runtimeDescriptors: Map<string, RuntimePlacementTiming>,
+  workerCeilings: { blacksmith: WorkerCeilings; github: WorkerCeilings },
+  exactInventoryOnly: boolean,
 ) {
   const profile = labels.some((label) => label.startsWith("blacksmith-")) ? "blacksmith" : "github";
   const starts = new Map<string, number>();
   const descriptors = readRuntimeTimingGroups(text);
   const runtimeModes = new Map<string, "runtime" | "private-qa">();
+  const jobWorkerCeiling = readJobWorkerCeiling(text);
+  const resources = readWorkerResources(text);
+  const runnerEnvironment = readLogEnv(text, "RUNNER_ENVIRONMENT");
+  const frozenTarget = readLogEnv(text, "FROZEN_TARGET");
   for (const line of text.split("\n")) {
     const readiness =
       /\[shard:([^\]]+)\] \[test\] preparing (runtime|private-qa) runtime before Vitest workers/u.exec(
@@ -173,16 +272,75 @@ function readCompactLog(
     if (exitCode === "0" && started !== undefined) {
       // Preserve the workload as executed. Packed plans may be serial or
       // concurrent, and admission must use the wrapper span it actually ran.
-      recordSample(samples[profile], key, (Date.parse(timestamp) - started) / 1000);
       const matches = descriptors.filter((group) => (group.timing_key ?? group.shard_name) === key);
-      if (matches.length === 1) {
-        const group = matches[0]!;
+      const group = matches.length === 1 ? matches[0] : undefined;
+      // Runtime subsets inherit the envelope's worker pin, but their files
+      // cannot supply a full-envelope runtime placement observation.
+      const workerMatches = descriptors.filter(
+        (entry) =>
+          (entry.timing_key ?? entry.shard_name) === key.replace(/^(?:bun|node-subset):/u, ""),
+      );
+      const workerGroup = workerMatches.length === 1 ? workerMatches[0] : undefined;
+      let workerCeiling = intersectWorkerCeilings(
+        jobWorkerCeiling,
+        parseWorkerCeiling(workerGroup?.env?.OPENCLAW_VITEST_MAX_WORKERS),
+      );
+      const fallback = workerGroup?.fallbackMaxWorkers;
+      if (
+        workerGroup !== undefined &&
+        fallback !== undefined &&
+        (typeof workerCeiling !== "number" || workerCeiling > fallback)
+      ) {
+        const eligibleResources =
+          resources &&
+          !isConstrainedCiCheckHost(resources) &&
+          resources.admittedPlans === 1 &&
+          resources.totalMemoryBytes >= (workerGroup.minTotalMemoryBytes ?? 0);
+        const fallbackApplies =
+          (resources && !eligibleResources) ||
+          runnerEnvironment === "github-hosted" ||
+          frozenTarget === "true";
+        const measuredHost =
+          eligibleResources && runnerEnvironment === "self-hosted" && frozenTarget === "false";
+        workerCeiling = fallbackApplies
+          ? intersectWorkerCeilings(workerCeiling, fallback)
+          : measuredHost
+            ? workerCeiling
+            : null;
+      }
+      const namedWorkers = [...key.matchAll(/#(?:workers|file-parallel)-([1-9]\d*)(?=#|$)/gu)];
+      if (
+        typeof workerCeiling === "number" &&
+        namedWorkers.some((match) => Number(match[1]) !== workerCeiling)
+      ) {
+        // A successful fallback still carries the requested worker identity.
+        workerCeiling = null;
+      }
+      const splitTiming = parseCompactSplitTimingKey(key);
+      if (!exactInventoryOnly || splitTiming) {
+        for (const identity of [key, splitTiming?.parentShardName]) {
+          if (identity === undefined) {
+            continue;
+          }
+          const observed = workerCeilings[profile].get(identity) ?? new Set();
+          observed.add(workerCeiling === null ? "ambiguous" : (workerCeiling ?? "unspecified"));
+          workerCeilings[profile].set(identity, observed);
+        }
+        // An unsplit PR key does not prove that its full owner inventory ran.
+        recordSample(samples[profile], key, (Date.parse(timestamp) - started) / 1000);
+      }
+      if (group && workerCeiling !== null) {
         const observation = {
           configs: group.configs,
           env: Object.fromEntries(
-            Object.entries(group.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
+            Object.entries({
+              ...group.env,
+              ...(workerCeiling === undefined
+                ? {}
+                : { OPENCLAW_VITEST_MAX_WORKERS: String(workerCeiling) }),
+            }).toSorted(([a], [b]) => a.localeCompare(b)),
           ),
-          includePatterns: group.includePatterns.toSorted(),
+          includePatterns: group.includePatterns?.toSorted(),
           pretestBuildMode: runtimeModes.get(key),
           seconds: Math.max(1, Math.round((Date.parse(timestamp) - started) / 1000)),
         };
@@ -229,12 +387,12 @@ function readToolingLog(text: string, samples: Samples) {
           cases: new Map(),
           files: new Map(),
           complete: false,
-          declaredFiles: new Set(descriptor.includePatterns),
+          declaredFiles: new Set(descriptor.includePatterns ?? []),
           singletonFile:
             !active.has(shard) &&
             descriptor.configs.length === 1 &&
             descriptor.configs[0] === "test/vitest/vitest.tooling.config.ts" &&
-            descriptor.includePatterns.length === 1
+            descriptor.includePatterns?.length === 1
               ? descriptor.includePatterns[0]
               : undefined,
           fileSummaryCount: 0,
@@ -322,7 +480,11 @@ function runtimePlacementSecondsMap(observations: readonly RuntimePlacementTimin
   );
 }
 
-function recordCompleteParentSamples(samples: Samples, observedParents: Set<string>) {
+function recordCompleteParentSamples(
+  samples: Samples,
+  observedParents: Set<string>,
+  foldParents: boolean,
+) {
   const generations = new Map<
     string,
     { parent: string; expected: number; parts: Map<number, number> }
@@ -333,6 +495,11 @@ function recordCompleteParentSamples(samples: Samples, observedParents: Set<stri
       continue;
     }
     observedParents.add(parsed.parentShardName);
+    // A selected PR subset can share the reduced full inventory's parent name.
+    // Its exact child key is evidence; completeness of that subset is not.
+    if (!foldParents) {
+      continue;
+    }
     const generation = generations.get(parsed.generationKey) ?? {
       parent: parsed.parentShardName,
       expected: parsed.expectedParts,
@@ -416,6 +583,10 @@ export function refitTestTimings(
     blacksmith: new Map<string, number[]>(),
     github: new Map<string, number[]>(),
   };
+  const workerCeilings = {
+    blacksmith: new Map<string, Set<number | "unspecified" | "ambiguous">>(),
+    github: new Map<string, Set<number | "unspecified" | "ambiguous">>(),
+  };
   const runtimeDescriptors = new Map<string, RuntimePlacementTiming>(
     Object.values(previous?.runtimePlacementTimings ?? {})
       .flat()
@@ -427,6 +598,7 @@ export function refitTestTimings(
     if (retained) {
       retained.logs.push(...run.logs);
       retained.completeInventory = retained.completeInventory && run.completeInventory;
+      retained.pullRequestMergeRef ||= run.pullRequestMergeRef;
     } else {
       uniqueRuns.set(run.id, { ...run, logs: [...run.logs] });
     }
@@ -452,13 +624,29 @@ export function refitTestTimings(
           : "toolingGithub";
         readToolingLog(text, current[profile]);
       } else if (log.kind === "compact") {
-        readCompactLog(text, log.labels, current, currentRuntime, runtimeDescriptors);
+        readCompactLog(
+          text,
+          log.labels,
+          current,
+          currentRuntime,
+          runtimeDescriptors,
+          workerCeilings,
+          run.pullRequestMergeRef === true,
+        );
+        const profile = log.labels.some((label) => label.startsWith("blacksmith-"))
+          ? "toolingBlacksmith"
+          : "toolingGithub";
+        readToolingLog(text, current[profile]);
       } else {
         readE2eLog(text, current[log.kind], log.kind === "uiE2e" ? overhead : undefined);
       }
     }
     for (const profile of ["blacksmith", "github"] as const) {
-      recordCompleteParentSamples(current[profile], observedParents[profile]);
+      recordCompleteParentSamples(
+        current[profile],
+        observedParents[profile],
+        !run.pullRequestMergeRef,
+      );
       for (const [identity, values] of currentRuntime[profile]) {
         recordSample(runtimeSamples[profile], identity, median(values));
       }
@@ -482,6 +670,20 @@ export function refitTestTimings(
     }
   }
 
+  const rejectedWorkerKeys = { blacksmith: [] as string[], github: [] as string[] };
+  for (const profile of ["blacksmith", "github"] as const) {
+    for (const [key, ceilings] of workerCeilings[profile]) {
+      if (ceilings.size > 1 || ceilings.has("ambiguous")) {
+        // Historical keys can omit inherited job caps. Do not average unlike
+        // execution policies or turn rejected evidence into a pruning signal.
+        samples[profile].delete(key);
+        observedParents[profile].add(key);
+        rejectedWorkerKeys[profile].push(key);
+      }
+    }
+    rejectedWorkerKeys[profile].sort();
+  }
+
   const completeInventoryRuns = new Set(
     [...uniqueRuns.values()].filter((run) => run.completeInventory).map((run) => run.id),
   );
@@ -495,6 +697,7 @@ export function refitTestTimings(
     measuredOverhead === undefined ||
     (oldOverhead !== undefined && Math.abs(measuredOverhead - oldOverhead) <= oldOverhead * 0.15);
   const runIds = [...new Set(runs.map((run) => run.id))].toSorted((a, b) => a - b);
+  const pullRequestRunIds = runs.filter((run) => run.pullRequestMergeRef).map((run) => run.id);
   function refitRuntime(profile: "blacksmith" | "github"): RuntimePlacementTiming[] {
     return Object.entries(
       refitMap(
@@ -534,7 +737,7 @@ export function refitTestTimings(
     },
     source: options.seedTooling
       ? `tooling seed from successful pull_request CI merge-ref runs: ${runIds.join(", ")}; retained other timings: ${previous?.source ?? "none"}`
-      : `median of successful timing jobs from ${runIds.length} CI and release-check runs: ${runIds.join(", ")}`,
+      : `median of successful timing jobs from ${runIds.length} CI and release-check runs: ${runIds.join(", ")}${pullRequestRunIds.length > 0 ? `; pull_request merge-ref runs: ${[...new Set(pullRequestRunIds)].toSorted((a, b) => a - b).join(", ")}` : ""}`,
     // PR plans may select only part of tooling. Absence is not evidence that
     // a file disappeared; preserve unobserved measurements across those windows.
     toolingFileSeconds: {
@@ -622,6 +825,7 @@ export function refitTestTimings(
     timings,
     changes: changes.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
     runIds,
+    rejectedWorkerKeys,
     contributingRunIds: {
       blacksmith: [...contributingRuns.blacksmith].toSorted((a, b) => a - b),
       github: [...contributingRuns.github].toSorted((a, b) => a - b),
