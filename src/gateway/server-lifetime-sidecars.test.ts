@@ -293,29 +293,67 @@ describe("gateway lifetime sidecars", () => {
     expect(stopped).toHaveBeenCalledOnce();
   });
 
-  test("owns standalone GitHub publication recovery when worker placement is unavailable", async () => {
-    vi.useFakeTimers();
-    const reconcileGitHubPublications = vi.fn(async () => {});
+  test("owns and joins GitHub publication recovery when worker placement is unavailable", async () => {
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const reconcileGitHubPublications = vi
+      .fn(async () => {})
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(() => {
+        entered.resolve();
+        return release.promise;
+      });
     const owner = createGatewaySidecarStopOwner();
+    const checkpoint = new MessageChannel();
+    const warn = vi.fn();
+    vi.spyOn(secretStore, "purgeExpiredSecretStoreEntries").mockResolvedValue(0);
 
     await attachInitialGatewayLifetimeSidecars({
-      scheduler: createTestGatewayScheduler(),
+      scheduler,
       chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
       gatewayRequestContext: {} as never,
       flushPendingSessionsChangedEvents: vi.fn(),
       minimalTestGateway: false,
-      logWarning: vi.fn(),
+      logWarning: warn,
       reconcileGitHubPublications,
       publishSidecars: owner.publish,
     });
-    vi.runAllTicks();
-    expect(reconcileGitHubPublications).toHaveBeenCalledOnce();
+    let scheduled: void | Promise<void> = undefined;
+    let stopping: Promise<void> | undefined;
+    try {
+      await clock.wake();
+      expect(reconcileGitHubPublications).toHaveBeenCalledOnce();
 
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
-    await owner.stop();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
+      scheduled = clock.advanceBy(60_000);
+      await entered.promise;
+      await clock.advanceBy(3 * 60_000);
+      expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
+      let stopped = false;
+      stopping = owner.stop().then(() => {
+        stopped = true;
+      });
+      const shutdownYielded = createDeferred();
+      checkpoint.port1.once("message", () => shutdownYielded.resolve());
+      checkpoint.port2.postMessage(null);
+      await shutdownYielded.promise;
+      expect(stopped).toBe(false);
+      release.reject(new Error("synthetic publication recovery failure"));
+      await Promise.all([scheduled, stopping]);
+      expect(stopped).toBe(true);
+      expect(warn).toHaveBeenCalledWith("GitHub publication recovery failed; will retry.");
+
+      await clock.advanceBy(60_000);
+      expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
+    } finally {
+      checkpoint.port1.close();
+      checkpoint.port2.close();
+      release.resolve();
+      await Promise.allSettled([scheduled, stopping]);
+      await owner.stop();
+      await scheduler.stop();
+    }
   });
 
   test("attaches and retires authorization lifecycles with the Gateway", async () => {

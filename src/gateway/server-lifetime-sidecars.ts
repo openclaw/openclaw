@@ -13,42 +13,9 @@ import {
 import { attachSessionChangeEventLifetime } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 import { startIncognitoSessionLifetime } from "./session-incognito-lifetime.js";
 
 type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>;
-const GITHUB_PUBLICATION_RECONCILE_INTERVAL_MS = 60_000;
-
-function startGitHubPublicationMaintenance(
-  reconcile: () => Promise<void>,
-  logWarning: (message: string) => void,
-): GatewayPostReadySidecarHandle {
-  let current: Promise<void> | undefined;
-  let stopped = false;
-  const run = () => {
-    if (stopped || current) {
-      return;
-    }
-    const operation = reconcile()
-      .catch(() => logWarning("GitHub publication recovery failed; will retry."))
-      .finally(() => {
-        if (current === operation) {
-          current = undefined;
-        }
-      });
-    current = operation;
-  };
-  run();
-  const interval = setInterval(run, GITHUB_PUBLICATION_RECONCILE_INTERVAL_MS);
-  interval.unref?.();
-  return {
-    stop: async () => {
-      stopped = true;
-      clearInterval(interval);
-      await current;
-    },
-  };
-}
 
 export async function attachInitialGatewayLifetimeSidecars(params: {
   scheduler: GatewayScheduler;
@@ -126,9 +93,18 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
       }),
     );
   }
-  if (params.reconcileGitHubPublications) {
+  const reconcileGitHubPublications = params.reconcileGitHubPublications;
+  if (reconcileGitHubPublications) {
     params.publishSidecars(
-      startGitHubPublicationMaintenance(params.reconcileGitHubPublications, params.logWarning),
+      params.scheduler.schedule({
+        id: "maintenance:github-publication",
+        atMs: params.scheduler.now(),
+        everyMs: 60_000,
+        run: () =>
+          reconcileGitHubPublications().catch(() =>
+            params.logWarning("GitHub publication recovery failed; will retry."),
+          ),
+      }),
     );
   }
   attachSessionChangeEventLifetime(params.gatewayRequestContext, () =>
