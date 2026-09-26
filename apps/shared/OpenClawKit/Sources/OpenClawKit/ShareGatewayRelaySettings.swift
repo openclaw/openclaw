@@ -8,6 +8,7 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
     public let sessionKey: String
     public let deliveryChannel: String?
     public let deliveryTo: String?
+    public let requiresForegroundSignIn: Bool?
 
     public init(
         gatewayURLString: String,
@@ -16,7 +17,8 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
         password: String?,
         sessionKey: String,
         deliveryChannel: String? = nil,
-        deliveryTo: String? = nil)
+        deliveryTo: String? = nil,
+        requiresForegroundSignIn: Bool? = nil)
     {
         self.gatewayURLString = gatewayURLString
         self.gatewayStableID = gatewayStableID
@@ -25,6 +27,7 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
         self.sessionKey = sessionKey
         self.deliveryChannel = deliveryChannel
         self.deliveryTo = deliveryTo
+        self.requiresForegroundSignIn = requiresForegroundSignIn
     }
 }
 
@@ -74,7 +77,8 @@ public enum ShareGatewayRelaySettings {
             password: credentials?.password,
             sessionKey: config.sessionKey,
             deliveryChannel: config.deliveryChannel,
-            deliveryTo: config.deliveryTo)
+            deliveryTo: config.deliveryTo,
+            requiresForegroundSignIn: config.requiresForegroundSignIn)
     }
 
     /// An endpoint is not a gateway identity. If the extension launches before the
@@ -132,7 +136,8 @@ public enum ShareGatewayRelaySettings {
             password: nil,
             sessionKey: config.sessionKey,
             deliveryChannel: config.deliveryChannel,
-            deliveryTo: config.deliveryTo)
+            deliveryTo: config.deliveryTo,
+            requiresForegroundSignIn: config.requiresForegroundSignIn)
         guard let data = try? JSONEncoder().encode(metadata) else { return }
         self.defaults.set(data, forKey: self.relayConfigKey)
     }

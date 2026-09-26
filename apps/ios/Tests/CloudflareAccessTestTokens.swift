@@ -26,9 +26,13 @@ struct CloudflareAccessTestTokens {
         ]]])
     }
 
-    static func application() throws -> CloudflareAccessApplication {
-        try CloudflareAccessApplication(
-            origin: CloudflareAccessOrigin(#require(URL(string: "https://gateway.example.test:8443"))),
+    static func application(port: Int = 8443) throws -> CloudflareAccessApplication {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "gateway.example.test"
+        if port != 443 { components.port = port }
+        return try CloudflareAccessApplication(
+            origin: CloudflareAccessOrigin(#require(components.url)),
             issuer: #require(URL(string: "https://example.cloudflareaccess.com")),
             audience: "test-audience")
     }
@@ -42,14 +46,22 @@ struct CloudflareAccessTestTokens {
         return "\(message).\(Self.encode(signature))"
     }
 
-    func session(subject: String = "test-subject", expires: Date = Date().addingTimeInterval(3600)) throws
+    func session(
+        subject: String = "test-subject",
+        expires: Date = Date().addingTimeInterval(3600),
+        application: CloudflareAccessApplication? = nil,
+        gatewayRoles: [String]? = nil) throws
         -> CloudflareAccessSession
     {
-        let application = try Self.application()
-        let token = try self.token([
+        let application = try application ?? Self.application()
+        var claims: [String: Any] = [
             "iss": application.issuer.absoluteString, "aud": [application.audience],
             "type": "app", "sub": subject, "exp": expires.timeIntervalSince1970,
-        ])
+        ]
+        if let gatewayRoles {
+            claims["gateway.roles"] = gatewayRoles
+        }
+        let token = try self.token(claims)
         return CloudflareAccessSession(application: application, subject: subject, token: token, expiresAt: expires)
     }
 

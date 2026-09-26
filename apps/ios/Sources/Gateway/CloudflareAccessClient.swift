@@ -10,7 +10,10 @@ struct CloudflareAccessClient: Sendable {
     }
 
     /// Check ordinary ingress first: the metadata endpoint returns 200 even before authentication.
-    func discover(gatewayURL: URL, session: CloudflareAccessSession? = nil) async throws
+    func discover(
+        gatewayURL: URL,
+        session: CloudflareAccessSession? = nil,
+        customHeaders: [String: String] = [:]) async throws
         -> CloudflareAccessApplication?
     {
         let origin = try CloudflareAccessOrigin(gatewayURL)
@@ -23,7 +26,12 @@ struct CloudflareAccessClient: Sendable {
         }
         guard let url = components.url else { throw CloudflareAccessError.invalidGateway }
         var probe = URLRequest(url: url)
-        probe.setValue(session?.authorizationHeader(for: url), forHTTPHeaderField: "Cf-Access-Token")
+        for (name, value) in customHeaders {
+            probe.setValue(value, forHTTPHeaderField: name)
+        }
+        if let token = session?.authorizationHeader(for: url) {
+            probe.setValue(token, forHTTPHeaderField: "Cf-Access-Token")
+        }
         let (_, response) = try await self.request(probe, 0)
         guard Self.isChallenge(response, origin: origin) else { return nil }
 

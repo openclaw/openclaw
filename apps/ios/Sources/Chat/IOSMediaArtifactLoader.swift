@@ -30,7 +30,7 @@ struct IOSMediaArtifactLoader: Sendable {
 
     init(connectionProvider: @escaping ConnectionProvider) {
         self.init(connectionProvider: connectionProvider) { tls, maximumBytes in
-            let session = GatewayTLSPinningSession(params: tls)
+            let session = GatewayTLSPinningSession(params: tls, allowsRedirects: false, allowsStoredCredentials: false)
             return { request in
                 defer { session.finishTasksAndInvalidate() }
                 return try await session.data(for: request, maximumBytes: maximumBytes)
@@ -76,14 +76,20 @@ struct IOSMediaArtifactLoader: Sendable {
                   playback: playback)
         else { throw LoadError.invalidSource }
 
-        let headers = url.scheme?.lowercased() == "https"
-            ? GatewayCustomHeaders.sanitized(connection.customHeaders)
-            : [:]
+        let ingress = connection.config.ingressAuthorization
+        let headers: [String: String] = if let ingress {
+            try await ingress.headers(url)
+        } else {
+            url.scheme?.lowercased() == "https"
+                ? GatewayCustomHeaders.sanitized(connection.customHeaders)
+                : [:]
+        }
         // AVPlayer cannot use the app's pinned TLS delegate or immutable proxy
         // headers. Those routes take the bounded authenticated download path.
         let canStreamDirectly = kind == .video &&
             url.scheme?.lowercased() == "https" &&
             connection.config.tls == nil &&
+            ingress == nil &&
             headers.isEmpty &&
             declaredMIME.map(kind.acceptsMIMEType) == true
         if canStreamDirectly, playback != .transcode, let declaredMIME {
@@ -110,11 +116,21 @@ struct IOSMediaArtifactLoader: Sendable {
         let data: Data
         let urlResponse: URLResponse
         do {
-            (data, urlResponse) = try await self.requestFactory(tls, maximumBytes)(request)
+            let operation = self.requestFactory(tls, maximumBytes)
+            if let ingress {
+                (data, urlResponse) = try await ingress.load(request, operation)
+            } else {
+                (data, urlResponse) = try await operation(request)
+            }
         } catch is GatewayBoundedDataError {
             throw LoadError.payloadTooLarge
         }
-        guard let http = urlResponse as? HTTPURLResponse else { throw LoadError.invalidResponse }
+        guard let http = urlResponse as? HTTPURLResponse, http.url == request.url else {
+            throw LoadError.invalidResponse
+        }
+        // The capability belongs to the captured ingress revision. A late download
+        // must not publish after expiry or replacement by another Access account.
+        try await ingress?.checkResponse(http)
         if http.statusCode == 202 {
             return .preparing
         }

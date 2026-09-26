@@ -38,6 +38,7 @@ enum ControlUIHubPage {
         return AuthenticatedControlUI.pageURL(config: config, path: path, queryItems: [])
     }
 
+    @MainActor
     func authUserScript(config: GatewayConnectConfig?, storedOperatorToken: String?) -> String? {
         AuthenticatedControlUI.authUserScript(
             config: config,

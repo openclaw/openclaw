@@ -926,6 +926,37 @@ extension SettingsProTab {
                         .font(OpenClawType.body)
                 }
             }
+            if let attention = self.gatewayController.ingress.attention {
+                Text(attention.message)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+                if self.gatewayController.ingress.signingIn {
+                    Button {
+                        self.gatewayController.ingress.cancelSignIn()
+                    } label: {
+                        Text("Cancel sign-in").font(OpenClawType.body)
+                    }
+                } else {
+                    Button {
+                        Task { await self.reconnectGateway(ingressAttention: attention) }
+                    } label: {
+                        Text("Sign in to Cloudflare Access").font(OpenClawType.body)
+                    }
+                    .disabled(self.isReconnectingGateway)
+                }
+            }
+            if let stableID = self.gatewayCustomHeadersTargetStableID,
+               self.gatewayController.ingress.hasSession(stableID: stableID)
+            {
+                Button {
+                    Task { await self.gatewayController.ingress.signOut(stableID: stableID) }
+                } label: {
+                    Text("Sign out of Cloudflare Access").font(OpenClawType.body)
+                }
+                Text("Signs out gateways using this host’s Access session. Your browser may stay signed in.")
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+            }
             Button(role: .destructive) {
                 self.showResetOnboardingAlert = true
             } label: {

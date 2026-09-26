@@ -138,6 +138,14 @@ final class ShareViewController: UIViewController {
                         comment: "Share extension missing gateway error"),
                 ])
         }
+        guard config.requiresForegroundSignIn != true else {
+            throw NSError(
+                domain: "OpenClawShare",
+                code: 12,
+                userInfo: [NSLocalizedDescriptionKey: NSLocalizedString(
+                    "This gateway uses Cloudflare Access. Open OpenClaw and send from the app; your share stays here.",
+                    comment: "Share extension foreground browser sign-in requirement")])
+        }
         guard let url = URL(string: config.gatewayURLString) else {
             throw NSError(
                 domain: "OpenClawShare",

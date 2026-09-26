@@ -292,8 +292,14 @@ enum ChatInlineWidgetExport {
     }
 }
 
+extension EnvironmentValues {
+    /// Apps can retire embedded browser content while native transport remains usable.
+    @Entry public var openClawEmbeddedBrowserUnavailableReason: String?
+}
+
 @MainActor
 struct ChatInlineWidgetView: View {
+    @Environment(\.openClawEmbeddedBrowserUnavailableReason) private var browserUnavailableReason
     let preview: OpenClawChatCanvasPreview
     let resolverReady: Bool
     let resolveResource: @MainActor @Sendable (
@@ -334,7 +340,11 @@ struct ChatInlineWidgetView: View {
             }
 
             #if canImport(WebKit) && (os(iOS) || os(macOS))
-            if let resolvedResource {
+            if let browserUnavailableReason {
+                Text(browserUnavailableReason)
+                    .font(OpenClawChatTypography.footnote)
+                    .foregroundStyle(OpenClawChatTheme.muted)
+            } else if let resolvedResource {
                 self.renderedWidget(resource: resolvedResource)
             } else if self.unavailable {
                 Text("Widget unavailable")
@@ -351,7 +361,10 @@ struct ChatInlineWidgetView: View {
                 .foregroundStyle(OpenClawChatTheme.muted)
             #endif
         }
-        .task(id: LoadID(path: self.preview.inlineWidgetPath, resolverReady: self.resolverReady)) {
+        .task(id: LoadID(
+            path: self.preview.inlineWidgetPath,
+            resolverReady: self.resolverReady && self.browserUnavailableReason == nil))
+        {
             let path = self.preview.inlineWidgetPath
             if self.activePath != path {
                 self.reset(path: path)
@@ -366,23 +379,23 @@ struct ChatInlineWidgetView: View {
         }
         #if canImport(WebKit) && (os(iOS) || os(macOS))
         .alert("Widget export failed", isPresented: self.isPresentingExportError) {
-            Button(role: .cancel) {
-                self.exportErrorMessage = nil
-            } label: {
-                Text("OK")
-                    .font(OpenClawChatTypography.body)
+                Button(role: .cancel) {
+                    self.exportErrorMessage = nil
+                } label: {
+                    Text("OK")
+                        .font(OpenClawChatTypography.body)
+                }
+            } message: {
+                if let exportErrorMessage {
+                    Text(exportErrorMessage)
+                        .font(OpenClawChatTypography.body)
+                }
             }
-        } message: {
-            if let exportErrorMessage {
-                Text(exportErrorMessage)
-                    .font(OpenClawChatTypography.body)
+            #if os(iOS)
+            .sheet(item: self.$sharedImage) { item in
+                ChatInlineWidgetShareSheet(image: item.image)
             }
-        }
-        #if os(iOS)
-        .sheet(item: self.$sharedImage) { item in
-            ChatInlineWidgetShareSheet(image: item.image)
-        }
-        #endif
+            #endif
         #endif
     }
 
@@ -520,7 +533,8 @@ struct ChatInlineWidgetView: View {
         replacing failedResource: OpenClawChatWidgetResource?,
         generation: UUID) async
     {
-        let candidate = await self.resolveResource(path, failedResource)
+        guard self.browserUnavailableReason == nil else { return }
+        let candidate = await resolveResource(path, failedResource)
         guard !Task.isCancelled,
               self.activePath == path,
               self.loadGeneration == generation

@@ -9,6 +9,7 @@ struct CloudflareAccessSessionStoreTests {
         var values: [CloudflareAccessOrigin: String] = [:]
         var events: [String] = []
         var canSave = true
+        var canDelete = true
 
         var persistence: CloudflareAccessSessionStore.Persistence {
             .init(
@@ -21,6 +22,7 @@ struct CloudflareAccessSessionStoreTests {
                 },
                 delete: {
                     self.events.append("delete")
+                    guard self.canDelete else { return false }
                     self.values.removeValue(forKey: $0)
                     return true
                 })
@@ -147,7 +149,7 @@ struct CloudflareAccessSessionStoreTests {
             retireTransports: { _ in memory.events.append("retire") })
         let attempt = store.signIn(application: application, openBrowser: { _ in })
         await gate.waitUntilStarted()
-        try await store.forget(application.origin)
+        try await store.forget(application.origin).task.value
         gate.complete(session)
         await #expect(throws: CancellationError.self) { try await attempt.value }
         #expect(memory.values.isEmpty)
@@ -193,6 +195,48 @@ struct CloudflareAccessSessionStoreTests {
         #expect(memory.values.isEmpty)
     }
 
+    @Test func `dashboard cookie is a current host-scoped HTTP-only Access app grant`() throws {
+        let tokens = try CloudflareAccessTestTokens()
+        let application = try CloudflareAccessTestTokens.application(port: 443)
+        let now = Date()
+        let expiry = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970) + 3600)
+        let session = try tokens.session(expires: expiry, application: application)
+        let dashboardURL = try #require(URL(string: "https://gateway.example.test/settings"))
+        let cookie = try #require(session.dashboardCookie(
+            for: dashboardURL,
+            now: expiry.addingTimeInterval(-1)))
+
+        #expect(cookie.name == "CF_Authorization")
+        #expect(cookie.domain == "gateway.example.test")
+        #expect(cookie.path == "/")
+        #expect(cookie.isSecure)
+        #expect(cookie.isHTTPOnly)
+        #expect(cookie.expiresDate.map { $0 <= expiry && $0 > expiry.addingTimeInterval(-1) } == true)
+        #expect(try session.dashboardCookie(
+            for: #require(URL(string: "https://other.example.test/settings")),
+            now: expiry.addingTimeInterval(-1)) == nil)
+        #expect(try session.dashboardCookie(
+            for: #require(URL(string: "https://gateway.example.test:8443/settings")),
+            now: expiry.addingTimeInterval(-1)) == nil)
+        #expect(session.dashboardCookie(for: dashboardURL, now: expiry) == nil)
+
+        let nonstandard = try CloudflareAccessTestTokens.application(port: 8443)
+        let nonstandardSession = try tokens.session(expires: expiry, application: nonstandard)
+        let nonstandardURL = try #require(URL(string: "https://gateway.example.test:8443/settings"))
+        let nonstandardCookie = try #require(nonstandardSession.dashboardCookie(
+            for: nonstandardURL,
+            now: expiry.addingTimeInterval(-1)))
+        #expect(nonstandardCookie.domain == "gateway.example.test")
+        #expect(nonstandardCookie.isSecure)
+        #expect(nonstandardCookie.isHTTPOnly)
+        #expect(try nonstandardSession.dashboardCookie(
+            for: #require(URL(string: "https://gateway.example.test:8443/settings")),
+            now: expiry.addingTimeInterval(-1))?.value == nonstandardCookie.value)
+        #expect(try nonstandardSession.dashboardCookie(
+            for: #require(URL(string: "https://gateway.example.test:9443/settings")),
+            now: expiry.addingTimeInterval(-1)) == nil)
+    }
+
     @Test func `restart loads only a valid session for its exact authority`() throws {
         let memory = MemoryStore()
         let session = try CloudflareAccessTestTokens().session()
@@ -220,6 +264,47 @@ struct CloudflareAccessSessionStoreTests {
         }
         #expect(store.snapshot(for: application.origin) == nil)
         #expect(store.state(for: application.origin) == .reauthenticationRequired)
+    }
+
+    @Test func `explicit revocation is synchronous origin scoped and survives a renewed grant`() async throws {
+        let memory = MemoryStore()
+        let application = try CloudflareAccessTestTokens.application()
+        let session = try CloudflareAccessTestTokens().session()
+        let other = try CloudflareAccessOrigin(#require(URL(string: "https://other.example.test")))
+        let store = CloudflareAccessSessionStore(
+            persistence: memory.persistence,
+            authenticate: { _, _ in session }, retireTransports: { _ in })
+        let original = store.admissionCheckpoint()
+        let retirement = store.forget(application.origin)
+        #expect(!store.admits(original, for: application.origin))
+        #expect(store.admits(original, for: other))
+        let retry = store.admissionCheckpoint()
+        try await retirement.task.value
+        _ = try await store.signIn(application: application, openBrowser: { _ in }).value
+        #expect(!store.admits(original, for: application.origin))
+        #expect(store.admits(retry, for: application.origin))
+        #expect(store.snapshot(for: application.origin) != nil)
+    }
+
+    @Test func `failed deletion retires admission and reports failure without rewriting saved credentials`() async throws {
+        let memory = MemoryStore()
+        let session = try CloudflareAccessTestTokens().session()
+        let encoded = try #require(String(data: JSONEncoder().encode(session), encoding: .utf8))
+        memory.values[session.origin] = encoded
+        memory.canDelete = false
+        let store = CloudflareAccessSessionStore(
+            persistence: memory.persistence,
+            retireTransports: { _ in memory.events.append("retire") })
+        #expect(store.snapshot(for: session.origin) != nil)
+        let checkpoint = store.admissionCheckpoint()
+        let retirement = store.forget(session.origin)
+        #expect(!store.admits(checkpoint, for: session.origin))
+        await #expect(throws: CloudflareAccessError.self) { try await retirement.task.value }
+        #expect(!store.admits(checkpoint, for: session.origin))
+        #expect(store.snapshot(for: session.origin) == nil)
+        #expect(store.state(for: session.origin) == .signedOut)
+        #expect(memory.values[session.origin] == encoded)
+        #expect(memory.events == ["retire", "delete"])
     }
 
     @Test func `expiry while teardown is suspended cannot publish or persist authentication`() async throws {
@@ -273,7 +358,7 @@ struct CloudflareAccessSessionStoreTests {
         defer {
             // Only these unique rows belong to this test. No service-wide cleanup.
             for (rowService, account) in ownedRows {
-                #expect(GenericPasswordKeychainStore.delete(service: rowService, account: account))
+                _ = GenericPasswordKeychainStore.delete(service: rowService, account: account)
                 let absent = GenericPasswordKeychainStore.loadString(service: rowService, account: account) == nil
                 #expect(absent)
             }
@@ -316,7 +401,7 @@ struct CloudflareAccessSessionStoreTests {
 
         var forgetReturned = false
         let forget = Task { @MainActor in
-            try await reader.forget(firstOrigin)
+            try await reader.forget(firstOrigin).task.value
             forgetReturned = true
         }
         do {

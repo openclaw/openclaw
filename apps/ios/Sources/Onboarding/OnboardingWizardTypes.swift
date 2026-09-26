@@ -1,3 +1,4 @@
+import CoreImage
 import OpenClawKit
 import SwiftUI
 
@@ -118,5 +119,22 @@ struct OnboardingQRCodeCompletion {
         return GatewayStableIdentifier.matches(targetStableID, connectedStableID)
             ? .mainUI
             : .successScreen
+    }
+}
+
+extension OnboardingWizardView {
+    func detectQRCode(from data: Data) -> String? {
+        guard let ciImage = CIImage(data: data) else { return nil }
+        let detector = CIDetector(
+            ofType: CIDetectorTypeQRCode,
+            context: nil,
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
+        let features = detector?.features(in: ciImage) ?? []
+        for feature in features {
+            if let qr = feature as? CIQRCodeFeature, let message = qr.messageString {
+                return message
+            }
+        }
+        return nil
     }
 }

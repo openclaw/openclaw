@@ -5,6 +5,12 @@ enum GatewaySetupRouteProbeBudget {
     static let tcpConnectTimeoutSeconds = 2.0
 }
 
+struct GatewaySetupAttempt: Equatable {
+    // periphery:ignore - Synthesized Equatable compares this ID to reject stale setup attempts.
+    private let id = UUID()
+    let admissionCheckpoint: UInt64
+}
+
 struct GatewayPendingTrustConnect {
     let url: URL
     let stableID: String
@@ -13,9 +19,71 @@ struct GatewayPendingTrustConnect {
     let allowStoredDeviceAuth: Bool
     let suppressionLease: GatewayConnectionController.AutoConnectSuppressionLease
     let gatewayGeneration: UInt64?
+    let admissionCheckpoint: UInt64
+    var userInitiated = true
 }
 
 extension GatewayConnectionController {
+    struct TrustPrompt: Identifiable, Equatable {
+        let stableID: String
+        let gatewayName: String
+        let host: String
+        let port: Int
+        let fingerprintSha256: String
+        let isManual: Bool
+        let attemptGeneration: UInt64
+
+        var id: String {
+            self.stableID
+        }
+    }
+
+    func admitSetupLifetime(_ auth: ManualAuthOverride?, stableID: String, generation: UInt64?) -> Bool {
+        guard let auth, let expiry = auth.expiresAtMs,
+              expiry <= Int64(now().timeIntervalSince1970 * 1000)
+        else { return true }
+        let instanceID = GatewaySettingsStore.currentInstanceID()
+        let stored = GatewaySettingsStore.loadGatewayCredentials(instanceId: instanceID, gatewayStableID: stableID)
+        // The form persists setup credentials before admission. Remove only this
+        // expired bootstrap; a newer scan or Gateway device credentials must survive.
+        let saved = stored.bootstrapToken != auth.bootstrapToken || GatewaySettingsStore.saveGatewayCredentials(
+            token: stored.token,
+            bootstrapToken: nil,
+            password: stored.password,
+            gatewayStableID: stableID,
+            suppressStoredDeviceAuth: stored.suppressStoredDeviceAuth,
+            instanceId: instanceID)
+        let problem = GatewayConnectionProblem(
+            kind: .bootstrapTokenInvalid,
+            owner: .iphone,
+            title: "Setup code expired",
+            message: saved ? "Scan a new setup code. Cloudflare Access sign-in is still available." :
+                "Could not clear the expired setup code. Scan a new code to replace it.",
+            actionLabel: "Scan new code",
+            retryable: false,
+            pauseReconnect: true)
+        self.appModel?.failGatewayPreconnectVerification(
+            problem, stableID: stableID, host: nil, expectedGeneration: generation)
+        return false
+    }
+
+    func clearLegacyManualGatewayDefaults(matching stableID: String) {
+        let defaults = UserDefaults.standard
+        let host = defaults.string(forKey: "gateway.manual.host")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let port = Self.resolvedManualPort(
+            host: host,
+            port: defaults.integer(forKey: "gateway.manual.port"))
+        guard !host.isEmpty,
+              let port,
+              GatewayStableIdentifier.matches(self.manualStableID(host: host, port: port), stableID)
+        else { return }
+        defaults.set(false, forKey: "gateway.manual.enabled")
+        defaults.removeObject(forKey: "gateway.manual.host")
+        defaults.removeObject(forKey: "gateway.manual.port")
+        defaults.removeObject(forKey: "gateway.manual.tls")
+    }
+
     enum ConnectionAttemptResult: Equatable {
         case accepted
         case failed(String)
