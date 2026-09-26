@@ -36,6 +36,7 @@ import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts"
 import { readAsyncQuestions, renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import {
+  hasUserFileAttachments,
   renderAssistantAttachments,
   renderMessageAttachment,
   renderOmittedMedia,
@@ -249,14 +250,7 @@ export function renderGroupedMessage(
         )
       : [];
   const cardAttachments = visibleAttachments.filter((item) => !videoPreviews.includes(item));
-  const hasUserFiles =
-    normalizedRole === "user" &&
-    cardAttachments.some(
-      (item) =>
-        item.attachment.kind === "document" &&
-        !isSentCommentAttachment(item) &&
-        !isSentPastedTextAttachment(item),
-    );
+  const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
   const imageRenderOptions = {
     galleryImages: images,
     sessionKey: opts.sessionKey,
