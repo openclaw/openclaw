@@ -44,7 +44,6 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         spawner,
         databaseIdentity,
         databasePath,
-        initialStoreAdmission,
         store,
         parent,
         originalChild,
@@ -137,7 +136,6 @@ export async function withDelegatedUpdateCommandExecutor<T>(
           ...(retained ? { retainedParent: retained } : {}),
           databasePath,
           databaseIdentity,
-          initialStores: grant.initialStores,
         }),
         assertBase,
       });
@@ -226,7 +224,6 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         });
       } finally {
         active = false;
-        initialStoreAdmission?.close();
         childOwners.delete(fence);
         slotReservations.delete(fence);
         admittedAuthorities.delete(fence);

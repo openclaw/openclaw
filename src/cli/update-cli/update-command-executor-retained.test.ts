@@ -271,9 +271,7 @@ it.each([
     );
     expect(result.code).not.toBe(0);
     if (["both", "wrong-key", "wrong-generation"].includes(tamper)) {
-      expect(result.stderr).toContain(
-        "Candidate store selection or lineage is missing or invalid.",
-      );
+      expect(result.stderr).toContain("Candidate executor lineage is missing or invalid.");
     } else {
       expect(result.stderr).toMatch(/retained owner pair|does not match its parent/);
     }
@@ -331,6 +329,7 @@ function publishedPackageFixture(
         launcherRootIdentity: identity(root),
         previousLauncherRootIdentity: null,
         helperIdentity: identity(helper),
+        recoveryNodePath: fs.realpathSync(process.execPath),
         preparation: [
           { name: "anchor" as const, source: anchor },
           { name: "helper" as const, source: helper },

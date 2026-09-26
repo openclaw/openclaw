@@ -166,7 +166,6 @@ export function createUpdateCliFixture() {
     });
     mockCurrentProcessFreshDoctor({
       packageRoot: pkgRoot,
-      candidateAdmission: true,
       postCoreResumeAttempt: false,
       postPluginDoctorAttempt: true,
     });

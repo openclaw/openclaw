@@ -61,7 +61,6 @@ import {
   preparePackageDoctorContext,
   type PackageInstallUpdateParams,
 } from "./update-command-package.js";
-import { captureOriginalUpdateRecoveryBaseline } from "./update-command-recovery-baseline.js";
 import {
   assertUpdateCommandRecovery,
   readOriginalUpdateRecovery,
@@ -545,16 +544,7 @@ export async function executeMutableUpdate(
         `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
       );
     }
-    if (opts.run && !opts.run.recoveryBaseline) {
-      opts.run.recoveryBaseline = await captureOriginalUpdateRecoveryBaseline({
-        opts,
-        env,
-        installRoot: params.root,
-        assertCallerCurrent: assertExecutionCurrent,
-      });
-      assertExecutionCurrent();
-    }
-    // Both install paths enter mutation only after the post-stop capture/schema/authority fence.
+    // Both install paths enter mutation only after the post-stop schema/authority fence.
     preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
     mutationStarted = true;
     params.onActivation?.();

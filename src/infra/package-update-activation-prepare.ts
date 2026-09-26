@@ -24,7 +24,6 @@ import {
   encodePackageActivationLauncher,
 } from "./package-update-activation-journal.js";
 import { packageActivationRuntimeEntrypoint } from "./package-update-activation-runtime-assets.js";
-import { capturePackageActivationPreviousRuntime } from "./package-update-activation-target.js";
 import {
   createPackageIntegrityReader,
   type PackageIntegrityFingerprint,
@@ -77,8 +76,7 @@ export function resolvePackageActivationRecoveryCommand(record: PackageActivatio
     }
     helper = custody.moved ? custody.destination : custody.source;
   }
-  const node =
-    record.descriptor.recoveryNodePath ?? record.descriptor.previousRuntime?.nodePath ?? "node";
+  const node = record.descriptor.recoveryNodePath;
   return packageActivationRecoveryCommand(node, anchor, record.descriptor.operationId, helper);
 }
 
@@ -88,10 +86,7 @@ export async function preparePackageActivationJournal(
 ) {
   const assertCurrent = retainMutationAuthority(assertion);
   assertCurrent();
-  const authority = captureUpdateCommandExecutorAuthority(
-    params.options.fence,
-    params.options.runId,
-  );
+  const authority = captureUpdateCommandExecutorAuthority(params.options.fence);
   assertCurrent();
   if (process.platform === "win32" || authority.installKey !== params.liveRoot) {
     throw new Error("Package publication recovery requires its original POSIX npm directory.");
@@ -116,15 +111,6 @@ export async function preparePackageActivationJournal(
   if (version.status !== 0 || !isSupportedNodeVersion(version.stdout.trim().replace(/^v/u, ""))) {
     throw new Error("Recovery requires a supported external Node executable.");
   }
-  const previousRuntime = params.options.runId
-    ? await capturePackageActivationPreviousRuntime({
-        root: params.liveRoot,
-        previous: params.previous,
-        nodePath: node,
-        nodeVersion: version.stdout.trim(),
-        assertCurrent,
-      })
-    : undefined;
   const reader = createPackageIntegrityReader();
   const candidate = await reader.tree(params.stageRoot);
   const launchers = [];
@@ -231,7 +217,6 @@ export async function preparePackageActivationJournal(
     layout: "external-helper" as const,
     operationId: randomUUID(),
     recoveryNodePath: node,
-    ...(params.options.runId ? { originalRunId: params.options.runId, previousRuntime } : {}),
     authority,
     anchorIdentity,
     parentIdentity,

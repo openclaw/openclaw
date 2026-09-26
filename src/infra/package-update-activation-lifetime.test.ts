@@ -953,7 +953,7 @@ describe.skipIf(process.platform === "win32")(
             packageRoot: f.packageRoot,
             runCommand: createRootRunner(f.globalRoot),
             timeoutMs: 5000,
-            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            getActivation: () => ({ fence, nodeRunner: process.execPath, onPrepared: () => {} }),
             runStep: async ({ name, argv, cwd }) => {
               if (name !== "package-install") {
                 throw new Error(`unexpected package-manager leaf ${name}`);

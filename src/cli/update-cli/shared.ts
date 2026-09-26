@@ -27,10 +27,8 @@ import {
   detectGlobalInstallManagerForRoot,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
-import type { UpdateInitialStoreInvocation } from "../../infra/update-initial-store-invocation.js";
 import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
-import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { runStep } from "../../infra/update-runner-command.js";
@@ -52,8 +50,6 @@ import { resolveNodeRunner } from "./node-runner.js";
 export { resolveNodeRunner } from "./node-runner.js";
 
 export type UpdateCommandOptions = {
-  /** Internal explicit private invocation; no public CLI flag or inferred selection. */
-  initialStores?: UpdateInitialStoreInvocation;
   /** Doctor's accepted source update targets dev without changing the saved channel. */
   sourceUpdate?: { root: string };
   /** In-process reporting only, after the update owner settles. Never serialized. */
@@ -80,8 +76,6 @@ export type UpdateCommandOptions = {
     requesterAuthority?: UpdateRequesterAuthority;
     /** Live local executor only. A child must independently acquire its owner. */
     executorFence?: UpdateRecoveryFence;
-    /** Immutable B locator, never authority; retained by the original rollback caller. */
-    recoveryBaseline?: UpdateRecoveryBackupRef;
   };
   acceptCapabilities?: boolean;
   admission?: "auto" | "installed";

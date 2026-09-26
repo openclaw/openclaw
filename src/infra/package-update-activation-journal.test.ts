@@ -165,6 +165,7 @@ async function fixture() {
     const descriptor: Omit<PackageActivationDescriptor, "journalIdentity"> = {
       version: 1,
       layout: "external-helper",
+      recoveryNodePath: fs.realpathSync(process.execPath),
       helperIdentity: packageActivationIdentity(
         resolvePackageActivationHelper(stagedAnchor),
         false,

@@ -52,7 +52,7 @@ export async function retireVerifiedPackageSwap(params: {
   };
   if (activation) {
     await activation.retire();
-    // The journal has removed itself; only the executor fence remains.
+    // The anchor and helper are retired; only the executor fence remains.
     assertRetirementCurrent();
     return undefined;
   }

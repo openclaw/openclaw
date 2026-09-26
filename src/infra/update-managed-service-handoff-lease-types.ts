@@ -1,4 +1,3 @@
-import type { admitUpdateInitialStores } from "./update-initial-store-admission.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import type { BorrowedLegacyHandoffParent } from "./update-managed-service-handoff-legacy-parent.js";
 import type { ManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
@@ -25,6 +24,5 @@ export type ManagedHandoffLeaseStoreOptions = {
   serviceManagerEnv: NodeJS.ProcessEnv;
   existingIdentity?: ManagedUpdateLeaseDatabaseIdentity;
   originalUpdateKey?: string;
-  initialStoreAdmission?: ReturnType<typeof admitUpdateInitialStores>;
   onProcessIdentityWarning?: (pid: number, message: string) => void;
 };

@@ -1,12 +1,5 @@
 import path from "node:path";
 import { z } from "zod";
-import {
-  packageActivationPreviousRuntimeSchema,
-  packageActivationReverseBindingSchema,
-  packageActivationReverseIntentSchema,
-  packageActivationReversePreparationIntentSchema,
-  packageActivationReversePreparationSchema,
-} from "./package-update-activation-reverse-schema.js";
 
 const absolutePath = z
   .string()
@@ -29,15 +22,7 @@ export const PackageActivationDescriptorSchema = z.strictObject({
   layout: z.literal("external-helper"),
   version: z.literal(1),
   operationId: z.uuid(),
-  originalRunId: z
-    .string()
-    .regex(/^[a-zA-Z0-9_-]{1,128}$/u)
-    .optional(),
-  // Older receipts may omit the executable; new preparation always records it.
-  recoveryNodePath: absolutePath.optional(),
-  previousRuntime: packageActivationPreviousRuntimeSchema.optional(),
-  reversePreparation: packageActivationReversePreparationSchema.optional(),
-  reverse: packageActivationReverseBindingSchema.optional(),
+  recoveryNodePath: absolutePath,
   authority: z.strictObject({
     databasePath: absolutePath,
     databaseIdentity: packageActivationIdentitySchema,
@@ -88,9 +73,6 @@ export const PackageActivationPhaseSchema = z.enum([
   "publishing",
   "publication-complete",
   "rollback-in-progress",
-  "reverse-preparing",
-  "reverse-in-progress",
-  "reverse-complete",
   "rolled-back",
   "aborted",
   "retiring",
@@ -99,8 +81,6 @@ export const PackageActivationPhaseSchema = z.enum([
 export type PackageActivationPhase = z.infer<typeof PackageActivationPhaseSchema>;
 export const intentSchema = z
   .union([
-    packageActivationReverseIntentSchema,
-    packageActivationReversePreparationIntentSchema,
     z.strictObject({
       kind: z.literal("prepare"),
       completed: z.array(transferName).max(5),

@@ -22,7 +22,6 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "./sqlite-transaction.js";
-import type { admitUpdateInitialStores } from "./update-initial-store-admission.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import { quarantineManagedHandoffStore } from "./update-managed-service-handoff-store-repair.js";
 import { createPrivateWindowsFile } from "./windows-private-directory.js";
@@ -216,37 +215,16 @@ export function assertManagedUpdateLeaseDatabaseIdentity(
 export function createManagedHandoffLeaseDatabase(
   databasePath: string,
   existingIdentity?: ManagedUpdateLeaseDatabaseIdentity,
-  initialStoreAdmission?: ReturnType<typeof admitUpdateInitialStores>,
 ) {
   if (existingIdentity && databasePath !== existingIdentity.databasePath) {
     throw new Error("managed handoff lease database path changed");
-  }
-  if (initialStoreAdmission) {
-    initialStoreAdmission.assertCurrent();
-    const selected = initialStoreAdmission.selection.handoff;
-    if (
-      !existingIdentity ||
-      databasePath !== selected.databasePath ||
-      existingIdentity.databaseIdentity !== selected.databaseIdentity ||
-      existingIdentity.parentIdentity !== selected.parentIdentity
-    ) {
-      throw new Error("Selected handoff database disagrees with its native owner.");
-    }
   }
   const existingTransactions = new WeakMap<HandoffDatabase, ExistingSqliteTransaction>();
   const validations = new WeakMap<HandoffDatabase, () => void>();
   const existingOptions = existingIdentity
     ? {
         busyTimeoutMs: 5000,
-        assertIdentity: () => {
-          initialStoreAdmission?.assertCurrent();
-          assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
-        },
-        observeConnection: initialStoreAdmission
-          ? (db: HandoffDatabase) => {
-              initialStoreAdmission.observeConnection("handoff", db);
-            }
-          : undefined,
+        assertIdentity: () => assertManagedUpdateLeaseDatabaseIdentity(existingIdentity),
         validate: (db: HandoffDatabase) => {
           let validate = validations.get(db);
           if (!validate) {

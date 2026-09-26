@@ -1,14 +1,12 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import {
   captureUpdateCommandExecutorAuthority,
-  captureUpdateCommandExecutorCurrentStores,
-  publishUpdateCommandPackageGeneration,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
+import { resolveExecutablePath } from "./executable-path.js";
 import {
   openPackageActivationJournal,
   assertPackageActivationOperation,
@@ -17,32 +15,24 @@ import {
   resolvePackageActivationJournalPath,
   isPackageActivationComplete,
   resolvePackageActivationAnchor,
-  type PackageActivationJournal,
-  type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
 import {
   preparePackageActivationJournal,
   resolvePackageActivationRecoveryCommand as recoveryCommand,
   type PackageActivationPreparation,
 } from "./package-update-activation-prepare.js";
-import { readPackageReverseGenerations } from "./package-update-activation-reverse-binding.js";
-import type { PackageReverseAuthority } from "./package-update-activation-reverse.js";
-import { readReleasedPackageActivationReceipt } from "./package-update-activation-status.js";
 import {
-  createPublicationOwner,
-  packageActivationStatus as status,
+  readReleasedPackageActivationReceipt,
+  readPackageActivationRecordStatus as status,
   type PackageActivationStatus,
-} from "./package-update-publication-owner.js";
-import { capturePackageReverseExecutor } from "./package-update-reverse-authority.js";
+} from "./package-update-activation-status.js";
+import { createPublicationOwner } from "./package-update-publication-owner.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
-import { admitUpdateInitialStores } from "./update-initial-store-admission.js";
 import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
-import { withUpdateRecoveryResumeCustody } from "./update-recovery-resume-custody.js";
-import { admitSelectedRuntimeUpdateRecoveryPublication } from "./update-recovery-startup-admission.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
-export type { PackageActivationStatus } from "./package-update-publication-owner.js";
+export type { PackageActivationStatus } from "./package-update-activation-status.js";
 
 /** Read-only correlation; callers still need a privately registered live fence. */
 function readPackageActivationContinuation(installKey: string) {
@@ -103,53 +93,12 @@ export function assertNoPendingPackageActivation(
   );
 }
 
-// Only a prepared inline owner can install a provider, for the lifetime of its
-// call into the original executor. The shared invocation cannot replace its
-// native assertion or supply a different journal/operation.
-const nativeForwardDispatch = new AsyncLocalStorage<object>();
-const forwardProviders = new Map<
-  string,
-  {
-    initial: PackageActivationRecord;
-    dispatch: object;
-    provider: Pick<
-      ReturnType<typeof createPublicationOwner>,
-      "preflight" | "publish" | "assertCurrent"
-    >;
-  }
->();
-
-export function createPackageActivationForwardProvider(
-  anchor: string,
-  journal: PackageActivationJournal,
-  _callerAssertion: () => void,
-  initial: PackageActivationRecord,
-) {
-  const admitted = forwardProviders.get(anchor);
-  if (
-    !admitted ||
-    nativeForwardDispatch.getStore() !== admitted.dispatch ||
-    !isDeepStrictEqual(initial, admitted.initial)
-  ) {
-    throw new Error("Forward publication requires its prepared inline owner and native dispatch.");
-  }
-  admitted.provider.assertCurrent();
-  journal.assertCurrent(initial);
-  return admitted.provider;
-}
-
 export async function preparePackageActivation(
   params: PackageActivationPreparation & { installTarget: ResolvedGlobalInstallTarget },
 ) {
   const fence = params.options.fence;
   const assertOriginal = fence.assertCurrent.bind(fence);
   const options = { ...params.options, fence };
-  // Ordinary forward updates without a selected generation remain supported.
-  // They must not gain reverse authority from a replacement callback.
-  const reverseExecutor =
-    options.runId && captureUpdateCommandExecutorCurrentStores(fence, options.runId)
-      ? capturePackageReverseExecutor(fence, options.runId)
-      : undefined;
   if (
     process.platform === "win32" ||
     process.versions.bun ||
@@ -159,6 +108,16 @@ export async function preparePackageActivation(
   ) {
     return undefined;
   }
+  const nodeRunner = resolveExecutablePath(options.nodeRunner, { useCache: false });
+  assertOriginal();
+  if (!nodeRunner) {
+    options.onUnavailable?.(
+      "Standalone package publication repair is unavailable: the selected Node executable could not be resolved.",
+    );
+    return undefined;
+  }
+  // Probe and seal the same selected runtime before the probe clears its environment.
+  options.nodeRunner = fs.realpathSync(nodeRunner);
   const capable = await supportsPostCoreExecutor(params.stageRoot, options.nodeRunner);
   assertOriginal();
   if (!capable) {
@@ -170,97 +129,10 @@ export async function preparePackageActivation(
     return undefined;
   }
   const prepared = await preparePackageActivationJournal({ ...params, options }, assertOriginal);
-  let publishing = false;
-  const assertRetained = () => {
-    if (publishing && reverseExecutor) {
-      reverseExecutor.assertCurrent();
-    } else {
-      assertOriginal();
-    }
-  };
-  const initial = prepared.journal.read();
-  const owner = createPublicationOwner(
-    prepared.anchor,
-    prepared.journal,
-    assertRetained,
-    initial,
-    undefined,
-    fence,
-    false,
-    reverseExecutor,
-  );
-  return {
-    ...prepared,
-    ...owner,
-    async publish(resume: boolean, onDisplaced?: () => void | Promise<void>) {
-      if (!reverseExecutor) {
-        return owner.publish(resume, onDisplaced);
-      }
-      assertOriginal();
-      if (resume || publishing || forwardProviders.has(prepared.anchor)) {
-        throw new Error("Forward publication requires its original prepared invocation.");
-      }
-      owner.assertCurrent();
-      const current = prepared.journal.read();
-      if (
-        current.phase !== "prepared" ||
-        !isDeepStrictEqual(current.descriptor, initial.descriptor)
-      ) {
-        throw new Error("Forward publication requires its original prepared journal.");
-      }
-      const dispatch = {};
-      let effectDispatched = false;
-      const assertNative = () => {
-        if (!publishing || nativeForwardDispatch.getStore() !== dispatch) {
-          throw new Error("Forward publication outlived its inline owner.");
-        }
-        reverseExecutor.assertCurrent();
-      };
-      const native = createPublicationOwner(
-        prepared.anchor,
-        prepared.journal,
-        assertNative,
-        current,
-      );
-      const provider = {
-        preflight: native.preflight,
-        assertCurrent: native.assertCurrent,
-        publish: async (requestedResume: boolean) => {
-          assertNative();
-          if (requestedResume || effectDispatched) {
-            throw new Error("Forward publication requires its single original native dispatch.");
-          }
-          effectDispatched = true;
-          return native.publish(false, async () => {
-            owner.synchronize();
-            await onDisplaced?.();
-            assertNative();
-          });
-        },
-      };
-      publishing = true;
-      forwardProviders.set(prepared.anchor, { initial: current, dispatch, provider });
-      try {
-        const completion = await nativeForwardDispatch.run(dispatch, () =>
-          publishUpdateCommandPackageGeneration(
-            fence,
-            reverseExecutor.runId,
-            current.descriptor.operationId,
-          ),
-        );
-        // Native publication owns the durable journal during the displacement
-        // gap. Rejoin its authenticated current record, never the prepared JS
-        // snapshot, before this retained transaction can reverse or retire.
-        assertOriginal();
-        owner.synchronize();
-        return completion;
-      } finally {
-        publishing = false;
-        forwardProviders.delete(prepared.anchor);
-      }
-    },
-  };
+  const owner = createPublicationOwner(prepared.anchor, prepared.journal, assertOriginal);
+  return { ...prepared, ...owner };
 }
+
 export function readPackageActivationReceipt(installKey: string):
   | (Omit<PackageActivationStatus, "phase"> & {
       phase: PackageActivationStatus["phase"] | "retired";
@@ -293,121 +165,6 @@ export async function readPackageActivationStatus(
   return status(record);
 }
 
-async function runPackageActivationReverseRecovery(
-  anchor: string,
-  operationId: string,
-): Promise<PackageActivationStatus> {
-  const journal = openPackageActivationJournal(anchor);
-  const admission = await journal.readForRecovery();
-  const initial = admission.record;
-  assertPackageActivationOperation(initial, operationId);
-  const durable = initial.descriptor.reverse ?? initial.descriptor.reversePreparation;
-  if (
-    !durable ||
-    !["reverse-preparing", "reverse-in-progress", "reverse-complete", "rolled-back"].includes(
-      initial.phase,
-    )
-  ) {
-    throw new Error("Reverse repair does not match a durable original operation.");
-  }
-  const generations = readPackageReverseGenerations(
-    durable,
-    durable.runId,
-    initial.descriptor.authority.installKey,
-  );
-  assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
-  return withUpdateCommandExecutor(
-    durable.runId,
-    async (executor) => {
-      const fence = await executor.enter(initial.descriptor.authority.installKey);
-      assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
-      admission.admit(fence.assertCurrent);
-      journal.assertCurrent(initial);
-      const owner = createPublicationOwner(
-        anchor,
-        journal,
-        fence.assertCurrent,
-        initial,
-        undefined,
-        fence,
-        true,
-      );
-      const selection = () => {
-        const descriptor = journal.read().descriptor;
-        return {
-          anchor,
-          operationId: descriptor.operationId,
-          originalRunId: descriptor.originalRunId,
-          previous: descriptor.previous,
-          previousRuntime: descriptor.previousRuntime,
-        };
-      };
-      return withUpdateRecoveryResumeCustody(
-        {
-          manifest: generations.prepared,
-          assertOwned: owner.assertCurrent,
-        },
-        async ({ assertCurrent }) => {
-          const admitted = await admitSelectedRuntimeUpdateRecoveryPublication(
-            {
-              baseline: durable.baseline,
-              candidate: durable.candidate,
-              prepared: durable.prepared,
-            },
-            { assertOwned: assertCurrent },
-            { selection, timeoutMs: 10 * 60_000 },
-            initial.descriptor.reverse,
-          );
-          if (!isDeepStrictEqual(admitted.target, durable.target)) {
-            throw new Error("Reverse repair changed its selected target runtime.");
-          }
-          const authority: PackageReverseAuthority = {
-            assertCurrent,
-            assertWritersSettled: assertCurrent,
-            validateTarget: admitted.validateTarget,
-            beforeStatePublication: () => assertCurrent(),
-          };
-          if (journal.read().phase === "reverse-preparing") {
-            await owner.resumePreparation(authority);
-          } else if (journal.read().phase === "reverse-in-progress") {
-            await owner.resumeReverse(authority);
-          }
-          if (journal.read().phase === "reverse-complete") {
-            await owner.settleReverse(authority);
-          }
-          const binding = journal.read().descriptor.reverse;
-          if (!binding) {
-            throw new Error("Reverse repair did not seal its durable binding.");
-          }
-          const completion = await owner.verifyCompletion(binding, authority);
-          const packageResource = binding.resources.find((resource) => resource.role === "package");
-          if (!packageResource || packageResource.after.kind !== "package") {
-            throw new Error("Reverse repair lost its package postimage.");
-          }
-          const next = admitUpdateInitialStores({
-            ...binding.initialStores,
-            installation: {
-              path: binding.initialStores.installation.path,
-              identity: packageResource.after.identity,
-            },
-            state: completion.publishedState.state,
-          });
-          try {
-            assertCurrent();
-            next.assertCurrent();
-            const final = await owner.commitCompletion(binding, authority);
-            assertCurrent();
-            next.assertCurrent();
-            return final;
-          } finally {
-            next.close();
-          }
-        },
-      );
-    },
-    { existingAuthority: initial.descriptor.authority },
-  );
-}
 export async function runPackageActivationRecovery(
   anchor: string,
   action: "repair" | "retire",
@@ -420,12 +177,6 @@ export async function runPackageActivationRecovery(
   if (isPackageActivationComplete(anchor, initial)) {
     assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
     return status(initial);
-  }
-  if (
-    action === "repair" &&
-    (initial.descriptor.reversePreparation || initial.descriptor.reverse)
-  ) {
-    return runPackageActivationReverseRecovery(anchor, operationId);
   }
   // Reject malformed/foreign/disarmed recovery before acquiring a new writer.
   // Admission is still followed by the same observations under the fresh fence.

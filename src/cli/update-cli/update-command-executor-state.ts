@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { UpdateInitialStoreTransport } from "../../infra/update-initial-store-transport.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { ChildOperation, ChildPurpose } from "./update-command-executor-children.js";
@@ -12,8 +11,6 @@ export const admittedAuthorities = new WeakMap<
   {
     authority: ManagedUpdateLeaseAuthority;
     assertCurrent: () => void;
-    assertPublicationCurrent?: () => void;
-    currentStores?: () => UpdateInitialStoreTransport;
     managedHandoff: boolean;
   }
 >();

@@ -451,7 +451,7 @@ export type PackageInstallUpdateParams = {
   onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
   getDoctorContext?: PackageDoctorOptions["getDoctorContext"];
-  activation?: PackageActivationOptions;
+  getActivation?: () => PackageActivationOptions | undefined;
 };
 
 /** Retain one staged target while its runtime initializes a fresh profile. */
@@ -514,6 +514,9 @@ export async function stagePackageInstallUpdate(
         return await requireActive().validateCandidate(root);
       },
       beforeActivate: () => requireActive().beforeActivate(),
+      assertCurrent: () => requireActive().assertCurrent?.(),
+      reserveInstallSlot: (root) => requireActive().reserveInstallSlot?.(root),
+      getActivation: () => requireActive().getActivation?.(),
       onTransaction: (transaction) => requireActive().onTransaction(transaction),
       onConfigSnapshot: (snapshot) => requireActive().onConfigSnapshot?.(snapshot),
     },
@@ -599,7 +602,7 @@ export async function runPackageInstallUpdate(
     assertCurrent: params.assertCurrent,
     reserveInstallSlot: params.reserveInstallSlot,
     onTransaction: params.onTransaction,
-    activation: params.activation,
+    getActivation: params.getActivation,
     installTarget,
     installSpec,
     packageName,

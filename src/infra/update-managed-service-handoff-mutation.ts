@@ -56,7 +56,7 @@ export function createManagedHandoffMutationReader(
     const marker = "/.openclaw-update-child-";
     const index = key.lastIndexOf(marker);
     const childName = index < 0 ? "" : key.slice(index + marker.length);
-    if (!/^[a-f0-9-]{36}(?:-stores-v1)?-lineage-[a-f0-9]{64}$/.test(childName)) {
+    if (!/^[a-f0-9-]{36}-lineage-[a-f0-9]{64}$/.test(childName)) {
       return [];
     }
     // Mirrors keep the exact recorded child name. Its restricted alphabet has

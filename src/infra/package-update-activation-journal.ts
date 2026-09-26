@@ -18,10 +18,6 @@ import {
   resolvePackageActivationHelper,
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-paths.js";
-import type {
-  PackageActivationReverseBinding,
-  PackageActivationReversePreparation,
-} from "./package-update-activation-reverse-schema.js";
 import {
   basename,
   packageActivationIdentitySchema,
@@ -122,7 +118,7 @@ export function openPackageActivationJournal(anchor: string) {
       (db, transact) => {
         if (write) {
           // Persist rollback-journal deletion before the next filesystem effect.
-          db.exec("PRAGMA synchronous = EXTRA"); // sqlite-allow-raw -- Durable reverse intent before rename.
+          db.exec("PRAGMA synchronous = EXTRA"); // sqlite-allow-raw -- Durable package intent before rename.
         }
         return operation(db, transact);
       },
@@ -174,51 +170,6 @@ export function openPackageActivationJournal(anchor: string) {
       .parse(JSON.parse(row.publications_json));
     const intent = intentSchema.parse(JSON.parse(row.intent_json));
     const names = new Set(descriptor.launchers.map((entry) => entry.name));
-    if (
-      descriptor.reversePreparation &&
-      (descriptor.reverse ||
-        descriptor.reversePreparation.operationId !== descriptor.operationId ||
-        descriptor.reversePreparation.runId !== descriptor.originalRunId ||
-        row.phase !== "reverse-preparing" ||
-        intent?.kind !== "reverse-prepare" ||
-        intent.completed > descriptor.reversePreparation.state.length ||
-        (intent.completed === descriptor.reversePreparation.state.length && intent.effect !== null))
-    ) {
-      throw new Error("Reverse preparation is not in its original operation phase.");
-    }
-    if (row.phase === "reverse-preparing" && !descriptor.reversePreparation) {
-      throw new Error("Reverse preparation phase has no durable plan.");
-    }
-    if (
-      descriptor.reverse &&
-      (descriptor.reverse.operationId !== descriptor.operationId ||
-        descriptor.reverse.runId !== descriptor.originalRunId ||
-        ![
-          "reverse-in-progress",
-          "reverse-complete",
-          "rolled-back",
-          "retiring",
-          "anchor-retired",
-        ].includes(row.phase))
-    ) {
-      throw new Error("Reverse binding is not in its original operation phase.");
-    }
-    if (
-      ["reverse-in-progress", "reverse-complete"].includes(row.phase) &&
-      (!descriptor.reverse || intent?.kind !== "reverse")
-    ) {
-      throw new Error("Reverse phase has no durable binding/progress.");
-    }
-    if (
-      intent?.kind === "reverse" &&
-      (!descriptor.reverse ||
-        !["reverse-in-progress", "reverse-complete", "rolled-back"].includes(row.phase) ||
-        intent.completed > descriptor.reverse.resources.length ||
-        (row.phase !== "reverse-in-progress" &&
-          (intent.completed !== descriptor.reverse.resources.length || intent.effect !== null)))
-    ) {
-      throw new Error("Reverse progress is incomplete or invalid.");
-    }
     if (
       new Set(publications.map((entry) => entry.name)).size !== publications.length ||
       publications.some((entry) => !names.has(entry.name)) ||
@@ -273,15 +224,14 @@ export function openPackageActivationJournal(anchor: string) {
       throw new Error("Package publication intent is no longer current");
     }
   };
-  const transitionRecord = (
+  const transition = (
     expected: PackageActivationRecord,
     phase: PackageActivationPhase,
-    descriptor: PackageActivationDescriptor,
     intent: PackageActivationIntent,
-    publications: PackageActivationRecord["publications"],
     assertCurrent: () => void,
-  ) => {
-    const descriptorJsonValue = descriptorJson(descriptor);
+    publications = expected.publications,
+  ): PackageActivationRecord => {
+    const descriptorJsonValue = descriptorJson(expected.descriptor);
     const intentJson = JSON.stringify(intentSchema.parse(intent));
     PackageActivationPhaseSchema.parse(phase);
     assertCurrent();
@@ -459,78 +409,7 @@ export function openPackageActivationJournal(anchor: string) {
     assertCurrent(expected: PackageActivationRecord) {
       assertRecord(expected, read());
     },
-    prepareReverse(
-      expected: PackageActivationRecord,
-      preparation: PackageActivationReversePreparation,
-      assertCurrent: () => void,
-    ): PackageActivationRecord {
-      if (
-        expected.phase !== "publication-complete" ||
-        expected.descriptor.reverse ||
-        expected.descriptor.reversePreparation ||
-        preparation.operationId !== expected.descriptor.operationId ||
-        preparation.runId !== expected.descriptor.originalRunId
-      ) {
-        throw new Error("Reverse preparation requires the untouched original publication.");
-      }
-      const descriptor = {
-        ...expected.descriptor,
-        reversePreparation: preparation,
-      };
-      return transitionRecord(
-        expected,
-        "reverse-preparing",
-        descriptor,
-        { kind: "reverse-prepare", completed: 0, effect: null },
-        expected.publications,
-        assertCurrent,
-      );
-    },
-    sealReverse(
-      expected: PackageActivationRecord,
-      reverse: PackageActivationReverseBinding,
-      assertCurrent: () => void,
-    ): PackageActivationRecord {
-      const preparation = expected.descriptor.reversePreparation;
-      if (
-        expected.phase !== "reverse-preparing" ||
-        !preparation ||
-        expected.descriptor.reverse ||
-        expected.intent?.kind !== "reverse-prepare" ||
-        expected.intent.completed !== preparation.state.length ||
-        expected.intent.effect !== null ||
-        reverse.operationId !== preparation.operationId ||
-        reverse.runId !== preparation.runId
-      ) {
-        throw new Error("Reverse binding requires completely sealed durable preparation.");
-      }
-      const { reversePreparation: _preparation, ...base } = expected.descriptor;
-      const descriptor = { ...base, reverse };
-      return transitionRecord(
-        expected,
-        "reverse-in-progress",
-        descriptor,
-        { kind: "reverse", direction: "reverse", completed: 0, effect: null },
-        expected.publications,
-        assertCurrent,
-      );
-    },
-    transition(
-      expected: PackageActivationRecord,
-      phase: PackageActivationPhase,
-      intent: PackageActivationIntent,
-      assertCurrent: () => void,
-      publications = expected.publications,
-    ): PackageActivationRecord {
-      return transitionRecord(
-        expected,
-        phase,
-        expected.descriptor,
-        intent,
-        publications,
-        assertCurrent,
-      );
-    },
+    transition,
   };
 }
 export type PackageActivationJournal = ReturnType<typeof openPackageActivationJournal>;

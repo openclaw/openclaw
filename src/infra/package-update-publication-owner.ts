@@ -13,16 +13,13 @@ import {
 import {
   packageActivationIdentity,
   resolvePackageActivationHelper,
-  isPackageActivationComplete,
-  resolvePackageActivationAnchor,
   type PackageActivationIntent,
   type PackageActivationJournal,
   type PackageActivationPhase,
   type PackageActivationRecord,
   encodePackageActivationLauncher,
 } from "./package-update-activation-journal.js";
-import { createPackageActivationReverseOwner } from "./package-update-activation-reverse.js";
-import type { PackageActivationStatus } from "./package-update-activation-status.js";
+import { readPackageActivationRecordStatus as packageActivationStatus } from "./package-update-activation-status.js";
 import {
   activateStagedNpmPackageRoot,
   copyPackagePathEntry,
@@ -33,23 +30,7 @@ import {
   createPackageIntegrityReader,
   type PackageIntegrityFingerprint,
 } from "./package-update-integrity.js";
-import { capturePackageReverseExecutor } from "./package-update-reverse-authority.js";
 import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
-import type { UpdateRecoveryFence } from "./update-run-recovery.js";
-
-export type { PackageActivationStatus } from "./package-update-activation-status.js";
-export const packageActivationStatus = (
-  record: PackageActivationRecord,
-): PackageActivationStatus => ({
-  phase: isPackageActivationComplete(
-    resolvePackageActivationAnchor(record.descriptor.authority.installKey),
-    record,
-  )
-    ? "complete"
-    : record.phase,
-  operationId: record.descriptor.operationId,
-  installKey: record.descriptor.authority.installKey,
-});
 
 export function createPublicationOwner(
   anchor: string,
@@ -59,9 +40,6 @@ export function createPublicationOwner(
   assertJournalCurrent: (expected: PackageActivationRecord) => void = journal.assertCurrent.bind(
     journal,
   ),
-  fence?: UpdateRecoveryFence,
-  resuming = false,
-  executor?: ReturnType<typeof capturePackageReverseExecutor>,
 ) {
   let record = initial;
   const descriptor = record.descriptor;
@@ -141,8 +119,8 @@ export function createPublicationOwner(
     }
     assertSelectedLaunchers(selected);
   };
-  const assertCurrent = (assertExecutor = assertion) => {
-    assertExecutor();
+  const assertCurrent = () => {
+    assertion();
     assertJournalCurrent(record);
     const currentAnchor = entryIdentity(custodyPath("anchor"), true);
     if (
@@ -171,10 +149,9 @@ export function createPublicationOwner(
     phase: PackageActivationPhase,
     intent: PackageActivationIntent = null,
     publications = record.publications,
-    assertExecutor = assertion,
   ) => {
-    assertCurrent(assertExecutor);
-    record = journal.transition(record, phase, intent, assertExecutor, publications);
+    assertCurrent();
+    record = journal.transition(record, phase, intent, assertion, publications);
   };
   const matches = async (file: string, expected: PackageIntegrityFingerprint, logical: string) => {
     if (!(await packagePathEntryExists(file))) {
@@ -248,7 +225,7 @@ export function createPublicationOwner(
     }
     return { selected, previous, candidate, launcherStates };
   };
-  const verifyClosure = async (assertExecutor = assertion) => {
+  const verifyClosure = async () => {
     assertInventory();
     assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
     if (packageActivationIdentity(helper(), false) !== helperIdentity) {
@@ -258,14 +235,9 @@ export function createPublicationOwner(
     if (createHash("sha256").update(bytes).digest("hex") !== descriptor.helperDigest) {
       throw new Error("Sealed package recovery helper changed.");
     }
-    assertCurrent(assertExecutor);
+    assertCurrent();
   };
-  const preflight = async (action: "repair" | "retire", assertExecutor = assertion) => {
-    if (action === "retire" && record.descriptor.reverse && record.phase !== "rolled-back") {
-      throw new Error(
-        "Reverse-bound evidence requires verified successor admission before retirement.",
-      );
-    }
+  const preflight = async (action: "repair" | "retire") => {
     if (
       action === "repair" &&
       !["preparing", "prepared", "publishing", "publication-complete"].includes(record.phase)
@@ -280,7 +252,7 @@ export function createPublicationOwner(
     ) {
       throw new Error(`Package evidence cannot be retired (${record.phase}).`);
     }
-    await verifyClosure(assertExecutor);
+    await verifyClosure();
     if (record.phase === "preparing") {
       inspectPackageActivationCustody(anchor, record);
     } else if (action === "repair" || record.phase === "publication-complete") {
@@ -304,7 +276,35 @@ export function createPublicationOwner(
       }
       await verifySelectedLaunchers(selected);
     }
-    assertCurrent(assertExecutor);
+    assertCurrent();
+  };
+  const persistPackageSelection = async (selected: "displaced" | "candidate" | "previous") => {
+    const rejected =
+      selected === "previous" && entryIdentity(root("previous.candidate"), true) !== null;
+    const roles = [
+      [live, selected === "displaced" ? null : descriptor[selected].identity],
+      [root("previous"), selected === "previous" ? null : descriptor.previous.identity],
+      [
+        root("candidate"),
+        selected === "displaced" || (selected === "previous" && !rejected)
+          ? descriptor.candidate.identity
+          : null,
+      ],
+      [root("previous.candidate"), rejected ? descriptor.candidate.identity : null],
+    ] as const;
+    const assertSelected = () => {
+      assertCurrent();
+      if (roles.some(([file, identity]) => entryIdentity(file, true) !== identity)) {
+        throw new Error("Package selection changed during persistence.");
+      }
+    };
+    // Persist both sides even when recovery observes a rename whose acknowledgment was lost.
+    for (const directory of [anchor, path.dirname(live)]) {
+      assertSelected();
+      const outcome = await syncDirectory(directory);
+      assertSelected();
+      requireDirectorySync(outcome, "Package selection");
+    }
   };
   const publish = async (resume: boolean, onDisplaced?: () => void | Promise<void>) => {
     await verifyClosure();
@@ -334,8 +334,11 @@ export function createPublicationOwner(
         throw new Error("Package displacement preimage changed.");
       }
       await fsp.rename(live, root("previous"));
+      await persistPackageSelection("displaced");
       await onDisplaced?.();
       assertCurrent();
+    } else if (observed.selected === null) {
+      await persistPackageSelection("displaced");
     }
     observed = await inspect();
     assertCurrent();
@@ -352,6 +355,7 @@ export function createPublicationOwner(
         }
       });
     }
+    await persistPackageSelection("candidate");
     for (const entry of descriptor.launchers) {
       observed = await inspect();
       assertCurrent();
@@ -415,11 +419,6 @@ export function createPublicationOwner(
   };
   const retire = async () => {
     await verifyClosure();
-    if (record.descriptor.reverse && record.phase !== "rolled-back") {
-      throw new Error(
-        "Reverse-bound evidence requires verified successor admission before retirement.",
-      );
-    }
     if (
       !["publication-complete", "rolled-back", "aborted", "retiring", "anchor-retired"].includes(
         record.phase,
@@ -547,47 +546,12 @@ export function createPublicationOwner(
     // intended absence even when this acknowledgement is lost. No trailing write.
     return packageActivationStatus(record);
   };
-  const assertLegacyRollback = () => {
-    if (executor && !resuming) {
-      // A candidate selected by the native executor cannot be replaced by
-      // ordinary rename-based rollback. Preserve its native reverse lifetime.
-      throw new Error("Selected package rollback requires native reverse publication.");
-    }
-  };
   return {
-    ...createPackageActivationReverseOwner({
-      journal,
-      current: () => record,
-      transition,
-      prepareReverse: (preparation, assertExecutor) => {
-        assertCurrent(assertExecutor);
-        record = journal.prepareReverse(record, preparation, () => assertCurrent(assertExecutor));
-      },
-      sealReverse: (binding, assertExecutor) => {
-        assertCurrent(assertExecutor);
-        record = journal.sealReverse(record, binding, () => assertCurrent(assertExecutor));
-      },
-      assertCurrent,
-      verifyClosure,
-      verifyForward: (assertExecutor) => preflight("repair", assertExecutor),
-      executor:
-        executor ??
-        (resuming && fence && descriptor.originalRunId
-          ? capturePackageReverseExecutor(fence, descriptor.originalRunId, true)
-          : undefined),
-      fence,
-      resuming,
-    }),
     publish,
     retire,
-    preflight: (action: "repair" | "retire") => preflight(action),
-    assertLegacyRollback,
+    preflight,
     async disarmRollback() {
       assertCurrent();
-      assertLegacyRollback();
-      if (record.descriptor.reverse) {
-        throw new Error("Bound reverse publication cannot use legacy rollback.");
-      }
       const observed = await inspect();
       assertCurrent();
       if (
@@ -615,10 +579,15 @@ export function createPublicationOwner(
         { name, identity },
       ]);
     },
-    restored() {
-      if (record.descriptor.reverse) {
-        throw new Error("Bound reverse publication requires exhaustive settlement.");
-      }
+    async restored() {
+      assertCurrent();
+      assertSelectedLaunchers("previous");
+      // Restoration also removes launchers that did not exist in the old package.
+      const outcome = await syncDirectory(descriptor.binDir);
+      assertCurrent();
+      assertSelectedLaunchers("previous");
+      requireDirectorySync(outcome, "Restored package launchers");
+      await persistPackageSelection("previous");
       const publications = descriptor.launchers.flatMap((entry) => {
         const identity =
           entry.previous === null
@@ -632,17 +601,7 @@ export function createPublicationOwner(
       });
       transition("rolled-back", null, publications);
     },
-    synchronize() {
-      assertion();
-      const current = journal.read();
-      if (!isDeepStrictEqual(current.descriptor, record.descriptor)) {
-        throw new Error("Forward publication changed its retained transaction descriptor.");
-      }
-      journal.assertCurrent(current);
-      record = current;
-      assertCurrent();
-    },
     status: () => packageActivationStatus(record),
-    assertCurrent: () => assertCurrent(),
+    assertCurrent,
   };
 }

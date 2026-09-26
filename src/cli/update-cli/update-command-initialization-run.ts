@@ -2,10 +2,6 @@ import { randomUUID } from "node:crypto";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
-import {
-  assertUpdateInitialStoreInvocation,
-  currentUpdateInitialStoreAdmission,
-} from "../../infra/update-initial-store-invocation.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -64,8 +60,6 @@ export async function initializeAndRunUpdate(
   const runId = env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID();
   let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
   try {
-    assertUpdateInitialStoreInvocation(undefined, targetEnv);
-    const selection = currentUpdateInitialStoreAdmission()?.selection;
     await withUpdateCommandTerminalResult(
       (registerRun) =>
         withUpdateInProgressEnv(invocationCwd, () =>
@@ -85,7 +79,6 @@ export async function initializeAndRunUpdate(
               if (!target) {
                 return;
               }
-              assertUpdateInitialStoreInvocation(target.root, env);
               const packageAdmission = { serviceRoot: target.managedServiceRoot };
               const initialization: InitializedUpdate = {
                 env,
@@ -375,13 +368,7 @@ export async function initializeAndRunUpdate(
                   )
                 : await runWithSelectedProfile();
             },
-            executorOptions ??
-              (selection
-                ? {
-                    directOriginal: { databasePath: selection.handoff.databasePath },
-                    initialStores: { protocol: "initial-pair-v1", selection },
-                  }
-                : undefined),
+            executorOptions,
           ),
         ),
       opts,

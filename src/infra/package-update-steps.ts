@@ -199,7 +199,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   assertCurrent?: () => void;
   reserveInstallSlot?: (root: string) => void;
   onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
-  activation?: PackageActivationOptions;
+  getActivation?: () => PackageActivationOptions | undefined;
   expectedGitCheckout?: GitRuntimeIdentity;
   activateGitRoot?: string;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
@@ -686,7 +686,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           liveTreeMutated = true;
         },
         onTransaction: params.onTransaction,
-        activation: params.activation,
+        activation: params.getActivation?.(),
         localOverrides: params.expectedGitCheckout ? undefined : params.localOverrides,
         onLocalOverrides: (result) => {
           localOverrides = result;

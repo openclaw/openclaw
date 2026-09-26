@@ -1,8 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  snapshotUpdateInitialStoreTransport,
-  type UpdateInitialStoreTransport,
-} from "../../infra/update-initial-store-transport.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import {
@@ -19,7 +15,6 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 export type UpdateCommandChildGrant = {
   runId: string;
   root: string;
-  initialStores?: UpdateInitialStoreTransport;
   databasePath: string;
   parent: ManagedHandoffParent;
   /** Original owner and its lineage survive a package-generation change. */
@@ -54,7 +49,6 @@ export function childLineageDigest(
   database: ManagedUpdateLeaseDatabaseIdentity,
   retained?: ManagedHandoffLease,
   slot?: Omit<NonNullable<UpdateCommandChildGrant["slot"]>, "childKey">,
-  initialStores?: UpdateInitialStoreTransport,
 ): string {
   return createHash("sha256")
     .update(
@@ -62,7 +56,6 @@ export function childLineageDigest(
         database.databasePath,
         database.databaseIdentity,
         database.parentIdentity,
-        ...(initialStores ? [["initial-pair-v1", initialStores.selection]] : []),
         [original, spawner, parent].map((lease) =>
           // v1 stores only its runner; bind the borrowed updater too. Shipped
           // v2/v3 payloads already carry both identities and keep their bytes.
@@ -123,7 +116,6 @@ export function createChildOwner(params: {
     retainedParent?: ManagedHandoffLease;
     databasePath: string;
     databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
-    initialStores?: UpdateInitialStoreTransport;
   };
   assertBase: () => void;
   onStart?: (purpose?: ChildPurpose) => void;
@@ -166,10 +158,7 @@ export function createChildOwner(params: {
         retainedParent,
         databasePath,
         databaseIdentity,
-        initialStores: inputStores,
       } = params.binding();
-      const initialStores =
-        inputStores === undefined ? undefined : snapshotUpdateInitialStoreTransport(inputStores);
       if (!databaseIdentity) {
         throw new UpdateCommandRecoveryPendingError(
           "Native child requires its pinned lease database.",
@@ -177,17 +166,6 @@ export function createChildOwner(params: {
       }
       params.onStart?.(purpose);
       const candidateRoot = resolveUpdateInstallRoot(root);
-      if (
-        initialStores &&
-        (candidateRoot !== initialStores.selection.installation.path ||
-          databasePath !== initialStores.selection.handoff.databasePath ||
-          databaseIdentity.databaseIdentity !== initialStores.selection.handoff.databaseIdentity ||
-          databaseIdentity.parentIdentity !== initialStores.selection.handoff.parentIdentity)
-      ) {
-        throw new UpdateCommandRecoveryPendingError(
-          "Child requires its explicitly selected installation and stores.",
-        );
-      }
       let candidateParent = parent;
       let acquiredParent = false;
       let children: ManagedHandoffLease[] = [];
@@ -263,7 +241,7 @@ export function createChildOwner(params: {
                       ? slot.spawner.key
                       : candidateParent.key),
                 );
-          const childName = `${randomUUID()}${initialStores ? "-stores-v1" : ""}-lineage-${childLineageDigest(original, spawner, candidateParent, databaseIdentity, retainedParent, slot, initialStores)}`;
+          const childName = `${randomUUID()}-lineage-${childLineageDigest(original, spawner, candidateParent, databaseIdentity, retainedParent, slot)}`;
           for (const childParent of parents) {
             const acquired = store.acquire(
               `${childParent.key}/.openclaw-update-child-${childName}`,
@@ -302,7 +280,6 @@ export function createChildOwner(params: {
             originalChildKey: children[0]!.key,
             childKey: children[candidateChildIndex]!.key,
             databaseIdentity,
-            ...(initialStores ? { initialStores } : {}),
             ...(slot
               ? {
                   slot: {

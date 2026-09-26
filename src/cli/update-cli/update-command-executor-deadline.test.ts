@@ -35,17 +35,13 @@ it.each([false, true])(
     let fence: UpdateRecoveryFence | undefined;
     let signal: AbortSignal | undefined;
     let ended = false;
-    const work = withUpdateCommandExecutor(
-      "deadline-run",
-      async (executor) => {
-        fence = await executor.enter(root, { activationTimeoutMs: 1000, serviceRoot });
-        signal = resolveCommandProcessSignal();
-        admitted.resolve();
-        await finish.promise;
-        signal!.throwIfAborted();
-      },
-      { directOriginal: { databasePath } },
-    )
+    const work = withUpdateCommandExecutor("deadline-run", async (executor) => {
+      fence = await executor.enter(root, { activationTimeoutMs: 1000, serviceRoot });
+      signal = resolveCommandProcessSignal();
+      admitted.resolve();
+      await finish.promise;
+      signal!.throwIfAborted();
+    })
       .catch((error: unknown) => error)
       .finally(() => {
         ended = true;

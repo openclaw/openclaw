@@ -1,43 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
-import { admitUpdateInitialStoreTransport } from "../../infra/update-initial-store-transport.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   childLineageDigest,
   type UpdateCommandChildGrant,
 } from "./update-command-executor-children.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 export type { UpdateCommandChildGrant } from "./update-command-executor-children.js";
-
-/** Validate private store selectors before a receiver's state-backed preparation.
- * Live lease/PID admission still happens in resolveUpdateCommandChildBinding. */
-export function assertUpdateCommandChildInitialStores(
-  grant: UpdateCommandChildGrant | undefined,
-  root: string,
-  requiresInitialStores = false,
-): void {
-  const selectedName = grant?.childKey?.includes("-stores-v1-lineage-") === true;
-  const supplied = grant !== undefined && Object.hasOwn(grant, "initialStores");
-  if (
-    (requiresInitialStores && !supplied) ||
-    selectedName !== supplied ||
-    (supplied && !grant?.initialStores)
-  ) {
-    throw new UpdateCommandRecoveryPendingError("Candidate initial store selection was stripped.");
-  }
-  if (grant?.initialStores) {
-    const admission = admitUpdateInitialStoreTransport(grant.initialStores, {
-      installationRoot: resolveUpdateInstallRoot(root),
-      handoffPath: grant.databasePath,
-      statePath: resolveOpenClawStateSqlitePath(),
-    });
-    admission.close();
-  }
-}
 
 export function resolveUpdateCommandChildBinding(
   grant: UpdateCommandChildGrant,
@@ -89,7 +61,6 @@ export function resolveUpdateCommandChildBinding(
     !grant.spawner &&
     !grant.originalChildKey &&
     !grant.databaseIdentity &&
-    !Object.hasOwn(grant, "initialStores") &&
     grant.childKey === `${grant.parent.key}/.openclaw-update-child-${childName}` &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(childName);
   const databaseIdentity = legacyGrant
@@ -108,34 +79,20 @@ export function resolveUpdateCommandChildBinding(
         `${grant.retainedParent!.key}/.openclaw-update-child-${childName}`) &&
     grant.childKey ===
       `${grant.parent.key === original.key ? spawner.key : grant.parent.key === slot?.parent.key ? slot.spawner.key : grant.parent.key}/.openclaw-update-child-${childName}` &&
-    /^[0-9a-f-]{36}(?:-stores-v1)?-lineage-[0-9a-f]{64}$/.test(childName) &&
+    /^[0-9a-f-]{36}-lineage-[0-9a-f]{64}$/.test(childName) &&
     childName.endsWith(
-      `-lineage-${childLineageDigest(original, spawner, grant.parent, grant.databaseIdentity, grant.retainedParent, slot, grant.initialStores)}`,
+      `-lineage-${childLineageDigest(original, spawner, grant.parent, grant.databaseIdentity, grant.retainedParent, slot)}`,
     ),
   );
-  const selectedFormat = childName.includes("-stores-v1-lineage-");
-  if (
-    (!lineageBound && !legacyGrant) ||
-    (!legacyGrant && databasePath !== grant.databasePath) ||
-    selectedFormat !== Object.hasOwn(grant, "initialStores") ||
-    (Object.hasOwn(grant, "initialStores") && !grant.initialStores)
-  ) {
+  if ((!lineageBound && !legacyGrant) || (!legacyGrant && databasePath !== grant.databasePath)) {
     throw new UpdateCommandRecoveryPendingError(
-      "Candidate store selection or lineage is missing or invalid.",
+      "Candidate executor lineage is missing or invalid.",
     );
   }
-  const initialStoreAdmission = grant.initialStores
-    ? admitUpdateInitialStoreTransport(grant.initialStores, {
-        installationRoot: resolveUpdateInstallRoot(root),
-        handoffPath: databasePath,
-        statePath: resolveOpenClawStateSqlitePath(),
-      })
-    : undefined;
   const store = createManagedHandoffLeaseStore({
     databasePath,
     serviceManagerEnv: resolveServiceManagerEnv(),
     existingIdentity: databaseIdentity,
-    initialStoreAdmission,
     onProcessIdentityWarning,
   });
   const parent =
@@ -151,7 +108,6 @@ export function resolveUpdateCommandChildBinding(
   const retained = retainedFields ? store.read(grant.retainedParent!.key) : undefined;
   const retainedChild = retainedFields ? store.read(grant.retainedChildKey!) : undefined;
   if (
-    (!lineageBound && !legacyGrant) ||
     (slot &&
       (slot.parent.key === original.key ||
         !store.current(slot.parent) ||
@@ -235,7 +191,6 @@ export function resolveUpdateCommandChildBinding(
     spawner,
     databaseIdentity,
     databasePath,
-    initialStoreAdmission,
     store,
     parent: parent.lease,
     originalChild: originalChild.lease,

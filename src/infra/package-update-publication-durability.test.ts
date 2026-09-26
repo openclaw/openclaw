@@ -17,6 +17,7 @@ import {
   runPackageActivationRecovery,
 } from "./package-update-activation.js";
 import * as integrity from "./package-update-integrity.js";
+import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as capability from "./update-post-core-capability.js";
 
@@ -37,6 +38,171 @@ afterEach(async () => {
     vi.unstubAllEnvs();
   }
 });
+
+it.skipIf(process.platform === "win32").each([
+  ["displace", "anchor"],
+  ["displace", "installation"],
+  ["publish", "anchor"],
+  ["publish", "installation"],
+] as const)(
+  "persists both package rename parents before advancing %s (%s failure)",
+  (cut, parent) =>
+    fixture.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixture.writePostCoreCapability(f.params.stage.packageRoot);
+      const anchor = resolvePackageActivationAnchor(f.packageRoot);
+      const previousRoot = path.join(anchor, "previous");
+      const candidateRoot = path.join(anchor, "candidate");
+      const parents = [anchor, path.dirname(f.packageRoot)];
+      const failedParent = parent === "anchor" ? anchor : path.dirname(f.packageRoot);
+      const failure = Object.assign(new Error(`${cut} directory sync interrupted`), {
+        code: "EIO",
+      });
+      const synced = { displace: new Set<string>(), publish: new Set<string>() };
+      let faultEnabled = true;
+      let refused = 0;
+      let callbackDurable: boolean | undefined;
+      const sync = durability.syncDirectory;
+      vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
+        const phase = !fs.existsSync(previousRoot)
+          ? undefined
+          : fs.existsSync(f.packageRoot)
+            ? "publish"
+            : "displace";
+        if (faultEnabled && phase === cut && directory === failedParent) {
+          refused++;
+          throw failure;
+        }
+        const result = await sync(directory);
+        if (phase) {
+          synced[phase].add(directory);
+        }
+        return result;
+      });
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        const reader = integrity.createPackageIntegrityReader();
+        const prepared = await preparePackageActivation({
+          options: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          installTarget: f.params.installTarget,
+          liveRoot: f.packageRoot,
+          stageRoot: f.params.stage.packageRoot,
+          launcherRoot: f.params.stage.layout.binDir,
+          binDir: path.dirname(f.launcher),
+          previous: await reader.tree(f.packageRoot),
+          launchers: [
+            {
+              name: "openclaw",
+              previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
+            },
+          ],
+        });
+        expect(prepared).toBeDefined();
+        await expect(
+          prepared!.publish(false, () => {
+            callbackDurable = parents.every((directory) => synced.displace.has(directory));
+          }),
+        ).rejects.toBe(failure);
+      });
+      expect(refused).toBe(1);
+      expect(callbackDurable).toBe(cut === "displace" ? undefined : true);
+      const version = (directory: string) =>
+        JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8")).version;
+      expect(version(previousRoot)).toBe("1.0.0");
+      expect(version(cut === "displace" ? candidateRoot : f.packageRoot)).toBe("2.0.0");
+      expect(fs.existsSync(cut === "displace" ? f.packageRoot : candidateRoot)).toBe(false);
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+      const journal = openPackageActivationJournal(anchor);
+      const pending = journal.read();
+      expect(pending).toMatchObject({
+        phase: "publishing",
+        intent: { kind: cut },
+        publications: [],
+      });
+      // Reopening observes the completed rename, but its missing durability
+      // acknowledgement must still prevent every subsequent effect.
+      await expect(
+        runPackageActivationRecovery(anchor, "repair", pending.descriptor.operationId),
+      ).rejects.toBe(failure);
+      expect(refused).toBe(2);
+      expect(journal.read()).toEqual(pending);
+      expect(version(previousRoot)).toBe("1.0.0");
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+      faultEnabled = false;
+      await expect(
+        runPackageActivationRecovery(anchor, "repair", pending.descriptor.operationId),
+      ).resolves.toMatchObject({ phase: "publication-complete" });
+      expect(parents.every((directory) => synced[cut].has(directory))).toBe(true);
+      expect(version(f.packageRoot)).toBe("2.0.0");
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+      await expect(
+        runPackageActivationRecovery(anchor, "retire", pending.descriptor.operationId),
+      ).resolves.toMatchObject({ phase: "complete" });
+    }),
+);
+
+it.skipIf(process.platform === "win32").each(["anchor", "installation", "launchers"] as const)(
+  "retains recovery copies when restored package %s persistence fails",
+  (parent) =>
+    fixture.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixture.writePostCoreCapability(f.params.stage.packageRoot);
+      const anchor = resolvePackageActivationAnchor(f.packageRoot);
+      const failedParent =
+        parent === "anchor"
+          ? anchor
+          : path.dirname(parent === "launchers" ? f.launcher : f.packageRoot);
+      if (parent === "launchers") {
+        fs.unlinkSync(f.launcher);
+      }
+      const failure = Object.assign(new Error("restored directory sync interrupted"), {
+        code: "EIO",
+      });
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        let transaction: PackageUpdateTransaction | undefined;
+        const result = await swapStagedPackageInstall({
+          ...f.params,
+          activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          onTransaction: (issued) => {
+            transaction = issued;
+          },
+        });
+        expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+        const sync = durability.syncDirectory;
+        let refused = 0;
+        vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
+          if (
+            directory === failedParent &&
+            fs.existsSync(path.join(anchor, "previous.candidate"))
+          ) {
+            refused++;
+            throw failure;
+          }
+          return sync(directory);
+        });
+        await expect(transaction!.rollback(fence.assertCurrent)).rejects.toBe(failure);
+        expect(refused).toBe(1);
+        expect(openPackageActivationJournal(anchor).read().phase).toBe("rollback-in-progress");
+        expect(
+          JSON.parse(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).version,
+        ).toBe("1.0.0");
+        expect(
+          JSON.parse(fs.readFileSync(path.join(anchor, "previous.candidate/package.json"), "utf8"))
+            .version,
+        ).toBe("2.0.0");
+        if (parent === "launchers") {
+          expect(fs.existsSync(f.launcher)).toBe(false);
+        } else {
+          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+        }
+        await expect(
+          transaction!.complete({ activationVerified: true }, fence.assertCurrent),
+        ).rejects.toBe(failure);
+        expect(fs.existsSync(path.join(anchor, "previous.candidate"))).toBe(true);
+      });
+    }),
+);
 
 it.skipIf(process.platform === "win32").each([
   ["file", "EIO"],

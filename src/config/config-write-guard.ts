@@ -1,4 +1,3 @@
-import { assertUpdateRecoveryWriterAllowed } from "../infra/update-recovery-writer-guard.js";
 // Guards config writes when an external deployment owns the config.
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "./paths.js";
 
@@ -53,7 +52,6 @@ export function assertConfigWriteAllowedInCurrentMode(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): void {
-  assertUpdateRecoveryWriterAllowed();
   if (!resolveIsConfigReadOnly(params.env)) {
     return;
   }

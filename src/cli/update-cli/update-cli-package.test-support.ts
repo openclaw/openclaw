@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi, type Mock } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -457,28 +456,40 @@ export function createCurrentProcessFreshDoctorFixture(
       postCoreResumeAttempt?: boolean;
       postPluginDoctorAttempt?: boolean;
       packageRoot?: string;
-      candidateAdmission?: boolean;
     } = {},
   ) => {
-    // Package Doctor precedes the fresh-process decision; it must have a real entrypoint.
+    const installedEntrypoint = params.packageRoot
+      ? vi.fn<typeof resolveGatewayInstallEntrypoint>()
+      : vi.mocked(resolveGatewayInstallEntrypoint);
+    // Staged admission and publication probes read the fixture they request;
+    // they must not consume the installed Doctor/finalization responses.
     if (params.packageRoot) {
-      vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
-      if (params.candidateAdmission) {
-        // Native capability admission resolves the staged candidate before package Doctor.
-        vi.mocked(resolveGatewayInstallEntrypoint).mockImplementationOnce(async (root) =>
-          path.join(expectDefined(root, "capability candidate root"), "dist", "index.js"),
-        );
-      }
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-        path.join(params.packageRoot, "dist", "index.js"),
-      );
+      vi.mocked(resolveGatewayInstallEntrypoint)
+        .mockReset()
+        .mockImplementation(async (root) => {
+          if (root && root !== params.packageRoot) {
+            const actual = await vi.importActual<
+              typeof import("../../daemon/gateway-entrypoint.js")
+            >("../../daemon/gateway-entrypoint.js");
+            return actual.resolveGatewayInstallEntrypoint(root, async (candidate) => {
+              try {
+                await fs.access(candidate);
+                return true;
+              } catch {
+                return false;
+              }
+            });
+          }
+          return installedEntrypoint(root);
+        });
+      installedEntrypoint.mockResolvedValueOnce(path.join(params.packageRoot, "dist", "index.js"));
     }
     if (params.postCoreResumeAttempt !== false) {
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(undefined);
+      installedEntrypoint.mockResolvedValueOnce(undefined);
     }
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(freshEntrypoint);
+    installedEntrypoint.mockResolvedValueOnce(freshEntrypoint);
     if (params.postPluginDoctorAttempt) {
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(freshEntrypoint);
+      installedEntrypoint.mockResolvedValueOnce(freshEntrypoint);
     }
   };
 }

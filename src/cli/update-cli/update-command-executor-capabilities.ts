@@ -103,10 +103,3 @@ export async function withUpdateCommandExecutorChild<T>(
   }
   return await owner(root, operation, purpose);
 }
-
-export {
-  captureUpdateCommandExecutorCurrentStores,
-  captureUpdateCommandRecoveryGenerationAuthority,
-  publishUpdateCommandPackageGeneration,
-  publishUpdateCommandRecoveryGeneration,
-} from "./update-command-executor-generation.js";

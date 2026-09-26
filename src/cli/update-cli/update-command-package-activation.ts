@@ -8,7 +8,7 @@ export function createPackageUpdateActivationOptions(params: {
   run: MutableUpdateExecutionParams["opts"]["run"];
   nodeRunner?: string;
   assertCurrent: () => void;
-}): Pick<PackageInstallUpdateParams, "reserveInstallSlot" | "activation"> {
+}): Pick<PackageInstallUpdateParams, "reserveInstallSlot" | "getActivation"> {
   return {
     reserveInstallSlot: (root) => {
       params.assertCurrent();
@@ -17,12 +17,11 @@ export function createPackageUpdateActivationOptions(params: {
         reserveUpdateCommandExecutorSlot(fence, root);
       }
     },
-    get activation() {
+    getActivation: () => {
       const run = params.run;
       const fence = run?.executorFence;
       return run && fence
         ? {
-            runId: run.runId,
             fence,
             nodeRunner: params.nodeRunner ?? resolveNodeRunner(),
             onPrepared: (command: string) => {

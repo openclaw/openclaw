@@ -13,11 +13,8 @@ import {
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
-import {
-  readPackageReverseSymlink,
-  renamePackageReverseResource,
-} from "./package-update-activation-symlink.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
+import { writePackageRoot } from "./package-update-steps.test-support.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as snapshot from "./sqlite-snapshot.js";
@@ -98,6 +95,33 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
         } else {
           await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
           expect(fs.existsSync(anchor)).toBe(false);
+          // A completed transaction stays cached even after its one-slot receipt
+          // is reused by another publication under the same executor.
+          await writePackageRoot(f.params.stage.packageRoot, "3.0.0");
+          await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+          fs.mkdirSync(f.params.stage.layout.binDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(f.params.stage.layout.binDir, "openclaw"),
+            "candidate launcher\n",
+          );
+          let nextTransaction: PackageUpdateTransaction | undefined;
+          const next = await swapStagedPackageInstall({
+            ...f.params,
+            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            onTransaction: (issued) => {
+              nextTransaction = issued;
+            },
+          });
+          expect(next.status, next.step.stderrTail ?? undefined).toBe("committed");
+          await expect(
+            transaction!.complete({ activationVerified: true }, fence.assertCurrent),
+          ).resolves.toBeUndefined();
+          expect(openPackageActivationJournal(anchor).read().phase).toBe("publication-complete");
+          await nextTransaction!.complete({ activationVerified: true }, fence.assertCurrent);
+          expect(fs.existsSync(anchor)).toBe(false);
+          expect(
+            JSON.parse(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).version,
+          ).toBe("3.0.0");
         }
         expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
       });
@@ -149,19 +173,6 @@ it.skipIf(process.platform === "win32")(
     }),
 );
 
-it("reads and revalidates a normal Linux npm symlink launcher", () => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-  const link = path.join(root, "openclaw");
-  fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", link);
-  const captured = fs.lstatSync(link, { bigint: true });
-  expect(readPackageReverseSymlink(link, captured)).toBe(
-    "../lib/node_modules/openclaw/openclaw.mjs",
-  );
-  fs.unlinkSync(link);
-  fs.symlinkSync("../lib/node_modules/other/openclaw.mjs", link);
-  expect(() => readPackageReverseSymlink(link, captured)).toThrow("captured inode");
-});
-
 it.skipIf(process.platform === "win32").each(["directory", "parent"] as const)(
   "preserves replacement %s contents when recovery snapshot transport fails",
   (replacement) =>
@@ -206,62 +217,5 @@ it.skipIf(process.platform === "win32").each(["directory", "parent"] as const)(
         ),
       ).toEqual(before);
       expect(fs.existsSync(retained)).toBe(true);
-    }),
-);
-
-it.each(["publish", "destination", "source", "parent", "revoked"] as const)(
-  "binds a reverse rename to its original slots and authority: %s",
-  (change) =>
-    fixtures.lifetime.run(async () => {
-      const directory = path.join(root, "reverse-slots");
-      fs.mkdirSync(directory, { mode: 0o700 });
-      const from = path.join(directory, "staged");
-      const to = path.join(directory, "live");
-      const retained = path.join(root, "retained");
-      fs.writeFileSync(from, "prepared original");
-      const sourceIdentity = packageActivationIdentity(from, false);
-      const parentIdentity = packageActivationIdentity(directory, true);
-      // A caller has completed an awaited inspection. Replace a recorded slot
-      // before the effect; only the original identities may authorize the rename.
-      await Promise.resolve();
-      if (change === "destination") {
-        fs.writeFileSync(to, "newer destination");
-      }
-      if (change === "source") {
-        fs.renameSync(from, retained);
-        fs.writeFileSync(from, "foreign staged source");
-      }
-      if (change === "parent") {
-        fs.renameSync(directory, retained);
-        fs.mkdirSync(directory, { mode: 0o700 });
-        fs.renameSync(path.join(retained, "staged"), from);
-      }
-      const assertBeforeRename = vi.fn(() => {
-        if (change === "revoked") {
-          throw new Error("original scope closed");
-        }
-        if (packageActivationIdentity(directory, true) !== parentIdentity) {
-          throw new Error("original parent replaced");
-        }
-      });
-      const result = renamePackageReverseResource(from, to, { sourceIdentity, assertBeforeRename });
-      if (change === "publish") {
-        await expect(result).resolves.toBeUndefined();
-        expect(fs.readFileSync(to, "utf8")).toBe("prepared original");
-        expect(fs.existsSync(from)).toBe(false);
-      } else {
-        await expect(result).rejects.toThrow();
-        expect(fs.readFileSync(from, "utf8")).toBe(
-          change === "source" ? "foreign staged source" : "prepared original",
-        );
-        if (change === "destination") {
-          expect(fs.readFileSync(to, "utf8")).toBe("newer destination");
-        } else {
-          expect(fs.existsSync(to)).toBe(false);
-        }
-      }
-      if (change === "source") {
-        expect(fs.readFileSync(retained, "utf8")).toBe("prepared original");
-      }
     }),
 );

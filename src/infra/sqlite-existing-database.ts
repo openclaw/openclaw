@@ -17,7 +17,6 @@ type ExistingSqliteReadOptions = {
   busyTimeoutMs: number;
   assertIdentity: () => void;
   validate: (database: DatabaseSync) => void;
-  observeConnection?: (database: DatabaseSync) => void;
 };
 type ExistingSqliteOperation<T> = (
   database: DatabaseSync,
@@ -113,7 +112,6 @@ function withExistingRollbackDatabase<T>(
   };
   try {
     options.assertIdentity();
-    options.observeConnection?.(reader);
     setSqliteBusyTimeout(reader, options.busyTimeoutMs);
     if (retained) {
       // A fresh connection cannot hide in-place damage behind cached pages or
@@ -153,7 +151,6 @@ function withExistingRollbackDatabase<T>(
     }
     writer = openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname));
     options.assertIdentity();
-    options.observeConnection?.(writer);
     setSqliteBusyTimeout(writer, options.busyTimeoutMs);
     const database = writer;
     let admitted = false;

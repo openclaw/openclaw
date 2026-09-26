@@ -50,9 +50,6 @@ export const runtimeProcessEntrypoints = {
   doctorLint: runtimeProcessEntrypoint("commands/doctor-lint.worker"),
   doctor: runtimeProcessEntrypoint("commands/doctor.worker"),
   databaseVerify: runtimeProcessEntrypoint("state/openclaw-database-verify.worker"),
-  stateRecoveryPreparation: runtimeProcessEntrypoint(
-    "state/openclaw-state-recovery-preparation.worker",
-  ),
   stateLeaseHeartbeat: runtimeProcessEntrypoint("state/openclaw-state-lease-heartbeat.worker"),
   sessionTranscriptArchive: runtimeProcessEntrypoint(
     "config/sessions/session-accessor.sqlite-archive.worker",

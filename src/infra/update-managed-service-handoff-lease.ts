@@ -97,11 +97,7 @@ export function createManagedHandoffLeaseStore(
 
   const { control, properties, nativeScope, isInNativeScope, nativeClosed } =
     createManagedHandoffScopeReader(serviceManagerEnv);
-  const withDatabase = createManagedHandoffLeaseDatabase(
-    databasePath,
-    options.existingIdentity,
-    options.initialStoreAdmission,
-  );
+  const withDatabase = createManagedHandoffLeaseDatabase(databasePath, options.existingIdentity);
   const {
     row,
     handle,

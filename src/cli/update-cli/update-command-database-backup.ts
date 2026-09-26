@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
@@ -31,12 +30,7 @@ export async function captureUpdateDatabases(params: {
 }) {
   const startedAt = Date.now();
   const { execution, context, transaction } = params;
-  // Atomic publication retires its anchor after success. Keep migration
-  // snapshots in a sibling so they remain durable recovery evidence.
-  const backupRoot =
-    transaction.reversePublication === undefined
-      ? transaction.backupRoot
-      : path.dirname(transaction.backupRoot);
+  const backupRoot = transaction.databaseBackupRoot ?? transaction.backupRoot;
   const env = context?.env ?? execution.opts.run!.env;
   params.assertCurrent();
   const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);

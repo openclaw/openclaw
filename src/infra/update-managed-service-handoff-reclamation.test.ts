@@ -7,6 +7,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  assertManagedHandoffTestConsumer,
+  createManagedHandoffTestBinding,
+} from "../../test/helpers/managed-handoff-isolation.js";
+import {
   installPrivateUpdateHandoffStore,
   writePrivateUpdateHandoffChildGuard,
 } from "../../test/helpers/private-update-handoff-store.js";
@@ -38,6 +42,7 @@ function fixture() {
   const state = make("state");
   const coordinator = make("coordinator");
   const { databasePath: handoff } = installPrivateUpdateHandoffStore(privateTmp);
+  const binding = createManagedHandoffTestBinding(privateTmp);
   const childEnv = writePrivateUpdateHandoffChildGuard(handoff, privateTmp);
   vi.stubEnv("HOME", root);
   vi.stubEnv("USERPROFILE", root);
@@ -75,10 +80,10 @@ await withStateDatabaseCoordinatorRuntimeDirectory({directory:${JSON.stringify(c
     }
     if (${JSON.stringify(mode)} === "cancelled") requestUpdateCommandExecutorCancellation(fence, runId, new Error("original cancellation"));
     process.kill(process.pid, "SIGKILL");
-  }, {directOriginal:{databasePath:${JSON.stringify(handoff)}}}));
+  }));
 `,
     );
-    const result = spawnSync(process.execPath, ["--import", "tsx", child], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", binding.nodeOption, child], {
       cwd: fileURLToPath(new URL("../../", import.meta.url)),
       env,
       encoding: "utf8",
@@ -87,6 +92,7 @@ await withStateDatabaseCoordinatorRuntimeDirectory({directory:${JSON.stringify(c
     });
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.signal, result.stderr).toBe("SIGKILL");
+    assertManagedHandoffTestConsumer(binding, result.pid, path.resolve("src"));
     const original = store.read(install),
       occupied = store.read(slot);
     expect(original.kind).toBe("current");
@@ -103,25 +109,21 @@ await withStateDatabaseCoordinatorRuntimeDirectory({directory:${JSON.stringify(c
   };
   const retry = () =>
     withStateDatabaseCoordinatorRuntimeDirectory({ directory: coordinator, keepAlive: false }, () =>
-      withUpdateCommandExecutor(
-        randomUUID(),
-        async (executor) => {
-          const fence = await executor.enter(slot);
-          fence.assertCurrent();
-          const original = store.read(install),
-            occupied = store.read(slot);
-          expect(original.kind).toBe("current");
-          expect(occupied.kind).toBe("current");
-          if (original.kind !== "current" || occupied.kind !== "current") {
-            throw new Error("Missing new pair");
-          }
-          expect(original.lease.helper.pid).toBe(process.pid);
-          expect(occupied.lease.owner).toBe(original.lease.owner);
-          expect(store.current(original.lease)).toBe(true);
-          expect(store.current(occupied.lease)).toBe(true);
-        },
-        { directOriginal: { databasePath: handoff } },
-      ),
+      withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(slot);
+        fence.assertCurrent();
+        const original = store.read(install),
+          occupied = store.read(slot);
+        expect(original.kind).toBe("current");
+        expect(occupied.kind).toBe("current");
+        if (original.kind !== "current" || occupied.kind !== "current") {
+          throw new Error("Missing new pair");
+        }
+        expect(original.lease.helper.pid).toBe(process.pid);
+        expect(occupied.lease.owner).toBe(original.lease.owner);
+        expect(store.current(original.lease)).toBe(true);
+        expect(store.current(occupied.lease)).toBe(true);
+      }),
     );
   return { root, install, slot, handoff, store, env, crash, retry };
 }
