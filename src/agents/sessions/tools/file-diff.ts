@@ -98,7 +98,10 @@ export function prepareFileWriteDiff(params: {
   ) {
     return undefined;
   }
-  return prepareFileDiff(params.path, beforeText, params.content, {
-    ...(params.created ? {} : { maxEditLength: WRITE_DIFF_MAX_EDIT_LENGTH }),
-  });
+  return prepareFileDiff(
+    params.path,
+    beforeText,
+    params.content,
+    params.created ? {} : { maxEditLength: WRITE_DIFF_MAX_EDIT_LENGTH },
+  );
 }
