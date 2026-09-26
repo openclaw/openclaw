@@ -3008,7 +3008,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(finalSummary).toContain(
       `## Pending user asks\nLatest user request context: ${JSON.stringify(latestAsk)}`,
     );
-    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    expect(mockSummarizeInStages).toHaveBeenCalledOnce();
   });
 
   it("does not treat a terminal assistant response as proof that the latest task is complete", async () => {
@@ -3445,6 +3445,59 @@ describe("compaction-safeguard recent-turn preservation", () => {
     );
     expect(finalSummary).not.toContain(`## Pending user asks\n${latestAsk}`);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+  });
+
+  it("summarizes earlier decisions when an all-preserved turn exceeds its suffix budget", async () => {
+    mockSummarizeInStages.mockReset();
+    const decision = "Keep the staging deployment pending until the owner approves it.";
+    const messagesToSummarize: AgentMessage[] = [
+      { role: "user", content: "Inspect the staging deployment.", timestamp: 1 },
+      castAgentMessage(timestampedTextAssistant(`${decision} ${"x".repeat(700)}`, 2)),
+      ...Array.from({ length: 16 }, (_, index) =>
+        castAgentMessage(
+          timestampedTextAssistant(`Later status ${index} ${"y".repeat(700)}`, 3 + index),
+        ),
+      ),
+    ];
+    const preservedSection = buildPreservedTurnsSection(messagesToSummarize);
+    expect(preservedSection.truncatedLoss).toBe("preserved-turn-head");
+    expect(preservedSection.text).not.toContain(decision);
+    mockSummarizeInStages.mockImplementation(async (params) =>
+      summaryResult(
+        [
+          "## Decisions",
+          JSON.stringify(params.messages).includes(decision) ? decision : "No decision captured.",
+          "## Open TODOs",
+          "None.",
+          "## Constraints/Rules",
+          "None.",
+          "## Pending user asks",
+          "None.",
+          "## Exact identifiers",
+          "None.",
+        ].join("\n"),
+      ),
+    );
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 12,
+      qualityGuardEnabled: false,
+    });
+    const event = createCompactionEvent({
+      messageText: "Inspect the staging deployment.",
+      tokensBefore: 1_500,
+    });
+    event.preparation.messagesToSummarize = messagesToSummarize;
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(mockSummarizeInStages).toHaveBeenCalledOnce();
+    expect(requireRecord(mockCallArg(mockSummarizeInStages)).messages).toEqual(messagesToSummarize);
+    expect(expectCompactionResult(result).summary).toContain(decision);
   });
 
   it("audits all-preserved fallback output against pre-partition source facts", async () => {

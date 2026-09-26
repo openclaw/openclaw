@@ -1063,13 +1063,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
       const latestPreparedAsk = extractLatestUserAsk(messagesToSummarize);
       const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
+      // A bounded preserved suffix cannot be the only carrier of earlier turn content.
       const includePreservedContext =
-        !latestUnresolvedUserRequest &&
-        qualityGuardEnabled &&
-        latestPreparedAsk === latestUserAsk &&
-        Boolean(latestPreparedAsk) &&
-        (summaryTargetMessages.length > 0 ||
-          !preservedTurnsSectionLocal.text.includes(requiredAskContext));
+        preservedTurnsSectionLocal.truncatedLoss === "preserved-turn-head" ||
+        (!latestUnresolvedUserRequest &&
+          qualityGuardEnabled &&
+          latestPreparedAsk === latestUserAsk &&
+          Boolean(latestPreparedAsk) &&
+          (summaryTargetMessages.length > 0 ||
+            !preservedTurnsSectionLocal.text.includes(requiredAskContext)));
       messagesToSummarize = includePreservedContext ? messagesToSummarize : summaryTargetMessages;
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
 

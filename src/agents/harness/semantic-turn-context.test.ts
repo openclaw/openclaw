@@ -220,7 +220,7 @@ describe("turn context published Labs eligibility", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: { experimental: { decisionAssistance: labs }, decisionModel: model },
-        entries: { main: { ...(override !== undefined ? { decisionModel: override } : {}) } },
+        entries: { main: override !== undefined ? { decisionModel: override } : {} },
       },
     };
     const { requests } = installDecisionFixture("preserved", undefined, config);
@@ -239,15 +239,16 @@ describe("turn context published Labs eligibility", () => {
       sessionId: "synthetic",
       modelId: "synthetic-model",
       agentId: "main",
-      semanticCuration: {
-        ...options(),
+      semanticCuration: Object.assign(options(), {
         isEligible: () => isDecisionAssistanceEligible(readConfig(), "main"),
-      },
+      }),
     });
     expect(requests.length > 0).toBe(enabled);
     expect(result?.messages).toBe(source.messages);
     expect(JSON.stringify(source)).toBe(original);
-    if (!enabled) expect(result?.semanticCurationObservation).toBeUndefined();
+    if (!enabled) {
+      expect(result?.semanticCurationObservation).toBeUndefined();
+    }
   });
 
   it("discards an awaited observation after Labs opt-out", async () => {
