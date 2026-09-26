@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   PICKED,
   WORKSPACE,
@@ -349,9 +350,15 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await mobileModelSettings.click();
       await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
+      const capturedModelOption = page
+        .locator(".chat-controls__model-picker[open] [data-chat-model-option]")
+        .first();
+      if (captureUiProofEnabled) {
+        await revealChatModelOption(capturedModelOption);
+      }
       await captureProjectUiProof(suite, page, "mobile-new-session-model-open.png", {
         surface: page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
-        content: [page.locator("[data-chat-model-option]").first()],
+        content: [capturedModelOption],
       });
       expect(
         await page
