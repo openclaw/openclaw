@@ -1,8 +1,10 @@
 // Covers TUI submit handler behavior for chat input and slash commands.
 import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { editorTheme } from "./theme/theme.js";
+import { createTuiCommandHandlersHarness } from "./tui-command-handlers-test-support.js";
 import { createSubmitHarness } from "./tui-submit-test-helpers.js";
 import {
   createEditorSubmitHandler,
@@ -418,4 +420,87 @@ describe("shouldEnableWindowsGitBashPasteFallback", () => {
       }),
     ).toBe(false);
   });
+});
+
+describe("session transition submit admission", () => {
+  it.each([
+    { command: "new", capture: "before" },
+    { command: "reset", capture: "during" },
+  ] as const)(
+    "keeps a submit captured $capture /$command blocked across the transition epoch",
+    async ({ command, capture }) => {
+      vi.useFakeTimers();
+      try {
+        const transitionResult = createDeferred<{
+          ok: true;
+          key: string;
+          entry: { sessionId: string };
+        }>();
+        const createSession = vi.fn(() => transitionResult.promise);
+        const resetSession = vi.fn(() => transitionResult.promise);
+        const applySessionMutationResult = vi.fn().mockReturnValue(true);
+        const harness = createTuiCommandHandlersHarness({
+          createSession,
+          resetSession,
+          applySessionMutationResult,
+        });
+        const editor = {
+          getText: vi.fn(() => ""),
+          getExpandedText: vi.fn(() => ""),
+          setText: vi.fn(),
+          addToHistory: vi.fn(),
+        };
+        const submit = createEditorSubmitHandler({
+          editor,
+          handleCommand: harness.handleCommand,
+          sendMessage: harness.sendMessage,
+          handleBangLine: vi.fn(),
+          onSubmitError: vi.fn(),
+          admitMessage: harness.resolveMessageAdmission,
+          onBlockedMessageSubmit: harness.reportBlockedMessageSubmit,
+        });
+        const bufferedSubmit = createSubmitBurstCoalescer({
+          submit,
+          captureSnapshot: harness.captureMessageAdmission,
+          enabled: true,
+          burstWindowMs: 50,
+        });
+
+        if (capture === "before") {
+          bufferedSubmit("must remain in the editor");
+        }
+        const transitioning = harness.handleCommand(`/${command}`);
+        await Promise.resolve();
+        expect(command === "new" ? createSession : resetSession).toHaveBeenCalledOnce();
+
+        if (capture === "during") {
+          bufferedSubmit("must remain in the editor");
+        }
+        transitionResult.resolve({
+          ok: true,
+          key: command === "new" ? "agent:main:tui-next" : "agent:main:main",
+          entry: { sessionId: `session-after-${command}` },
+        });
+        await transitioning;
+        expect(harness.captureMessageAdmission()).toEqual({
+          historyLoaded: true,
+          sessionTransition: null,
+          sessionTransitionEpoch: 2,
+        });
+        expect(harness.resolveMessageAdmission("live admission is clear")).toEqual({
+          status: "allowed",
+        });
+
+        vi.advanceTimersByTime(50);
+
+        expect(harness.sendChat).not.toHaveBeenCalled();
+        expect(editor.setText).toHaveBeenCalledWith("must remain in the editor");
+        expect(harness.addSystem).toHaveBeenCalledWith(
+          `session change in progress; wait for /${command} to finish`,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

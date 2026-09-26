@@ -80,6 +80,15 @@ export function prepareCodexNativeCommandTasks(
     releaseClient?.();
     source.release();
   };
+  const closeAdmission = () => {
+    admitting = false;
+    for (const [itemId, entry] of entries) {
+      if (!entry.task) {
+        entries.delete(itemId);
+      }
+    }
+    releaseIfFinished();
+  };
   const settle = async (itemId: string) => {
     const entry = entries.get(itemId);
     if (!entry?.task || !entry.terminal || entry.cancellation === "pending") {
@@ -273,23 +282,11 @@ export function prepareCodexNativeCommandTasks(
           await settle(itemId);
         }
       } finally {
-        admitting = false;
-        for (const [itemId, entry] of entries) {
-          if (!entry.task) {
-            entries.delete(itemId);
-          }
-        }
-        releaseIfFinished();
+        closeAdmission();
       }
     },
     async closeAdmission() {
-      admitting = false;
-      for (const [itemId, entry] of entries) {
-        if (!entry.task) {
-          entries.delete(itemId);
-        }
-      }
-      releaseIfFinished();
+      closeAdmission();
     },
   };
 }

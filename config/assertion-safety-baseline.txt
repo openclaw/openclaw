@@ -134,7 +134,7 @@ extensions/clickclack/src/setup-verify.ts	4
 extensions/cloudflare-ai-gateway/onboard.ts	1
 extensions/codex/doctor-contract-api.ts	1
 extensions/codex/harness.ts	1
-extensions/codex/index.ts	26
+extensions/codex/index.ts	5
 extensions/codex/src/app-server/approval-bridge.ts	1
 extensions/codex/src/app-server/attempt-diagnostics.ts	3
 extensions/codex/src/app-server/attempt-notifications.ts	1
@@ -149,7 +149,6 @@ extensions/codex/src/app-server/context-engine-projection.ts	3
 extensions/codex/src/app-server/dynamic-tool-build.ts	1
 extensions/codex/src/app-server/dynamic-tools.ts	1
 extensions/codex/src/app-server/effective-mcp-catalog.ts	1
-extensions/codex/src/app-server/elicitation-bridge.ts	1
 extensions/codex/src/app-server/event-projector-tool-transcript.ts	2
 extensions/codex/src/app-server/event-projector-values.ts	1
 extensions/codex/src/app-server/event-projector.ts	1
@@ -167,9 +166,7 @@ extensions/codex/src/app-server/run-attempt-context.ts	2
 extensions/codex/src/app-server/run-attempt-resources.ts	13
 extensions/codex/src/app-server/run-attempt-runtime.ts	1
 extensions/codex/src/app-server/run-attempt-server-requests.ts	2
-extensions/codex/src/app-server/run-attempt-tool-setup.ts	1
 extensions/codex/src/app-server/run-attempt-tools.ts	1
-extensions/codex/src/app-server/run-attempt-turn-request.ts	1
 extensions/codex/src/app-server/runtime-artifact.ts	2
 extensions/codex/src/app-server/sandbox-exec-server.ts	1
 extensions/codex/src/app-server/sandbox-exec-server/http.ts	2

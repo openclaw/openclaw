@@ -1,5 +1,5 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -18,12 +18,14 @@ import {
   type TrialDependencies,
 } from "../../scripts/ios-release-e2e.js";
 import { createNativeDependencies } from "../../scripts/lib/ios-release-e2e-native.js";
+import { GatewayTransportError } from "../../src/gateway/transport-error.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 const nativeMocks = vi.hoisted(() => ({
   command: vi.fn(),
   gateway: vi.fn(),
+  rpc: vi.fn(),
 }));
 vi.mock("../../scripts/lib/managed-child-process.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/managed-child-process.mjs")>()),
@@ -32,6 +34,7 @@ vi.mock("../../scripts/lib/managed-child-process.mjs", async (importOriginal) =>
 vi.mock("../helpers/openclaw-test-instance.js", () => ({
   createOpenClawTestInstance: nativeMocks.gateway,
 }));
+vi.mock("../../src/gateway/call.js", () => ({ callGateway: nativeMocks.rpc }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -40,6 +43,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   nativeMocks.command.mockReset();
   nativeMocks.gateway.mockReset();
+  nativeMocks.rpc.mockReset();
 });
 
 function result(
@@ -526,8 +530,16 @@ describe("native command adapter", () => {
     "cleanup-failure",
     "build-unjoined",
     "build-exit",
+    "setup-code-timeout",
+    "setup-code-rpc-timeout",
     "test-unjoined",
     "test-exit",
+    "test-timeout-output",
+    "reply-failure-evidence",
+    "reply-failure-history-error",
+    "reply-failure-submission",
+    "reply-failure-source-only",
+    "reply-failure-app-log-error",
   ])("owns admission, build, test and cleanup for %s", async (scenario) => {
     const temp = tempDirs.make("ios-release-e2e-adapter-");
     vi.spyOn(os, "tmpdir").mockReturnValue(temp);
@@ -539,13 +551,45 @@ describe("native command adapter", () => {
       }),
     );
     vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", "");
-    const instances: { cli: ReturnType<typeof vi.fn>; cleanup: ReturnType<typeof vi.fn> }[] = [];
+    const instances: { cleanup: ReturnType<typeof vi.fn> }[] = [];
+    let nativeCommandActive = false;
+    let historyReadBeforeCommandExit = false;
+    nativeMocks.rpc.mockImplementation(async (options) => {
+      if (options.method === "chat.history") {
+        historyReadBeforeCommandExit = nativeCommandActive;
+        if (scenario === "reply-failure-history-error") {
+          throw new Error("private history failure");
+        }
+        return {
+          messages: [
+            { role: "user", content: [{ type: "text", text: "OPENCLAW_E2E_OK_200" }] },
+            { role: "assistant", content: [{ type: "text", text: "OPENCLAW_E2E_SEED_0_100" }] },
+          ],
+        };
+      }
+      if (scenario === "setup-code-timeout") {
+        throw new Error("private fixture command failed", {
+          cause: Object.assign(new Error("private setup code and path"), { code: "ETIMEDOUT" }),
+        });
+      }
+      if (scenario === "setup-code-rpc-timeout") {
+        throw new GatewayTransportError({
+          kind: "timeout",
+          message: "private RPC timeout",
+          connectionDetails: { url: "ws://private", urlSource: "private", message: "private" },
+          timeoutMs: 30_000,
+        });
+      }
+      return { setupCode: `synthetic-code-${instances.length}` };
+    });
     nativeMocks.gateway.mockImplementation(async () => {
       const index = instances.length + 1;
       const instance = {
         url: `ws://127.0.0.1:${20000 + index}`,
-        cli: vi.fn(async () => ({ code: 0, signal: null, stdout: `synthetic-code-${index}` })),
+        gatewayToken: `synthetic-token-${index}`,
+        configPath: `/private/fixture-${index}/config.json`,
         startGateway: vi.fn(async () => {}),
+        logs: () => "private log\n[responses] start private\n[responses] completed private\n",
         cleanup: vi.fn(async () => {
           if (scenario === "cleanup-failure") {
             throw new Error("private cleanup failure");
@@ -556,6 +600,7 @@ describe("native command adapter", () => {
       return instance;
     });
     let created = 0;
+    let appContainer = "";
     let selectedTest: string = IOS_RELEASE_TESTS[0];
     let joinedMocks = 0;
     nativeMocks.command.mockImplementation(async (options) => {
@@ -564,9 +609,29 @@ describe("native command adapter", () => {
       options.onReady?.({ stdout, stderr } as unknown as ChildProcess);
       const args = options.args as string[];
       if (args.includes("scripts/e2e/mock-openai-server.mjs")) {
+        const body = scenario.startsWith("reply-failure-")
+          ? {
+              model: "ios-e2e",
+              input: [
+                {
+                  role: "user",
+                  content: "Reply exactly with OPENCLAW_E2E_OK_200 and no other text.",
+                },
+              ],
+              metadata: { title: "OPENCLAW_E2E_SEED_0_100" },
+            }
+          : { model: "ios-e2e" };
+        const requests = [body];
+        if (scenario.startsWith("reply-failure-")) {
+          requests.push({ model: "ios-e2e" });
+        }
         writeFileSync(
           options.env.MOCK_REQUEST_LOG,
-          `${JSON.stringify({ path: "/v1/responses", body: JSON.stringify({ model: "ios-e2e" }) })}\n`,
+          requests
+            .map((requestBody) =>
+              JSON.stringify({ path: "/v1/responses", body: JSON.stringify(requestBody) }),
+            )
+            .join("\n") + "\n",
         );
         stdout.write("mock-openai listening on 20001\n");
         await new Promise<void>((_resolve, reject) => {
@@ -657,6 +722,10 @@ describe("native command adapter", () => {
         );
         stdout.write(`11111111-2222-3333-4444-${String(++created).padStart(12, "0")}`);
       } else if (args.includes("build-for-testing")) {
+        appContainer = path.join(
+          path.dirname(args[args.indexOf("-derivedDataPath") + 1]!),
+          "app-container",
+        );
         if (scenario === "build-unjoined") {
           throw Object.assign(new Error("private build termination failure"), {
             code: "ETIMEDOUT",
@@ -668,6 +737,34 @@ describe("native command adapter", () => {
           return 65;
         }
       } else if (args.includes("test-without-building")) {
+        if (
+          scenario.startsWith("reply-failure-") &&
+          args.includes(`-only-testing:${IOS_RELEASE_TESTS[1]}`)
+        ) {
+          nativeCommandActive = true;
+          const failureMessage =
+            scenario === "reply-failure-source-only"
+              ? ""
+              : `IOS_RELEASE_CHAT_FAILURE final ${scenario === "reply-failure-submission" ? "submission" : "reply"} draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false`;
+          stdout.write(
+            "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' started.\n" +
+              `/private/checkout/OpenClawSnapshotUITests.swift:1913: error: private ${failureMessage}\n` +
+              "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' failed (99 seconds).\n",
+          );
+          await Promise.resolve();
+          nativeCommandActive = false;
+          throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
+        }
+        if (scenario === "test-timeout-output") {
+          stdout.write(
+            "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' started.\n" +
+              "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
+              "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: repeated private details\n" +
+              "/private/Other.swift:42: error: private details\n" +
+              "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' failed (39.615 seconds).\n",
+          );
+          throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
+        }
         if (scenario === "test-unjoined") {
           throw Object.assign(new Error("private test termination failure"), {
             code: "ETIMEDOUT",
@@ -675,12 +772,41 @@ describe("native command adapter", () => {
           });
         }
         if (scenario === "test-exit") {
+          stdout.write(
+            "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
+              "private teardown details\n".repeat(256),
+          );
           stderr.write("TEST FAILED: private setup code and private path\n");
           return 65;
         }
         selectedTest = args
           .find((arg) => arg.startsWith("-only-testing:"))!
           .slice("-only-testing:".length);
+      } else if (options.bin === "/usr/bin/plutil") {
+        stdout.write("ai.synthetic.private\n");
+      } else if (args.includes("get_app_container")) {
+        expect(args).toEqual([
+          "simctl",
+          "get_app_container",
+          "11111111-2222-3333-4444-000000000002",
+          "ai.synthetic.private",
+          "data",
+        ]);
+        expect(options.timeoutMs).toBe(5_000);
+        if (scenario === "reply-failure-app-log-error") {
+          throw new Error("private app container failure");
+        }
+        mkdirSync(path.join(appContainer, "Library/Caches"), { recursive: true });
+        writeFileSync(
+          path.join(appContainer, "Library/Caches/openclaw-gateway.log"),
+          "[2026-09-26T00:00:00Z] chat.ui send invoked sessionKey=private inputLen=100\n" +
+            "[2026-09-26T00:00:00Z] chat.ui send queued sessionKey=private localRunId=private\n" +
+            "[2026-09-26T00:00:00Z] chat.ui transport send start sessionKey=private\n" +
+            "[2026-09-26T00:00:00Z] chat.ui send failed sessionKey=private error=private\n" +
+            "[2026-09-26T00:00:00Z] chat.send skipped before dispatch: route changed\n" +
+            "[2026-09-26T00:00:00Z] unknown event private credential\n",
+        );
+        stdout.write(appContainer);
       } else if (args.includes("xcresulttool")) {
         stdout.write(JSON.stringify(result(selectedTest)));
       }
@@ -757,6 +883,108 @@ describe("native command adapter", () => {
     });
     try {
       const report = await runTrials("stock", native.dependencies);
+      if (scenario.startsWith("reply-failure-")) {
+        expect(report.complete).toBe(true);
+        expect(report.trials.map((trial) => trial.status)).toEqual(["passed", "failed"]);
+        expect(report.trials[1]).toMatchObject({
+          errors: ["test-timeout"],
+          diagnostics: [{ operation: "native-test", code: "timeout", errorCode: "ETIMEDOUT" }],
+        });
+        const context = report.trials[1]?.diagnostics[0]?.context;
+        expect(context).toEqual(
+          expect.arrayContaining([
+            ...(scenario === "reply-failure-source-only"
+              ? []
+              : [
+                  "chat-stage:final",
+                  `chat-checkpoint:${scenario === "reply-failure-submission" ? "submission" : "reply"}`,
+                  "chat-draft-retained:false",
+                  "chat-keyboard:true",
+                  "chat-reply-present:false",
+                  "chat-writing:false",
+                  "chat-jump:true",
+                  "chat-app-foreground:true",
+                  "chat-input-present:true",
+                  "chat-transcript-present:true",
+                  "chat-send-present:false",
+                ]),
+            "provider-latest-user:final",
+            "provider-body-tail:seed-0",
+            "provider-marker-match:false",
+            "model-any-request-stage:start",
+            "model-any-request-stage:completed",
+            expect.stringMatching(/^failure-evidence-at-ms:\d+$/),
+            ...(scenario === "reply-failure-app-log-error"
+              ? ["app-evidence-unavailable"]
+              : [
+                  "app-evidence-read",
+                  "app-send-stage:invoked",
+                  "app-send-stage:optimistic-message",
+                  "app-send-stage:transport-start",
+                  "app-send-stage:failed",
+                  "app-send-stage:dispatch-route-changed",
+                ]),
+            ...(scenario === "reply-failure-history-error"
+              ? ["history-evidence-unavailable"]
+              : ["history-user:final", "history-assistant:seed-0"]),
+          ]),
+        );
+        expect(context).not.toContain("provider-marker-match:true");
+        expect(context).not.toContain("app-send-stage:transport-accepted");
+        expect(historyReadBeforeCommandExit).toBe(true);
+        expect(instances.every((instance) => instance.cleanup.mock.calls.length === 1)).toBe(true);
+        expect(JSON.stringify(report)).not.toMatch(/private|OPENCLAW_E2E_|metadata/);
+        return;
+      }
+      if (scenario === "test-timeout-output") {
+        expect(report.complete).toBe(true);
+        for (const trial of report.trials) {
+          expect(trial).toMatchObject({
+            status: "failed",
+            errors: ["test-timeout"],
+            diagnostics: [
+              {
+                operation: "native-test",
+                code: "timeout",
+                errorCode: "ETIMEDOUT",
+                context: expect.arrayContaining([
+                  "xctest-started",
+                  "xctest-failed",
+                  "xctest-line:1904",
+                ]),
+              },
+            ],
+          });
+        }
+        expect(instances.every((instance) => instance.cleanup.mock.calls.length === 1)).toBe(true);
+        expect(JSON.stringify(report)).not.toContain("private");
+        return;
+      }
+      if (scenario === "setup-code-timeout" || scenario === "setup-code-rpc-timeout") {
+        expect(report.complete).toBe(true);
+        for (const trial of report.trials) {
+          expect(trial).toMatchObject({
+            status: "failed",
+            errors: ["test-timeout"],
+            diagnostics: [
+              {
+                operation: "setup-code",
+                code: "timeout",
+                ...(scenario === "setup-code-timeout" ? { errorCode: "ETIMEDOUT" } : {}),
+                context: [],
+              },
+            ],
+          });
+        }
+        expect(
+          nativeMocks.command.mock.calls.some(([{ args }]) =>
+            args.includes("test-without-building"),
+          ),
+        ).toBe(false);
+        expect(instances.every((instance) => instance.cleanup.mock.calls.length === 1)).toBe(true);
+        expect(JSON.stringify(report)).not.toContain("private");
+        return;
+      }
       if (scenario === "cleanup-failure" || scenario === "test-unjoined") {
         expect(report.complete).toBe(false);
         expect(report.trials).toHaveLength(1);
@@ -771,7 +999,7 @@ describe("native command adapter", () => {
             operation: "native-test",
             code: "exit",
             exitCode: 65,
-            context: ["test-failed"],
+            context: ["test-failed", "xctest-line:1904"],
           },
         ]);
         expect(JSON.stringify(report)).not.toContain("private");
@@ -781,12 +1009,19 @@ describe("native command adapter", () => {
       expect(created).toBe(2);
       expect(joinedMocks).toBe(2);
       for (const [index, instance] of instances.entries()) {
-        expect(instance.cli).toHaveBeenCalledWith([
-          "qr",
-          "--url",
-          `ws://127.0.0.1:${20001 + index}`,
-          "--setup-code-only",
-        ]);
+        expect(nativeMocks.rpc).toHaveBeenNthCalledWith(index + 1, {
+          config: {},
+          configPath: `/private/fixture-${index + 1}/config.json`,
+          url: `ws://127.0.0.1:${20001 + index}`,
+          token: `synthetic-token-${index + 1}`,
+          ignoreEnvUrlOverride: true,
+          deviceIdentity: null,
+          sharedStateMode: "read-only",
+          method: "device.pair.setupCode",
+          params: { publicUrl: `ws://127.0.0.1:${20001 + index}`, includeQr: false },
+          timeoutMs: 30_000,
+          signal: native.dependencies.signal,
+        });
         expect(instance.cleanup).toHaveBeenCalledOnce();
       }
       const commands = nativeMocks.command.mock.calls.map(([options]) => options);

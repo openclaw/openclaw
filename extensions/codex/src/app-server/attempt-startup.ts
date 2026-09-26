@@ -1,7 +1,3 @@
-/**
- * Startup orchestration for Codex app-server attempts, including shared-client
- * leasing, plugin thread config, sandbox environment, and thread lifecycle binding.
- */
 import {
   AgentHarnessPreflightError,
   embeddedAgentLog,
@@ -88,10 +84,6 @@ const CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS = 3;
 
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
-/**
- * Starts or resumes the Codex app-server thread and returns the resources the
- * run loop must later release.
- */
 export async function startCodexAttemptThread(params: {
   assertCurrent?: () => void;
   attemptClientFactory: CodexAppServerClientFactory;
