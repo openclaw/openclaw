@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { CompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import { extractFailoverHttpStatus } from "../failover/retry-evidence.js";
+import type { EmbeddedAgentCompactResult } from "./types.js";
 
 const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
 const COMPACTION_PROVIDER_4XX = new Set([400, 401, 403, 429]);
@@ -14,6 +15,19 @@ const COMPACTION_PROVIDER_5XX = new Set([500, 502, 503, 504]);
 
 export const DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON =
   "deferred to background context-engine maintenance";
+export const MANUAL_COMPACTION_ACTIVE_RUN_REASON =
+  "manual compaction unavailable while another embedded run is active";
+
+export function lockedCompactionRuntimeFailure(runtime?: string): EmbeddedAgentCompactResult {
+  return {
+    ok: false,
+    compacted: false,
+    reason: runtime
+      ? `Model selection is locked to native agent harness "${runtime}", but native compaction is unavailable.`
+      : "Model selection is locked but the persisted agent harness is unavailable.",
+    failure: { reason: "model_selection_locked" },
+  };
+}
 
 function isGenericCompactionCancelledReason(reason: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(reason);

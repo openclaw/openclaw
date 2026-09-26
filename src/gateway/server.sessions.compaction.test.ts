@@ -40,7 +40,11 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { embeddedRunMock, onceMessage, agentDiscoveryMock, rpcReq } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { testConfigRoot } from "./test-helpers.runtime-state.js";
-import { holdCompaction } from "./test/server-sessions-compaction.test-helpers.js";
+import {
+  holdCompaction,
+  seedTranscriptRows,
+  loadTranscriptRows,
+} from "./test/server-sessions-compaction.test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
@@ -50,26 +54,6 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
-
-function buildSessionTranscriptLines(sessionId: string, totalLines: number): string[] {
-  const header = JSON.stringify({
-    type: "session",
-    version: 3,
-    id: sessionId,
-    timestamp: "2026-06-19T12:00:00.000Z",
-    cwd: "/tmp",
-  });
-  const entries = Array.from({ length: Math.max(0, totalLines - 1) }, (_, index) =>
-    JSON.stringify({
-      type: "message",
-      id: `entry-${index}`,
-      parentId: index === 0 ? null : `entry-${index - 1}`,
-      timestamp: `2026-06-19T12:00:${String(index % 60).padStart(2, "0")}.000Z`,
-      message: { role: "user", content: `line-${index}`, timestamp: index },
-    }),
-  );
-  return [header, ...entries];
-}
 
 function isCompactOperationEvent(message: unknown, phase: "start" | "end") {
   const candidate = message as {
@@ -121,54 +105,6 @@ function loadSessionEntry(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
-}
-
-async function seedTranscriptRows(params: {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-  totalLines: number;
-}): Promise<void> {
-  const scope = {
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  };
-  if (params.totalLines <= 0) {
-    return;
-  }
-  const header = JSON.parse(buildSessionTranscriptLines(params.sessionId, 1)[0] ?? "{}");
-  await appendTranscriptEvent(scope, header);
-  for (let index = 0; index < params.totalLines - 1; index += 1) {
-    await appendTranscriptMessage(scope, {
-      cwd: "/tmp",
-      message: {
-        role: "user",
-        content: `line-${index}`,
-        timestamp: index,
-      },
-      now: Date.parse(`2026-06-19T12:00:${String(index % 60).padStart(2, "0")}.000Z`),
-    });
-  }
-}
-
-async function loadTranscriptRows(params: {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<Array<Record<string, unknown>>> {
-  const rows = await loadTranscriptEvents({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
-  return rows.map((row) =>
-    row && typeof row === "object" && !Array.isArray(row) ? (row as Record<string, unknown>) : {},
-  );
 }
 
 test("sessions.compact without maxLines runs embedded manual compaction without checkpoint metadata", async () => {
@@ -516,90 +452,6 @@ test("sessions.compact keeps prior usage stale when the compactor returns a nega
   } finally {
     ws.close();
   }
-});
-
-test("sessions.compact records terminal Codex native compaction", async () => {
-  const { storePath } = await createSessionStoreDir();
-  await seedSessionEntry({
-    entry: sessionStoreEntry("sess-codex", {
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      compactionCount: 2,
-      totalTokens: 54_321,
-      totalTokensFresh: true,
-      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-      cliSessionIds: { "codex-cli": "thread-1" },
-      cliSessionBindings: { "codex-cli": { sessionId: "thread-1" } },
-    }),
-    sessionKey: "agent:main:main",
-    storePath,
-  });
-  await seedTranscriptRows({
-    sessionId: "sess-codex",
-    sessionKey: "agent:main:main",
-    storePath,
-    totalLines: 2,
-  });
-  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
-    ok: true,
-    compacted: true,
-    compactionKind: "native-harness",
-    result: {
-      summary: "",
-      firstKeptEntryId: "",
-      tokensBefore: 54_321,
-      details: {
-        backend: "codex-app-server",
-        threadId: "thread-1",
-        signal: "thread/compact/start",
-        pending: false,
-        completed: true,
-      },
-    },
-  });
-
-  const { ws } = await openClient();
-  await rpcReq(ws, "sessions.subscribe", {});
-  const endEventPromise = onceMessage(ws, (message) => isCompactOperationEvent(message, "end"));
-
-  const compacted = await rpcReq<{
-    ok: true;
-    key: string;
-    compacted: boolean;
-    result?: { details?: unknown };
-  }>(ws, "sessions.compact", {
-    key: "main",
-  });
-
-  expectMainCompactionResult(compacted, true);
-  expect(compacted.payload?.result?.details).toMatchObject({
-    backend: "codex-app-server",
-    threadId: "thread-1",
-    signal: "thread/compact/start",
-    pending: false,
-    completed: true,
-  });
-  const endEvent = await endEventPromise;
-  expect(endEvent.payload).toMatchObject({
-    operation: "compact",
-    phase: "end",
-    sessionKey: "agent:main:main",
-    completed: true,
-  });
-
-  // Terminal Codex native compaction persists via the accessor: the count
-  // advances and the previous context snapshot becomes stale for recomputation.
-  const codexEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-  expect(codexEntry?.compactionCount).toBe(3);
-  expect(codexEntry?.cliSessionIds).toEqual({ "codex-cli": "thread-1" });
-  expect(codexEntry?.cliSessionBindings).toEqual({
-    "codex-cli": { sessionId: "thread-1" },
-  });
-  expect(codexEntry?.totalTokens).toBe(54_321);
-  expect(codexEntry?.totalTokensFresh).toBe(false);
-  expect(codexEntry?.totalTokensVersion).toBeUndefined();
-
-  ws.close();
 });
 
 test("sessions.compact targets the persisted native CLI session", async () => {

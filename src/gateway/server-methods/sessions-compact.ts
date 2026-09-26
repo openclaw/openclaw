@@ -370,6 +370,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             assertRequestCurrent();
             abortSignal?.throwIfAborted();
           };
+          let hostAccountingCommitted = false;
           try {
             result = await runGatewaySessionCompaction(
               {
@@ -389,13 +390,16 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 onCommitted: (accepted) => {
                   expectedEntry = accepted.entry;
                 },
+                onHostCompactionCommitted: (commit) => {
+                  hostAccountingCommitted = commit.accountingCommitted === true;
+                },
               },
             );
           } catch (err) {
             emitCompactionEnd(false, formatErrorMessage(err));
             throw err;
           }
-          if (result.ok && result.compacted) {
+          if ((result.ok && result.compacted) || hostAccountingCommitted) {
             let persisted: boolean;
             try {
               // Skip terminal persistence when session ownership rotated during compaction.
@@ -419,10 +423,12 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                     ok: true,
                     entry: {
                       ...existingEntry,
-                      ...projectCompactionAccountingPatch(existingEntry, {
-                        compactionKind: result.compactionKind,
-                        tokensAfter: result.result?.tokensAfter,
-                      }),
+                      ...(hostAccountingCommitted
+                        ? {}
+                        : projectCompactionAccountingPatch(existingEntry, {
+                            compactionKind: result.compactionKind,
+                            tokensAfter: result.result?.tokensAfter,
+                          })),
                     },
                   };
                 },
@@ -464,12 +470,13 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             },
             undefined,
           );
-          if (result.ok) {
+          if (result.ok || hostAccountingCommitted) {
             emitSessionsChanged(context, {
               sessionKey: target.canonicalKey,
+              sessionId: expectedEntry.sessionId,
               agentId: target.agentId,
               reason: "compact",
-              compacted: result.compacted,
+              compacted: hostAccountingCommitted || result.compacted,
             });
           }
         },
