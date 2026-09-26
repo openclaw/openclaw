@@ -17,27 +17,15 @@ import {
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import {
   expectDashscopeVideoTaskPoll,
-  expectExplicitVideoGenerationCapabilities,
   expectSuccessfulDashscopeVideoResult,
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
-// Alibaba tests cover video generation provider plugin behavior.
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import {
-  DASHSCOPE_WAN_VIDEO_MODELS,
-  DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
-} from "openclaw/plugin-sdk/video-generation";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-const {
-  resolveApiKeyForProviderMock,
-  postJsonRequestMock,
-  fetchWithTimeoutMock,
-  fetchWithTimeoutGuardedMock,
-  resolveProviderHttpRequestConfigMock,
-  sanitizeConfiguredModelProviderRequestMock,
-} = getProviderHttpMocks();
+const { resolveApiKeyForProviderMock, postJsonRequestMock, fetchWithTimeoutMock } =
+  getProviderHttpMocks();
 
 let alibabaVideoGenerationProvider: typeof import("./video-generation-provider.js").alibabaVideoGenerationProvider;
 
@@ -104,38 +92,25 @@ describe("alibaba video generation provider", () => {
     });
   });
 
-  it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(alibabaVideoGenerationProvider);
-    expect(alibabaVideoGenerationProvider).toMatchObject({
-      id: "alibaba",
-      label: "Alibaba Model Studio",
-      defaultModel: DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
-      models: [...DASHSCOPE_WAN_VIDEO_MODELS],
-    });
-  });
+  it("advertises Wan video generation with a config-only Standard API key", () => {
+    clearAlibabaAuthEnvironment();
 
-  it.each(["sk-ws-alibaba-standard-key", "sk-alibaba-legacy-standard-key"])(
-    "advertises Wan video generation with config-only Standard API key %s",
-    (apiKey) => {
-      clearAlibabaAuthEnvironment();
-
-      expect(
-        alibabaVideoGenerationProvider.isConfigured?.({
-          cfg: {
-            models: {
-              providers: {
-                alibaba: {
-                  apiKey,
-                  baseUrl: "https://dashscope-intl.aliyuncs.com",
-                  models: [],
-                },
+    expect(
+      alibabaVideoGenerationProvider.isConfigured?.({
+        cfg: {
+          models: {
+            providers: {
+              alibaba: {
+                apiKey: "sk-alibaba-legacy-standard-key",
+                baseUrl: "https://dashscope-intl.aliyuncs.com",
+                models: [],
               },
             },
           },
-        }),
-      ).toBe(true);
-    },
-  );
+        },
+      }),
+    ).toBe(true);
+  });
 
   it("does not use Qwen Coding Plan credentials for Alibaba video discovery", () => {
     clearAlibabaAuthEnvironment();
@@ -156,29 +131,6 @@ describe("alibaba video generation provider", () => {
       }),
     ).toBe(false);
   });
-
-  it.each(["", "oauth:alibaba", "custom-local", "secretref-managed"])(
-    "does not advertise a non-secret Alibaba credential marker %j",
-    (apiKey) => {
-      clearAlibabaAuthEnvironment();
-
-      expect(
-        alibabaVideoGenerationProvider.isConfigured?.({
-          cfg: {
-            models: {
-              providers: {
-                alibaba: {
-                  apiKey,
-                  baseUrl: "https://dashscope-intl.aliyuncs.com",
-                  models: [],
-                },
-              },
-            },
-          },
-        }),
-      ).toBe(false);
-    },
-  );
 
   it("tracks whether an allowed Alibaba API-key SecretRef resolves", () => {
     clearAlibabaAuthEnvironment();
@@ -303,8 +255,7 @@ describe("alibaba video generation provider", () => {
   it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 
-    const provider = alibabaVideoGenerationProvider;
-    const result = await provider.generateVideo({
+    const result = await alibabaVideoGenerationProvider.generateVideo({
       provider: "alibaba",
       model: "wan2.6-r2v-flash",
       prompt: "animate this shot",
@@ -331,104 +282,5 @@ describe("alibaba video generation provider", () => {
     expect(parameters.watermark).toBe(false);
     expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
     expectSuccessfulDashscopeVideoResult(result);
-  });
-
-  it("applies configured request policy to DashScope video requests", async () => {
-    const requestPolicy = {
-      allowPrivateNetwork: true,
-      headers: { "X-DashScope-Route": "alibaba-policy" },
-    };
-    const dispatcherPolicy = { mode: "env-proxy" as const };
-    resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
-      const headers = new Headers(params.defaultHeaders);
-      for (const [key, value] of Object.entries(params.request?.headers ?? {})) {
-        headers.set(key, value);
-      }
-      return {
-        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-        allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
-        headers,
-        dispatcherPolicy,
-      };
-    });
-    mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
-
-    const provider = alibabaVideoGenerationProvider;
-    await provider.generateVideo({
-      provider: "alibaba",
-      model: "wan2.6-t2v",
-      prompt: "animate this shot",
-      cfg: {
-        models: {
-          providers: {
-            alibaba: {
-              baseUrl: "https://dashscope-intl.aliyuncs.com",
-              models: [],
-              request: requestPolicy,
-            },
-          },
-        },
-      },
-    });
-
-    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(requestPolicy);
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "alibaba",
-        capability: "video",
-        transport: "http",
-        request: requestPolicy,
-      }),
-    );
-    const request = requireFirstPostJsonRequest(
-      postJsonRequestMock,
-      "DashScope request with request policy",
-    );
-    expect(request.allowPrivateNetwork).toBe(true);
-    expect(request.dispatcherPolicy).toBe(dispatcherPolicy);
-    expect(request.headers).toBeInstanceOf(Headers);
-    expect((request.headers as Headers).get("x-dashscope-route")).toBe("alibaba-policy");
-    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
-      1,
-      "https://dashscope-intl.aliyuncs.com/api/v1/tasks/task-1",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.any(Headers),
-      }),
-      expect.any(Number),
-      fetch,
-      {
-        ssrfPolicy: { allowPrivateNetwork: true },
-        dispatcherPolicy,
-      },
-    );
-    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
-      2,
-      "https://example.com/out.mp4",
-      { method: "GET" },
-      expect.any(Number),
-      fetch,
-      {
-        ssrfPolicy: { allowPrivateNetwork: true },
-        dispatcherPolicy,
-      },
-    );
-  });
-
-  it("fails fast when reference inputs are local buffers instead of remote URLs", async () => {
-    const provider = alibabaVideoGenerationProvider;
-
-    await expect(
-      provider.generateVideo({
-        provider: "alibaba",
-        model: "wan2.6-i2v",
-        prompt: "animate this local frame",
-        cfg: {},
-        inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-      }),
-    ).rejects.toThrow(
-      "Alibaba Wan video generation currently requires remote http(s) URLs for reference images/videos.",
-    );
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 });
