@@ -39,7 +39,7 @@ it("offers plugin and personal themes from the shared catalog with their descrip
     "Alien indigo surfaces, lime controls, and monospace typography.",
   );
   pluginTheme?.click();
-  expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel", { element: pluginTheme });
+  expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel");
   expect(container.querySelector('[data-theme-id="user/candlelight"]')?.textContent).toContain(
     "Candlelight",
   );
@@ -80,7 +80,7 @@ it.each(["profile", "device-local"] as const)(
     }
     expect(props.theme).toBe(missingTheme);
     claw?.click();
-    expect(props.setTheme).toHaveBeenCalledWith("claw", { element: claw });
+    expect(props.setTheme).toHaveBeenCalledWith("claw");
   },
 );
 

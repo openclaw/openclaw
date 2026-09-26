@@ -1,5 +1,6 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -24,6 +25,8 @@ function streamJob(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
 async function createCron(triggersEnabled: boolean | undefined, cronEnabled = true) {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled,
     ...(triggersEnabled === undefined
@@ -180,6 +183,8 @@ describe("cron stream schedule validation", () => {
       );
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       cronConfig: {

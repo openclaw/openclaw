@@ -1,8 +1,3 @@
-/**
- * Configured binding compiler.
- *
- * Compiles config rules into channel/provider-specific binding registry entries.
- */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

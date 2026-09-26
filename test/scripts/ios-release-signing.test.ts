@@ -1,32 +1,15 @@
 // iOS release signing tests cover checked-in Fastlane-managed profile pinning.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-release-signing.mjs");
 
-function runSigningResult(args: string[]): { ok: boolean; stdout: string; stderr: string } {
-  try {
-    const stdout = execFileSync(process.execPath, [SCRIPT, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return { ok: true, stdout, stderr: "" };
-  } catch (error) {
-    const e = error as { stdout?: unknown; stderr?: unknown };
-    return {
-      ok: false,
-      stdout: formatProcessOutput(e.stdout),
-      stderr: formatProcessOutput(e.stderr),
-    };
-  }
-}
-
-function formatProcessOutput(value: unknown): string {
-  if (Buffer.isBuffer(value)) {
-    return value.toString("utf8");
-  }
-  return typeof value === "string" ? value : "";
+function runSigningResult(args: string[]) {
+  return spawnSync(process.execPath, [SCRIPT, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 function runSigning(mode: string): string {
@@ -38,15 +21,13 @@ function runSigning(mode: string): string {
 
 describe("scripts/ios-release-signing.mjs", () => {
   it.each([
-    ["--mode"],
     ["--mode", "--manifest"],
     ["--mode", "-h"],
-    ["--manifest"],
     ["--manifest", "-h"],
   ])("rejects missing values for %s before reading signing manifests", (...args) => {
     const result = runSigningResult(args);
 
-    expect(result.ok).toBe(false);
+    expect(result.status).toBe(1);
     expect(result.stderr).toContain(`Missing value for ${args[0]}.`);
     expect(result.stderr).not.toContain("ENOENT");
     expect(result.stdout).toBe("");

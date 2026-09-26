@@ -25,8 +25,7 @@ final class MotionService: MotionServicing {
                     cont.resume(throwing: error)
                 } else {
                     let formatter = ISO8601DateFormatter()
-                    let sliced = Array((activity ?? []).suffix(limit))
-                    let entries = sliced.map { entry in
+                    let entries = (activity ?? []).suffix(limit).map { entry in
                         OpenClawMotionActivityEntry(
                             startISO: formatter.string(from: entry.startDate),
                             endISO: formatter.string(from: end),

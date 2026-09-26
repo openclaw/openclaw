@@ -4,7 +4,7 @@ import { Agent as HttpsAgent } from "node:https";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import {
-  captureWsEvent,
+  captureWsEventAsync,
   resolveEffectiveDebugProxyUrl,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
@@ -268,27 +268,28 @@ function createGatewayPlugin(params: {
         }
         this.emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: Date.now() });
       };
-      captureWsEvent({
+      // Finalization retains capture failures; observe Promises returned by the SDK view.
+      void captureWsEventAsync({
         url,
         direction: "local",
         kind: "ws-open",
         flowId: wsFlowId,
         meta: { subsystem: "discord-gateway" },
-      });
+      }).catch(() => {});
       socket.on?.("message", (data: unknown) => {
         emitTransportActivity();
-        captureWsEvent({
+        void captureWsEventAsync({
           url,
           direction: "inbound",
           kind: "ws-frame",
           flowId: wsFlowId,
           payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
           meta: { subsystem: "discord-gateway" },
-        });
+        }).catch(() => {});
       });
       socket.on?.("close", (code: number, reason: Buffer) => {
         const closeReason = Buffer.isBuffer(reason) ? reason : Buffer.from(String(reason ?? ""));
-        captureWsEvent({
+        void captureWsEventAsync({
           url,
           direction: "local",
           kind: "ws-close",
@@ -296,7 +297,7 @@ function createGatewayPlugin(params: {
           closeCode: code,
           payload: closeReason,
           meta: { subsystem: "discord-gateway" },
-        });
+        }).catch(() => {});
         if (
           shouldLogDiscordGatewayTransportClose({
             code,
@@ -318,14 +319,14 @@ function createGatewayPlugin(params: {
       });
       socket.on?.("error", (error: Error) => {
         lastTransportError = describeDiscordGatewayTransportError(error);
-        captureWsEvent({
+        void captureWsEventAsync({
           url,
           direction: "local",
           kind: "error",
           flowId: wsFlowId,
           errorText: error.message,
           meta: { subsystem: "discord-gateway" },
-        });
+        }).catch(() => {});
         params.runtime?.log?.(
           warn(
             formatDiscordGatewayTransportErrorLog({ flowId: wsFlowId, error: lastTransportError }),

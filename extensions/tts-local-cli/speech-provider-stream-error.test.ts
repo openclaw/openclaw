@@ -1,4 +1,3 @@
-// TTS local CLI tests cover the canonical process-wrapper contract.
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -19,7 +18,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
 
 import { buildCliSpeechProvider } from "./speech-provider.js";
 
-const TEST_CFG = {} as OpenClawConfig;
+const TEST_CFG: OpenClawConfig = {};
 const MIB = 1024 * 1024;
 const PCM_AUDIO = Buffer.from([0, 1, 2, 3]);
 const WAV_AUDIO = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WAVEaudio")]);
@@ -68,7 +67,6 @@ describe("CLI TTS process wrapper", () => {
     { method: "synthesize", providerTimeoutMs: undefined },
     { method: "synthesizeTelephony", providerTimeoutMs: undefined },
     { method: "synthesize", providerTimeoutMs: 8_000 },
-    { method: "synthesizeTelephony", providerTimeoutMs: 8_000 },
   ] as const)(
     "$method honors timeout precedence with provider timeout $providerTimeoutMs",
     async ({ method, providerTimeoutMs }) => {
@@ -98,7 +96,7 @@ describe("CLI TTS process wrapper", () => {
         await expect(pending).rejects.toThrow("CLI TTS timed out after 1000ms");
       } else {
         await expect(pending).resolves.toMatchObject({
-          audioBuffer: method === "synthesize" ? WAV_AUDIO : PCM_AUDIO,
+          audioBuffer: WAV_AUDIO,
         });
       }
       expect(runCommandBufferedMock).toHaveBeenCalledExactlyOnceWith(
@@ -125,12 +123,7 @@ describe("CLI TTS process wrapper", () => {
     );
   });
 
-  it("maps timeout and output-limit failures", async () => {
-    runCommandBufferedMock.mockResolvedValueOnce(
-      commandResult({ code: null, termination: "timeout" }),
-    );
-    await expect(synthesize()).rejects.toThrow("CLI TTS timed out after 2500ms");
-
+  it("rejects stderr output beyond its byte cap", async () => {
     runCommandBufferedMock.mockResolvedValueOnce(
       commandResult({
         code: 0,

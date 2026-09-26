@@ -77,8 +77,11 @@ export function createBoundSessionHistorySubagentProjection(
   };
 }
 
-export function createReadonlySessionHistoryReader(target: PreparedSessionHistoryReadTarget) {
-  const sourceDatabases = target.sourceDatabases;
+export function createReadonlySessionHistoryReader(
+  target: Omit<PreparedSessionHistoryReadTarget, "sourceDiscovery">,
+  resolveSourceDatabases?: () => GatewaySessionStoreReadSources | undefined,
+) {
+  let sourceDatabases = target.sourceDatabases;
   const readSnapshot = <T>(read: (projection: CurrentTranscriptProjection) => T): T => {
     const result = withScopedOpenClawAgentDatabaseReadOnly(
       (database) =>
@@ -123,7 +126,7 @@ export function createReadonlySessionHistoryReader(target: PreparedSessionHistor
     subagentCoordination: createBoundSessionHistorySubagentProjection(
       readSnapshot,
       target.stateDatabase,
-      () => sourceDatabases,
+      () => (sourceDatabases ??= resolveSourceDatabases?.()),
     ),
   };
 }

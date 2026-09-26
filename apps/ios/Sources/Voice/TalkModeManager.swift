@@ -1137,7 +1137,7 @@ final class TalkModeManager: NSObject {
             gatewayContext: gatewayContext)
         // Reply generation can open interruption recognition. Keep the PTT
         // external-audio lease until that finalizer exits or is canceled.
-        self.transferActivePushToTalkToFinalizer(captureId)
+        precondition(self.clearActivePushToTalk(captureId))
         self.finishPTTOnce(payload)
         return payload
     }
@@ -1340,10 +1340,6 @@ final class TalkModeManager: NSObject {
         self.finishPTTOnce(payload)
         self.scheduleContinuousResume(shouldResume)
         return payload
-    }
-
-    private func transferActivePushToTalkToFinalizer(_ captureId: String) {
-        precondition(self.clearActivePushToTalk(captureId))
     }
 
     private func startFinishingPushToTalk(
@@ -2005,7 +2001,7 @@ final class TalkModeManager: NSObject {
         streamingOwner: TranscriptStreamingOwner) async throws -> Bool?
     {
         let runId = acknowledgement.runId
-        let shouldIncremental = self.shouldUseIncrementalTTS()
+        let shouldIncremental = !self.runtimeRoute.usesGatewayTalkSpeak
         if shouldIncremental {
             self.resetIncrementalSpeech()
             streamingOwner.speechGeneration = self.speechGeneration
@@ -2040,27 +2036,19 @@ final class TalkModeManager: NSObject {
                 self.logger.warning(
                     "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
                 GatewayDiagnostics.log("talk: chat completion timeout runId=\(runId)")
-            } else if completion.state == .aborted {
-                self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
-                GatewayDiagnostics.log("talk: chat completion aborted runId=\(runId)")
+            } else if completion.state == .aborted || completion.state == .error {
+                let aborted = completion.state == .aborted
+                let state = aborted ? "aborted" : "error"
+                self.logger.warning(
+                    "chat completion \(state, privacy: .public) runId=\(runId, privacy: .public)")
+                GatewayDiagnostics.log("talk: chat completion \(state) runId=\(runId)")
                 streamingOwner.task?.cancel()
                 await self.finishIncrementalSpeech()
                 guard self.isCurrentTranscriptProcessing(generation) else { return nil }
                 streamingOwner.terminalStatus = (
-                    String(localized: "Aborted"),
+                    aborted ? String(localized: "Aborted") : String(localized: "Chat error"),
                     .idle,
-                    .localized("Aborted"))
-                return nil
-            } else if completion.state == .error {
-                self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
-                GatewayDiagnostics.log("talk: chat completion error runId=\(runId)")
-                streamingOwner.task?.cancel()
-                await self.finishIncrementalSpeech()
-                guard self.isCurrentTranscriptProcessing(generation) else { return nil }
-                streamingOwner.terminalStatus = (
-                    String(localized: "Chat error"),
-                    .idle,
-                    .localized("Chat error"))
+                    .localized(aborted ? "Aborted" : "Chat error"))
                 return nil
             }
         }
@@ -2792,6 +2780,10 @@ final class TalkModeManager: NSObject {
         self.prefetchedRealtimeSession = nil
         guard !owners.isEmpty else { return nil }
         owners.sort { $0.voiceSessionId < $1.voiceSessionId }
+        return self.closeRealtimeVoiceSessions(owners)
+    }
+
+    private func closeRealtimeVoiceSessions(_ owners: [TalkRealtimeVoiceSessionOwner]) -> Task<Void, Never> {
         let transcriptStore = self.realtimeTranscriptStore
         return Task { @MainActor in
             defer { transcriptStore.remove(Set(owners.map(\.voiceSessionId))) }
@@ -2890,22 +2882,8 @@ final class TalkModeManager: NSObject {
         sessionKey: String,
         voiceSessionId: String) -> Task<Void, Never>
     {
-        let transcriptStore = self.realtimeTranscriptStore
-        return Task { @MainActor in
-            defer { transcriptStore.remove([voiceSessionId]) }
-            await transcriptStore.flush(voiceSessionId: voiceSessionId)
-            do {
-                try await self.closeRealtimeVoiceSession(
-                    gateway: gateway,
-                    route: route,
-                    sessionKey: sessionKey,
-                    voiceSessionId: voiceSessionId)
-            } catch {
-                GatewayDiagnostics.log(
-                    "talk voice session close FAILED voiceSessionId=\(voiceSessionId) "
-                        + "error=\(error.localizedDescription)")
-            }
-        }
+        self.closeRealtimeVoiceSessions([TalkRealtimeVoiceSessionOwner(
+            gateway: gateway, route: route, sessionKey: sessionKey, voiceSessionId: voiceSessionId)])
     }
 
     private func buildPrompt(transcript: String) -> String {
@@ -3185,14 +3163,9 @@ final class TalkModeManager: NSObject {
                     rawStream,
                     sampleRate: TalkTTSValidation.pcmSampleRate(from: outputFormat))
                 { mp3Format in
-                    client.streamSynthesize(
-                        voiceId: voiceId,
-                        request: ElevenLabsTTSRequest(
-                            text: cleaned,
-                            directive: directive,
-                            modelId: modelId,
-                            outputFormat: mp3Format,
-                            language: languages.provider))
+                    var mp3Request = request
+                    mp3Request.outputFormat = mp3Format
+                    return client.streamSynthesize(voiceId: voiceId, request: mp3Request)
                 }
                 guard !Task.isCancelled, self.speechGeneration == speechGeneration else { return }
                 let duration = Date().timeIntervalSince(started)
@@ -3433,10 +3406,6 @@ final class TalkModeManager: NSObject {
                 false
             }
         }
-    }
-
-    private func shouldUseIncrementalTTS() -> Bool {
-        !self.runtimeRoute.usesGatewayTalkSpeak
     }
 
     private var isSpeechOutputActive: Bool {
@@ -3908,14 +3877,9 @@ final class TalkModeManager: NSObject {
             rawStream,
             sampleRate: TalkTTSValidation.pcmSampleRate(from: playbackFormat))
         { mp3Format in
-            client.streamSynthesize(
-                voiceId: voiceId,
-                request: ElevenLabsTTSRequest(
-                    text: text,
-                    directive: context.directive,
-                    modelId: context.modelId,
-                    outputFormat: mp3Format,
-                    language: context.language))
+            var mp3Request = request
+            mp3Request.outputFormat = mp3Format
+            return client.streamSynthesize(voiceId: voiceId, request: mp3Request)
         }
         guard self.isCurrentSpeechGeneration(speechGeneration) else { return }
         if !result.finished, let interruptedAt = result.interruptedAt {
@@ -4172,104 +4136,81 @@ extension TalkModeManager {
         self.setStatus(String(localized: "Listening (Realtime)"), phase: .listening)
     }
 
-    private static func phase(forRealtimeStatus status: String) -> TalkPhase {
-        switch status {
-        case "Listening", "Listening (Realtime)":
-            .listening
-        case "Thinking", "Thinking…", "Asking OpenClaw", "Still asking OpenClaw", "Updating OpenClaw":
-            .thinking
-        case "Speaking", "Speaking…":
-            .speaking
-        case "Connecting", "Connecting realtime…", "Waiting for realtime…", "Reconnecting", "Reconnecting…":
-            .connecting
-        default:
-            .idle
-        }
-    }
-
-    private static func watchPresentation(forRealtimeStatus status: String) -> TalkWatchPresentation {
-        switch status {
-        case "Listening", "Listening (Realtime)", "Thinking", "Thinking…", "Speaking", "Speaking…",
-             "Asking OpenClaw", "Still asking OpenClaw", "Updating OpenClaw", "Connecting",
-             "Connecting realtime…", "Waiting for realtime…", "Ready", "Reconnecting", "Reconnecting…":
-            .phase
-        case "Realtime failed before connecting":
-            .localized("Realtime failed before connecting")
-        case "Realtime disconnected":
-            .localized("Realtime disconnected")
-        case "OpenClaw unavailable":
-            .localized("OpenClaw unavailable")
-        case "Confirmation needed":
-            .localized("Confirmation needed")
-        default:
-            .verbatim(status)
-        }
-    }
-
-    private static func presentationText(forRealtimeStatus status: String) -> String {
+    private static func realtimePresentation(for status: String) -> (
+        text: String,
+        phase: TalkPhase,
+        watch: TalkWatchPresentation)
+    {
         switch status {
         case "Listening":
-            String(localized: "Listening")
+            (String(localized: "Listening"), .listening, .phase)
         case "Listening (Realtime)":
-            String(localized: "Listening (Realtime)")
+            (String(localized: "Listening (Realtime)"), .listening, .phase)
         case "Thinking":
-            String(localized: "Thinking")
+            (String(localized: "Thinking"), .thinking, .phase)
         case "Thinking…":
-            String(localized: "Thinking…")
+            (String(localized: "Thinking…"), .thinking, .phase)
         case "Asking OpenClaw":
-            String(localized: "Asking OpenClaw")
+            (String(localized: "Asking OpenClaw"), .thinking, .phase)
         case "Still asking OpenClaw":
-            String(localized: "Still asking OpenClaw")
+            (String(localized: "Still asking OpenClaw"), .thinking, .phase)
         case "Updating OpenClaw":
-            String(localized: "Updating OpenClaw")
+            (String(localized: "Updating OpenClaw"), .thinking, .phase)
         case "Speaking":
-            String(localized: "Speaking")
+            (String(localized: "Speaking"), .speaking, .phase)
         case "Speaking…":
-            String(localized: "Speaking…")
+            (String(localized: "Speaking…"), .speaking, .phase)
         case "Connecting":
-            String(localized: "Connecting")
+            (String(localized: "Connecting"), .connecting, .phase)
         case "Connecting realtime…":
-            String(localized: "Connecting realtime…")
+            (String(localized: "Connecting realtime…"), .connecting, .phase)
         case "Waiting for realtime…":
-            String(localized: "Waiting for realtime…")
+            (String(localized: "Waiting for realtime…"), .connecting, .phase)
         case "Ready":
-            String(localized: "Ready")
+            (String(localized: "Ready"), .idle, .phase)
         case "Reconnecting":
-            String(localized: "Reconnecting")
+            (String(localized: "Reconnecting"), .connecting, .phase)
         case "Reconnecting…":
-            String(localized: "Reconnecting…")
+            (String(localized: "Reconnecting…"), .connecting, .phase)
         case "Realtime failed before connecting":
-            String(localized: "Realtime failed before connecting")
+            (
+                String(localized: "Realtime failed before connecting"),
+                .idle,
+                .localized("Realtime failed before connecting"))
         case "Realtime disconnected":
-            String(localized: "Realtime disconnected")
+            (String(localized: "Realtime disconnected"), .idle, .localized("Realtime disconnected"))
         case "OpenClaw unavailable":
-            String(localized: "OpenClaw unavailable")
+            (String(localized: "OpenClaw unavailable"), .idle, .localized("OpenClaw unavailable"))
         case "Confirmation needed":
-            String(localized: "Confirmation needed")
+            (String(localized: "Confirmation needed"), .idle, .localized("Confirmation needed"))
         default:
-            status
+            (status, .idle, .verbatim(status))
         }
     }
 
-    private func handleRealtimeRelayStatus(_ status: String) {
-        guard self.captureMode != .pushToTalk else { return }
-        let phase = Self.phase(forRealtimeStatus: status)
-        if status == "Listening (Realtime)" {
+    private func updateRealtimeStatus(_ status: String, readyStatus: String) -> TalkPhase {
+        let presentation = Self.realtimePresentation(for: status)
+        if status == readyStatus {
             // Ready can be followed by a buffered close before start() resumes. Commit continuous
             // state here so the typed terminal callback still enters bounded recovery.
             self.markRealtimeSessionReady()
         } else {
             self.setStatus(
-                Self.presentationText(forRealtimeStatus: status),
-                phase: phase,
-                watchPresentation: Self.watchPresentation(forRealtimeStatus: status))
+                presentation.text,
+                phase: presentation.phase,
+                watchPresentation: presentation.watch)
         }
-        self.isListening = phase == .listening
-        if phase == .thinking || phase == .connecting {
-            self.isListening = false
+        self.isListening = presentation.phase == .listening
+        if presentation.phase == .thinking || presentation.phase == .connecting {
             self.isSpeaking = false
             self.isUserSpeechDetected = false
         }
+        return presentation.phase
+    }
+
+    private func handleRealtimeRelayStatus(_ status: String) {
+        guard self.captureMode != .pushToTalk else { return }
+        _ = self.updateRealtimeStatus(status, readyStatus: "Listening (Realtime)")
     }
 
     private func handleRealtimeRelayTermination(_ termination: RealtimeTalkRelayTermination) {
@@ -4811,22 +4752,7 @@ extension TalkModeManager: TalkRealtimeWebRTCSessionDelegate {
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didChangeStatus status: String) {
         guard session === self.realtimeSession else { return }
         GatewayDiagnostics.log("talk.timeline realtime status=\(status)")
-        let phase = Self.phase(forRealtimeStatus: status)
-        if status == "Listening" {
-            self.markRealtimeSessionReady()
-        } else {
-            self.setStatus(
-                Self.presentationText(forRealtimeStatus: status),
-                phase: phase,
-                watchPresentation: Self.watchPresentation(forRealtimeStatus: status))
-        }
-        self.isListening = phase == .listening
-        self.isSpeaking = phase == .speaking
-        if phase == .thinking || phase == .connecting {
-            self.isListening = false
-            self.isSpeaking = false
-            self.isUserSpeechDetected = false
-        }
+        self.isSpeaking = self.updateRealtimeStatus(status, readyStatus: "Listening") == .speaking
         if !self.isSpeaking {
             self.playbackLevel = nil
         }
@@ -5250,22 +5176,6 @@ extension TalkModeManager {
 
     func _test_hasPendingRealtimeIssue() -> Bool {
         self.pendingRealtimeIssue != nil
-    }
-
-    func _test_gatewayTalkActiveModeTitle() -> String {
-        self.gatewayTalkActiveModeTitle
-    }
-
-    func _test_gatewayTalkActiveModeSubtitle() -> String? {
-        self.gatewayTalkActiveModeSubtitle
-    }
-
-    func _test_gatewayTalkLastIssueText() -> String? {
-        self.gatewayTalkLastIssueText
-    }
-
-    func _test_gatewayTalkCurrentFallbackIssue() -> TalkRuntimeIssue? {
-        self.gatewayTalkCurrentFallbackIssue
     }
 
     func _test_incrementalReset() {

@@ -109,6 +109,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           requestedProvider: primaryProvider,
           requestedModel: primaryModel,
           stage: "fallback",
+          selectionChanged: false,
           fallbackReason: "format",
         },
       },

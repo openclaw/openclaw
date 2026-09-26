@@ -258,6 +258,7 @@ describe("tsdown config", () => {
     async (verbose) => {
       vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
       const entryName = "extensions/memory-lancedb/lancedb-store";
+      const runtimeEntryName = "extensions/memory-lancedb/lancedb-runtime";
       const defaultConfig = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
       expect(defaultConfig?.entry).not.toHaveProperty(entryName);
       vi.stubEnv(DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV, "memory-lancedb");
@@ -269,7 +270,11 @@ describe("tsdown config", () => {
         (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
       );
       const source = (selected?.entry as Record<string, string> | undefined)?.[entryName];
+      const runtimeSource = (selected?.entry as Record<string, string> | undefined)?.[
+        runtimeEntryName
+      ];
       expect(source).toBeDefined();
+      expect(runtimeSource).toBeDefined();
       const root = fs.realpathSync(createTempDir("openclaw-tsdown-memory-"));
       const manifest = JSON.parse(
         fs.readFileSync("extensions/memory-lancedb/package.json", "utf8"),
@@ -293,7 +298,7 @@ describe("tsdown config", () => {
       const { bundles } = await build({
         ...selected,
         config: false,
-        entry: { [entryName]: source! },
+        entry: { [entryName]: source!, [runtimeEntryName]: runtimeSource! },
         outDir: path.join(root, "dist"),
         dts: false,
         logLevel: "silent",
@@ -304,7 +309,7 @@ describe("tsdown config", () => {
           import { registerHooks } from "node:module";
           import path from "node:path";
           import { pathToFileURL } from "node:url";
-          const [root, entry, bindingsJson] = process.argv.slice(1);
+          const [root, entry, runtimeEntry, bindingsJson] = process.argv.slice(1);
           const bindings = new Set(JSON.parse(bindingsJson));
           const loadedBindings = new Set();
           registerHooks({ resolve(specifier, context, nextResolve) {
@@ -325,7 +330,16 @@ describe("tsdown config", () => {
             db.close();
             db = new MemoryDB(dbPath, 2);
             assert.equal((await db.search("alpha", [1, 0], 1, 0))[0].entry.id, stored.id);
-            assert.equal(await db.count("alpha"), 1);
+            const { loadLanceDbModule } = await import(pathToFileURL(runtimeEntry).href);
+            const connection = await (await loadLanceDbModule()).connect(dbPath);
+            const table = await connection.openTable("memories");
+            try {
+              assert.equal(await table.countRows("agentId = 'alpha'"), 1);
+              assert.equal(await table.countRows("agentId = 'beta'"), 0);
+            } finally {
+              table.close();
+              connection.close();
+            }
             assert(loadedBindings.size > 0, "Expected a declared native binding");
           } finally {
             db.close();
@@ -342,6 +356,7 @@ describe("tsdown config", () => {
                 script,
                 root,
                 path.join(root, "dist", `${entryName}.js`),
+                path.join(root, "dist", `${runtimeEntryName}.js`),
                 JSON.stringify(Object.keys(manifest.optionalDependencies)),
               ],
               { cwd: root, timeout: 30_000 },

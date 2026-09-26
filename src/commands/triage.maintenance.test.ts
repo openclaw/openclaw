@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   maintenance: vi.fn(),
   handoff: undefined as ReturnType<typeof createManagedHandoffTestBinding> | undefined,
 }));
-vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: async () => [] }));
+vi.mock("./doctor-lint-runner.js", () => ({ collectDoctorFindings: async () => [] }));
 vi.mock("./triage-update.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./triage-update.js")>()),
   readPendingTriageUpdateFailure: async () => undefined,

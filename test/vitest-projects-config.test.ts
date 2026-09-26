@@ -949,9 +949,9 @@ describe("projects vitest config", () => {
     },
   );
 
-  it("keeps the bundled lane on the platform pool with the non-isolated runner", () => {
+  it("keeps the bundled lane in broker-capable forks with the non-isolated runner", () => {
     const testConfig = requireTestConfig(bundledConfig);
-    expect(testConfig.pool).toBe(defaultPool);
+    expect(testConfig.pool).toBe("forks");
     expect(testConfig.isolate).toBe(false);
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });

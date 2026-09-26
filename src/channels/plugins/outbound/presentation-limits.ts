@@ -1,8 +1,3 @@
-/**
- * Presentation limit adapters for channel outbound payloads.
- *
- * Splits text and reshapes portable controls to match per-channel limits.
- */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -63,7 +58,7 @@ function truncateUtf8Bytes(value: string, limit: number): string {
   let bytes = 0;
   let result = "";
   for (const char of value) {
-    const nextBytes = utf8ByteLength(char);
+    const nextBytes = Buffer.byteLength(char, "utf8");
     if (bytes + nextBytes > limit) {
       break;
     }
@@ -126,13 +121,9 @@ function presentationTextBlocks(params: {
   });
 }
 
-function utf8ByteLength(value: string): number {
-  return Buffer.byteLength(value, "utf8");
-}
-
 function fitsByteLimit(value: string | undefined, maxBytes: number | undefined): boolean {
   const limit = positiveInteger(maxBytes);
-  return !value || !limit || utf8ByteLength(value) <= limit;
+  return !value || !limit || Buffer.byteLength(value, "utf8") <= limit;
 }
 
 function fallbackListBlocks(params: {
@@ -285,14 +276,13 @@ function adaptButtonsBlock(
   if (buttons.length === 0) {
     return fallback;
   }
-  const blocks: MessagePresentationBlock[] = chunkButtons(buttons, limits?.maxActionsPerRow).map(
-    (row) => ({
+  return [
+    ...chunkButtons(buttons, limits?.maxActionsPerRow).map((row): MessagePresentationBlock => ({
       type: "buttons",
       buttons: row,
-    }),
-  );
-  blocks.push(...fallback);
-  return blocks;
+    })),
+    ...fallback,
+  ];
 }
 
 function adaptOption(
@@ -355,7 +345,7 @@ function adaptSelectBlock(
     return fallback;
   }
   consumeSelectBudget(budget);
-  const blocks: MessagePresentationBlock[] = [
+  return [
     {
       type: "select",
       ...(block.placeholder
@@ -363,9 +353,8 @@ function adaptSelectBlock(
         : {}),
       options,
     },
+    ...fallback,
   ];
-  blocks.push(...fallback);
-  return blocks;
 }
 
 function countRenderableSelectBlocks(
@@ -454,12 +443,7 @@ function selectButtonsByPriority(
     .slice(0, capacity);
 }
 
-/**
- * Adapt a portable presentation to the target channel's advertised capabilities.
- *
- * Unsupported controls are downgraded to text/context fallback blocks where possible, and
- * controls honor channel limits while authored and fallback text retain every character.
- */
+/** Limit native controls while preserving authored and fallback text in full. */
 export function adaptMessagePresentationForChannel(params: {
   presentation: MessagePresentation;
   capabilities?: ChannelPresentationCapabilities;
@@ -481,91 +465,68 @@ export function adaptMessagePresentationForChannel(params: {
         limits: limits?.text,
       })
     : [];
-  const blocks: MessagePresentationBlock[] = titleBlocks.slice(1);
-  for (const block of params.presentation.blocks) {
+  const blocks = params.presentation.blocks.flatMap((block): MessagePresentationBlock[] => {
     if (block.type === "text" || block.type === "context") {
-      blocks.push(
-        ...presentationTextBlocks({
-          blockType: block.type === "context" ? fallbackBlockType : "text",
-          text: block.text,
-          limits: limits?.text,
-          continuation:
-            Object.getOwnPropertyDescriptor(block, PRESENTATION_FALLBACK_CONTINUATION)?.value ===
-            true,
-        }),
-      );
-      continue;
+      return presentationTextBlocks({
+        blockType: block.type === "context" ? fallbackBlockType : "text",
+        text: block.text,
+        limits: limits?.text,
+        continuation:
+          Object.getOwnPropertyDescriptor(block, PRESENTATION_FALLBACK_CONTINUATION)?.value ===
+          true,
+      });
     }
-    if (block.type === "chart" && capabilities?.charts !== true) {
-      blocks.push(
-        ...presentationTextBlocks({
-          blockType: fallbackBlockType,
-          text: renderMessagePresentationChartFallbackText(block),
-          limits: limits?.text,
-        }),
-      );
-      continue;
+    if (
+      (block.type === "chart" && capabilities?.charts !== true) ||
+      (block.type === "table" && capabilities?.tables !== true)
+    ) {
+      return presentationTextBlocks({
+        blockType: fallbackBlockType,
+        text:
+          block.type === "chart"
+            ? renderMessagePresentationChartFallbackText(block)
+            : renderMessagePresentationTableFallbackText(block),
+        limits: limits?.text,
+      });
     }
-    if (block.type === "table" && capabilities?.tables !== true) {
-      blocks.push(
-        ...presentationTextBlocks({
-          blockType: fallbackBlockType,
-          text: renderMessagePresentationTableFallbackText(block),
-          limits: limits?.text,
-        }),
-      );
-      continue;
+    if (
+      (block.type === "buttons" && capabilities?.buttons === false) ||
+      (block.type === "select" && capabilities?.selects === false)
+    ) {
+      return fallbackListBlocks({
+        blockType: fallbackBlockType,
+        heading: block.type === "buttons" ? "Actions" : (block.placeholder ?? "Options"),
+        labels: (block.type === "buttons" ? block.buttons : block.options).map(
+          renderMessagePresentationControlFallbackLabel,
+        ),
+        limits: limits?.text,
+      });
     }
     if (block.type === "buttons") {
-      if (capabilities?.buttons === false) {
-        blocks.push(
-          ...fallbackListBlocks({
-            blockType: fallbackBlockType,
-            heading: "Actions",
-            labels: block.buttons.map(renderMessagePresentationControlFallbackLabel),
-            limits: limits?.text,
-          }),
-        );
-        continue;
-      }
-      blocks.push(
-        ...adaptButtonsBlock(
-          block,
-          limits?.actions,
-          actionBudget,
-          fallbackBlockType,
-          buttonSelection,
-          limits?.text,
-        ),
+      return adaptButtonsBlock(
+        block,
+        limits?.actions,
+        actionBudget,
+        fallbackBlockType,
+        buttonSelection,
+        limits?.text,
       );
-      continue;
     }
     if (block.type === "select") {
-      if (capabilities?.selects === false) {
-        blocks.push(
-          ...fallbackListBlocks({
-            blockType: fallbackBlockType,
-            heading: block.placeholder ?? "Options",
-            labels: block.options.map(renderMessagePresentationControlFallbackLabel),
-            limits: limits?.text,
-          }),
-        );
-        continue;
-      }
-      blocks.push(
-        ...adaptSelectBlock(block, limits?.selects, actionBudget, fallbackBlockType, limits?.text),
+      return adaptSelectBlock(
+        block,
+        limits?.selects,
+        actionBudget,
+        fallbackBlockType,
+        limits?.text,
       );
-      continue;
     }
-    if (block.type === "divider" && capabilities?.divider === false) {
-      continue;
-    }
-    blocks.push(block);
-  }
+    return block.type === "divider" && capabilities?.divider === false ? [] : [block];
+  });
   return {
     ...params.presentation,
     ...(params.presentation.title ? { title: titleBlocks[0]?.text } : {}),
-    blocks,
+    blocks: [...titleBlocks.slice(1), ...blocks],
   };
 }
 

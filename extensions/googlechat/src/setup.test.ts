@@ -23,7 +23,7 @@ import {
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   listGoogleChatAccountIds,
   resolveGoogleChatAccount,
@@ -91,6 +91,11 @@ async function waitForGoogleChatMonitorStarted() {
 }
 
 describe("googlechat setup", () => {
+  beforeAll(async () => {
+    // Keep cold monitor imports out of the lifecycle assertion's wait budget.
+    await import("./channel.runtime.js");
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();

@@ -1,6 +1,6 @@
 import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
@@ -19,7 +19,6 @@ import type {
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
-import type { BoardFace } from "../lib/board/settings.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -33,7 +32,6 @@ import { showToast } from "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatPage } from "../pages/chat/chat-page.ts";
-import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import {
   equalShellRouteState,
   selectShellRouteState,
@@ -51,7 +49,7 @@ import { ShellNavigationOwner, type ShellNavigationHost } from "./app-shell-navi
 import { createShellViewCallbacks } from "./app-shell-view-callbacks.ts";
 import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
+import type { ApplicationContext } from "./context.ts";
 import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import {
@@ -68,6 +66,7 @@ import {
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
+import "./router-outlet.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { isApplyingServerUiPrefs, pushServerUiPrefs } from "./server-prefs.ts";
 import { setSettingsChangeListener } from "./settings.ts";
@@ -420,22 +419,11 @@ class OpenClawShell
       );
   }
 
-  /**
-   * Server config (ui.prefs) is the canonical home for synced display prefs;
-   * apply server-side deltas to the browser mirror whenever a config snapshot
-   * lands (connect, settings pages, reloads).
-   */
-  private reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]) {
-    this.shellGateway.reconcileServerUiPrefs(runtimeConfig);
-  }
-
-  private reconcileCommittedServerUiPrefs(
-    runtimeConfig: ApplicationContext["runtimeConfig"],
-    needsRefresh: boolean,
-    retainedLocal = false,
-  ) {
-    this.shellGateway.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal);
-  }
+  private readonly reconcileServerUiPrefs = this.shellGateway.reconcileServerUiPrefs.bind(
+    this.shellGateway,
+  );
+  private readonly reconcileCommittedServerUiPrefs =
+    this.shellGateway.reconcileCommittedServerUiPrefs.bind(this.shellGateway);
 
   override connectedCallback() {
     super.connectedCallback();
@@ -528,12 +516,10 @@ class OpenClawShell
     this.settingsPreloadTimers.clear();
   }
 
-  selectChatSession(sessionKey: string, agentId?: string | null) {
-    this.shellNavigation.selectChatSession(sessionKey, agentId);
-  }
-  private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
-    this.shellGateway.handleGatewayEvent(event);
-  };
+  readonly selectChatSession = this.shellNavigation.selectChatSession.bind(this.shellNavigation);
+  private readonly handleGatewayEvent = this.shellGateway.handleGatewayEvent.bind(
+    this.shellGateway,
+  );
 
   readonly handleThemeChange = (event: CustomEvent<ThemeModeChangeDetail>) => {
     const context = this.context;
@@ -559,19 +545,18 @@ class OpenClawShell
     }
   }
 
-  chatNavigationOptions(face: BoardFace, options?: ApplicationNavigationOptions) {
-    return this.shellNavigation.chatNavigationOptions(face, options);
-  }
+  readonly chatNavigationOptions = this.shellNavigation.chatNavigationOptions.bind(
+    this.shellNavigation,
+  );
 
   readonly navigate = this.shellNavigation.navigate;
 
-  readonly recoverNotFoundRoute = () => {
-    return this.shellNavigation.recoverNotFoundRoute();
-  };
-
-  recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
-    this.shellNavigation.recoverDeletedActiveSession(sessionState);
-  }
+  readonly recoverNotFoundRoute = this.shellNavigation.recoverNotFoundRoute.bind(
+    this.shellNavigation,
+  );
+  readonly recoverDeletedActiveSession = this.shellNavigation.recoverDeletedActiveSession.bind(
+    this.shellNavigation,
+  );
 
   observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void {
     const context = this.context;
@@ -589,9 +574,7 @@ class OpenClawShell
     );
   }
 
-  exitSettings() {
-    this.shellNavigation.exitSettings();
-  }
+  readonly exitSettings = this.shellNavigation.exitSettings.bind(this.shellNavigation);
 
   readonly toggleNavigationSurface = this.shellChrome.toggleNavigationSurface;
 
@@ -599,9 +582,7 @@ class OpenClawShell
 
   readonly resizeNavigation = this.shellChrome.resizeNavigation;
 
-  openNewSession(agentId: string, target?: NewSessionTarget) {
-    this.shellNavigation.openNewSession(agentId, target);
-  }
+  readonly openNewSession = this.shellNavigation.openNewSession.bind(this.shellNavigation);
 
   // Shipped Mac app builds without web chrome still drive these handlers.
   readonly handleNativeToggleSidebar = this.shellChrome.handleNativeToggleSidebar;
@@ -615,7 +596,9 @@ class OpenClawShell
   get pendingDebugOverlayMode() {
     return this.shellChrome.pendingDebugOverlayMode;
   }
-  readonly togglePendingDebugOverlayMode = () => this.shellChrome.togglePendingDebugOverlayMode();
+  readonly togglePendingDebugOverlayMode = this.shellChrome.togglePendingDebugOverlayMode.bind(
+    this.shellChrome,
+  );
   readonly openPalette = this.shellChrome.openPalette;
   readonly closePendingPalette = this.shellChrome.closePendingPalette;
   get commandPaletteLoading() {
@@ -722,10 +705,9 @@ class OpenClawShell
     void this.shellGateway.ensureRuntimeConfig(snapshot, runtimeConfig).catch(() => undefined);
   }
 
-  /** Agent targeted by the open new-session route, keyed off its ?agent param. */
-  newSessionRouteAgentId(): string {
-    return this.shellNavigation.newSessionRouteAgentId();
-  }
+  readonly newSessionRouteAgentId = this.shellNavigation.newSessionRouteAgentId.bind(
+    this.shellNavigation,
+  );
 
   ensureAgentsList(
     snapshot: ApplicationContext["gateway"]["snapshot"],
@@ -734,9 +716,9 @@ class OpenClawShell
     void this.shellGateway.ensureAgentsList(snapshot, agents).catch(() => undefined);
   }
 
-  private updateRouteState(routeState: ShellRouteState) {
-    this.shellNavigation.updateRouteState(routeState);
-  }
+  private readonly updateRouteState = this.shellNavigation.updateRouteState.bind(
+    this.shellNavigation,
+  );
 
   override render() {
     this.refreshStoredOutboxSummary();

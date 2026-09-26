@@ -1,103 +1,91 @@
-// Cron rearm tests cover timer rearming while scheduled jobs are already running.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
+import { stop } from "./service/ops-lifecycle.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
-const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
 
-function createDueRecurringJob(params: {
-  id: string;
-  nowMs: number;
-  nextRunAtMs: number;
-}): CronJob {
+function recurringJob(id: string, nowMs: number, nextRunAtMs: number): CronJob {
   return {
-    id: params.id,
-    name: params.id,
+    id,
+    name: id,
     enabled: true,
     deleteAfterRun: false,
-    createdAtMs: params.nowMs,
-    updatedAtMs: params.nowMs,
+    createdAtMs: nowMs,
+    updatedAtMs: nowMs,
     schedule: { kind: "every", everyMs: 5 * 60_000 },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "test" },
     delivery: { mode: "none" },
-    state: { nextRunAtMs: params.nextRunAtMs },
+    state: { nextRunAtMs },
   };
 }
 
-describe("CronService - timer re-arm when running (#12025)", () => {
-  beforeEach(() => {
-    noopLogger.debug.mockClear();
-    noopLogger.info.mockClear();
-    noopLogger.warn.mockClear();
-    noopLogger.error.mockClear();
-  });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("arms a watchdog timer while a timer tick is still executing", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+describe("cron wakes during active execution", () => {
+  it("runs later due work while an earlier scheduled run is still executing", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const clock = createGatewaySchedulerClock(now);
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const started = createDeferred();
     const deferredRun = createDeferred<{ status: "ok"; summary: string }>();
-
+    const laterFinished = createDeferred();
+    const laterJob = recurringJob("later-job", now, now + 10_000);
+    laterJob.sessionTarget = "main";
+    laterJob.payload = { kind: "systemEvent", text: "later work" };
     await saveCronStore(store.storePath, {
       version: 1,
-      jobs: [
-        createDueRecurringJob({
-          id: "long-running-job",
-          nowMs: now,
-          nextRunAtMs: now,
-        }),
-      ],
+      jobs: [recurringJob("long-running-job", now, now), laterJob],
     });
-    const runIsolatedAgentJob = vi.fn(async () => await deferredRun.promise);
-
+    const runIsolatedAgentJob = vi.fn(async () => {
+      started.resolve();
+      return await deferredRun.promise;
+    });
+    const enqueueSystemEvent = vi.fn();
     const state = createCronServiceState({
       storePath: store.storePath,
       cronEnabled: true,
-      log: noopLogger,
-      nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
+      log: createNoopLogger(),
+      scheduler,
+      enqueueSystemEvent,
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
+      onEvent: (event) => {
+        if (event.jobId === "later-job" && event.action === "finished") {
+          laterFinished.resolve();
+        }
+      },
     });
 
-    let settled = false;
     const timerPromise = onTimer(state);
-    void timerPromise.finally(() => {
-      settled = true;
-    });
+    let laterWake: ReturnType<typeof clock.advanceTo> = undefined;
+    try {
+      await started.promise;
+      expect(state.running).toBe(true);
+      expect(scheduler.nextWakeAtMs).not.toBeNull();
 
-    await vi.waitFor(() => {
+      laterWake = clock.advanceTo(now + 10_000);
+      await laterFinished.promise;
+
+      expect(enqueueSystemEvent).toHaveBeenCalledWith("later work", expect.any(Object));
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-    });
-    expect(settled).toBe(false);
-    expect(state.running).toBe(true);
-    expect(
-      timeoutSpy.mock.results.some(
-        (result) => result.type === "return" && result.value === state.timer,
-      ),
-    ).toBe(true);
-
-    const delays = timeoutSpy.mock.calls
-      .map(([, delay]) => delay)
-      .filter((d): d is number => typeof d === "number");
-    expect(delays).toContain(60_000);
-
-    deferredRun.resolve({ status: "ok", summary: "done" });
-    await timerPromise;
+      expect(state.running).toBe(true);
+    } finally {
+      deferredRun.resolve({ status: "ok", summary: "done" });
+      await timerPromise;
+      await laterWake;
+      stop(state);
+      await scheduler.stop();
+    }
     expect(state.running).toBe(false);
-
-    timeoutSpy.mockRestore();
-    await store.cleanup();
   });
 });

@@ -284,6 +284,9 @@ export class CompilerInputSnapshot {
 
   hash = (file: string) => this.read(file).hash;
 
+  /** Supply the compiler with the same captured bytes that sealing will verify. */
+  readText = (file: string) => this.read(file).bytes.toString("utf8");
+
   private config(file: string) {
     let result = this.configs.get(file);
     if (!result) {
@@ -291,7 +294,7 @@ export class CompilerInputSnapshot {
         const parsed = readNativeTypeScriptConfig({
           cwd: this.rootDir,
           configFileName: this.inputPath(file),
-          readFile: (name) => this.read(name).bytes.toString("utf8"),
+          readFile: this.readText,
           assertInput: this.policy.assertInput,
         });
         result = {

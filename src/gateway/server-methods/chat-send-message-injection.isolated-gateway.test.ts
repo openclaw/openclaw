@@ -657,8 +657,8 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971 round-8)"
       // Simulate the pre-fix classifier: never fail-closed.
       const receiptModule = await import("../../config/sessions/restart-recovery-receipt.js");
       const classifierSpy = vi
-        .spyOn(receiptModule, "isRestartRecoveryTerminalDeliveryFailClosed")
-        .mockReturnValue(false);
+        .spyOn(receiptModule, "resolveRestartRecoverySteeringBlockReason")
+        .mockReturnValue(undefined);
 
       const registrySpy = vi
         .spyOn(replyRunRegistryModule, "beginReplyMessageInjectionTarget")
