@@ -37,8 +37,9 @@ compatibility listener forwards only its registered webhook
 routes through the same Gateway request pipeline, preserving signatures and retry
 responses during channel restarts.
 
-The exported Telegram and Feishu config types retain deprecated `webhookPort` and
-`webhookHost` input properties until the next Plugin SDK major. TypeScript config
+The exported Telegram, Feishu, and Microsoft Teams config types retain deprecated
+listener input properties (`webhookPort`, `webhookHost`, or `webhook.port`) until
+the next Plugin SDK major. TypeScript config
 producers remain source-compatible, but parsed runtime config uses only
 `legacyWebhook`; run Doctor before using legacy inputs. This type compatibility
 window does not schedule removal of the default listener.
