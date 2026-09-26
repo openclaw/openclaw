@@ -97,8 +97,6 @@ export function collectMessagingMediaUrlsFromToolResult(result: unknown): string
   return urls;
 }
 
-/** Extract an internal source-reply payload from a completed message tool result. */
-
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "agents_list",
   "apply_patch",
@@ -220,17 +218,6 @@ export function filterToolResultMediaUrls(
   return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
 }
 
-/**
- * Extract media file paths from a tool result.
- *
- * Strategy (first match wins):
- * 1. Read structured `details.media` attachments from tool details.
- * 2. Fall back to `details.path` when image content exists (legacy imageResult).
- *
- * Returns an empty array when no media is found (e.g. embedded `read` tool
- * returns base64 image data but no file path; those need a different delivery
- * path like saving to a temp file).
- */
 type ToolResultMediaArtifact = {
   mediaUrls: string[];
   attachments?: ReplyMediaAttachment[];
@@ -242,11 +229,9 @@ function readToolResultDetailsMedia(
   result: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
   const details = readToolResultDetails(result);
-  const media =
-    details?.media && typeof details.media === "object" && !Array.isArray(details.media)
-      ? (details.media as Record<string, unknown>)
-      : undefined;
-  return media;
+  return details?.media && typeof details.media === "object" && !Array.isArray(details.media)
+    ? (details.media as Record<string, unknown>)
+    : undefined;
 }
 
 const REPLY_ATTACHMENT_METADATA_KEYS = new Set([
@@ -325,23 +310,6 @@ function collectStructuredMedia(media: Record<string, unknown>): ToolResultMedia
   };
 }
 
-function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {
-  return media.outbound === false;
-}
-
-function hasImageContentBlock(content: unknown[]): boolean {
-  for (const item of content) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
-    const entry = item as Record<string, unknown>;
-    if (entry.type === "image") {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function extractToolResultMediaArtifact(
   result: unknown,
 ): ToolResultMediaArtifact | undefined {
@@ -351,7 +319,7 @@ export function extractToolResultMediaArtifact(
   const record = result as Record<string, unknown>;
   const detailsMedia = readToolResultDetailsMedia(record);
   if (detailsMedia) {
-    if (isNonOutboundToolResultMedia(detailsMedia)) {
+    if (detailsMedia.outbound === false) {
       return undefined;
     }
     const structuredMedia = collectStructuredMedia(detailsMedia);
@@ -371,7 +339,7 @@ export function extractToolResultMediaArtifact(
 
   // Fall back to legacy details.path when image content exists but no
   // structured media details.
-  if (hasImageContentBlock(content)) {
+  if (content.some((item) => item && typeof item === "object" && item.type === "image")) {
     const details = record.details as Record<string, unknown> | undefined;
     const p = normalizeOptionalString(details?.path) ?? "";
     if (p) {

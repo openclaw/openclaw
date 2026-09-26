@@ -66,6 +66,13 @@ Concurrent profile-photo requests can share a Gravatar lookup. Each HTTP request
 keeps its own timeout and disconnect lifecycle, so one expired or disconnected
 request does not interrupt another client loading the same photo.
 
+Saved profile photos use a bounded in-memory cache tied to the Gateway's profile
+catalog. Committed profile edits and merges invalidate cached representations;
+authentication still runs before cached responses and `304 Not Modified`.
+Cold photo reads have a separate concurrency budget to preserve shared-state read
+capacity. During overload, the endpoint returns `503 Service Unavailable` with
+`Retry-After: 1` instead of a permanent lookup failure.
+
 ## Assistant media route auth
 
 Local image previews follow the chat's filesystem permissions. Project chats use

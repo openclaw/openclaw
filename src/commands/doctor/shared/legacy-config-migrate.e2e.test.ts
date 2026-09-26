@@ -36,6 +36,29 @@ describe("legacy config migration end to end", () => {
       },
     },
     {
+      name: "malformed media model rows",
+      raw: {
+        tools: {
+          media: {
+            models: [null, "invalid", 42, false, [], { provider: "openai", model: "whisper-1" }],
+            audio: {
+              models: [null, "invalid", 42, false, [], { provider: "deepgram", model: "nova-2" }],
+            },
+          },
+        },
+      },
+      expected: {
+        tools: {
+          media: {
+            models: [
+              { provider: "deepgram", model: "nova-2", capabilities: ["audio"] },
+              { provider: "openai", model: "whisper-1" },
+            ],
+          },
+        },
+      },
+    },
+    {
       name: "Deepgram options before media consolidation",
       raw: {
         tools: {

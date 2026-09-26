@@ -12,14 +12,7 @@ import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
 
 /** Builds compact diagnostic tool definitions for trusted private telemetry. */
-function buildCodexDiagnosticToolDefinitions(
-  tools: readonly {
-    name: string;
-    description: string;
-    inputSchema?: unknown;
-    parameters?: unknown;
-  }[],
-) {
+function buildCodexDiagnosticToolDefinitions(tools: readonly CodexModelCallDiagnosticTool[]) {
   return tools.map((tool) => ({
     name: tool.name,
     description: tool.description,

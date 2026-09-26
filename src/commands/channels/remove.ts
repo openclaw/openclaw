@@ -1,9 +1,6 @@
 // Implements guided and non-interactive disable/delete for channel accounts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  applyChannelAccountRemoval,
-  type ChannelAccountMutationPlugin,
-} from "../../channels/plugins/account-config-mutation.js";
+import { applyChannelAccountRemoval } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -22,7 +19,7 @@ import { withCommandPluginMetadata, type ConfigWriteSnapshot } from "../config-v
 import { parseAccountSelector } from "./account-selector.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
-import { type ChatChannel, requireValidConfigForWrite, shouldUseWizard } from "./shared.js";
+import { type ChatChannel, requireValidConfigForWrite } from "./shared.js";
 
 export type ChannelsRemoveOptions = {
   agent?: string;
@@ -30,19 +27,6 @@ export type ChannelsRemoveOptions = {
   account?: string;
   delete?: boolean;
 };
-
-function listAccountIds(
-  cfg: OpenClawConfig,
-  channel: ChatChannel,
-  pluginInput?: ChannelAccountMutationPlugin,
-): string[] {
-  let plugin = pluginInput;
-  plugin ??= getChannelPlugin(channel);
-  if (!plugin) {
-    return [];
-  }
-  return plugin.config.listAccountIds(cfg);
-}
 
 function formatAccountRemovalErrorMessage(params: {
   channel: ChatChannel;
@@ -120,7 +104,7 @@ async function removeChannelAccount(
 ) {
   const cfg: OpenClawConfig = writeSnapshot.snapshot.sourceConfig;
 
-  const useWizard = shouldUseWizard(params);
+  const useWizard = params?.hasFlags === false;
   const prompter = useWizard ? createClackPrompter() : null;
   const rawChannel = normalizeOptionalString(opts.channel) ?? "";
   let lookupChannel = rawChannel;
@@ -143,19 +127,20 @@ async function removeChannelAccount(
     channel = selectedChannel;
     lookupChannel = selectedChannel;
 
-    accountId = await (async () => {
-      const readOnlyPlugin = readOnlyPlugins.find((plugin) => plugin.id === selectedChannel);
-      const ids = listAccountIds(cfg, selectedChannel, readOnlyPlugin);
-      const choice = await prompter.select({
+    const readOnlyPlugin =
+      readOnlyPlugins.find((plugin) => plugin.id === selectedChannel) ??
+      getChannelPlugin(selectedChannel);
+    const ids = readOnlyPlugin?.config.listAccountIds(cfg) ?? [];
+    accountId = normalizeAccountId(
+      await prompter.select({
         message: "Account",
         options: ids.map((id) => ({
           value: id,
           label: id === DEFAULT_ACCOUNT_ID ? "default (primary)" : id,
         })),
         initialValue: ids[0] ?? DEFAULT_ACCOUNT_ID,
-      });
-      return normalizeAccountId(choice);
-    })();
+      }),
+    );
 
     const wantsDisable = await prompter.confirm({
       message: `Disable ${channelLabel(selectedChannel)} account "${accountId}"? (keeps config)`,
@@ -265,17 +250,12 @@ async function removeChannelAccount(
     baseHash: writeSnapshot.snapshot.hash,
     runtime,
   });
+  const message = deleteConfig
+    ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountId}".`
+    : `Disabled ${channelLabel(resolvedChannelId)} account "${accountId}".`;
   if (useWizard && prompter) {
-    await prompter.outro(
-      deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountId}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${accountId}".`,
-    );
+    await prompter.outro(message);
   } else {
-    runtime.log(
-      deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountId}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${accountId}".`,
-    );
+    runtime.log(message);
   }
 }

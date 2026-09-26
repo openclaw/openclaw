@@ -1,8 +1,8 @@
-// Openai provider module implements model/runtime integration.
 import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
+  asOptionalObjectRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
@@ -81,6 +81,13 @@ type OpenAIRealtimeSecretRequest = {
   missingValueMessage: string;
 };
 
+type OpenAIRealtimeClientSecretRequest = {
+  authToken: string;
+  auditContext: string;
+  session: Record<string, unknown>;
+  authRejectedMessage?: string;
+};
+
 async function createOpenAIRealtimeSecret(
   params: OpenAIRealtimeSecretRequest,
   {
@@ -113,38 +120,31 @@ async function createOpenAIRealtimeSecret(
     timeoutMs: OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS,
     auditContext: params.auditContext,
   });
-  const payload = await (async () => {
-    try {
-      if (!response.ok) {
-        const error = await createProviderHttpError(response, params.errorMessage);
-        // Provider details can echo a masked credential while hiding which
-        // OpenClaw auth source won. Keep the status metadata, but give callers
-        // a bounded remediation for an explicitly configured key.
-        if (response.status === 401 && params.authRejectedMessage) {
-          error.message = params.authRejectedMessage;
-        }
-        throw error;
+  let payload: unknown;
+  try {
+    if (!response.ok) {
+      const error = await createProviderHttpError(response, params.errorMessage);
+      // Provider details can echo a masked credential while hiding which
+      // OpenClaw auth source won. Keep the status metadata, but give callers
+      // a bounded remediation for an explicitly configured key.
+      if (response.status === 401 && params.authRejectedMessage) {
+        error.message = params.authRejectedMessage;
       }
-      return await readProviderJsonResponse<unknown>(response, "openai.realtime-session");
-    } finally {
-      await release();
+      throw error;
     }
-  })();
-  const nestedSecret =
-    payload && typeof payload === "object"
-      ? (payload as Record<string, unknown>).client_secret
-      : undefined;
+    payload = await readProviderJsonResponse<unknown>(response, "openai.realtime-session");
+  } finally {
+    await release();
+  }
+  const record = asOptionalObjectRecord(payload);
+  const nestedSecret = record?.client_secret;
   const clientSecret =
     normalizeOptionalString(asOptionalRecord(payload)?.value) ??
     normalizeOptionalString(asOptionalRecord(nestedSecret)?.value);
   if (!clientSecret) {
     throw new Error(params.missingValueMessage);
   }
-  const expiresAt =
-    payload && typeof payload === "object"
-      ? (payload as Record<string, unknown>).expires_at
-      : undefined;
-  const expiresAtMs = resolveExpiresAtMsFromEpochSeconds(expiresAt);
+  const expiresAtMs = resolveExpiresAtMsFromEpochSeconds(record?.expires_at);
   return {
     value: clientSecret,
     ...(expiresAtMs === undefined ? {} : { expiresAt: expiresAtMs }),
@@ -152,12 +152,7 @@ async function createOpenAIRealtimeSecret(
 }
 
 export async function createOpenAIRealtimeClientSecret(
-  params: {
-    authToken: string;
-    auditContext: string;
-    session: Record<string, unknown>;
-    authRejectedMessage?: string;
-  },
+  params: OpenAIRealtimeClientSecretRequest,
   runtime: OpenAIRealtimeHost,
 ): Promise<OpenAIRealtimeClientSecretResult> {
   const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;
@@ -174,12 +169,7 @@ export async function createOpenAIRealtimeClientSecret(
 }
 
 export async function createOpenAIRealtimeTranscriptionClientSecret(
-  params: {
-    authToken: string;
-    auditContext: string;
-    session: Record<string, unknown>;
-    authRejectedMessage?: string;
-  },
+  params: OpenAIRealtimeClientSecretRequest,
   runtime: OpenAIRealtimeHost,
 ): Promise<OpenAIRealtimeClientSecretResult> {
   const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;

@@ -22,6 +22,7 @@ let minimalChannelsCommandRegistry: ReturnType<typeof createTestRegistry>;
 const createClackPrompterMock = vi.hoisted(() => vi.fn());
 const catalogMocks = vi.hoisted(() => ({
   listTrustedChannelPluginCatalogEntries: vi.fn(() => []),
+  resolveTrustedChannelCatalogInput: vi.fn(() => undefined),
 }));
 
 vi.mock("../wizard/clack-prompter.js", () => ({

@@ -61,7 +61,6 @@ function isReasoningModelHeuristic(modelId: string): boolean {
     lower.includes("r1") ||
     lower.includes("reason") ||
     lower.includes("thinking") ||
-    lower.includes("reasoner") ||
     lower.includes("grok") ||
     lower.includes("qwq")
   );

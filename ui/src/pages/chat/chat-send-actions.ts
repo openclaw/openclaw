@@ -13,6 +13,7 @@ import { generateUUID } from "../../lib/uuid.ts";
 import {
   isExpiredIncognitoSession,
   isInitialChatHistoryUnavailable,
+  setChatError,
 } from "./chat-history-state.ts";
 import {
   flushStoredChatOutbox,
@@ -28,11 +29,7 @@ import {
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
-import {
-  canSendVolatileQueueItem,
-  reconnectSafeQueuedSendState,
-  setChatError,
-} from "./chat-send-queue-state.ts";
+import { canSendVolatileQueueItem, reconnectSafeQueuedSendState } from "./chat-send-queue-state.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import {

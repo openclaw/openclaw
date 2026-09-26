@@ -20,21 +20,6 @@ import {
 } from "./embedded-agent-runner/tool-result-truncation.js";
 import type { AgentMessage } from "./runtime/index.js";
 
-/**
- * Truncate oversized text content blocks in a tool result message.
- * Returns the original message if under the limit, or a new message with
- * truncated text blocks otherwise.
- */
-function capToolResultSize(msg: AgentMessage, maxChars: number): AgentMessage {
-  if (msg.role !== "toolResult") {
-    return msg;
-  }
-  return truncateToolResultMessage(msg, maxChars, {
-    suffix: (truncatedChars) => formatContextLimitTruncationNotice(truncatedChars),
-    minKeepChars: 2_000,
-  });
-}
-
 export function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): number {
   return resolveIntegerOption(opts?.maxToolResultChars, DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS, {
     min: 1,
@@ -313,23 +298,15 @@ function enforcePersistedDetailsByteCap(
   if (sanitizedBytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
     return value;
   }
-  const fallback = isRecord(originalDetails)
-    ? buildPersistedDetailsFallback(originalDetails, originalSize, sanitizedBytes, redactionConfig)
-    : {
-        persistedDetailsTruncated: true,
-        finalDetailsTruncated: true,
-        ...originalDetailsSizeFields(originalSize),
-        sanitizedDetailsBytes: sanitizedBytes,
-      };
-  if (jsonUtf8BytesOrInfinity(fallback) <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
-    return fallback;
-  }
-  return {
-    persistedDetailsTruncated: true,
-    finalDetailsTruncated: true,
-    ...originalDetailsSizeFields(originalSize),
-    sanitizedDetailsBytes: sanitizedBytes,
-  };
+  const fallback = buildPersistedDetailsFallback(
+    isRecord(originalDetails) ? originalDetails : undefined,
+    originalSize,
+    sanitizedBytes,
+    redactionConfig,
+  );
+  return jsonUtf8BytesOrInfinity(fallback) <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES
+    ? fallback
+    : buildPersistedDetailsFallback(undefined, originalSize, sanitizedBytes);
 }
 
 function sanitizeToolResultDetailsForPersistence(
@@ -419,7 +396,13 @@ export function capToolResultForPersistence(
   maxChars: number,
   redactionConfig?: ToolResultDetailRedactionConfig,
 ): AgentMessage {
-  const capped = capToolResultSize(msg, maxChars);
+  const capped =
+    msg.role === "toolResult"
+      ? truncateToolResultMessage(msg, maxChars, {
+          suffix: formatContextLimitTruncationNotice,
+          minKeepChars: 2_000,
+        })
+      : msg;
   if (capped.role !== "toolResult") {
     return capped;
   }

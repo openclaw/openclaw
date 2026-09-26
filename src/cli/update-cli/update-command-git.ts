@@ -18,6 +18,7 @@ import {
   resolveDevUpdateTargetRevision,
   type DevUpdateTarget,
 } from "../../infra/update-dev-target.js";
+import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
 import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import type { CommandRunner as GlobalCommandRunner } from "../../infra/update-global-command-runner.js";
 import {
@@ -275,10 +276,7 @@ function readRemoteTagRevisions(stdout: string): Map<string, string> | null {
     }
     const match = /^refs\/tags\/(v.+?)(\^\{\})?$/u.exec(ref);
     if (!match) {
-      if (line.trim()) {
-        return null;
-      }
-      continue;
+      return null;
     }
     const tag = match[1];
     if (!tag) {
@@ -520,6 +518,15 @@ export async function updateGitInstall(params: {
     ? await readPackageUpdateIdentity(installTarget.packageRoot ?? params.root)
     : undefined;
   let exposure: Awaited<ReturnType<typeof prepareGitPackageExposure>> | undefined;
+  const runDoctor: NonNullable<UpdateRunnerOptions["runGitDoctor"]> = (root, results) =>
+    runPackageUpdateDoctor({
+      ...params,
+      results,
+      managedServiceEnv: params.getManagedServiceEnv(),
+      root,
+      timeoutMs: effectiveTimeout,
+      workTimeoutMs: params.timeoutMs ?? null,
+    });
   const runUpdate = async (
     gitRoot: string,
     publishGitCheckout?: () => Promise<string>,
@@ -577,29 +584,13 @@ export async function updateGitInstall(params: {
                   activateGitRoot: updateRoot,
                   onTransaction: params.onTransaction,
                   assertCurrent: params.assertCurrent,
-                  postVerifyStep: (root, results) =>
-                    runPackageUpdateDoctor({
-                      ...params,
-                      results,
-                      managedServiceEnv: params.getManagedServiceEnv(),
-                      root,
-                      timeoutMs: effectiveTimeout,
-                      workTimeoutMs: params.timeoutMs ?? null,
-                    }),
+                  postVerifyStep: runDoctor,
                 });
               },
             }
           : {
               onTransaction: params.onTransaction,
-              runGitDoctor: (root, results) =>
-                runPackageUpdateDoctor({
-                  ...params,
-                  results,
-                  managedServiceEnv: params.getManagedServiceEnv(),
-                  root,
-                  timeoutMs: effectiveTimeout,
-                  workTimeoutMs: params.timeoutMs ?? null,
-                }),
+              runGitDoctor: runDoctor,
             }),
       },
     });
@@ -659,13 +650,10 @@ export async function updateGitInstall(params: {
         status: packageUpdate.failedStep ? "error" : "ok",
         reason:
           packageUpdate.reason ??
-          (packageUpdate.failedStep?.configWriteRefusal
-            ? packageUpdate.failedStep.configWriteRefusal.reason === "requester-revoked"
-              ? "requester-revoked"
-              : "repair-requires-config-change"
-            : packageUpdate.failedStep
-              ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
-              : undefined),
+          getUpdateDoctorConfigFailureReason(packageUpdate.failedStep?.configWriteRefusal) ??
+          (packageUpdate.failedStep
+            ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
+            : undefined),
         recovery: packageUpdate.recovery,
         failedStep: packageUpdate.failedStep ?? undefined,
         steps: [...steps, ...packageUpdate.steps],

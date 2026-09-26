@@ -591,11 +591,7 @@ export class DraftPlaceState {
     if (selection.kind === "local") {
       this.persistPreference({
         projectId: selection.id,
-        where: resolveNewSessionWhere({
-          cloudProfileId: this.cloudProfileIdValue,
-          deviceId: this.deviceIdValue,
-          autoDevice: this.autoDeviceValue,
-        }),
+        where: resolveNewSessionWhere(this),
         worktree: this.worktree,
         worktreeName: "",
         freshWorkspace: false,
@@ -717,8 +713,7 @@ export class DraftPlaceState {
       (preferredWhere?.kind === "device" || preferredWhere?.kind === "auto-device") &&
       this.gateway.cloudProfilesReady
     ) {
-      const automatic = preferredWhere.kind === "auto-device";
-      this.autoDeviceValue = automatic;
+      this.autoDeviceValue = preferredWhere.kind === "auto-device";
       this.deviceIdValue = preferredWhere.kind === "device" ? preferredWhere.id : "";
       this.cloudProfileIdValue = "";
       this.repositoryState.forceWorktree(this.remotePlacement);

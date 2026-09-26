@@ -10,7 +10,7 @@ import { ExpectedCliError } from "./failure-output.js";
 import { formatVersionLabel } from "./version-format.js";
 
 /** Options accepted by `openclaw plugins search`. */
-type PluginsSearchOptions = {
+export type PluginsSearchOptions = {
   json?: boolean;
   limit?: number;
 };

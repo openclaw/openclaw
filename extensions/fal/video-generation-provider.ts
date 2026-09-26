@@ -1,4 +1,3 @@
-// Fal provider module implements model/runtime integration.
 import {
   readGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -553,6 +552,19 @@ function extractFalVideoPayload(payload: FalQueueResponse): FalVideoResponse {
   return readFalVideoPayload(payload);
 }
 
+function buildFalVideoModeCapabilities(models: readonly string[]) {
+  return {
+    maxVideos: 1,
+    supportedDurationSecondsByModel: Object.fromEntries(
+      models.map((model) => [model, SEEDANCE_2_DURATION_SECONDS]),
+    ),
+    supportsAspectRatio: true,
+    supportsResolution: true,
+    supportsSize: true,
+    supportsAudio: true,
+  };
+}
+
 export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "fal",
@@ -568,45 +580,22 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
     ],
     isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "fal", ...ctx }),
     capabilities: {
-      generate: {
-        maxVideos: 1,
-        supportedDurationSecondsByModel: Object.fromEntries(
-          SEEDANCE_2_VIDEO_MODELS.map((model) => [model, SEEDANCE_2_DURATION_SECONDS]),
-        ),
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsSize: true,
-        supportsAudio: true,
-      },
+      generate: buildFalVideoModeCapabilities(SEEDANCE_2_VIDEO_MODELS),
       imageToVideo: {
         enabled: true,
-        maxVideos: 1,
+        ...buildFalVideoModeCapabilities(SEEDANCE_2_VIDEO_MODELS),
         maxInputImages: 1,
         maxInputImagesByModel: SEEDANCE_REFERENCE_MAX_IMAGES_BY_MODEL,
         maxInputAudiosByModel: SEEDANCE_REFERENCE_MAX_AUDIOS_BY_MODEL,
-        supportedDurationSecondsByModel: Object.fromEntries(
-          SEEDANCE_2_VIDEO_MODELS.map((model) => [model, SEEDANCE_2_DURATION_SECONDS]),
-        ),
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsSize: true,
-        supportsAudio: true,
       },
       videoToVideo: {
         enabled: true,
-        maxVideos: 1,
+        ...buildFalVideoModeCapabilities(SEEDANCE_2_REFERENCE_VIDEO_MODELS),
         maxInputImages: 0,
         maxInputImagesByModel: SEEDANCE_REFERENCE_MAX_IMAGES_BY_MODEL,
         maxInputVideos: 0,
         maxInputVideosByModel: SEEDANCE_REFERENCE_MAX_VIDEOS_BY_MODEL,
         maxInputAudiosByModel: SEEDANCE_REFERENCE_MAX_AUDIOS_BY_MODEL,
-        supportedDurationSecondsByModel: Object.fromEntries(
-          SEEDANCE_2_REFERENCE_VIDEO_MODELS.map((model) => [model, SEEDANCE_2_DURATION_SECONDS]),
-        ),
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsSize: true,
-        supportsAudio: true,
       },
     },
     async generateVideo(req) {

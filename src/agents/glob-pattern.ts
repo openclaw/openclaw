@@ -1,15 +1,12 @@
 /**
  * Compiles and matches lightweight glob patterns used by agent policies.
  */
+import { escapeRegExp } from "../shared/regexp.js";
+
 type CompiledGlobPattern =
   | { kind: "all" }
   | { kind: "exact"; value: string }
   | { kind: "regex"; value: RegExp };
-
-function escapeRegex(value: string) {
-  // Standard "escape string for regex literal" pattern.
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function compileGlobPattern(params: {
   raw: string;
@@ -27,7 +24,7 @@ function compileGlobPattern(params: {
   }
   return {
     kind: "regex",
-    value: new RegExp(`^${escapeRegex(normalized).replaceAll("\\*", ".*")}$`),
+    value: new RegExp(`^${escapeRegExp(normalized).replaceAll("\\*", ".*")}$`),
   };
 }
 

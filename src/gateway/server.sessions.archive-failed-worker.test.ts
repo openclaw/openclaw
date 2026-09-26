@@ -86,8 +86,8 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
     );
   expect(await patch(true)).toMatchObject({ ok: true });
   await disposeSessionReadContexts();
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawAgentDatabasesAsync(path.dirname(storePath));
+  closeOpenClawAgentDatabasesForTest(path.dirname(storePath));
   // Reopening uses a fresh projection binding while retaining the same worker services.
   context = { ...context };
   expect(loadSessionEntry(scope)).toMatchObject({

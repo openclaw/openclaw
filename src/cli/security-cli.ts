@@ -4,8 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { GatewayAuthMode } from "../config/types.gateway.js";
 import { defaultRuntime } from "../runtime.js";
@@ -15,7 +14,7 @@ import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getSecurityAuditCommandSecretTargetIds } from "./command-secret-targets.js";
-import { formatHelpExamples } from "./help-format.js";
+import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 
 type SecurityAuditOptions = {
   json?: boolean;
@@ -63,14 +62,11 @@ function buildAuditGatewayAuthOverride(params: {
 
 function formatSummary(summary: { critical: number; warn: number; info: number }): string {
   const rich = isRich();
-  const c = summary.critical;
-  const w = summary.warn;
-  const i = summary.info;
-  const parts: string[] = [];
-  parts.push(rich ? theme.error(`${c} critical`) : `${c} critical`);
-  parts.push(rich ? theme.warn(`${w} warn`) : `${w} warn`);
-  parts.push(rich ? theme.muted(`${i} info`) : `${i} info`);
-  return parts.join(" · ");
+  return [
+    colorize(rich, theme.error, `${summary.critical} critical`),
+    colorize(rich, theme.warn, `${summary.warn} warn`),
+    colorize(rich, theme.muted, `${summary.info} info`),
+  ].join(" · ");
 }
 
 export function registerSecurityCli(program: Command) {
@@ -97,7 +93,7 @@ export function registerSecurityCli(program: Command) {
           ],
           ["openclaw security audit --fix", "Apply safe remediations and file-permission fixes."],
           ["openclaw security audit --json", "Output machine-readable JSON."],
-        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/security", "docs.openclaw.ai/cli/security")}\n`,
+        ])}\n${formatDocsHelp("/cli/security")}`,
     );
 
   security
@@ -190,22 +186,10 @@ export function registerSecurityCli(program: Command) {
             lines.push(muted(`  ${shortenHomeInString(change)}`));
           }
           for (const action of fixResult.actions) {
-            if (action.kind === "chmod") {
-              const mode = action.mode.toString(8).padStart(3, "0");
-              if (action.ok) {
-                lines.push(muted(`  chmod ${mode} ${shortenHomePath(action.path)}`));
-              } else if (action.skipped) {
-                lines.push(
-                  muted(`  skip chmod ${mode} ${shortenHomePath(action.path)} (${action.skipped})`),
-                );
-              } else if (action.error) {
-                lines.push(
-                  muted(`  chmod ${mode} ${shortenHomePath(action.path)} failed: ${action.error}`),
-                );
-              }
-              continue;
-            }
-            const command = shortenHomeInString(action.command);
+            const command =
+              action.kind === "chmod"
+                ? `chmod ${action.mode.toString(8).padStart(3, "0")} ${shortenHomePath(action.path)}`
+                : shortenHomeInString(action.command);
             if (action.ok) {
               lines.push(muted(`  ${command}`));
             } else if (action.skipped) {
@@ -214,34 +198,22 @@ export function registerSecurityCli(program: Command) {
               lines.push(muted(`  ${command} failed: ${action.error}`));
             }
           }
-          if (fixResult.errors.length > 0) {
-            for (const err of fixResult.errors) {
-              lines.push(muted(`  error: ${shortenHomeInString(err)}`));
-            }
+          for (const err of fixResult.errors) {
+            lines.push(muted(`  error: ${shortenHomeInString(err)}`));
           }
         }
       }
 
-      const bySeverity = (sev: "critical" | "warn" | "info") =>
-        report.findings.filter((f) => f.severity === sev);
-
-      const render = (sev: "critical" | "warn" | "info") => {
-        const list = bySeverity(sev);
+      for (const [severity, style] of [
+        ["critical", theme.error],
+        ["warn", theme.warn],
+        ["info", theme.muted],
+      ] as const) {
+        const list = report.findings.filter((finding) => finding.severity === severity);
         if (list.length === 0) {
-          return;
+          continue;
         }
-        const label =
-          sev === "critical"
-            ? rich
-              ? theme.error("CRITICAL")
-              : "CRITICAL"
-            : sev === "warn"
-              ? rich
-                ? theme.warn("WARN")
-                : "WARN"
-              : rich
-                ? theme.muted("INFO")
-                : "INFO";
+        const label = colorize(rich, style, severity.toUpperCase());
         lines.push("");
         lines.push(heading(label));
         for (const f of list) {
@@ -251,11 +223,7 @@ export function registerSecurityCli(program: Command) {
             lines.push(`  ${muted(`Fix: ${f.remediation.trim()}`)}`);
           }
         }
-      };
-
-      render("critical");
-      render("warn");
-      render("info");
+      }
 
       defaultRuntime.log(lines.join("\n"));
     });

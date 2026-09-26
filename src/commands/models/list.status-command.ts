@@ -93,28 +93,18 @@ import {
   resolveModelsTargetAgent,
 } from "./shared.js";
 
-type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
-type ProgressRuntime = typeof import("../../cli/progress.js");
-
 function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   return override ? resolveUserPath(override, env) : undefined;
 }
-type TerminalTableRuntime = typeof import("../../../packages/terminal-core/src/table.js");
-type ListProbeRuntime = typeof import("./list.probe.js");
-
-const providerUsageRuntimeLoader = createLazyImportLoader<ProviderUsageRuntime>(
+const providerUsageRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/provider-usage.js"),
 );
-const progressRuntimeLoader = createLazyImportLoader<ProgressRuntime>(
-  () => import("../../cli/progress.js"),
-);
-const terminalTableRuntimeLoader = createLazyImportLoader<TerminalTableRuntime>(
+const progressRuntimeLoader = createLazyImportLoader(() => import("../../cli/progress.js"));
+const terminalTableRuntimeLoader = createLazyImportLoader(
   () => import("../../../packages/terminal-core/src/table.js"),
 );
-const listProbeRuntimeLoader = createLazyImportLoader<ListProbeRuntime>(
-  () => import("./list.probe.js"),
-);
+const listProbeRuntimeLoader = createLazyImportLoader(() => import("./list.probe.js"));
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
@@ -441,7 +431,7 @@ export async function modelsStatusCommand(
       );
       const providersFromConfig = new Set(
         Object.keys(cfg.models?.providers ?? {})
-          .map((p) => (typeof p === "string" ? normalizeProviderId(p) : ""))
+          .map(normalizeProviderId)
           .filter(Boolean),
       );
       const providersFromModels = new Set<string>();
@@ -1574,11 +1564,8 @@ export async function modelsStatusCommand(
         }
 
         for (const [provider, profiles] of profilesByProvider) {
-          const usageProfile = profiles.find(
-            (profile) => profile.type === "oauth" || profile.type === "token",
-          );
           const usageKey = resolveUsageProviderId(provider, {
-            credentialType: usageProfile?.type,
+            credentialType: profiles[0]?.type,
           });
           const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
           const usageSuffix = usage ? colorize(rich, theme.muted, ` usage: ${usage}`) : "";
@@ -1614,17 +1601,11 @@ export async function modelsStatusCommand(
             if (status === "ok") {
               return theme.success;
             }
-            if (status === "rate_limit") {
-              return theme.warn;
-            }
-            if (status === "timeout" || status === "billing") {
+            if (status === "rate_limit" || status === "timeout" || status === "billing") {
               return theme.warn;
             }
             if (status === "auth" || status === "format") {
               return theme.error;
-            }
-            if (status === "no_model") {
-              return theme.muted;
             }
             return theme.muted;
           };

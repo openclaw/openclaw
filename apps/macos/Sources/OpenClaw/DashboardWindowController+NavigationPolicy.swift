@@ -68,9 +68,7 @@ extension DashboardWindowController {
         }
         guard !isMainFrame,
               isTrustedDashboardSource,
-              host?.isEmpty == false,
-              url.user == nil,
-              url.password == nil
+              host?.isEmpty == false
         else {
             return false
         }

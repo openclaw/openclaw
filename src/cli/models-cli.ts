@@ -140,31 +140,31 @@ export function registerModelsCli(program: Command) {
       });
     });
 
-  models
-    .command("set")
-    .description("Set the default model")
-    .argument("<model>", "Model id or alias")
-    .action(async (model: string, _opts: unknown, command: Command) => {
-      const runtime = await loadModelsRuntime();
-      runtime.rejectAgentScopedModelCommand(command, "set");
-      await runtime.runModelsCommand(async () => {
-        const { modelsSetCommand } = await import("../commands/models/set.js");
-        await modelsSetCommand(model, runtime.defaultRuntime);
+  for (const [name, description, loadCommand] of [
+    [
+      "set",
+      "Set the default model",
+      async () => (await import("../commands/models/set.js")).modelsSetCommand,
+    ],
+    [
+      "set-image",
+      "Set the image model",
+      async () => (await import("../commands/models/set-image.js")).modelsSetImageCommand,
+    ],
+  ] as const) {
+    models
+      .command(name)
+      .description(description)
+      .argument("<model>", "Model id or alias")
+      .action(async (model: string, _opts: unknown, command: Command) => {
+        const runtime = await loadModelsRuntime();
+        runtime.rejectAgentScopedModelCommand(command, name);
+        await runtime.runModelsCommand(async () => {
+          const run = await loadCommand();
+          await run(model, runtime.defaultRuntime);
+        });
       });
-    });
-
-  models
-    .command("set-image")
-    .description("Set the image model")
-    .argument("<model>", "Model id or alias")
-    .action(async (model: string, _opts: unknown, command: Command) => {
-      const runtime = await loadModelsRuntime();
-      runtime.rejectAgentScopedModelCommand(command, "set-image");
-      await runtime.runModelsCommand(async () => {
-        const { modelsSetImageCommand } = await import("../commands/models/set-image.js");
-        await modelsSetImageCommand(model, runtime.defaultRuntime);
-      });
-    });
+  }
 
   const aliases = models.command("aliases").description("Manage model aliases");
 
@@ -453,52 +453,40 @@ export function registerModelsCli(program: Command) {
       });
     });
 
-  auth
-    .command("paste-token")
-    .description("Save a token in an auth profile and update config")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
-    .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
-    .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")
-    .option(
-      "--expires-in <duration>",
-      "Optional expiry duration (e.g. 365d, 12h). Stored as absolute expiresAt.",
-    )
-    .action(async (opts, command) => {
+  for (const [name, noun, exampleProvider, handler] of [
+    ["paste-token", "token", "anthropic", "modelsAuthPasteTokenCommand"],
+    ["paste-api-key", "API key", "openai", "modelsAuthPasteApiKeyCommand"],
+  ] as const) {
+    const paste = auth
+      .command(name)
+      .description(
+        `Save ${name === "paste-token" ? "a" : "an"} ${noun} in an auth profile and update config`,
+      )
+      .option("--agent <id>", "Agent id (default: configured default agent)")
+      .requiredOption("--provider <name>", `Provider id (e.g. ${exampleProvider})`)
+      .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)");
+    if (name === "paste-token") {
+      paste.option(
+        "--expires-in <duration>",
+        "Optional expiry duration (e.g. 365d, 12h). Stored as absolute expiresAt.",
+      );
+    }
+    paste.action(async (opts, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command);
-        const { modelsAuthPasteTokenCommand } = await loadModelsAuthCommands();
-        await modelsAuthPasteTokenCommand(
+        const commands = await loadModelsAuthCommands();
+        await commands[handler](
           {
             provider: opts.provider as string | undefined,
             profileId: opts.profileId as string | undefined,
-            expiresIn: opts.expiresIn as string | undefined,
+            ...(name === "paste-token" ? { expiresIn: opts.expiresIn as string | undefined } : {}),
             agent,
           },
           defaultRuntime,
         );
       });
     });
-
-  auth
-    .command("paste-api-key")
-    .description("Save an API key in an auth profile and update config")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
-    .requiredOption("--provider <name>", "Provider id (e.g. openai)")
-    .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")
-    .action(async (opts, command) => {
-      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-        const agent = resolveModelAgentOption(command);
-        const { modelsAuthPasteApiKeyCommand } = await loadModelsAuthCommands();
-        await modelsAuthPasteApiKeyCommand(
-          {
-            provider: opts.provider as string | undefined,
-            profileId: opts.profileId as string | undefined,
-            agent,
-          },
-          defaultRuntime,
-        );
-      });
-    });
+  }
 
   auth
     .command("login-github-copilot")

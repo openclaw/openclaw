@@ -42,16 +42,6 @@ export function visitAgentConfigScopes(
   visitAgentEntries(raw, visitor);
 }
 
-/** Clone a record-like config section, treating undefined as an empty object. */
-export function cloneRecord<T extends JsonRecord>(value: T | undefined): T {
-  return { ...value } as T;
-}
-
-/** Own-property guard used by migrations that must preserve falsy values. */
-export function hasOwnKey(target: JsonRecord, key: string): boolean {
-  return Object.hasOwn(target, key);
-}
-
 /** Delete a nested retired config path, with `*` matching record entries. */
 export function deleteRetiredPath(
   owner: unknown,

@@ -28,7 +28,7 @@ final class DeviceStatusService: DeviceStatusServicing {
     func info() -> OpenClawDeviceInfoPayload {
         let device = UIDevice.current
         let appVersion = DeviceInfoHelper.appVersion()
-        let appBuild = DeviceStatusService.fallbackAppBuild(DeviceInfoHelper.appBuild())
+        let appBuild = DeviceInfoHelper.appBuild()
         let locale = Locale.preferredLanguages.first ?? Locale.current.identifier
         return OpenClawDeviceInfoPayload(
             deviceName: device.name,
@@ -36,7 +36,7 @@ final class DeviceStatusService: DeviceStatusServicing {
             systemName: device.systemName,
             systemVersion: device.systemVersion,
             appVersion: appVersion,
-            appBuild: appBuild,
+            appBuild: appBuild.isEmpty ? "0" : appBuild,
             locale: locale)
     }
 
@@ -80,10 +80,5 @@ final class DeviceStatusService: DeviceStatusServicing {
         let free = (attrs[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
         let used = max(0, total - free)
         return OpenClawStorageStatusPayload(totalBytes: total, freeBytes: free, usedBytes: used)
-    }
-
-    /// Fallback for payloads that require a non-empty build (e.g. "0").
-    private static func fallbackAppBuild(_ build: String) -> String {
-        build.isEmpty ? "0" : build
     }
 }

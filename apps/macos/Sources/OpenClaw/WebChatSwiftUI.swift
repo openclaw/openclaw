@@ -80,22 +80,17 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         private var defaultGlobalAgentID: String?
 
         init(defaultGlobalAgentID: String?) {
-            self.defaultGlobalAgentID = Self.normalized(defaultGlobalAgentID)
+            self.defaultGlobalAgentID = WebChatRoute.normalizedAgentID(defaultGlobalAgentID)
         }
 
         func update(defaultGlobalAgentID: String?) {
             self.lock.withLock {
-                self.defaultGlobalAgentID = Self.normalized(defaultGlobalAgentID)
+                self.defaultGlobalAgentID = WebChatRoute.normalizedAgentID(defaultGlobalAgentID)
             }
         }
 
         func currentAgentID() -> String? {
             self.lock.withLock { self.defaultGlobalAgentID }
-        }
-
-        private static func normalized(_ agentID: String?) -> String? {
-            let normalized = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return normalized?.isEmpty == false ? normalized : nil
         }
     }
 
@@ -115,8 +110,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         self.connection = connection
         self.outboxGatewayID = outboxGatewayID
         self.routingIdentity = RoutingIdentity(defaultGlobalAgentID: defaultGlobalAgentID)
-        let fixed = fixedAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.fixedAgentID = fixed?.isEmpty == false ? fixed : nil
+        self.fixedAgentID = WebChatRoute.normalizedAgentID(fixedAgentID)
     }
 
     func updateDefaultGlobalAgentID(_ agentID: String?) {
@@ -997,7 +991,6 @@ private final class WebChatSessionKeyRelay {
 
 @MainActor
 final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
-    private let sessionKey: String
     private let viewModel: OpenClawChatViewModel
     private let contentController: NSViewController
     private let sessionKeyRelay: WebChatSessionKeyRelay
@@ -1089,7 +1082,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         windowTitle: String = "OpenClaw Chat",
         windowAutosaveName: String = WebChatSwiftUILayout.windowFrameAutosaveName)
     {
-        self.sessionKey = sessionKey
         let initialActiveAgentID = WebChatRoute.normalizedAgentID(initialActiveAgentID)
         let voiceNoteRecorder = OpenClawVoiceNoteRecorder()
         voiceNoteRecorder.setCaptureAdmissionHandler {

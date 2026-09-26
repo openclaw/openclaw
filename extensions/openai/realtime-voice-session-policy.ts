@@ -195,7 +195,7 @@ export function normalizeProviderConfig(
     // Session creation selects the effective model; an earlier family fallback loses overrides.
     voice: normalizeOptionalString(raw?.speakerVoice ?? raw?.voice)?.toLowerCase(),
     temperature: asFiniteNumber(raw?.temperature),
-    vadThreshold: asUnitInterval(raw?.vadThreshold),
+    vadThreshold: asFiniteNumberInRange(raw?.vadThreshold, { min: 0, max: 1 }),
     silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
     prefixPaddingMs: asSafeIntegerInRange(raw?.prefixPaddingMs, { min: 0 }),
     interruptResponseOnInputAudio:
@@ -208,10 +208,6 @@ export function normalizeProviderConfig(
     azureDeployment: normalizeOptionalString(raw?.azureDeployment),
     azureApiVersion: normalizeOptionalString(raw?.azureApiVersion),
   };
-}
-
-function asUnitInterval(value: unknown): number | undefined {
-  return asFiniteNumberInRange(value, { min: 0, max: 1 });
 }
 
 type OpenAIRealtimeApiKeyResolution =
@@ -298,12 +294,7 @@ export function resolveOpenAIRealtimeSecretInput(
 }
 
 export function resolveOpenAIRealtimeEnvApiKey(): OpenAIRealtimeApiKeyResolution {
-  const envValue = normalizeSecretInputString(process.env.OPENAI_API_KEY);
-  if (!envValue) {
-    return { status: "missing" };
-  }
-  const value = resolveKeychainSecretRef(envValue);
-  return value ? { status: "available", value } : { status: "missing" };
+  return resolveOpenAIRealtimeSecretInput(process.env.OPENAI_API_KEY);
 }
 
 function resolveOpenAIRealtimeApiKey(
@@ -481,11 +472,7 @@ export async function resolveOpenAIRealtimePlatformAuth(
   if (profileApiKey) {
     return { status: "available", value: profileApiKey };
   }
-  const envApiKey = resolveOpenAIRealtimeEnvApiKey();
-  if (envApiKey.status === "available") {
-    return envApiKey;
-  }
-  return { status: "missing" };
+  return resolveOpenAIRealtimeEnvApiKey();
 }
 
 export async function requireOpenAIRealtimePlatformAuth(
@@ -530,16 +517,7 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
   if (platformAuth.status === "available") {
     return { type: "api-key" as const, token: platformAuth.value };
   }
-  if (
-    hasOpenAIRealtimePlatformAuthInput(
-      {
-        configuredApiKey: params.configuredApiKey,
-        cfg: params.cfg,
-        agentId: params.agentId,
-      },
-      runtime,
-    )
-  ) {
+  if (hasOpenAIRealtimePlatformAuthInput(params, runtime)) {
     throw new Error(
       isOpenAIGptLiveSubscriptionModel(params.model)
         ? OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE

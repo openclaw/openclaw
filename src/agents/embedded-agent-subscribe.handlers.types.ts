@@ -408,22 +408,20 @@ type ToolHandlerState = Pick<
   | "assistantMessageIndex"
 >;
 
-export type ToolHandlerContext = {
+export type ToolHandlerContext = Pick<
+  EmbeddedAgentSubscribeContext,
+  | "log"
+  | "hookRunner"
+  | "builtinToolNames"
+  | "trustedLocalMediaToolNames"
+  | "flushBlockReplyBuffer"
+  | "shouldEmitToolResult"
+  | "shouldEmitToolOutput"
+  | "emitToolSummary"
+  | "emitToolOutput"
+  | "trimMessagingToolSent"
+> & {
   params: ToolHandlerParams;
   state: ToolHandlerState;
-  log: EmbeddedSubscribeLogger;
-  hookRunner?: HookRunner;
-  builtinToolNames?: ReadonlySet<string>;
-  trustedLocalMediaToolNames?: ReadonlySet<string>;
-  flushBlockReplyBuffer: () => void | Promise<void>;
-  shouldEmitToolResult: () => boolean;
-  shouldEmitToolOutput: () => boolean;
-  emitToolSummary: (
-    toolName: string | undefined,
-    meta: string | undefined,
-    commandBearing: boolean,
-  ) => void;
-  emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
-  trimMessagingToolSent: () => void;
   consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };

@@ -610,7 +610,6 @@ class InitialOnboardingLayoutTest {
     var manualSetupClicked = false
     setContent(fontScale = 1f, viewportHeight = 720.dp) {
       GatewaySetupScreen(
-        nearbyGateway = null,
         onBack = {},
         onSetupCode = {},
         onManualSetup = { manualSetupClicked = true },
@@ -628,7 +627,6 @@ class InitialOnboardingLayoutTest {
     var setupCodeClicked = false
     setContent(fontScale = 1.3f, viewportHeight = 480.dp) {
       GatewaySetupScreen(
-        nearbyGateway = null,
         onBack = {},
         onSetupCode = { setupCodeClicked = true },
         onManualSetup = {},

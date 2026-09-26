@@ -138,12 +138,9 @@ export async function flowsListCommand(
   runtime: RuntimeEnv,
 ) {
   const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_FLOW_STATUSES);
-  const flows = listTaskFlowRecords().filter((flow) => {
-    if (statusFilter && flow.status !== statusFilter) {
-      return false;
-    }
-    return true;
-  });
+  const flows = listTaskFlowRecords().filter(
+    (flow) => !statusFilter || flow.status === statusFilter,
+  );
 
   if (opts.json) {
     writeRuntimeJson(runtime, {

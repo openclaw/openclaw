@@ -48,24 +48,15 @@ function resolveRootPatternMatch(params: {
 }): InboundPathRootMatch | undefined {
   const candidateSegments = splitPathSegments(params.candidatePath);
   const rootSegments = splitPathSegments(params.rootPattern);
-  if (candidateSegments.length < rootSegments.length) {
+  if (
+    candidateSegments.length < rootSegments.length ||
+    rootSegments.some(
+      (expected, index) => expected !== WILDCARD_SEGMENT && expected !== candidateSegments[index],
+    )
+  ) {
     return undefined;
   }
-  const resolvedSegments: string[] = [];
-  for (const [idx, expected] of rootSegments.entries()) {
-    const actual = candidateSegments[idx];
-    if (!actual) {
-      return undefined;
-    }
-    if (expected === WILDCARD_SEGMENT) {
-      resolvedSegments.push(actual);
-      continue;
-    }
-    if (expected !== actual) {
-      return undefined;
-    }
-    resolvedSegments.push(expected);
-  }
+  const resolvedSegments = candidateSegments.slice(0, rootSegments.length);
   const firstWildcardIndex = rootSegments.indexOf(WILDCARD_SEGMENT);
   const anchorSegments =
     firstWildcardIndex === -1 ? resolvedSegments : rootSegments.slice(0, firstWildcardIndex);
@@ -75,17 +66,21 @@ function resolveRootPatternMatch(params: {
   };
 }
 
-/** Validates an absolute inbound root pattern with whole-segment wildcards only. */
-export function isValidInboundPathRootPattern(value: string): boolean {
+function normalizeInboundPathRootPattern(value: string): string | undefined {
   const normalized = normalizePosixAbsolutePath(value);
   if (!normalized) {
-    return false;
+    return undefined;
   }
   const segments = splitPathSegments(normalized);
-  if (segments.length === 0) {
-    return false;
-  }
-  return segments.every((segment) => segment === WILDCARD_SEGMENT || !segment.includes("*"));
+  return segments.length > 0 &&
+    segments.every((segment) => segment === WILDCARD_SEGMENT || !segment.includes("*"))
+    ? normalized
+    : undefined;
+}
+
+/** Validates an absolute inbound root pattern with whole-segment wildcards only. */
+export function isValidInboundPathRootPattern(value: string): boolean {
+  return normalizeInboundPathRootPattern(value) !== undefined;
 }
 
 /** Normalizes configured inbound attachment roots, dropping invalid or duplicate patterns. */
@@ -96,10 +91,7 @@ export function normalizeInboundPathRoots(roots?: readonly string[]): string[] {
     if (typeof root !== "string") {
       continue;
     }
-    if (!isValidInboundPathRootPattern(root)) {
-      continue;
-    }
-    const candidate = normalizePosixAbsolutePath(root);
+    const candidate = normalizeInboundPathRootPattern(root);
     if (!candidate || seen.has(candidate)) {
       continue;
     }
@@ -113,19 +105,7 @@ export function normalizeInboundPathRoots(roots?: readonly string[]): string[] {
 export function mergeInboundPathRoots(
   ...rootsLists: Array<readonly string[] | undefined>
 ): string[] {
-  const merged: string[] = [];
-  const seen = new Set<string>();
-  for (const roots of rootsLists) {
-    const normalized = normalizeInboundPathRoots(roots);
-    for (const root of normalized) {
-      if (seen.has(root)) {
-        continue;
-      }
-      seen.add(root);
-      merged.push(root);
-    }
-  }
-  return merged;
+  return normalizeInboundPathRoots(rootsLists.flatMap((roots) => roots ?? []));
 }
 
 /** Resolves the concrete lexical root matched by an inbound path pattern. */

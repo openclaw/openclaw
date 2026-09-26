@@ -1,5 +1,6 @@
 /** CLI command for exporting a session transcript as a trajectory artifact. */
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString, readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -30,14 +31,6 @@ type ExportTrajectoryCommandOptions = {
   requestJsonBase64?: string;
 };
 
-type EncodedExportTrajectoryRequest = {
-  sessionKey?: unknown;
-  output?: unknown;
-  store?: unknown;
-  agent?: unknown;
-  workspace?: unknown;
-};
-
 const ENCODED_EXPORT_REQUEST_RE = /^[A-Za-z0-9_-]{1,65536}$/u;
 
 function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajectoryCommandOptions> {
@@ -50,36 +43,23 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   }
   let decoded: unknown;
   try {
-    decoded = JSON.parse(bytes.toString("utf8")) as unknown;
+    decoded = JSON.parse(bytes.toString("utf8"));
   } catch {
     throw new Error("Encoded trajectory export request is invalid JSON");
   }
-  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+  if (!isRecord(decoded)) {
     throw new Error("Encoded trajectory export request must be a JSON object");
   }
-  const request = decoded as EncodedExportTrajectoryRequest;
   const opts: Partial<ExportTrajectoryCommandOptions> = {};
-  const sessionKey = readNonBlankString(request.sessionKey);
-  if (sessionKey !== undefined) {
-    opts.sessionKey = sessionKey;
-  }
-  const output = readNonBlankString(request.output);
-  if (output !== undefined) {
-    opts.output = output;
-  }
-  // Keep a present-but-blank store or agent so exportTrajectoryCommand rejects it
-  // the way it rejects a blank flag, instead of silently selecting the default.
-  const store = readStringValue(request.store);
-  if (store !== undefined) {
-    opts.store = store;
-  }
-  const agent = readStringValue(request.agent);
-  if (agent !== undefined) {
-    opts.agent = agent;
-  }
-  const workspace = readNonBlankString(request.workspace);
-  if (workspace !== undefined) {
-    opts.workspace = workspace;
+  for (const key of ["sessionKey", "output", "store", "agent", "workspace"] as const) {
+    // Blank selectors must reach command validation instead of choosing a default owner.
+    const value =
+      key === "store" || key === "agent"
+        ? readStringValue(decoded[key])
+        : readNonBlankString(decoded[key]);
+    if (value !== undefined) {
+      opts[key] = value;
+    }
   }
   return opts;
 }

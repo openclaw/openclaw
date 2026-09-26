@@ -187,11 +187,6 @@ export type CodexAppsReadResponse = {
   missingAppIds: string[];
 };
 
-export type CodexSkillsListParams = {
-  cwds: string[];
-  forceReload?: boolean;
-};
-
 type CodexSkillScope = "user" | "repo" | "system" | "admin";
 
 type CodexSkillMetadata = {

@@ -1,88 +1,54 @@
-// Minimax API module exposes the plugin public contract.
+import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import type { MiniMaxRegion } from "./oauth.js";
 import { resolveMinimaxThinkingProfile } from "./thinking.js";
 
 const noopAuth = async () => ({ profiles: [] });
-const wizardGroup = {
-  groupId: "minimax",
-  groupLabel: "MiniMax",
-  groupHint: "M3 (recommended)",
-} as const;
 
-export function createMinimaxProvider(): ProviderPlugin {
+export function minimaxAuthMethodMetadata(
+  region: MiniMaxRegion,
+  kind: "api_key" | "device_code",
+): Omit<ProviderAuthMethod, "run"> {
+  const isCn = region === "cn";
+  const isApiKey = kind === "api_key";
+  const label = `MiniMax ${isApiKey ? "API key" : "OAuth"} (${isCn ? "CN" : "Global"})`;
+  const hint = isCn ? "CN endpoint - api.minimaxi.com" : "Global endpoint - api.minimax.io";
   return {
-    id: "minimax",
-    label: "MiniMax",
-    hookAliases: ["minimax-cn"],
-    docsPath: "/providers/minimax",
-    envVars: ["MINIMAX_API_KEY"],
-    resolveThinkingProfile: ({ modelId }) => resolveMinimaxThinkingProfile(modelId),
-    auth: [
-      {
-        id: "api-global",
-        kind: "api_key",
-        label: "MiniMax API key (Global)",
-        hint: "Global endpoint - api.minimax.io",
-        run: noopAuth,
-        wizard: {
-          choiceId: "minimax-global-api",
-          choiceLabel: "MiniMax API key (Global)",
-          choiceHint: "Global endpoint - api.minimax.io",
-          ...wizardGroup,
-        },
-      },
-      {
-        id: "api-cn",
-        kind: "api_key",
-        label: "MiniMax API key (CN)",
-        hint: "CN endpoint - api.minimaxi.com",
-        run: noopAuth,
-        wizard: {
-          choiceId: "minimax-cn-api",
-          choiceLabel: "MiniMax API key (CN)",
-          choiceHint: "CN endpoint - api.minimaxi.com",
-          ...wizardGroup,
-        },
-      },
-    ],
+    id: isApiKey ? (isCn ? "api-cn" : "api-global") : isCn ? "oauth-cn" : "oauth",
+    kind,
+    label,
+    hint,
+    wizard: {
+      choiceId: `minimax-${isCn ? "cn" : "global"}-${isApiKey ? "api" : "oauth"}`,
+      choiceLabel: label,
+      choiceHint: hint,
+      groupId: "minimax",
+      groupLabel: "MiniMax",
+      groupHint: "M3 (recommended)",
+    },
   };
 }
 
-export function createMinimaxPortalProvider(): ProviderPlugin {
+function createMinimaxProviderContract(portal: boolean): ProviderPlugin {
   return {
-    id: "minimax-portal",
+    id: portal ? "minimax-portal" : "minimax",
     label: "MiniMax",
-    hookAliases: ["minimax-portal-cn"],
+    hookAliases: [portal ? "minimax-portal-cn" : "minimax-cn"],
     docsPath: "/providers/minimax",
-    envVars: ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+    envVars: portal ? ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"] : ["MINIMAX_API_KEY"],
     resolveThinkingProfile: ({ modelId }) => resolveMinimaxThinkingProfile(modelId),
-    auth: [
-      {
-        id: "oauth",
-        kind: "device_code",
-        label: "MiniMax OAuth (Global)",
-        hint: "Global endpoint - api.minimax.io",
+    auth: (["global", "cn"] as const).map((region) =>
+      Object.assign(minimaxAuthMethodMetadata(region, portal ? "device_code" : "api_key"), {
         run: noopAuth,
-        wizard: {
-          choiceId: "minimax-global-oauth",
-          choiceLabel: "MiniMax OAuth (Global)",
-          choiceHint: "Global endpoint - api.minimax.io",
-          ...wizardGroup,
-        },
-      },
-      {
-        id: "oauth-cn",
-        kind: "device_code",
-        label: "MiniMax OAuth (CN)",
-        hint: "CN endpoint - api.minimaxi.com",
-        run: noopAuth,
-        wizard: {
-          choiceId: "minimax-cn-oauth",
-          choiceLabel: "MiniMax OAuth (CN)",
-          choiceHint: "CN endpoint - api.minimaxi.com",
-          ...wizardGroup,
-        },
-      },
-    ],
+      }),
+    ),
   };
+}
+
+export function createMinimaxProvider(): ProviderPlugin {
+  return createMinimaxProviderContract(false);
+}
+
+export function createMinimaxPortalProvider(): ProviderPlugin {
+  return createMinimaxProviderContract(true);
 }
