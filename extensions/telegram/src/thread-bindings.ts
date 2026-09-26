@@ -1,4 +1,3 @@
-import * as acpRuntime from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,
@@ -8,7 +7,7 @@ import {
   type SessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { runQueuedStoreWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,6 +17,7 @@ import {
   persistBindingMutation,
   updateStoredBindingSync,
 } from "./thread-bindings-persistence.js";
+import { reconcileTelegramAcpBindingsOnStartup } from "./thread-bindings-reconcile.js";
 import {
   fromSessionBindingInput,
   normalizeDurationMs,
@@ -99,60 +99,11 @@ async function initializeThreadBindingManager(
     });
   }
 
-  const startupBindings = listBindingsForAccount(accountId);
-  const acpSessionKeys = new Set<string>();
-  for (const binding of startupBindings) {
-    if (binding.targetKind !== "acp" || !isAcpSessionKey(binding.targetSessionKey)) {
-      continue;
-    }
-    acpSessionKeys.add(binding.targetSessionKey);
-  }
-
-  const staleSessionKeys = new Set<string>();
-  const readAcpSessionEntryAsync = acpRuntime.readAcpSessionEntryAsync;
-  for (const targetSessionKey of acpSessionKeys) {
-    if (typeof readAcpSessionEntryAsync !== "function") {
-      throw new Error(
-        "ACP thread binding reconciliation requires asynchronous metadata reads. Upgrade the OpenClaw host.",
-      );
-    }
-    const sessionEntry = await readAcpSessionEntryAsync({ sessionKey: targetSessionKey });
-    if (!sessionEntry || sessionEntry.storeReadFailed) {
-      continue;
-    }
-    const isStale =
-      !sessionEntry.entry ||
-      sessionEntry.entry.status === "failed" ||
-      sessionEntry.entry.status === "killed" ||
-      sessionEntry.entry.status === "timeout" ||
-      sessionEntry.acp?.state === "error";
-    if (isStale) {
-      staleSessionKeys.add(targetSessionKey);
-    }
-  }
-
-  for (const sessionKey of staleSessionKeys) {
-    const bindingsToRemove = startupBindings.filter((b) => b.targetSessionKey === sessionKey);
-    for (const binding of bindingsToRemove) {
-      const bindingKey = resolveBindingKey({ accountId, conversationId: binding.conversationId });
-      if (getThreadBindingsState().bindingsByAccountConversation.get(bindingKey) !== binding) {
-        continue;
-      }
-      getThreadBindingsState().bindingsByAccountConversation.delete(bindingKey);
-      await persistBindingMutation({
-        accountId,
-        persist,
-        binding,
-        remove: true,
-        reason: "cleanup-stale",
-      });
-    }
-    if (bindingsToRemove.length > 0) {
-      logVerbose(
-        `telegram thread binding: cleaned up ${bindingsToRemove.length} stale binding(s) for session ${sessionKey}`,
-      );
-    }
-  }
+  await reconcileTelegramAcpBindingsOnStartup({
+    accountId,
+    persist,
+    startupBindings: listBindingsForAccount(accountId),
+  });
 
   let sweepTimer: NodeJS.Timeout | null = null;
   let stopping: Promise<void> | undefined;

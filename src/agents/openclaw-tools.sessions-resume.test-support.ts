@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
 import { expect, it, type Mock } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readInProcessSubagentResume } from "../gateway/in-process-subagent-resume.js";
 import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
@@ -10,13 +11,11 @@ import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js
 type SessionsSendResumeFixtures = {
   getSessionTool: (name: "sessions_send", options: { agentSessionKey: string }) => AnyAgentTool;
   callGatewayMock: Mock;
-  loadSessionEntryByKeyMock: Mock;
 };
 
 export function registerSessionsSendResumeTests({
   getSessionTool,
   callGatewayMock,
-  loadSessionEntryByKeyMock,
 }: SessionsSendResumeFixtures) {
   it("sessions_send resume rejects a caller without admitted authority instead of sending a message", async () => {
     const tool = getSessionTool("sessions_send", { agentSessionKey: "agent:main:main" });
@@ -64,6 +63,10 @@ export function registerSessionsSendResumeTests({
         scenario !== "completed child" &&
         scenario !== "completion disabled" &&
         scenario !== "completion unspecified";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: targetKey },
+        { sessionId: "tool-resume-session", updatedAt: Date.now() },
+      );
       addSubagentRunForTests({
         runId: previousRunId,
         childSessionKey: targetKey,
@@ -92,10 +95,6 @@ export function registerSessionsSendResumeTests({
           execution: { status: "terminal", endedAt: Date.now() + 1, outcome: { status: "ok" } },
         });
       }
-      loadSessionEntryByKeyMock.mockReturnValue({
-        sessionId: "tool-resume-session",
-        updatedAt: Date.now(),
-      });
       callGatewayMock.mockImplementation(async ({ method }) => {
         if (method === "agent") {
           return {
