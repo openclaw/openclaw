@@ -35,12 +35,15 @@ export const PLUGIN_COMPAT_RECORDS = [
       "FeishuAccountConfig.webhookPort",
       "FeishuAccountConfig.webhookHost",
       "MSTeamsWebhookConfig.port",
+      "NextcloudTalkAccountConfig.webhookPort",
+      "NextcloudTalkAccountConfig.webhookHost",
     ],
     diagnostics: ["TypeScript @deprecated annotations and plugin-owned Doctor migration"],
     tests: [
       "extensions/telegram/src/doctor.test.ts",
       "extensions/feishu/src/doctor-contract.test.ts",
       "extensions/msteams/config-doctor-api.test.ts",
+      "extensions/nextcloud-talk/src/doctor-contract.test.ts",
     ],
   },
   {
