@@ -612,6 +612,58 @@ export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error
   delivery.payload = payload;
 };
 
+/**
+ * Reopen a required completion that was terminalized before its captured artifact reached the
+ * requester. The registry artifact is authoritative here: task projections can legitimately point
+ * at a cancelled predecessor after adoption, but replaying the child would be both wasteful and
+ * unsafe. The stable announce idempotency key plus the requester transcript mirror check dedupe the
+ * repaired attempt if the original send actually committed.
+ */
+export const reconcileTerminalArtifactDelivery = (entry: SubagentRunRecord): boolean => {
+  const resultText = entry.completion?.resultText;
+  const hasArtifact = typeof resultText === "string" && resultText.trim().length > 0;
+  const delivery = entry.delivery;
+  const wasTerminalized =
+    entry.suppressCompletionDelivery === true ||
+    typeof entry.cleanupCompletedAt === "number" ||
+    delivery?.status === "failed" ||
+    delivery?.status === "not_required" ||
+    delivery?.disposition === "intentional_non_delivery";
+  if (
+    entry.expectsCompletionMessage === false ||
+    entry.completion?.required !== true ||
+    entry.execution.status !== "terminal" ||
+    typeof entry.execution.endedAt !== "number" ||
+    !hasArtifact ||
+    delivery?.status === "delivered" ||
+    delivery?.status === "discarded" ||
+    !wasTerminalized
+  ) {
+    return false;
+  }
+
+  const previousGeneration = delivery?.generation;
+  entry.completion = {
+    ...entry.completion,
+    required: true,
+  };
+  entry.suppressCompletionDelivery = undefined;
+  entry.cleanupHandled = false;
+  entry.cleanupCompletedAt = undefined;
+  entry.wakeOnDescendantSettle = undefined;
+  entry.requesterSettleWake = undefined;
+  entry.delivery = {
+    status: "pending",
+    disposition: "retryable",
+    ...(previousGeneration !== undefined ? { generation: previousGeneration } : {}),
+  };
+  markPendingFinalDelivery({
+    entry,
+    error: "reconciled terminal completion artifact after missing requester delivery",
+  });
+  return true;
+};
+
 export const refreshPendingFinalDeliveryPayload = (entry: SubagentRunRecord): boolean => {
   const delivery = entry.delivery;
   if (

@@ -135,6 +135,91 @@ describe("subagent registry recovery scheduling", () => {
     },
   );
 
+  it("reconstructs one missing notification from a terminal artifact without rerunning the child", async () => {
+    const {
+      entry,
+      completeSubagentRunWithRecovery,
+      finalizeInterruptedSubagentRun,
+      startSubagentAnnounceCleanupFlow,
+      sweeper,
+    } = createHarness({ current: {} as GatewayRecoveryRuntime });
+    const endedAt = Date.now() - 55_000;
+    entry.taskRunId = "cancelled-predecessor-task";
+    entry.expectsCompletionMessage = true;
+    entry.execution = {
+      status: "terminal",
+      startedAt: Date.now() - 60_000,
+      endedAt,
+      outcome: { status: "ok" },
+    };
+    entry.completion = {
+      required: true,
+      resultText: "preserved final artifact",
+      capturedAt: endedAt,
+    };
+    entry.suppressCompletionDelivery = true;
+    entry.cleanupHandled = true;
+    entry.cleanupCompletedAt = endedAt + 1;
+    entry.delivery = {
+      status: "failed",
+      disposition: "intentional_non_delivery",
+      lastError: "requester settle wake deferred too many times",
+    };
+    startSubagentAnnounceCleanupFlow.mockImplementation((_runId, repaired) => {
+      repaired.delivery = {
+        status: "delivered",
+        disposition: "delivered",
+        deliveredAt: Date.now(),
+      };
+      repaired.cleanupHandled = true;
+      repaired.cleanupCompletedAt = Date.now();
+      return true;
+    });
+
+    await sweeper.sweepOnce();
+    await sweeper.sweepOnce();
+
+    expect(startSubagentAnnounceCleanupFlow).toHaveBeenCalledTimes(1);
+    expect(startSubagentAnnounceCleanupFlow).toHaveBeenCalledWith(entry.runId, entry);
+    expect(entry.suppressCompletionDelivery).toBeUndefined();
+    expect(entry.taskRunId).toBe("cancelled-predecessor-task");
+    expect(entry.delivery?.status).toBe("delivered");
+    expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
+    expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "explicit non-notifying terminal artifacts",
+      expectsCompletionMessage: false,
+      required: false,
+      delivery: { status: "not_required", disposition: "intentional_non_delivery" } as const,
+    },
+    {
+      name: "already delivered terminal artifacts",
+      expectsCompletionMessage: true,
+      required: true,
+      delivery: { status: "delivered", disposition: "delivered" } as const,
+    },
+  ])("preserves $name", async ({ expectsCompletionMessage, required, delivery }) => {
+    const { entry, startSubagentAnnounceCleanupFlow, sweeper } = createHarness({});
+    entry.expectsCompletionMessage = expectsCompletionMessage;
+    entry.execution = {
+      status: "terminal",
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    };
+    entry.completion = { required, resultText: "preserved artifact", capturedAt: Date.now() };
+    entry.suppressCompletionDelivery = true;
+    entry.delivery = delivery;
+
+    await sweeper.sweepOnce();
+
+    expect(startSubagentAnnounceCleanupFlow).not.toHaveBeenCalled();
+    expect(entry.delivery?.status).toBe(delivery.status);
+    expect(entry.suppressCompletionDelivery).toBe(true);
+  });
+
   it("observes a sibling completion committed while another completion is awaiting", async () => {
     const actual = await vi.importActual<typeof import("./subagent-session-reconciliation.js")>(
       "./subagent-session-reconciliation.js",

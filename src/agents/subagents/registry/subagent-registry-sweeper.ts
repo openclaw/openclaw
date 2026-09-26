@@ -14,6 +14,7 @@ import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import { reconcileTerminalArtifactDelivery } from "./subagent-registry-lifecycle-delivery.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
@@ -274,6 +275,15 @@ export function createSubagentRegistrySweeper(params: {
         }
         if (isRestoredQueuedFailureSettlementClaimed(entry)) {
           // The restored FIFO callback owns this row until durable settlement.
+          continue;
+        }
+        // A terminal artifact is the durable completion authority. Repair notification state
+        // before requester-settle/task projections can keep a stale predecessor terminal forever.
+        // Cleanup reuses the captured artifact and the normal receipt/idempotency checks; it never
+        // starts another child execution.
+        if (reconcileTerminalArtifactDelivery(entry)) {
+          mutatedRunIds.add(runId);
+          params.startSubagentAnnounceCleanupFlow(runId, entry);
           continue;
         }
         if (

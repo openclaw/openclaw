@@ -54,6 +54,9 @@ export function createSubagentSweeperHarness(
   const notifyContextEngineSubagentEnded = vi.fn();
   const callGateway = vi.fn();
   const resumeRequesterSettleWake = vi.fn();
+  const startSubagentAnnounceCleanupFlow = vi.fn<
+    Parameters<typeof createSubagentRegistrySweeper>[0]["startSubagentAnnounceCleanupFlow"]
+  >(() => true);
   const warn = vi.fn();
   const sweeper = createSubagentRegistrySweeper({
     runs,
@@ -66,7 +69,7 @@ export function createSubagentSweeperHarness(
     getGatewayRecoveryRuntime: () => runtime.current,
     finalizeInterruptedSubagentRun,
     resumeRequesterSettleWake,
-    startSubagentAnnounceCleanupFlow: vi.fn(() => true),
+    startSubagentAnnounceCleanupFlow,
     completeCleanupBookkeeping,
     discardTerminalDelivery,
     shouldEmitEndedHookForRun: vi.fn(() => false),
@@ -99,6 +102,7 @@ export function createSubagentSweeperHarness(
     finalizeInterruptedSubagentRun,
     notifyContextEngineSubagentEnded,
     resumeRequesterSettleWake,
+    startSubagentAnnounceCleanupFlow,
     sweeper,
     warn,
   };
