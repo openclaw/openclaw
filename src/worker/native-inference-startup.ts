@@ -73,7 +73,7 @@ export function assertNativeInferenceAssignment(
         isPathInside(path.resolve(grant.path), path.resolve(assignment.workspaceDir)))
     ) ||
     (grant.sessionId !== undefined && grant.sessionId !== descriptor.admission.sessionId) ||
-    (grant.models !== undefined && !grant.models.includes(modelRef)) ||
+    !grant.models.includes(modelRef) ||
     !startup.config.models.some(
       (model) =>
         model.provider === assignment.modelRef.provider && model.id === assignment.modelRef.model,
@@ -99,8 +99,8 @@ export function projectNativeInferenceStartup(
   if (workspace !== root && !(grant.scope === "subdirectories" && isPathInside(root, workspace))) {
     throw new Error("Node-local inference workspace escapes its provisioned root");
   }
-  const models = startup.config.models.filter(
-    (model) => grant.models === undefined || grant.models.includes(model.provider + "/" + model.id),
+  const models = startup.config.models.filter((model) =>
+    grant.models.includes(model.provider + "/" + model.id),
   );
   return {
     // Projection changes selection and canonical path, not the validated model definitions.

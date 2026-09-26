@@ -117,9 +117,6 @@ export async function createNativeRuntime(
   }
   for (const entry of parsed.models) {
     const ref = entry.provider + "/" + entry.id;
-    if (models.has(ref)) {
-      throw new Error("Duplicate native runtime model: " + ref);
-    }
     if (!runtime.registry.getApiProvider(entry.api)) {
       throw new Error("Unsupported native runtime API: " + entry.api);
     }
@@ -182,15 +179,7 @@ export async function createNativeRuntime(
     }
   }
   for (const entry of parsed.workspaces) {
-    if (workspaces.has(entry.id)) {
-      throw new Error("Duplicate native runtime workspace: " + entry.id);
-    }
-    const allowed = new Set(entry.models ?? models.keys());
-    for (const ref of allowed) {
-      if (!models.has(ref)) {
-        throw new Error("Unknown native runtime workspace model: " + ref);
-      }
-    }
+    const allowed = new Set(entry.models);
     const sourcePath = path.resolve(entry.path);
     const canonicalPath = await realpath(sourcePath);
     const directory = await stat(canonicalPath);

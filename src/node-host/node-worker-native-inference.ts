@@ -33,7 +33,9 @@ export function snapshotNodeWorkerNativeInference(
     );
   } catch {
     // Parser and filesystem errors can contain source bytes or operator paths.
-    throw new Error("Node worker native inference configuration is invalid or unavailable");
+    throw new Error(
+      "Node worker native inference configuration is invalid or unavailable. Each workspace requires an explicit models allowlist ([] denies all) using configured model references.",
+    );
   }
   const credentials = Object.fromEntries(
     [...new Set(config.models.map((model) => model.apiKeyEnv))].map((name) => {
