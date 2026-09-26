@@ -1996,7 +1996,14 @@ start_gateway() {
   if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then
     readiness_mode="legacy-ready-log-ok"
   fi
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "$readiness_mode" || return "$?"
+  local readiness_status=0
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "$readiness_mode" || readiness_status=$?
+  if [ "$readiness_status" -ne 0 ]; then
+    node scripts/e2e/lib/upgrade-survivor/startup-diagnostics.mjs "$port" \
+      >"$ARTIFACT_ROOT/gateway-startup-probes.json" || \
+      echo "Gateway startup probes unavailable; preserving readiness failure." >&2
+    return "$readiness_status"
+  fi
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then
