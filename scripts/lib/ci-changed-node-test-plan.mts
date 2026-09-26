@@ -52,7 +52,9 @@ import {
   type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import { isCiProofTestFile } from "./ci-proof-test-inventory.mts";
+import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import {
+  createExtensionTestTimingKey,
   DATABASE_WORKER_CONFIG,
   DATABASE_WORKER_TEST_JOB_FILE_LIMIT,
   estimateExtensionTestCost,
@@ -78,6 +80,7 @@ type ChangedNodeTestShard = {
   includePatterns?: string[];
   planConcurrency?: number;
   predictedSeconds?: number;
+  predictedTestSeconds?: number;
   pretestBuildMode?: VitestPretestBuildMode;
   requiresDist: boolean;
   runner: string;
@@ -605,6 +608,22 @@ function createChangedExtensionConfigShards(
       chunks = [runtimeFiles, otherFiles]
         .filter((files) => files.length > 0)
         .flatMap((files) => splitExtensionTestJobTargets(config, files));
+    }
+    if (config === DATABASE_WORKER_CONFIG) {
+      const timings = readCompactGroupTimings("blacksmith");
+      const sharedFileBudget = Math.floor(DATABASE_WORKER_TEST_JOB_FILE_LIMIT / 2);
+      chunks = chunks.flatMap((files) => {
+        if (files.length <= sharedFileBudget || files.some((file) => buildModes.get(file))) {
+          return [files];
+        }
+        const timingKey = createExtensionTestTimingKey(config, files);
+        if (!timingKey || timings[timingKey] !== undefined) {
+          return [files];
+        }
+        // Two unmeasured envelopes can share the file budget; measured walls keep their exact scope.
+        const midpoint = Math.ceil(files.length / 2);
+        return [files.slice(0, midpoint), files.slice(midpoint)];
+      });
     }
     const partitionSeconds = Math.ceil(
       estimateExtensionTestCost(config, testFiles.length, testFiles) / chunks.length,

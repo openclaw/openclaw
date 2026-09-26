@@ -44,13 +44,21 @@ export function listScopedOwnerTestFiles(owner: {
   // Scoped configs drop unit-fast files, so a lister that keeps them prices
   // stripes on files the shard never runs and hands Vitest inert patterns.
   const unitFastFiles = new Set(getUnitFastTestFiles());
+  // Node 24 recompiles matchesGlob for every file. Plain canonical test paths
+  // need only equality; keep all glob/escape/dot-segment syntax with Node.
+  const literalPatterns = new Set(
+    [...owner.include, ...owner.exclude].filter((pattern) =>
+      /^(?:[\w-][\w.-]*\/)*[\w-][\w.-]*\.test\.ts$/u.test(pattern),
+    ),
+  );
   return filterFilesByPatterns(
     listTrackedTestFiles(owner.root).filter((file) =>
       isStripeEligibleTestFile(file, unitFastFiles),
     ),
     owner.include,
     owner.exclude,
-    matchesGlob,
+    (file, pattern) =>
+      literalPatterns.has(pattern) ? file === pattern : matchesGlob(file, pattern),
   );
 }
 
@@ -165,10 +173,7 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
     "agentic-gateway-server-isolated",
     { listFiles: () => [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles] },
   ],
-  [
-    "agentic-cli",
-    { listFiles: () => listScopedOwnerTestFiles(getCliVitestProjectOwner()), splitByFile: false },
-  ],
+  ["agentic-cli", { listFiles: () => listScopedOwnerTestFiles(getCliVitestProjectOwner()) }],
   ["agentic-cli-process", { listFiles: () => cliProcessTestFiles }],
   [
     "agentic-agents-support",

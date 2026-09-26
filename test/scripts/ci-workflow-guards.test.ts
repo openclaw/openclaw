@@ -2373,9 +2373,11 @@ AFTER_CD
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "defers timing refits when only the runtime group codec changes on main",
-    () => {
+  it
+    .skipIf(process.platform === "win32")
+    .each(["scripts/lib/ci-node-test-groups-codec.mts", "scripts/lib/local-check-runtime.mts"])(
+    "defers timing refits when only %s changes on main",
+    (sourcePath) => {
       const workflow = readWorkflow(".github/workflows/ci-test-timings-refit.yml");
       const publisher = expectDefined(
         workflow.jobs.refit.steps.find(
@@ -2385,7 +2387,7 @@ AFTER_CD
       );
       const result = runGeneratedPublisherScenario(null, {
         invalidationPaths: publisher.with["invalidation-paths"],
-        updateSource: "scripts/lib/ci-node-test-groups-codec.mts",
+        updateSource: sourcePath,
       });
 
       expect(result.branchExists).toBe(false);
@@ -2396,6 +2398,79 @@ AFTER_CD
       );
     },
   );
+
+  it("preserves large timing refit reports outside generated PR environments", () => {
+    const workflow = readWorkflow(".github/workflows/ci-test-timings-refit.yml");
+    const steps: WorkflowStep[] = workflow.jobs.refit.steps;
+    const refit = expectDefined(
+      steps.find((step) => step.id === "refit"),
+      "refit step",
+    );
+    const root = tempDirs.make("openclaw-refit-report-");
+    const bin = path.join(root, "bin");
+    const source = path.join(root, "source.md");
+    const output = path.join(root, "github-output");
+    mkdirSync(bin);
+    writeExecutable(path.join(bin, "pnpm"), [
+      "#!/bin/sh",
+      'test "$*" = "--silent ci:timings:refit" || exit 64',
+      'cat "$REFIT_FIXTURE_REPORT"',
+    ]);
+    writeExecutable(path.join(bin, "git"), [
+      "#!/bin/sh",
+      'test "$*" = "diff --quiet -- config/ci-test-timings.json" || exit 64',
+      "exit 1",
+    ]);
+    const validIds = "36204091214, 36208949888";
+    const largeTable = "| fixture-test | 100 | 50 | -50% |\n".repeat(12_000);
+    for (const runIds of [
+      validIds,
+      "invalid",
+      Array.from({ length: 200 }, (_, index) => String(36_200_000_000 + index)).join(", "),
+    ]) {
+      const report = `Sampled CI and release-check runs with successful timing jobs: ${runIds}\n\n${largeTable}`;
+      writeFileSync(source, report);
+      writeFileSync(output, "");
+      const result = runWorkflowShellScript(expectDefined(refit.run, "refit body"), {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          RUNNER_TEMP: root,
+          GITHUB_OUTPUT: output,
+          REFIT_FIXTURE_REPORT: source,
+        },
+      });
+      expect(readFileSync(path.join(root, "ci-test-timings-report.md"), "utf8")).toBe(report);
+      expect(Buffer.byteLength(readFileSync(output, "utf8"))).toBeLessThan(4096);
+      if (runIds === validIds) {
+        expect(result.status, result.stderr).toBe(0);
+        expect(readWorkflowOutputs(output)).toEqual({ run_ids: validIds, changed: "true" });
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("Missing or oversized sampled-run summary");
+        expect(readWorkflowOutputs(output)).toEqual({});
+      }
+    }
+    const upload = expectDefined(
+      steps.find((step) => step.id === "report"),
+      "report upload",
+    );
+    const publisher = expectDefined(
+      steps.find((step) => step.uses === "./.github/actions/publish-generated-pr"),
+      "refit publisher",
+    );
+    const uploadInputs = expectDefined(upload.with, "report upload inputs");
+    const publisherInputs = expectDefined(publisher.with, "refit publisher inputs");
+    expect(upload.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(uploadInputs.path).toBe("${{ runner.temp }}/ci-test-timings-report.md");
+    expect(uploadInputs["if-no-files-found"]).toBe("error");
+    expect(upload.if).toBe("${{ !cancelled() && steps.refit.outcome != 'skipped' }}");
+    expect(steps.indexOf(upload)).toBeLessThan(steps.indexOf(publisher));
+    expect(publisherInputs["pr-body"]).toContain("${{ steps.refit.outputs.run_ids }}");
+    expect(publisherInputs["pr-body"]).toContain("${{ steps.report.outputs.artifact-url }}");
+    expect(publisherInputs["pr-body"]).not.toContain("${{ steps.refit.outputs.report }}");
+  });
 
   it
     .skipIf(process.platform === "win32")
@@ -2768,7 +2843,68 @@ AFTER_CD
       "github.event_name == 'pull_request'",
     );
     expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(12);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(96);
+    const nodeParallel =
+      workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"];
+    const canonicalNodePr = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      headRepository: "openclaw/openclaw",
+      runAttempt: 1,
+      runnerProfile: "hybrid" as const,
+    };
+    for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
+      for (const authorAssociation of ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]) {
+        expect(
+          evaluateWorkflowExpression(nodeParallel, {
+            ...canonicalNodePr,
+            runnerBackend,
+            runnerProfile: runnerBackend === "hybrid" ? "hybrid" : "blacksmith",
+            authorAssociation,
+          }),
+          `${runnerBackend || "default"}/${authorAssociation}`,
+        ).toBe(130);
+      }
+    }
+    const restrictedNodeContexts: Array<Partial<Parameters<typeof evaluateWorkflowExpression>[1]>> =
+      [
+        { eventName: "push" },
+        { eventName: "schedule" },
+        { eventName: "workflow_dispatch" },
+        {
+          eventName: "workflow_dispatch",
+          ciShape: "main",
+          preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
+        },
+        {
+          eventName: "workflow_dispatch",
+          ciShape: "default",
+          preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
+        },
+        { runnerBackend: "github" },
+        { runnerBackend: "runson" },
+        { preflightOutputs: { node_runner_backend: "runson" } },
+        { runnerProfile: "github" },
+        { runAttempt: 2 },
+        { frozenTarget: true },
+        { authorAssociation: "FIRST_TIME_CONTRIBUTOR" },
+        { authorAssociation: "FIRST_TIMER" },
+        { authorAssociation: "NONE" },
+        { authorAssociation: "MANNEQUIN" },
+        { headRepository: "contributor/openclaw" },
+        { headRepository: "" },
+        { repository: "contributor/openclaw" },
+      ];
+    for (const context of restrictedNodeContexts) {
+      expect(
+        evaluateWorkflowExpression(nodeParallel, {
+          ...canonicalNodePr,
+          runnerBackend: "hybrid",
+          authorAssociation: "CONTRIBUTOR",
+          ...context,
+        }),
+        JSON.stringify(context),
+      ).toBe(96);
+    }
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
@@ -4042,6 +4178,7 @@ setImmediate(() => {
       "build-artifacts": "ubuntu-24.04",
       "check-additional-shard": "ubuntu-24.04",
       "check-lint-hosted-core-shard": "ubuntu-24.04",
+      "check-plan": "ubuntu-24.04",
       "check-shard": "ubuntu-24.04",
       "checks-baseline-ratchets": "ubuntu-24.04",
       "checks-fast-channel-contracts-shard": "ubuntu-24.04",
@@ -4068,6 +4205,8 @@ setImmediate(() => {
     const expectedHybridFirstAttemptRunners = {
       ...expectedHostedRunners,
       "pr-fail-fast": "blacksmith-4vcpu-ubuntu-2404",
+      "checks-baseline-ratchets": "blacksmith-4vcpu-ubuntu-2404",
+      "check-plan": "blacksmith-4vcpu-ubuntu-2404",
       preflight: "blacksmith-16vcpu-ubuntu-2404",
       "security-fast": "blacksmith-4vcpu-ubuntu-2404",
       android: "blacksmith-8vcpu-ubuntu-2404",
@@ -4085,6 +4224,8 @@ setImmediate(() => {
     } as const;
     const expectedHybridForkRunners = {
       ...expectedHybridFirstAttemptRunners,
+      "check-plan": "ubuntu-24.04",
+      "checks-baseline-ratchets": "ubuntu-24.04",
       "pr-fail-fast": "ubuntu-24.04",
       "docker-seed-e2e": "ubuntu-24.04",
     } as const;
@@ -4121,9 +4262,11 @@ setImmediate(() => {
         ],
         ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, hostedRunner],
         [
-          "RunsOn ordinary rows retain hybrid routing",
+          "RunsOn retains its existing placement",
           { runnerBackend: "runson" },
-          expectedHybridFirstAttemptRunners[jobName as keyof typeof expectedHostedRunners],
+          jobName === "check-plan" || jobName === "checks-baseline-ratchets"
+            ? hostedRunner
+            : expectedHybridFirstAttemptRunners[jobName as keyof typeof expectedHostedRunners],
         ],
         ["RunsOn retry", { runnerBackend: "runson", runAttempt: 2 }, hostedRunner],
         [
@@ -4171,7 +4314,27 @@ setImmediate(() => {
       }
     }
 
-    for (const jobName of ["check-lint-hosted-core-shard", "ci-gate"] as const) {
+    for (const runnerBackend of ["", "blacksmith"] as const) {
+      const trustedFork = {
+        ...canonicalPullRequest,
+        authorAssociation: "CONTRIBUTOR",
+        headRepository: "contributor/openclaw",
+        runnerBackend,
+      };
+      expect(
+        evaluateWorkflowExpression(jobs["checks-baseline-ratchets"]?.["runs-on"], trustedFork),
+      ).toBe("blacksmith-4vcpu-ubuntu-2404");
+      expect(evaluateWorkflowExpression(jobs["check-plan"]?.["runs-on"], trustedFork)).toBe(
+        "ubuntu-24.04",
+      );
+    }
+
+    for (const jobName of [
+      "check-lint-hosted-core-shard",
+      "checks-baseline-ratchets",
+      "check-plan",
+      "ci-gate",
+    ] as const) {
       const expression = jobs[jobName]?.["runs-on"];
       const runner = expectedHybridFirstAttemptRunners[jobName];
       for (const [label, overrides, expected] of [
@@ -4179,7 +4342,7 @@ setImmediate(() => {
         [
           "heavy packed core stripe",
           { runnerProfile: "hybrid", matrix: { stripe: 1 } },
-          jobName === "ci-gate" ? runner : "blacksmith-16vcpu-ubuntu-2404",
+          jobName === "check-lint-hosted-core-shard" ? "blacksmith-16vcpu-ubuntu-2404" : runner,
         ],
         ["lighter packed core stripe", { runnerProfile: "hybrid", matrix: { stripe: 2 } }, runner],
         ["unpaired core stripe", { runnerProfile: "github", matrix: { stripe: 1 } }, runner],
@@ -4188,7 +4351,9 @@ setImmediate(() => {
         [
           "trusted fork with hosted profile",
           { headRepository: "contributor/openclaw", runnerProfile: "github" },
-          runner,
+          jobName === "check-plan" || jobName === "checks-baseline-ratchets"
+            ? "ubuntu-24.04"
+            : runner,
         ],
         ["frozen target", { frozenTarget: true }, jobName === "ci-gate" ? runner : "ubuntu-24.04"],
         [
@@ -4213,6 +4378,21 @@ setImmediate(() => {
             },
           },
           "ubuntu-24.04",
+        ],
+        [
+          "RunsOn qualification retains its existing control placement",
+          {
+            eventName: "workflow_dispatch",
+            runnerBackend: "runson",
+            preflightOutputs: {
+              ci_qualification: "true",
+              qualification_runner_backend: "runson",
+              node_runner_backend: "runson",
+            },
+          },
+          jobName === "check-plan" || jobName === "checks-baseline-ratchets"
+            ? "ubuntu-24.04"
+            : runner,
         ],
         [
           "qualification retry",
@@ -4813,7 +4993,7 @@ setImmediate(() => {
       if: expect.stringContaining("steps.manifest.outputs.run_node == 'true'"),
       with: {
         "cache-mode": "${{ steps.candidate_trust.outputs.cache_mode }}",
-        "dependency-cache": "true",
+        "dependency-cache": expect.stringContaining("runner.environment == 'self-hosted'"),
         "install-bun": "false",
       },
     });
@@ -4823,12 +5003,42 @@ setImmediate(() => {
     expect(preflightRestore?.step.if).toContain(
       '!contains(fromJSON(\'["hybrid","runson"]\'), vars.OPENCLAW_CI_RUNNER_BACKEND)',
     );
+    for (const runnerBackend of ["blacksmith", "hybrid", "runson", "github"] as const) {
+      for (const headRepository of ["openclaw/openclaw", "contributor/openclaw"]) {
+        for (const runnerEnvironment of ["self-hosted", "github-hosted"] as const) {
+          const context = {
+            eventName: "pull_request" as const,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerBackend,
+            runnerEnvironment,
+            headRepository,
+            steps: {
+              manifest: { outputs: { baseline_ratchets_in_preflight: "true", run_node: "true" } },
+            },
+          };
+          expect(evaluateWorkflowExpression(`\${{ ${preflightRestore?.step.if} }}`, context)).toBe(
+            true,
+          );
+          expect(
+            evaluateWorkflowExpression(preflightRestore?.step.with?.["dependency-cache"], context),
+          ).toBe(
+            runnerBackend !== "github" &&
+              runnerEnvironment === "self-hosted" &&
+              headRepository === "openclaw/openclaw"
+              ? "true"
+              : "false",
+          );
+        }
+      }
+    }
     const consumers = dependencySetups.filter(({ jobName }) => jobName !== "preflight");
     expect(consumers.map(({ jobName }) => jobName).toSorted()).toEqual([
       "build-artifacts",
       "check-additional-shard",
       "check-docs",
       "check-lint-hosted-core-shard",
+      "check-plan",
       "check-shard",
       "check-test-types-hosted-core-shard",
       "checks-baseline-ratchets",

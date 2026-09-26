@@ -4,7 +4,7 @@ import { mergeVitestPretestBuildModes } from "./vitest-build-prerequisites.mts";
 import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
 const FIXED_JOB_SECONDS = 60;
-const MAX_PACKED_JOB_SECONDS = 720;
+const MAX_PACKED_JOB_SECONDS = 360;
 
 // Complete serial BS8/two-worker child observations from 35702479645,
 // 35702772380, 35707408465 and native Testbox run 35722202780.
@@ -234,7 +234,7 @@ export function rebalanceMeasuredHybridJobs(
       ) + FIXED_JOB_SECONDS;
     // Complete child walls identify existing tails more directly than summed
     // file estimates. Packing still retains the higher canonical price below.
-    const limit = 600;
+    const limit = MAX_PACKED_JOB_SECONDS;
     if (!pair && (!tooling || completeWall <= limit)) {
       return [job];
     }
@@ -246,10 +246,7 @@ export function rebalanceMeasuredHybridJobs(
         index === 0 ? job.shardName : `${job.shardName}-tail${index === 1 ? "" : `-${index + 1}`}`,
       groups: [group],
       pretestBuildMode: group.pretestBuildMode,
-      predictedSeconds: Math.max(
-        job.predictedSeconds ?? 0,
-        seconds[index]! + buildSeconds[index]! + FIXED_JOB_SECONDS,
-      ),
+      predictedSeconds: Math.ceil(seconds[index]! + buildSeconds[index]!),
     }));
   });
 
@@ -286,7 +283,7 @@ export function rebalanceMeasuredHybridJobs(
       job,
       {
         ...job,
-        predictedSeconds: Math.ceil(seconds + FIXED_JOB_SECONDS),
+        predictedSeconds: Math.ceil(seconds),
       },
     ]),
   );
@@ -339,7 +336,7 @@ export function rebalanceMeasuredHybridJobs(
         Object.assign({}, originals[0]!, {
           groups: originals.flatMap((job) => job.groups),
           env: { ...originals[0]!.env, OPENCLAW_VITEST_MAX_WORKERS: "2" },
-          predictedSeconds: Math.ceil(seconds + FIXED_JOB_SECONDS),
+          predictedSeconds: Math.ceil(seconds),
         }),
       );
     return [

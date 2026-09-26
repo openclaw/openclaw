@@ -53,10 +53,14 @@ export function listMatchedTestFiles(config: VitestConfig): string[] {
   const exclude = (testConfig.exclude ?? []).map((pattern) =>
     isAbsolute(pattern) ? toRepoPath(relative(cwd, pattern)) : toRepoPath(pattern),
   );
+  // Unit-fast ownership contributes hundreds of literal file exclusions.
+  // Compare those exactly after discovery; keep directory/glob pruning native.
+  const exactFiles = new Set(exclude.filter((pattern) => /^[\w/.-]+\.test\.ts$/u.test(pattern)));
   return globSync(testConfig.include ?? [], {
     cwd,
-    exclude,
+    exclude: exclude.filter((pattern) => !exactFiles.has(pattern)),
   })
+    .filter((file) => !exactFiles.has(toRepoPath(relative(cwd, resolve(cwd, file)))))
     .map((file) => toRepoPath(relative(process.cwd(), resolve(cwd, file))))
     .toSorted((a, b) => a.localeCompare(b));
 }
@@ -79,13 +83,19 @@ export function expectRuntimeReleaseInventory({
     plan.flatMap((shard) => shard.groups.flatMap(groupFiles));
   const beforeFiles = files(before);
   const afterFiles = files(after);
+  const timingLineage = (key: string) => {
+    const lineage = [key];
+    for (let split = parseCompactSplitTimingKey(key); split;) {
+      const parent = split.parentShardName;
+      lineage.push(parent);
+      split = parseCompactSplitTimingKey(parent);
+    }
+    return lineage;
+  };
   const fullTimingParents = new Set(
     before
       .flatMap((shard) =>
-        shard.groups.map((group) => {
-          const key = group.timing_key ?? group.shard_name;
-          return parseCompactSplitTimingKey(key)?.parentShardName ?? key;
-        }),
+        shard.groups.flatMap((group) => timingLineage(group.timing_key ?? group.shard_name)),
       )
       // The comparison plan can already omit tooling from mixed owners.
       .filter((parent) => !parent.startsWith("changed-")),
@@ -113,23 +123,27 @@ export function expectRuntimeReleaseInventory({
       expect(reduced, owner).toEqual([]);
     }
     if (owner === "agentic-cli") {
-      expect(reduced).toHaveLength(1);
       const full = before.flatMap((shard) => shard.groups).find(owns);
       expect(full, "full CLI owner").toBeDefined();
-      expect(reduced[0]!.shard_name).toBe(owner);
-      expect(reduced[0]!.env).toEqual(full?.env);
-      expect(reduced[0]!.fallbackMaxWorkers).toBe(full?.fallbackMaxWorkers);
-      const job = after.find((shard) => shard.groups.includes(reduced[0]!));
-      expect(job?.planConcurrency).toBe(1);
+      for (const group of reduced) {
+        expect(group.shard_name).toMatch(/^agentic-cli(?:-hosted-\d+)?$/u);
+        expect(group.env).toEqual(full?.env);
+        expect(group.fallbackMaxWorkers).toBe(full?.fallbackMaxWorkers);
+        const job = after.find((shard) => shard.groups.includes(group));
+        expect(job?.planConcurrency).toBe(1);
+      }
     }
     for (const group of reduced) {
       expect(group.timing_key, "reduced runtime timing identity").toBeTypeOf("string");
       const timingKey = group.timing_key!;
-      const timingParent = parseCompactSplitTimingKey(timingKey)?.parentShardName ?? timingKey;
-      expect(fullTimingParents.has(timingParent), `${owner}: ${timingParent}`).toBe(false);
+      const lineage = timingLineage(timingKey);
+      for (const parent of lineage) {
+        expect(fullTimingParents.has(parent), `${owner}: ${parent}`).toBe(false);
+      }
+      const timingParent = lineage.at(-1)!;
       expect(
         timingParent.replace(
-          /(?:#file-parallel-(?:2|8)|-parallel(?:-2)?(?:-native-serial)?(?:-stripes)?)$/u,
+          /(?:#workers-4|#file-parallel-(?:2|8)|-parallel(?:-2)?(?:-native-serial)?(?:-stripes)?)$/u,
           "",
         ),
       ).toBe(`changed-${owner}`);

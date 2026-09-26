@@ -1,5 +1,6 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
 cli-root-options.mjs
+config/ci-test-timings.json
 node-compile-cache.mjs
 node-sqlite.mjs
 node-version.mjs
@@ -113,6 +114,8 @@ scripts/lib/arg-utils.runtime.mjs
 scripts/lib/bundled-plugin-paths.mjs
 scripts/lib/changed-extensions.mts
 scripts/lib/changed-path-facts.mjs
+scripts/lib/ci-test-timings-schema.mts
+scripts/lib/ci-test-timings.mts
 scripts/lib/direct-run.mjs
 scripts/lib/error-format.mts
 scripts/lib/extension-test-plan.mts

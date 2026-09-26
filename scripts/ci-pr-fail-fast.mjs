@@ -91,6 +91,7 @@ export async function monitorPrFailure(options) {
   // GitHub's job budget includes checkout, so derive the cutoff from the
   // attempt's own monitor start rather than when this script finally starts.
   let observationDeadline;
+  let completionPollDeadline;
   const root = `https://api.github.com/repos/${repository}`;
   /** @param {string} route @param {string} [method] */
   const request = async (route, method = "GET") => {
@@ -264,15 +265,23 @@ export async function monitorPrFailure(options) {
     }
     const finalJobCount =
       checkCount === undefined ? undefined : expectedJobCount - preflightCheckJobCount + checkCount;
-    if (
-      finalJobCount !== undefined &&
-      rows.filter((job) => job.status === "completed" && job.conclusion !== "skipped").length >=
-        finalJobCount
-    ) {
+    const selectedRows = rows.filter((job) => job.conclusion !== "skipped");
+    const completedCount = selectedRows.filter((job) => job.status === "completed").length;
+    if (finalJobCount !== undefined && completedCount >= finalJobCount) {
       return "completed";
     }
+    // Keep broad observation cheap; an admitted final tail must not add another 30s to CI.
+    const nearCompletion =
+      finalJobCount !== undefined &&
+      selectedRows.length === finalJobCount &&
+      finalJobCount - completedCount <= 3;
+    if (nearCompletion && completionPollDeadline === undefined) {
+      completionPollDeadline = Date.now() + 60_000;
+    }
+    const fastPoll =
+      nearCompletion && completionPollDeadline !== undefined && Date.now() < completionPollDeadline;
     await new Promise((resolve) => {
-      setTimeout(resolve, 30_000);
+      setTimeout(resolve, fastPoll ? 5_000 : 30_000);
     });
   }
   return "observation-expired";

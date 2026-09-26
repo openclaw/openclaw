@@ -77,6 +77,7 @@ import {
 } from "./ci-test-timings.mts";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 import { isExclusiveCiTestConfig } from "./local-check-runtime.mts";
+import { readPositiveEnvInt } from "./numeric-options.mjs";
 import {
   listVitestRuntimeConsumerFiles,
   mergeVitestPretestBuildModes,
@@ -126,6 +127,7 @@ type NodeTestShard = {
   timeoutMinutes?: number;
   planConcurrency?: number;
   predictedSeconds?: number;
+  predictedTestSeconds?: number;
 };
 
 type NodeTestPlanOptions = {
@@ -396,11 +398,13 @@ const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
 const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 360;
+const COMPACT_SERIAL_NODE_TEST_JOB_SECONDS = 300;
 const COMPACT_FINAL_PARALLEL_NODE_TEST_JOB_SECONDS = 500;
 const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 210;
-// Includes the existing 100s runtime build; reserve 40s of the eight-minute
-// objective for checkout/setup. This is admission, never a test deadline.
-const COMPACT_HYBRID_RUNTIME_JOB_SECONDS = 440;
+// Runtime preparation is charged once beside the same serial test budget.
+// This is admission, never a test deadline.
+const COMPACT_HYBRID_RUNTIME_JOB_SECONDS =
+  COMPACT_SERIAL_NODE_TEST_JOB_SECONDS + VITEST_PRETEST_BUILD_SECONDS.runtime;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
 // hosted-derived splits so retries cannot reunite an oversized hosted group.
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
@@ -852,6 +856,8 @@ const COMPACT_PUSH_EXCLUDED_SHARDS = new Set([
   "core-tooling-isolated",
 ]);
 const COMPACT_BLACKSMITH_SPLIT_OWNERS = new Set([
+  "agentic-cli",
+  "agentic-agents-support",
   "agentic-control-plane-agent-chat",
   "agentic-gateway-core-1",
   "agentic-gateway-core-2",
@@ -862,7 +868,7 @@ const COMPACT_BLACKSMITH_SPLIT_OWNERS = new Set([
 // concurrent sibling Vitest run competes for the 4 vCPU runner. Pack them
 // into bins the shard runner executes at concurrency 1.
 const EXCLUSIVE_COMPACT_GROUP_RE =
-  /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$|^agentic-gateway-core-(?:runtime|inventory)$|^agentic-cli(?:-process(?:-hosted-\d+)?)?$/u;
+  /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$|^agentic-gateway-core-(?:runtime|inventory)$|^agentic-cli(?:-hosted-\d+|-process(?:-hosted-\d+)?)?$/u;
 // Exclusive bins run serially, so their packed estimate is their wall clock.
 // An indivisible file above this budget must not acquire additional work.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
@@ -873,7 +879,13 @@ export function isExclusiveCompactShardName(shardName: string): boolean {
 }
 
 function isExclusiveCompactGroup(group: NodeTestShardGroup): boolean {
-  return isExclusiveCompactShardName(group.shard_name);
+  return (
+    isExclusiveCompactShardName(group.shard_name) ||
+    // Blacksmith's whole support owner used its host alone. File partitions
+    // retain that allocation instead of inheriting overlapping worker caps.
+    (group.runner === EXTRA_LARGE_NODE_TEST_RUNNER &&
+      /^agentic-agents-support-hosted-\d+$/u.test(group.shard_name))
+  );
 }
 
 function isParallelCompactGroup(group: NodeTestShardGroup): boolean {
@@ -888,6 +900,8 @@ const PINNED_WORKER_COMPACT_GROUP_RE =
   /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-config$|^core-runtime-media-ui-(?:\d+|support)$|^agentic-cli(?:-process)?$|^agentic-gateway-(?:core-\d+|methods)$/u;
 const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
 const MEASURED_GATEWAY_ISOLATED_GROUP_RE = /^agentic-gateway-server-isolated(?:-hosted-\d+)?$/u;
+const MEASURED_GATEWAY_METHODS_GROUP_RE = /^agentic-gateway-methods(?:-hosted-\d+)?$/u;
+const MEASURED_CLI_GROUP_RE = /^agentic-cli(?:-hosted-\d+)?$/u;
 const FILE_PARALLEL_AGENT_GROUP_RE = /^agentic-agents-(?:embedded-base-\d+|embedded-run|tools)$/u;
 const FILE_PARALLEL_AGENT_MIN_WORKERS = 2;
 
@@ -996,10 +1010,11 @@ function readSerialAgentsCoreSeconds(
 function usesMeasuredCompactWorkers(group: NodeTestShardGroup, runnerBackend: string | undefined) {
   return (
     (runnerBackend === undefined || runnerBackend === "blacksmith" || runnerBackend === "hybrid") &&
-    (group.shard_name === "agentic-cli" ||
+    (MEASURED_CLI_GROUP_RE.test(group.shard_name) ||
       isParallelCommandsGroup(group) ||
       /^agentic-gateway-core-2(?:-hosted-\d+)?$/u.test(group.shard_name) ||
       MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(group.shard_name) ||
+      MEASURED_GATEWAY_METHODS_GROUP_RE.test(group.shard_name) ||
       FILE_PARALLEL_AGENT_GROUP_RE.test(group.shard_name.replace(/-hosted-\d+$/u, "")))
   );
 }
@@ -1104,6 +1119,18 @@ function applyCompactGroupWorkerPins(
     FILE_PARALLEL_AGENT_GROUP_RE.test(group.shard_name) && group.timing_key === undefined
       ? { ...group, timing_key: `${group.shard_name}#file-parallel` }
       : group;
+  if (
+    MEASURED_GATEWAY_METHODS_GROUP_RE.test(timedGroup.shard_name) &&
+    usesMeasuredCompactWorkers(timedGroup, runnerBackend)
+  ) {
+    return {
+      ...timedGroup,
+      timing_key: `${compactGroupTimingKey(timedGroup)}#workers-4`,
+      env: { ...timedGroup.env, OPENCLAW_VITEST_MAX_WORKERS: "4" },
+      minTotalMemoryBytes: 28 * 1024 ** 3,
+      fallbackMaxWorkers: 2,
+    };
+  }
   if (usesMeasuredCompactWorkers(timedGroup, runnerBackend)) {
     return {
       ...timedGroup,
@@ -1142,6 +1169,9 @@ function readCompactGroupSeconds(
   if (measured !== undefined) {
     return measured;
   }
+  if (key.endsWith("#workers-4") && MEASURED_GATEWAY_METHODS_GROUP_RE.test(group.shard_name)) {
+    return timings[key.slice(0, -"#workers-4".length)];
+  }
   if (FILE_PARALLEL_AGENT_GROUP_RE.test(group.shard_name)) {
     return fileParallelAgentFallbackSeconds(group, timings[group.shard_name]);
   }
@@ -1164,7 +1194,7 @@ function estimateParallelToolingSeconds(
   group: Pick<NodeTestShardGroup, "env">,
   files: readonly string[],
   runnerBackend: string | undefined,
-  fileTimings?: Readonly<Record<string, number>>,
+  fileTimings = readToolingFileTimings(runnerBackend === "github" ? "github" : "blacksmith"),
 ): number {
   const workers = Math.min(
     files.length,
@@ -1173,15 +1203,21 @@ function estimateParallelToolingSeconds(
         PINNED_COMPACT_GROUP_ENV.OPENCLAW_VITEST_MAX_WORKERS,
     ),
   );
-  const weights = files.map((file) => toolingFileWeight(file, fileTimings));
+  const fallbackTimings =
+    runnerBackend === "github" ? readToolingFileTimings("blacksmith") : fileTimings;
+  const weights = files.map(
+    (file) =>
+      (fileTimings[file] ?? toolingFileWeight(file, fallbackTimings)) *
+      (runnerBackend === "github" && fileTimings[file] === undefined
+        ? COMPACT_GITHUB_GROUP_SECONDS_SCALE
+        : 1),
+  );
   // File observations retain their elapsed cost under parallel execution. Old
   // numbered parent/child spans describe serial files and cannot price this lane.
-  return (
-    Math.max(
-      0,
-      ...weights,
-      weights.reduce((sum, seconds) => sum + seconds, 0) / Math.max(1, workers),
-    ) * (runnerBackend === "github" ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1)
+  return Math.max(
+    0,
+    ...weights,
+    weights.reduce((sum, seconds) => sum + seconds, 0) / Math.max(1, workers),
   );
 }
 
@@ -1248,6 +1284,11 @@ function readUnmeasuredCompactHint(
 }
 
 function estimateHybridCompactGroupSeconds(group: NodeTestShardGroup, seconds: number): number {
+  // Hybrid first attempts use the same Blacksmith allocation as these samples.
+  // A historical hosted-to-Blacksmith factor must not discount a direct wall.
+  if (readCompactGroupSeconds(group, "blacksmith") !== undefined) {
+    return seconds;
+  }
   // The 4,723s Blacksmith push hint sum measured 3,742.046s/3,756.674s
   // (79.230%/79.540%) in runs 31945998653/31949756966. A 0.87 scale keeps
   // 9.379% headroom above the higher ratio. With direct outlier hints, it sits
@@ -1343,14 +1384,28 @@ function estimateCompactStripeSeconds(
   ) {
     return estimateCompactGroupSeconds(group, runnerBackend);
   }
-  if (group.timing_key && parseCompactSplitTimingKey(group.timing_key)) {
+  const split = group.timing_key && parseCompactSplitTimingKey(group.timing_key);
+  if (split && group.timing_key) {
     // The parent-derived floor owns a new split until its exact child has samples.
     // File-count fallbacks would price the same work again after partitioning.
-    const seconds =
-      readCompactGroupTimings(runnerBackend === "github" ? "github" : "blacksmith")[
-        group.timing_key
-      ] ?? 0;
-    return runnerBackend === "hybrid" ? estimateHybridCompactGroupSeconds(group, seconds) : seconds;
+    const timings = readCompactGroupTimings(runnerBackend === "github" ? "github" : "blacksmith");
+    const exact = timings[group.timing_key];
+    if (exact !== undefined) {
+      return exact;
+    }
+    // Repacking siblings changes the generation, not an unchanged child's
+    // config, worker environment, or file membership within this selector.
+    const membership = group.timing_key.slice(group.timing_key.lastIndexOf("#include-"));
+    return Math.max(
+      0,
+      ...Object.entries(timings)
+        .filter(
+          ([key]) =>
+            key.endsWith(membership) &&
+            parseCompactSplitTimingKey(key)?.selectorKey === split.selectorKey,
+        )
+        .map(([, seconds]) => seconds),
+    );
   }
   if (
     runnerBackend === "github" ||
@@ -1371,14 +1426,14 @@ function estimateCompactStripeSeconds(
 // fixed stripes.
 function compactStripeFamily(group: NodeTestShardGroup): string | undefined {
   if (
-    /^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite(?:-recovery)?))?(?:-hosted-\d+)?$/u.test(
+    /^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite(?:-recovery)?))?(?:-hosted-\d+)*$/u.test(
       group.shard_name,
     )
   ) {
     return "agentic-commands-doctor-sessions-cron";
   }
   return (
-    /^(agentic-agents-embedded-base|agentic-gateway-core|core-runtime-media-ui|core-unit-src-security)-\d+(?:-hosted-\d+)?$/u.exec(
+    /^(agentic-agents-embedded-base|agentic-gateway-core|core-runtime-media-ui|core-unit-src-security)-\d+(?:-hosted-\d+)*$/u.exec(
       group.shard_name,
     )?.[1] ??
     (group.timing_key ? parseCompactSplitTimingKey(group.timing_key)?.selectorKey : undefined)
@@ -3481,6 +3536,7 @@ function selectHostedToolingTailDonation(
 function splitOversizedCompactGroup(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
+  observedSeconds = 0,
   runtimePartition?: ReturnType<typeof partitionRuntimeTestFiles>,
   splitHostedToolingTails = false,
   hostedToolingTailBudgets?: ReadonlyMap<string, number>,
@@ -3504,8 +3560,19 @@ function splitOversizedCompactGroup(
     hostedMain &&
     (group.includePatterns?.length ?? 0) > 1 &&
     group.includePatterns!.includes(HOSTED_MAIN_UPDATE_TEST);
-  const measuredProfileSeconds = estimateCompactGroupSeconds(group, runnerBackend);
-  const measuredHostedSeconds = estimateCompactGroupSeconds(group, "github");
+  const measuredProfileSeconds = Math.max(
+    estimateCompactGroupSeconds(group, runnerBackend),
+    observedSeconds,
+  );
+  const measuredHostedSeconds = Math.max(
+    estimateCompactGroupSeconds(group, "github"),
+    observedSeconds > 0
+      ? runnerBackend === "github"
+        ? observedSeconds
+        : estimateCompactStripeSeconds(group, "github") ||
+          observedSeconds * COMPACT_GITHUB_GROUP_SECONDS_SCALE
+      : 0,
+  );
   if (!canSplitWholeConfigGroup(group.shard_name)) {
     return [{ group, seconds: measuredProfileSeconds }];
   }
@@ -3605,9 +3672,7 @@ function splitOversizedCompactGroup(
       isCliProcess || isTooling ? (file: string) => batchWeight([file]) : weightForFile;
     let stripes: string[][];
     if (packTooling) {
-      // Balanced thirds of a ~301s parent each consume a 150s job. Fill the
-      // budget first so unrelated families can share the small remainder.
-      // Hybrid retains balanced children for its faster Blacksmith admission.
+      // Retain the normal file partition; unrelated families share its tails.
       const discoveryOrder = (a: string, b: string) => files.indexOf(a) - files.indexOf(b);
       const packFiles = (patterns: string[], secondsCap: number) =>
         packNodeTestGroups(
@@ -3616,10 +3681,17 @@ function splitOversizedCompactGroup(
           ),
           (bin, file) => batchWeight([...bin, file]) <= secondsCap,
         ).map((batch) => batch.toSorted(discoveryOrder));
-      stripes = packFiles(files, COMPACT_EXCLUSIVE_JOB_SECONDS);
+      // Full children plus small tails can strand a whole row even when the
+      // files fit. On overflow, expose smaller file envelopes for placement.
+      const refineTooling =
+        splitHostedToolingTails && !hostedToolingTailBudgets && !hostedToolingTailDonation;
+      stripes = refineTooling
+        ? packFiles(files, COMPACT_EXCLUSIVE_JOB_SECONDS / 2)
+        : packFiles(files, COMPACT_EXCLUSIVE_JOB_SECONDS);
       const tail = stripes.at(-1);
       if (
         splitHostedToolingTails &&
+        !refineTooling &&
         tail &&
         tail.length > 1 &&
         batchWeight(tail) <= COMPACT_EXCLUSIVE_JOB_SECONDS
@@ -3760,6 +3832,9 @@ function splitOversizedCompactGroup(
       : runnerBackend === "hybrid"
         ? Math.max(completeBlacksmithSeconds, completeHostedSeconds)
         : completeBlacksmithSeconds;
+  // A measured two-worker envelope must keep that ceiling after its children move to solo rows.
+  const measuredGroup =
+    parallelCommands && completeMeasuredSeconds > 0 ? { ...group, env: timingEnv } : group;
   if (
     !runtimePartition &&
     !exceedsHostedFileLimit &&
@@ -3769,7 +3844,7 @@ function splitOversizedCompactGroup(
   ) {
     return [
       {
-        group,
+        group: measuredGroup,
         seconds: parallelCommands
           ? Math.max(
               profileSeconds,
@@ -3863,23 +3938,38 @@ function splitOversizedCompactGroup(
       );
     }
   }
-  return stripes.map((patterns, index) => {
+  return stripes.flatMap((patterns, index) => {
     const timingKey = timingGeneration.timingKeys[index]!;
     const child: NodeTestShardGroup = {
-      ...group,
+      ...measuredGroup,
       includePatterns: patterns,
       pretestBuildMode: mergeVitestPretestBuildModes(patterns.map((file) => buildModes.get(file))),
       shard_name: `${group.shard_name}-hosted-${index + 1}`,
       timing_key: timingKey,
     };
     if (isTooling) {
-      return {
-        group: child,
-        seconds: estimateParallelToolingSeconds(child, patterns, runnerBackend),
-      };
+      return [
+        { group: child, seconds: estimateParallelToolingSeconds(child, patterns, runnerBackend) },
+      ];
     }
-    if (isParallelAgentsCoreGroup(group) && childTimings[timingKey] !== undefined) {
-      return { group: child, seconds: estimateCompactStripeSeconds(child, runnerBackend) };
+    const measuredChild = estimateCompactStripeSeconds(child, runnerBackend);
+    if (measuredChild > 0) {
+      if (
+        measuredChild > COMPACT_SERIAL_NODE_TEST_JOB_SECONDS &&
+        !child.requiresDist &&
+        !child.pretestBuildMode &&
+        patterns.length > 1 &&
+        isRuntimePlacementIncludePatterns(patterns) &&
+        (child.env?.OPENCLAW_VITEST_MAX_WORKERS ?? "2") === "2"
+      ) {
+        // Repartition this measured envelope only; its siblings can have different worker policies.
+        return splitOversizedCompactGroup(
+          { ...child, env: { ...child.env, ...PINNED_COMPACT_GROUP_ENV } },
+          runnerBackend,
+          measuredChild,
+        );
+      }
+      return [{ group: child, seconds: measuredChild }];
     }
     const childWorkers = isAutoReplyReplyGroup(child)
       ? compactEffectiveFileWorkers(child, patterns.length)
@@ -3903,28 +3993,30 @@ function splitOversizedCompactGroup(
             (runnerBackend === "hybrid" ? COMPACT_HYBRID_GROUP_SECONDS_SCALE : 1)) /
             childWorkers,
         );
-    return {
-      group: child,
-      // Round once at the job boundary; per-child rounding can duplicate a build
-      // when many small consumers together still fit one preparation budget.
-      seconds: Math.max(
-        parallelCommands ? commandFileSecondsFloor(patterns, runnerBackend) : 0,
-        legacyCommandTimingKeys[index]
-          ? estimateLegacyCommandStripeSeconds(
-              patterns,
-              legacyCommandTimingKeys[index],
-              runnerBackend,
-            )
-          : 0,
-        projectedSeconds,
-        previousWorkerTimingKeys[index]
-          ? estimateCompactStripeSeconds(
-              { ...group, timing_key: previousWorkerTimingKeys[index] },
-              runnerBackend,
-            )
-          : 0,
-      ),
-    };
+    return [
+      {
+        group: child,
+        // Round once at the job boundary; per-child rounding can duplicate a build
+        // when many small consumers together still fit one preparation budget.
+        seconds: Math.max(
+          parallelCommands ? commandFileSecondsFloor(patterns, runnerBackend) : 0,
+          legacyCommandTimingKeys[index]
+            ? estimateLegacyCommandStripeSeconds(
+                patterns,
+                legacyCommandTimingKeys[index],
+                runnerBackend,
+              )
+            : 0,
+          projectedSeconds,
+          previousWorkerTimingKeys[index]
+            ? estimateCompactStripeSeconds(
+                { ...group, timing_key: previousWorkerTimingKeys[index] },
+                runnerBackend,
+              )
+            : 0,
+        ),
+      },
+    ];
   });
 }
 
@@ -3957,15 +4049,12 @@ export function packNodeTestGroups<Group>(
             const nextRight: [Group, ...Group[]] = [...right];
             nextLeft[leftSlot] = rightGroup;
             nextRight[rightSlot] = leftGroup;
-            if (!admits(nextLeft) || !admits(nextRight)) {
-              continue;
-            }
             const target = canShareJob(nextLeft, group)
               ? nextLeft
               : canShareJob(nextRight, group)
                 ? nextRight
                 : undefined;
-            if (target) {
+            if (target && admits(nextLeft) && admits(nextRight)) {
               target.push(group);
               left.splice(0, left.length, ...nextLeft);
               right.splice(0, right.length, ...nextRight);
@@ -4312,6 +4401,7 @@ function createCompactNodeTestShardBundles(
         ? splitOversizedCompactGroup(
             group,
             options.runnerBackend,
+            0,
             runtimePartition,
             splitHostedToolingTails,
             hostedToolingTailBudgets,
@@ -4363,10 +4453,12 @@ function createCompactNodeTestShardBundles(
         },
         options.runnerBackend ?? "blacksmith",
       );
-      // Hosted jobs keep the strongest declared owner; smaller ordinary groups
-      // can fill that capacity without changing their process or worker policy.
-      const sharesHostedCapacity =
-        options.runnerBackend === "github" &&
+      // Ordinary packed self-hosted jobs already receive the 32-class. Share
+      // those slots across logical classes while keeping runtime owners separate.
+      const sharesOrdinaryCapacity =
+        (options.runnerBackend === "github" ||
+          ((isBlacksmithProfile || options.runnerBackend === "hybrid") &&
+            !planned.group.pretestBuildMode)) &&
         !planned.group.requiresDist &&
         !isExclusiveCompactGroup(planned.group) &&
         runnerRank(planned.group) >= 0;
@@ -4378,7 +4470,7 @@ function createCompactNodeTestShardBundles(
             (planned.group.includePatterns?.length ?? 0) > 32) ||
           planned.group.includePatterns?.includes(HOSTED_MAIN_UPDATE_TEST));
       const key = JSON.stringify([
-        sharesHostedCapacity ? "hosted-ordinary" : planned.group.runner,
+        sharesOrdinaryCapacity ? "ordinary" : planned.group.runner,
         shard.requiresDist,
         // Keep measured heavy children alone despite their stale packing estimates.
         // Small Gateway tails and its runtime prerequisite keep ordinary packing.
@@ -4390,8 +4482,8 @@ function createCompactNodeTestShardBundles(
       } else {
         groupsByRunner.set(key, [planned.group]);
       }
-      // The splitter retains parent floors unless an agents-core child has its
-      // own parallel measurement. Membership changes cannot reuse that sample.
+      // Exact child measurements replace parent projections. Changed membership
+      // keeps its parent floor until the new workload has an observation.
       if (
         selectedTooling ||
         isParallelCommandsGroup(group) ||
@@ -4411,11 +4503,27 @@ function createCompactNodeTestShardBundles(
   const prepareStripe = (group: NodeTestShardGroup) => {
     let facts = stripeFacts.get(group);
     if (!facts) {
+      const seconds = Math.max(
+        synthesizedSplitSeconds.get(compactGroupTimingKey(group)) ?? 0,
+        estimateCompactStripeSeconds(group, options.runnerBackend),
+      );
       facts = {
-        seconds: Math.max(
-          synthesizedSplitSeconds.get(compactGroupTimingKey(group)) ?? 0,
-          estimateCompactStripeSeconds(group, options.runnerBackend),
-        ),
+        // Worker selection after packing may lower a price, never introduce a
+        // previously uncharged file floor or measured worker-specific wall.
+        seconds: isParallelCommandsGroup(group)
+          ? Math.max(
+              seconds,
+              estimateCommandWorkerSeconds(
+                group,
+                seconds,
+                Math.min(
+                  options.runnerBackend === "github" ? 2 : 8,
+                  readPositiveEnvInt("OPENCLAW_VITEST_MAX_WORKERS", group.env ?? {}, 8),
+                ),
+                options.runnerBackend,
+              ).seconds,
+            )
+          : seconds,
         family: compactStripeFamily(group),
       };
       stripeFacts.set(group, facts);
@@ -4463,6 +4571,15 @@ function createCompactNodeTestShardBundles(
         runner,
       ));
   const hostedToolingGroups: NodeTestShardGroup[] = [];
+  const maximumInitialBinSeconds = Math.max(
+    COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS,
+    COMPACT_SERIAL_NODE_TEST_JOB_SECONDS,
+    COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS,
+    COMPACT_EXCLUSIVE_JOB_SECONDS,
+    COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS,
+    COMPACT_LARGE_NODE_TEST_JOB_SECONDS,
+    COMPACT_SMALL_NODE_TEST_JOB_SECONDS,
+  );
   let packedBins = [...groupsByRunner.values()].flatMap((groups) => {
     const usesBlacksmithRunner = usesBlacksmithCapacity(groups[0].runner);
     // Admit the final groups with their shared prerequisite. Rebalancing after
@@ -4487,6 +4604,9 @@ function createCompactNodeTestShardBundles(
       group: NodeTestShardGroup,
     ) => {
       const exclusive = isExclusiveCompactGroup(group);
+      if (isExclusiveCompactGroup(candidate[0]) !== exclusive) {
+        return false;
+      }
       // Keep ordinary work off serial runtime hosts. Hybrid exclusive/dist bins
       // retain their existing prerequisite sharing and admission policy.
       if (
@@ -4496,6 +4616,12 @@ function createCompactNodeTestShardBundles(
         return false;
       }
       const combined = [...candidate, group];
+      const combinedSeconds = estimateBinSeconds(combined);
+      // Exchange candidates usually overflow before their finer policy matters.
+      // Every multi-group admission below has one of these bounded budgets.
+      if (combinedSeconds > maximumInitialBinSeconds) {
+        return false;
+      }
       // Spend the larger budget only on a complete no-build CLI bin. Each child
       // keeps its 150s admission limit, worker budget and separate process.
       const sharesSerialCliBudget =
@@ -4514,29 +4640,28 @@ function createCompactNodeTestShardBundles(
         combined.every((entry) => entry.pretestBuildMode !== undefined && !entry.requiresDist);
       const serialSecondsCap = sharesSerialCliBudget
         ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS
-        : exclusive && !sharesHostedBuild
-          ? COMPACT_EXCLUSIVE_JOB_SECONDS
-          : usesExpandedRunnerProfile(options.runnerBackend)
-            ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
-            : resolveCiNodeTestRunnerClass(group.runner).secondsCap;
+        : combined.every(isParallelToolingGroup)
+          ? COMPACT_SERIAL_NODE_TEST_JOB_SECONDS
+          : exclusive && !sharesHostedBuild
+            ? COMPACT_EXCLUSIVE_JOB_SECONDS
+            : usesExpandedRunnerProfile(options.runnerBackend)
+              ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
+              : resolveCiNodeTestRunnerClass(group.runner).secondsCap;
       const parallel =
         usesBlacksmithRunner &&
         combined.every(isParallelCompactGroup) &&
         combined.every((entry) => estimateBinSeconds([entry]) <= serialSecondsCap);
-      const secondsCap = parallel ? COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS : serialSecondsCap;
-      return (
-        isExclusiveCompactGroup(candidate[0]) === exclusive &&
-        admitsCompactBin(combined, secondsCap, estimateBinSeconds, {
-          sharedFamily: sharesSerialCliBudget,
-          parallel,
-        })
-      );
+      const secondsCap = parallel
+        ? combined.some((entry) => entry.configs.some(isExclusiveCiTestConfig))
+          ? COMPACT_SERIAL_NODE_TEST_JOB_SECONDS
+          : COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS
+        : serialSecondsCap;
+      return admitsCompactBin(combined, secondsCap, () => combinedSeconds, {
+        sharedFamily: sharesSerialCliBudget,
+        parallel,
+      });
     };
-    const bins = packNodeTestGroups(
-      anchorGroups,
-      canShareCompactJob,
-      options.runnerBackend === "github",
-    );
+    const bins = packNodeTestGroups(anchorGroups, canShareCompactJob, true);
     if (options.runnerBackend === "github") {
       for (const bin of bins) {
         bin.sort((a, b) => runnerRank(b) - runnerRank(a));
@@ -4559,6 +4684,10 @@ function createCompactNodeTestShardBundles(
       hasDistinctStripeFamilies(combined)
     );
   };
+  const hostedBinBudget = (groups: NodeTestShardGroup[]) =>
+    groups.every(isParallelToolingGroup)
+      ? COMPACT_SERIAL_NODE_TEST_JOB_SECONDS
+      : COMPACT_EXCLUSIVE_JOB_SECONDS;
   if (packsHostedTooling) {
     const anchors = packedBins;
     const hostedGroups = hostedToolingGroups.toSorted(
@@ -4578,11 +4707,18 @@ function createCompactNodeTestShardBundles(
     const canShareHostedUnit = (
       candidate: readonly [HostedUnit, ...HostedUnit[]],
       unit: HostedUnit,
-    ) =>
-      isHostedToolingGroup(unit[0]) &&
-      canShareHostedGroup(candidate.flat(), unit[0]) &&
-      estimateBinSeconds([...candidate.flat(), unit[0]]) <= COMPACT_EXCLUSIVE_JOB_SECONDS;
-    packedBins = packNodeTestGroups(units, canShareHostedUnit).map(
+    ) => {
+      if (!isHostedToolingGroup(unit[0])) {
+        return false;
+      }
+      const groups = candidate.flat();
+      if (!canShareHostedGroup(groups, unit[0])) {
+        return false;
+      }
+      const combined = [...groups, ...unit];
+      return estimateBinSeconds(combined) <= hostedBinBudget(combined);
+    };
+    packedBins = packNodeTestGroups(units, canShareHostedUnit, true).map(
       (bin) => bin.flat() as HostedUnit,
     );
     // Preserve successful plans; compare one alternate only after tail splitting still overflows.
@@ -4598,7 +4734,7 @@ function createCompactNodeTestShardBundles(
           )
           .map((group) => [group]),
       ] as HostedUnit[];
-      const alternateBins = packNodeTestGroups(alternateUnits, canShareHostedUnit).map(
+      const alternateBins = packNodeTestGroups(alternateUnits, canShareHostedUnit, true).map(
         (bin) => bin.flat() as HostedUnit,
       );
       if (alternateBins.length < packedBins.length) {
@@ -4640,7 +4776,8 @@ function createCompactNodeTestShardBundles(
         bin.some((group) =>
           group.includePatterns?.some((file) => TOOLING_DECLARATION_COMPILER_TEST_FILES.has(file)),
         )) ||
-      (usesBlacksmithCapacity(runner) && bin.some((group) => group.shard_name === "agentic-cli"))
+      (usesBlacksmithCapacity(runner) &&
+        bin.some((group) => MEASURED_CLI_GROUP_RE.test(group.shard_name)))
         ? EXTRA_LARGE_NODE_TEST_RUNNER
         : runner;
     compactJobs.push({
@@ -4684,7 +4821,9 @@ function createCompactNodeTestShardBundles(
           0,
           ...packedBins
             .filter((candidate) => canShareHostedGroup(candidate, group))
-            .map((candidate) => COMPACT_EXCLUSIVE_JOB_SECONDS - estimateBinSeconds(candidate)),
+            .map(
+              (candidate) => hostedBinBudget([...candidate, group]) - estimateBinSeconds(candidate),
+            ),
         );
         if (available > 0) {
           tailBudgets.set(group.shard_name.replace(/-hosted-\d+$/u, ""), available);
@@ -4905,11 +5044,16 @@ function createCompactNodeTestShardBundles(
       const adjusted = estimateCommandWorkerSeconds(
         group,
         previousSeconds,
-        workers,
+        Math.min(
+          workers,
+          readPositiveEnvInt("OPENCLAW_VITEST_MAX_WORKERS", group.env ?? {}, workers),
+        ),
         options.runnerBackend,
       );
       savedSeconds += previousSeconds - adjusted.seconds;
-      return { ...group, timing_key: adjusted.timingKey };
+      const prepared = { ...group, timing_key: adjusted.timingKey };
+      stripeFacts.set(prepared, { ...prepareStripe(group), seconds: adjusted.seconds });
+      return prepared;
     });
     job.predictedSeconds = Math.ceil(job.predictedSeconds! - savedSeconds);
   }
@@ -4939,6 +5083,24 @@ function createCompactNodeTestShardBundles(
     throw new Error(
       `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${compactJobCap} jobs (${measuredJobs.length} planned)`,
     );
+  }
+  for (const job of measuredJobs) {
+    // Match the executor's ordered two-slot queue, including its indivisible
+    // longest child. Aggregate work remains the packing/admission currency.
+    const slots = Array.from({ length: job.planConcurrency ?? 1 }, () => 0);
+    if (slots.length === 1) {
+      const preparation = job.pretestBuildMode
+        ? VITEST_PRETEST_BUILD_SECONDS[job.pretestBuildMode] *
+          (options.runnerBackend === "github" ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1)
+        : 0;
+      job.predictedTestSeconds = Math.max(0, (job.predictedSeconds ?? 0) - Math.round(preparation));
+      continue;
+    }
+    for (const group of job.groups) {
+      const slot = slots.indexOf(Math.min(...slots));
+      slots[slot]! += estimateStripeSeconds(group);
+    }
+    job.predictedTestSeconds = Math.ceil(Math.max(...slots));
   }
   return measuredJobs.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
 }

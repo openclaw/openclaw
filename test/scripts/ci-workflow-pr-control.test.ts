@@ -82,13 +82,17 @@ describe("PR failure cancellation", () => {
         runAttempt: 1,
         runnerBackend: runnerProfile,
         runnerProfile,
-        preflightOutputs: manifest.outputs,
+        preflightOutputs: { ...manifest.outputs, baseline_ratchets_result: "success" },
         additionalNeeds: {
           "check-plan": { outputs: manifest.checkPlanOutputs, result: "success" },
         },
       };
       const evaluate = (value: string) =>
         evaluateWorkflowExpression(value.startsWith("${{") ? value : `\${{ ${value} }}`, context);
+      expect(evaluate(workflow.jobs["checks-baseline-ratchets"].if)).toBe(false);
+      expect(manifest.outputs.baseline_ratchets_in_preflight).toBe(
+        manifest.outputs.run_baseline_ratchets,
+      );
       let admitted = 0;
       for (const [name, job] of Object.entries(workflow.jobs) as Array<
         [

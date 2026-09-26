@@ -37,6 +37,27 @@ The table compares eleven successful B1/R1 main runs with five later successful 
 
 Independent hosted checks reached at most 664 seconds in this sample. Artifact builds reached 898 seconds before the shared preflight and gate; they retain Blacksmith. Only the gate depends on `build-artifacts`: the workflow does not contain a serial build-to-test job dependency.
 
+The package-boundary check now requests the existing Blacksmith 32-class when
+its unchanged routing policy selects Blacksmith. In successful PR run
+`36248684656`, its 16-class allocation delivered four CPUs and the existing
+two-CPU reservation admitted two compilers. The 527-second check comprised
+257 seconds of declaration preparation and 268 seconds compiling all 125
+plugins. The 32-class delivers eight CPUs, allowing four compilers under that
+same policy. It adds no jobs or registrations. At the observed 569-second job
+duration, doubling the class would add 151.7 class-vCPU-minutes, or 1.17% of
+that run's 12,921.2 total; any speedup still requires native measurement. Hosted,
+retry, trust, and cache policies remain unchanged.
+
+Exact plugin envelopes and unsplit two-worker command envelopes now feed the
+existing timing owner using config, complete file inventory, and worker-bound
+identities. Plugin row ordinals never identify a workload. Static plugin rates
+remain the fallback for unmeasured selections, and the refitter still requires
+two independent runs before replacing a price. Conservative single-run floors
+are explicitly labeled in the committed timing provenance. An exact measured
+multi-file core child above 300 seconds can split again without repricing its
+siblings or combining unlike capacity samples into a parent. A single-file
+overrun remains visible.
+
 | Test family                               | Available complete-job evidence                                                    | Placement and remaining measurement                                                        |
 | ----------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Compact large, baseline bin 13            | Blacksmith 932 [967]s across five runs                                             | Retain Blacksmith; correct underestimated serial packing                                   |
@@ -119,12 +140,12 @@ qualification.
 The change adds three actual Blacksmith registrations on ordinary hybrid main
 and same-repository PRs. Trusted fork PRs using the logical GitHub profile emit
 five core-lint rows, so their increase can be six including the gate. A fresh
-current-source audit totals 70 potentially self-hosted non-Node rows across the
+current-source audit totals 71 potentially self-hosted non-Node rows across the
 supported automatic main/PR profiles. This conservative union includes five
 core-lint rows, five core-type rows, five Windows rows, and thirteen UI E2E rows;
 its profile maxima do not all coexist. The six extension-lint rows stay hosted.
 
-Retain an 84-row non-Node allowance, leaving fourteen rows reserved above that
+Retain an 84-row non-Node allowance, leaving thirteen rows reserved above that
 union. With the unchanged 70/130 Node caps and four-main/21-PR arrival envelope,
 `4 × (70 + 84) + 21 × (130 + 84) = 5,110`. That leaves 890 below the 6,000
 operating target from the reported 10,000-per-five-minute registration limit.
@@ -132,6 +153,72 @@ This replaces the stale historical `80 + 3 + 1` explanation without spending
 headroom or changing matrix caps. Manual/frozen release jobs and other workflows
 are outside this conditional arrival envelope; it does not establish complete
 organization-wide usage.
+
+## Ratchet admission before Node tests
+
+Selected ratchets now run inside preflight for actual `pull_request` events,
+using its exact merge tree and comparison base. The same command body remains
+in the standalone job for other events, including release-gate merge preparation.
+Node admission and the final gate require the recorded inline step outcome;
+a required skipped or missing result fails. Job counts and hosted-budget
+accounting exclude the removed PR job. Cache trust and runner routing stay unchanged.
+
+Run `36263945802` measured 169 seconds waiting for the ratchet runner, then
+31 seconds of checkout, 10 seconds of setup, and 36 seconds of checks.
+Reusing preflight projects Node admission at about +96 seconds instead of +301,
+while other preflight-dependent lanes start about 46 seconds later. At unchanged
+speeds, moving those 46 seconds onto the existing 16-class and removing the
+82-second 4-class job adds about 6.8 class-vCPU-minutes and removes one registration.
+These are projections: the whole PR wall and aggregate cost require native proof.
+
+The following measurements explain the earlier standalone routing policy.
+
+The five newest broad green PR runs at the September 26 sampling cutoff
+(`36208949888`, `36208857347`, `36208617238`, `36208552952`, and `36208291831`)
+spent 148–173 seconds in hosted `checks-fast-baseline-ratchets`. Checkout took
+31–33 seconds, dependency setup 27–52 seconds, and the ratchets 73–111 seconds.
+Node rows wait for this job, so its full wall is on their critical path.
+Preflight took 89–120 seconds, including 48–83 seconds of manifest planning;
+these hybrid runs already skipped preflight's exact dependency restore.
+
+Trusted same-repository hybrid PR first attempts, automatic main runs, and admitted qualification dispatches
+now request the existing Blacksmith 4-class for the ratchet job. Nearby default-Blacksmith runs `36208877388` and
+`36209067188` measured complete ratchet jobs of 85 and 91 seconds. Their setup
+took 12–15 seconds and ratchets 39–40 seconds. These different-head observations
+project 57–88 seconds less Node admission delay; the changed workflow still
+needs an exact-head run to establish the saving.
+
+Using the slower 91-second observation, the route adds at most a modeled
+`4 × 91 / 60 = 6.07` Blacksmith vCPU-minutes per eligible run. It adds no jobs
+and one actual hybrid Blacksmith registration. The job already belonged to the
+potentially self-hosted non-Node union under the default backend, so the existing
+84-row allowance and 5,110-registration envelope stay unchanged. Hosted routing
+remains for the GitHub override, hybrid retries, ordinary manual or frozen targets, untrusted
+contributors, and noncanonical repositories. Ratchet checks, merge-tree
+validation, Node admission, dependency reconciliation, and deadlines are unchanged.
+
+The same five runs spent 165–209 seconds in the separate `check-plan` prerequisite.
+Its compiler inventory queries took most of the 93–154-second materialization
+step; every narrowed type/lint row waits for that result. Those runs' central
+test-type checks finished 629–667 seconds after workflow start, so advancing only
+Node admission cannot meet the ten-minute PR objective.
+
+`check-plan` therefore uses the existing 4-class under the same hybrid
+admission, restoring exact dependencies only for eligible same-repository jobs
+on an actual self-hosted runner. The route adds one Blacksmith registration
+within the existing non-Node reserve. Keeping the full observed 209-second
+hosted wall as its conservative cost estimate adds 13.93 vCPU-minutes, or 20
+vCPU-minutes with the ratchet estimate. No planner speedup is assumed in this
+cost bound. Native proof must establish the materialization and whole-workflow
+wall; compiler coverage, selected graphs, and all hosted fallbacks remain intact.
+
+The broad fallback PR qualification does not select `check-plan`. Its observed
+wall can validate the broad Node path, but cannot establish the new narrowed
+type/lint critical-path improvement. That claim needs a separate native run
+whose changed-file plan selects this prerequisite.
+
+These two control-job changes apply only to the hybrid backend. RunsOn retains
+hosted ratchets and check planning, including qualification dispatches.
 
 ## RunsOn remains unqualified
 
