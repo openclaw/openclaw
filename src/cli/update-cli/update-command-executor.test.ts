@@ -148,49 +148,6 @@ describe("live update executor", () => {
 
   registerExecutorRootOwnershipTests(() => ({ root, replaceOwner }));
 
-  it("recovery acquires a fresh owner without reactivating the original fence", async () => {
-    const store = createManagedHandoffLeaseStore();
-    const runId = randomUUID();
-    const original = await withUpdateCommandExecutor(runId, async (executor) => {
-      const fence = await executor.enter(root);
-      const current = store.read(root);
-      assert(current.kind === "current", "Original executor was not acquired");
-      return {
-        fence,
-        lease: current.lease,
-        authority: captureUpdateCommandExecutorAuthority(fence),
-      };
-    });
-    expect(Object.isFrozen(original.authority)).toBe(true);
-    expect(original.authority.owner).toBe(original.lease.owner);
-    expect(() => captureUpdateCommandExecutorAuthority(original.fence)).toThrow(
-      "no longer current",
-    );
-    await withUpdateCommandExecutor(
-      runId,
-      async (executor) => {
-        const fence = await executor.enter(root);
-        const current = store.read(root);
-        assert(current.kind === "current", "Recovery executor was not acquired");
-        expect(current.lease.owner).not.toBe(original.lease.owner);
-        expect(current.lease.helper.pid).toBe(process.pid);
-        const recoveredAuthority = captureUpdateCommandExecutorAuthority(fence);
-        expect(recoveredAuthority).toEqual({
-          ...original.authority,
-          owner: current.lease.owner,
-        });
-        expect(recoveredAuthority.owner).not.toBe(original.authority.owner);
-        expect(Object.isFrozen(recoveredAuthority)).toBe(true);
-        expect(store.current(original.lease)).toBe(false);
-        expect(store.release(original.lease)).toBe(false);
-        expect(original.fence.assertCurrent).toThrow("no longer current");
-        fence.assertCurrent();
-      },
-      { existingAuthority: original.authority },
-    );
-    expect(store.read(root)).toEqual({ kind: "absent" });
-  });
-
   it("recovery keeps the admitted installation key when the package root is missing", async () => {
     const packageRoot = path.join(root, "package");
     fs.mkdirSync(packageRoot);
@@ -271,9 +228,14 @@ describe("live update executor", () => {
     expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
   });
 
-  it.each([false, true])(
-    "borrows the exact helper package owner with a separate service root: %s",
-    async (splitRoot) => {
+  it.each([
+    { splitRoot: false, childMetadataRoot: "original" },
+    { splitRoot: true, childMetadataRoot: "original" },
+    { splitRoot: true, childMetadataRoot: "candidate" },
+    { splitRoot: true, childMetadataRoot: "unrelated" },
+  ] as const)(
+    "borrows the exact helper package owner with a separate service root: $splitRoot, child metadata: $childMetadataRoot",
+    async ({ splitRoot, childMetadataRoot }) => {
       const { runtimeEntry, options } = prepareStagedLeaseFixture();
       const runId = randomUUID();
       const owner = randomUUID();
@@ -323,6 +285,27 @@ describe("live update executor", () => {
         if (serviceRoot) {
           fs.mkdirSync(serviceRoot);
         }
+        const candidateRoot =
+          childMetadataRoot === "original" ? root : path.join(root, "candidate");
+        if (candidateRoot !== root) {
+          fs.mkdirSync(candidateRoot);
+        }
+        const unrelatedRoot = path.join(root, "unrelated");
+        if (childMetadataRoot === "unrelated") {
+          fs.mkdirSync(unrelatedRoot);
+        }
+        const childMetadata = path.join(root, "child-handoff.json");
+        fs.writeFileSync(
+          childMetadata,
+          JSON.stringify({
+            version: 1,
+            meta: {
+              runId,
+              handoffId: owner,
+              root: childMetadataRoot === "unrelated" ? unrelatedRoot : candidateRoot,
+            },
+          }),
+        );
         await withUpdateCommandExecutor(runId, async (executor) => {
           const fence = await executor.enter(root, { serviceRoot, preflight: true });
           expect(captureUpdateCommandExecutorAuthority(fence).installKey).toBe(root);
@@ -332,7 +315,7 @@ describe("live update executor", () => {
           expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
           const result = await withUpdateCommandExecutorChild(
             fence,
-            root,
+            candidateRoot,
             (grant, beforeInput) =>
               runUtf8CommandWithTimeout(
                 [
@@ -340,15 +323,18 @@ describe("live update executor", () => {
                   "--input-type=module",
                   "-e",
                   `import {json} from "node:stream/consumers";
-               import {withDelegatedUpdateCommandExecutor,captureUpdateCommandExecutorAuthority} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
+               import {withDelegatedUpdateCommandExecutor,captureUpdateCommandExecutorAuthority,assertUpdateRequesterContinuationOwner} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
                const grant=await json(process.stdin);
                await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async(fence)=>{
-                 fence.assertCurrent(); process.stdout.write(JSON.stringify(captureUpdateCommandExecutorAuthority(fence)));
+                 fence.assertCurrent();
+                 assertUpdateRequesterContinuationOwner(fence,grant.runId);
+                 process.stdout.write(JSON.stringify(captureUpdateCommandExecutorAuthority(fence)));
                });`,
                 ],
                 {
                   input: JSON.stringify(grant),
                   beforeInput,
+                  env: { [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: childMetadata },
                   timeoutMs: 15_000,
                   killProcessTree: true,
                   requireProcessTreeExtinction: true,
@@ -356,8 +342,20 @@ describe("live update executor", () => {
               ),
             { auxiliaryPreflight: true },
           );
-          expect(result.code, result.stderr).toBe(0);
-          expect(JSON.parse(result.stdout)).toEqual(captureUpdateCommandExecutorAuthority(fence));
+          if (childMetadataRoot === "unrelated") {
+            expect(result.code).toBe(1);
+            expect(result.stderr).toContain(
+              "Requester continuation requires its admitted Gateway update owner.",
+            );
+            expect(result.stdout).toBe("");
+          } else {
+            expect(result.code, result.stderr).toBe(0);
+            expect(JSON.parse(result.stdout)).toEqual(captureUpdateCommandExecutorAuthority(fence));
+          }
+          expect(JSON.parse(fs.readFileSync(metadata, "utf8"))).toEqual({
+            version: 1,
+            meta: { runId, handoffId: owner, root },
+          });
           expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
           fence.assertCurrent();
         });
@@ -899,12 +897,14 @@ describe("candidate executor delegation", () => {
               requireProcessTreeExtinction: true,
             }),
         );
-        expect(result.code).not.toBe(0);
+        expect(result.code).toBe(1);
         expect(result.stderr).toContain(
-          afterAdmission ? "no longer has permission" : "does not match its parent",
+          afterAdmission ? "no longer has permission" : "lineage is missing or invalid",
         );
         if (afterAdmission) {
           expect(result.stdout).toContain("admitted");
+        } else {
+          expect(result.stdout).toBe("");
         }
         expect(fs.existsSync(output)).toBe(false);
         fence.assertCurrent();

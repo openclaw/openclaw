@@ -156,7 +156,7 @@ export function createPackageActivationLifetimeFixture() {
     await fsp.mkdir(path.join(packageRoot, "dist/infra"), { recursive: true });
     await fsp.writeFile(
       path.join(packageRoot, "dist/infra/update-migrated-finalize.worker.js"),
-      'console.log(JSON.stringify({ postCoreExecutor: "fd3-pid-start-v1", mutationProtocol: "original-cancellation-v1" }));\n',
+      'console.log(JSON.stringify({ postCoreExecutor: "stdin-pid-start-v1", mutationProtocol: "original-cancellation-v1" }));\n',
     );
   }
 

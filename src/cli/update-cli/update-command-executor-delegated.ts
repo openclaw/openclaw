@@ -166,7 +166,7 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         meta?.runId === runId &&
         meta.handoffId === original.owner &&
         meta.root !== undefined &&
-        resolveUpdateInstallRoot(meta.root) === original.key;
+        [original.key, parent.key].includes(resolveUpdateInstallRoot(meta.root));
       childOwners.set(fence, (childRoot, childOperation, purpose) =>
         owner.run(childRoot, childOperation, purpose),
       );

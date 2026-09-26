@@ -8,9 +8,11 @@ import {
 } from "../cli/update-cli/update-command-executor.js";
 import type {
   UpdateDoctorInput,
+  UpdatePostCoreInput,
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
 } from "../cli/update-cli/update-command-migrated-types.js";
+import { writePostCoreUpdateFailureFile } from "../cli/update-cli/update-command-post-core.js";
 import { finishUpdate } from "../cli/update-cli/update-command-post-update.js";
 import {
   formatUpdateFinalizationError,
@@ -20,15 +22,18 @@ import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-comman
 import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import {
   adoptCandidateManagedServiceStop,
   stopSupervisedPredecessorGateway,
 } from "./update-candidate-predecessor-stop.js";
+import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   recordUpdateDoctorConfigWriteRefusal,
@@ -40,6 +45,10 @@ import {
   POST_CORE_EXECUTOR_CAPABILITY,
   POST_CORE_MUTATION_PROTOCOL,
 } from "./update-post-core-capability.js";
+import {
+  POST_CORE_UPDATE_ENV,
+  POST_CORE_UPDATE_RESULT_PATH_ENV,
+} from "./update-post-core-context.js";
 import {
   createManagedUpdateRequesterAuthority,
   createManagedUpdateRequesterContinuationAuthority,
@@ -82,6 +91,10 @@ async function finalizeMigratedUpdate(): Promise<void> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   const text = Buffer.concat(chunks).toString("utf8");
+  if (process.argv[2] === "--post-core") {
+    // SAFETY: The parent binds this receiver before releasing its private input.
+    return await runDelegatedPostCore(JSON.parse(text) as UpdatePostCoreInput);
+  }
   if (process.argv[2] === "--doctor") {
     // SAFETY: The typed parent sends this private input only after binding this child.
     return await runDelegatedDoctor(JSON.parse(text) as UpdateDoctorInput);
@@ -204,6 +217,64 @@ async function finalizeMigratedUpdate(): Promise<void> {
   };
   // Private response publication follows executor settlement and terminal history.
   await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
+}
+
+async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
+  const resultPath = process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]?.trim();
+  const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  if (
+    !resultPath ||
+    !input.executor ||
+    process.env[POST_CORE_UPDATE_ENV] !== "1" ||
+    process.env[UPDATE_RUN_ID_ENV] !== input.runId ||
+    !executingRoot ||
+    resolveUpdateInstallRoot(executingRoot) !== resolveUpdateInstallRoot(input.root)
+  ) {
+    throw new Error("Post-core update does not match its delegated run and installed runtime.");
+  }
+  if (input.opts.json) {
+    routeLogsToStderr();
+  }
+  // Keep the existing handoff directory/metadata, but do not expose completion
+  // to the waiting parent until this executor and every descendant have settled.
+  process.env[POST_CORE_UPDATE_RESULT_PATH_ENV] = `${resultPath}.pending`;
+  try {
+    await withDelegatedUpdateCommandExecutor(
+      input.executor,
+      input.runId,
+      input.root,
+      async (fence) => {
+        const requesterAuthority = input.requester?.authorizationSource?.startsWith("profile:")
+          ? await createManagedUpdateRequesterContinuationAuthority(input.requester, {
+              runId: input.runId,
+              executor: fence,
+            })
+          : input.requester
+            ? await createManagedUpdateRequesterAuthority(input.requester)
+            : undefined;
+        const { updateCommand } = await import("../cli/update-cli/update-command.js");
+        fence.assertCurrent();
+        if (requesterAuthority?.isCurrent() === false) {
+          throw new UpdateRequesterRevokedError();
+        }
+        await updateCommand({
+          ...input.opts,
+          run: {
+            runId: input.runId,
+            env: { ...process.env },
+            executorFence: fence,
+            ...(requesterAuthority ? { requesterAuthority } : {}),
+          },
+        });
+      },
+    );
+    await fs.rename(`${resultPath}.pending`, resultPath);
+  } catch (error) {
+    if (!hasCommandProcessCleanupError(error)) {
+      await writePostCoreUpdateFailureFile(resultPath, error);
+    }
+    throw error;
+  }
 }
 
 async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {

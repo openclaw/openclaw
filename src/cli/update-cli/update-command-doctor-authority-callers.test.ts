@@ -592,7 +592,7 @@ describe("unproved Doctor authority callers", () => {
         .mockImplementationOnce(async (params) => {
           await resumePostCoreUpdate(params);
           expect(dispatched).toEqual([]);
-          expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+          expect(defaultRuntime.exit).not.toHaveBeenCalled();
           const published = publication.mock.lastCall?.[1];
           expect(published).toBeDefined();
           expect(published?.doctorLint).toBeUndefined();

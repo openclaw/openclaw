@@ -121,10 +121,10 @@ export async function preparePackageActivation(
   const capable = await supportsPostCoreExecutor(params.stageRoot, options.nodeRunner);
   assertOriginal();
   if (!capable) {
-    // Older/respawning targets keep their shipped update path, without a
+    // Older targets keep their shipped update path, without a
     // journal whose post-core receiver cannot prove original ownership.
     options.onUnavailable?.(
-      "Standalone package publication repair is unavailable for this target: its preferred CLI entry does not support delegated post-core execution.",
+      "Standalone package publication repair is unavailable for this target: its update worker does not support delegated post-core execution.",
     );
     return undefined;
   }

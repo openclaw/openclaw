@@ -64,18 +64,19 @@ it.skipIf(process.platform === "win32").each([
       let callbackDurable: boolean | undefined;
       const sync = durability.syncDirectory;
       vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
+        const directoryPath = typeof directory === "string" ? directory : directory.path;
         const phase = !fs.existsSync(previousRoot)
           ? undefined
           : fs.existsSync(f.packageRoot)
             ? "publish"
             : "displace";
-        if (faultEnabled && phase === cut && directory === failedParent) {
+        if (faultEnabled && phase === cut && directoryPath === failedParent) {
           refused++;
           throw failure;
         }
         const result = await sync(directory);
         if (phase) {
-          synced[phase].add(directory);
+          synced[phase].add(directoryPath);
         }
         return result;
       });
