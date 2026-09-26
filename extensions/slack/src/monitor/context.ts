@@ -29,6 +29,7 @@ import type { SlackMessageEvent } from "../types.js";
 import { createSlackAgentViewState } from "./agent-view-state.js";
 import { normalizeSlackSlug } from "./allow-list.js";
 import { createSlackAssistantThreadContextStore } from "./assistant-thread-context.js";
+import { resolveSlackAvatarDownloadUrl } from "./avatar-url.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigEntries } from "./channel-config.js";
 import { normalizeSlackChannelType } from "./channel-type.js";
 import type { SlackIdentityHealth, SlackInstallationIdentity } from "./enterprise-install.js";
@@ -97,6 +98,10 @@ const SLACK_AVATAR_SSRF_POLICY = {
   allowedHostnames: ["avatars.slack-edge.com", "*.slack-edge.com"],
   hostnameAllowlist: ["avatars.slack-edge.com", "*.slack-edge.com"],
 };
+// A failed or unresolvable avatar is remembered so later messages from the same
+// user do not repeat the download attempt (and its log line) on every turn.
+const SLACK_AVATAR_FAILURE_TTL_MS = 30 * 60_000;
+const SLACK_AVATAR_FAILURE_MAX_ENTRIES = 256;
 const SLACK_CHANNEL_DENIAL_WARNING_TTL_MS = 5 * 60_000;
 const SLACK_CHANNEL_DENIAL_WARNING_MAX_ENTRIES = 1024;
 
@@ -151,6 +156,10 @@ function createSlackMonitorContextFields(
   const userCache = new Map<string, { name?: string; imageUrl?: string }>();
   const avatarCache = new Map<string, string>();
   const pendingAvatars = new Set<string>();
+  const failedAvatars = createDedupeCache({
+    ttlMs: SLACK_AVATAR_FAILURE_TTL_MS,
+    maxSize: SLACK_AVATAR_FAILURE_MAX_ENTRIES,
+  });
   // Rate-limit active denials while retaining periodic evidence; bound keys against config churn.
   const channelDenialWarnings = createDedupeCache({
     ttlMs: SLACK_CHANNEL_DENIAL_WARNING_TTL_MS,
@@ -306,12 +315,27 @@ function createSlackMonitorContextFields(
     if (cached) {
       return cached;
     }
+    if (failedAvatars.peek(cacheKey)) {
+      return undefined;
+    }
     if (pendingAvatars.has(cacheKey) || pendingAvatars.size >= SLACK_AVATAR_CACHE_MAX_ENTRIES) {
+      return undefined;
+    }
+    const downloadUrl = resolveSlackAvatarDownloadUrl(
+      imageUrl,
+      SLACK_AVATAR_SSRF_POLICY.hostnameAllowlist,
+    );
+    if (!downloadUrl) {
+      failedAvatars.check(cacheKey);
+      logger.debug(
+        { userId },
+        "Slack conversation avatar host is outside the avatar allowlist and carries no allowlisted fallback",
+      );
       return undefined;
     }
     pendingAvatars.add(cacheKey);
     void saveRemoteMedia({
-      url: imageUrl,
+      url: downloadUrl,
       filePathHint: "conversation-avatar.png",
       maxBytes: SLACK_AVATAR_MAX_BYTES,
       ssrfPolicy: SLACK_AVATAR_SSRF_POLICY,
@@ -320,6 +344,7 @@ function createSlackMonitorContextFields(
         writeLruMapEntry(avatarCache, cacheKey, media.path, SLACK_AVATAR_CACHE_MAX_ENTRIES);
       })
       .catch((error: unknown) => {
+        failedAvatars.check(cacheKey);
         logger.debug(
           { error: formatSlackError(error), userId },
           "Slack conversation avatar download failed",
