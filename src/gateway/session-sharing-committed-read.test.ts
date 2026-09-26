@@ -2,6 +2,7 @@ import { renameSync } from "node:fs";
 import { backup, type DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
 import {
@@ -87,6 +88,20 @@ describe("committed session mutation authorization", () => {
           } finally {
             queries.restore();
           }
+          const prepared = resolveSessionMutationAuthorization({
+            client,
+            method: "chat.send",
+            requestParams: { sessionKey },
+            context,
+            expectedTarget: {
+              ...scope,
+              storePath: resolveDefaultSessionStorePath("main"),
+              sessionId: shared.sessionId,
+            },
+          });
+          expect(prepared.error).toBeNull();
+          expect(prepared.authorization).toBeDefined();
+          prepared.authorization!.assertCurrent();
           const result = capture();
           expect(result.error).toBeNull();
           const authorization = result.authorization;
@@ -150,6 +165,9 @@ describe("committed session mutation authorization", () => {
           replaceSessionEntrySync(scope, { ...shared, sessionId: "replacement", updatedAt: 4 });
           inWriterTransaction(owner.db, () => {
             expect(() => authorization.assertCurrent()).toThrow("session changed before chat.send");
+            expect(() => prepared.authorization!.assertCurrent()).toThrow(
+              "session changed before chat.send",
+            );
           });
           expect(unrelatedParses()).toBe(0);
         } finally {

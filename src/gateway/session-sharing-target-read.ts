@@ -63,6 +63,7 @@ export const readProjectedSessionMutationTarget = (
 export function readSessionMutationTarget(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
+  expectedTarget?: { storePath: string };
   method: string;
   requestParams: unknown;
   sessionScope?: SessionOperatorScope;
@@ -91,7 +92,11 @@ export function readSessionMutationTarget(params: {
     const projection = getSessionRowProjection(params.context);
     const projected =
       projection && readProjectedSessionMutationTarget(params.targetRef, params.cfg, projection);
-    if (projected) {
+    // Prepared callers retain logical locators; resident rows expose physical store paths.
+    if (
+      projected &&
+      (!params.expectedTarget || projected.storePath === params.expectedTarget.storePath)
+    ) {
       return { target: projected, preparedReadSource: projected.readSource, projection };
     }
     if (
