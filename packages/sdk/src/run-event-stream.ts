@@ -1,3 +1,4 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isAssistantRunEvent,
   isTerminalRunEvent,
@@ -8,13 +9,16 @@ import {
 import type { EventHub } from "./event-hub.js";
 import type { OpenClawEvent } from "./types.js";
 
-type RunTerminalSource = { kind: "canonical" } | { kind: "chat"; eventType: OpenClawEvent["type"] };
+type RunTerminalSource =
+  | { kind: "canonical" }
+  | { kind: "chat" | "recovery"; eventType: OpenClawEvent["type"] };
 
 export async function* iterateSdkRunEvents(
   runId: string,
   replayEvents: OpenClawEvent[],
   events: EventHub<OpenClawEvent>,
   filter?: (event: OpenClawEvent) => boolean,
+  signal?: AbortSignal,
 ): AsyncIterable<OpenClawEvent> {
   let hasCanonicalAssistantRunEvent = replayEvents.some(isAssistantRunEvent);
   let terminalSource: RunTerminalSource | undefined = replayEvents.some(isTerminalRunEvent)
@@ -22,6 +26,15 @@ export async function* iterateSdkRunEvents(
     : undefined;
   let previousChatProjectionText: string | undefined;
   const toRunStreamEvent = (event: OpenClawEvent): OpenClawEvent | undefined => {
+    const data = asRecord(event.data);
+    if (
+      !event.raw &&
+      asRecord(data.recovery).projection === "chat" &&
+      typeof data.text === "string"
+    ) {
+      previousChatProjectionText = data.text;
+      return event;
+    }
     const chatProjection = readChatProjection(event);
     if (chatProjection?.state === "delta") {
       if (hasCanonicalAssistantRunEvent) {
@@ -56,8 +69,13 @@ export async function* iterateSdkRunEvents(
     if (isTerminalRunEvent(event)) {
       // Abort broadcasts can arrive chat-first. Collapse matching carriers,
       // while preserving a later authoritative outcome that differs.
-      const duplicate = terminalSource?.kind === "chat" && terminalSource.eventType === event.type;
-      terminalSource = { kind: "canonical" };
+      const duplicate =
+        terminalSource &&
+        terminalSource.kind !== "canonical" &&
+        terminalSource.eventType === event.type;
+      terminalSource = event.raw
+        ? { kind: "canonical" }
+        : { kind: "recovery", eventType: event.type };
       if (duplicate) {
         return undefined;
       }
@@ -68,15 +86,22 @@ export async function* iterateSdkRunEvents(
   const liveSource = events.stream(matches);
   // Iterator creation subscribes before replay yields, so live events queue behind the snapshot.
   const live = liveSource[Symbol.asyncIterator]();
+  const stop = () => {
+    void live.return?.();
+  };
+  signal?.addEventListener("abort", stop, { once: true });
   try {
     for (const event of replayEvents) {
+      if (signal?.aborted) {
+        return;
+      }
       const runEvent = toRunStreamEvent(event);
       if (!runEvent || (filter && !filter(runEvent))) {
         continue;
       }
       yield runEvent;
     }
-    while (true) {
+    while (!signal?.aborted) {
       const next = await live.next();
       if (next.done) {
         break;
@@ -88,6 +113,7 @@ export async function* iterateSdkRunEvents(
       yield runEvent;
     }
   } finally {
+    signal?.removeEventListener("abort", stop);
     await live.return?.();
   }
 }

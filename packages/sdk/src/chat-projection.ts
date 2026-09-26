@@ -67,7 +67,9 @@ export function readChatProjectionText(payload: Record<string, unknown>): string
 }
 
 export function isAssistantRunEvent(event: OpenClawEvent): boolean {
-  return event.type === "assistant.delta" || event.type === "assistant.message";
+  return (
+    Boolean(event.raw) && (event.type === "assistant.delta" || event.type === "assistant.message")
+  );
 }
 
 export function isTerminalRunEvent(event: OpenClawEvent): boolean {

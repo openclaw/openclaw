@@ -205,14 +205,31 @@ snapshot is evicted. Its `rawEvents()` and each normalized event's `raw` field
 still expose the original wire event, including omitted `message` fields.
 Normalized assistant events retain cumulative `data.text` for their current item;
 `data.delta` keeps its wire meaning, and the raw event can omit `data.text`.
-Active chat baselines remain protected while their connection is current. On the
-first event after reconnect, the SDK retires the previous connection's baseline
-protection and keeps only its bounded replay history. Ending the transport event
-stream also retires that protection. Custom `OpenClawTransport` implementations
-must deliver terminal outcomes or end a retired event stream; the generic
-transport interface does not expose a reconnect notification.
+Active chat baselines remain protected while their connection is current. The
+SDK's concrete Gateway transport reconciles outstanding owned or observed runs
+after reconnect through `agent.wait`. Active chat runs can recover display text
+from an exact `chat.history.inFlightRun` match; newer live text always wins over
+an older history response. Assistant-item text re-baselines on its next wire
+snapshot because history contains display text, not raw assistant-item text.
+
+Recovered completion uses the authoritative wait result and the exact terminal
+transcript occurrence, fetching a full message when history truncated it. The
+bounded `terminalReply.text` summary is never used as complete output. Local
+normalized recovery events have no `raw` field. Their `data.recovery.status`
+reports `rebaselined`, `recovered`, or `unavailable`; unavailable full text omits
+`outputText`. A bare wait timeout is not a run terminal. Terminal observations
+have finite retention, and sessionless or unavailable transcript occurrences
+cannot be reconstructed; unknown outcomes remain unsettled with a recovery
+notice. Closing the client or returning a run iterator cancels its recovery work.
+
+Reconnect retires old text baselines. Ending the transport event stream also
+releases outstanding-run protection, retaining only bounded replay. Custom
+`OpenClawTransport` implementations must deliver terminal outcomes or end a
+retired event stream; the generic transport interface does not expose reconnect
+notifications and does not receive this automatic reconciliation.
 Confirmed session unsubscribe also releases that session's baseline protection;
-the acknowledgment cannot retire a newer subscription's snapshot. The concrete
+it also releases unobserved runs accepted before their first output. The
+acknowledgment cannot retire a newer acceptance or subscription's snapshot. The concrete
 Gateway transport preserves acknowledgment and event order. Custom transports
 must preserve that ordering or end their retired event stream.
 

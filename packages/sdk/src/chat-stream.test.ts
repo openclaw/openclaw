@@ -1,3 +1,4 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import {
   createAgentEvent,
@@ -241,11 +242,21 @@ describe("SDK chat streaming", () => {
   it.each(["chat", "assistant"])(
     "releases %s baseline protection when a custom event stream ends",
     async (stream) => {
-      const { transport, oc } = createClientFixture();
+      const { transport, oc } = createClientFixture({
+        "chat.send": (params) => ({
+          status: "started",
+          runId: asRecord(params).idempotencyKey,
+        }),
+      });
       try {
         await oc.connect();
         const observedLast = observeGatewaySequence(oc, 101);
         for (let seq = 1; seq <= 101; seq += 1) {
+          await oc.request("chat.send", {
+            sessionKey: `session-${seq}`,
+            message: "hello",
+            idempotencyKey: `run-${seq}`,
+          });
           transport.emit(
             stream === "chat"
               ? createChatEvent(`run-${seq}`, `session-${seq}`, seq, "delta", "unfinished", seq, {

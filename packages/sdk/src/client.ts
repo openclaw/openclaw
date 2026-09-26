@@ -4,7 +4,12 @@ import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@o
 import { SdkRunReplay } from "./run-event-replay.js";
 import { iterateSdkRunEvents } from "./run-event-stream.js";
 import { readSdkRunTimestamp, resolveSdkRunWaitStatus } from "./run-terminal.js";
-import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
+import {
+  GatewayClientTransport,
+  isConnectableTransport,
+  observeGatewayReconnects,
+  RUN_SUBMISSION_METHODS,
+} from "./transport.js";
 import type {
   AgentsCreateParams,
   AgentsDeleteParams,
@@ -172,6 +177,7 @@ export class OpenClaw {
 
   private readonly transport: OpenClawTransport;
   private readonly replay = new SdkRunReplay();
+  private readonly stopReconnectObserver: () => void;
   private connected = false;
   private closed = false;
   private eventPumpPromise: Promise<void> | null = null;
@@ -187,6 +193,9 @@ export class OpenClaw {
         password: options.password,
         requestTimeoutMs: options.requestTimeoutMs,
       });
+    this.stopReconnectObserver = observeGatewayReconnects(this.transport, (context) => {
+      void this.replay.recover(context);
+    });
     this.agents = new AgentsNamespace(this);
     this.sessions = new SessionsNamespace(this);
     this.runs = new RunsNamespace(this);
@@ -222,6 +231,8 @@ export class OpenClaw {
       return;
     }
     this.closed = true;
+    this.stopReconnectObserver();
+    this.replay.endStream();
     this.closePromise = (async () => {
       try {
         await this.transport.close?.();
@@ -248,6 +259,9 @@ export class OpenClaw {
     await this.connect();
     this.assertOpen();
     const result = await this.transport.request<T>(method, params, options);
+    if (RUN_SUBMISSION_METHODS.has(method)) {
+      this.replay.noteRunAcceptance(params, result);
+    }
     if (method === "sessions.messages.unsubscribe") {
       await this.replay.retireUnsubscribedSession(params, result);
     }
@@ -262,7 +276,19 @@ export class OpenClaw {
     runId: string,
     filter?: (event: OpenClawEvent) => boolean,
   ): AsyncIterable<OpenClawEvent> {
-    return this.iterateRunEvents(runId, filter);
+    return {
+      [Symbol.asyncIterator]: () => {
+        const controller = new AbortController();
+        const iterator = this.iterateRunEvents(runId, filter, controller.signal);
+        return {
+          next: () => iterator.next(),
+          return: async () => {
+            controller.abort();
+            return await iterator.return(undefined);
+          },
+        };
+      },
+    };
   }
 
   /** Received wire events, without the cumulative chat projection used by runEvents(). */
@@ -290,10 +316,25 @@ export class OpenClaw {
   private async *iterateRunEvents(
     runId: string,
     filter?: (event: OpenClawEvent) => boolean,
-  ): AsyncIterable<OpenClawEvent> {
+    signal?: AbortSignal,
+  ): AsyncGenerator<OpenClawEvent> {
     await this.connect();
     this.assertOpen();
-    yield* iterateSdkRunEvents(runId, this.replay.snapshot(runId), this.replay.events, filter);
+    if (signal?.aborted) {
+      return;
+    }
+    const release = this.replay.observeRun(runId);
+    try {
+      yield* iterateSdkRunEvents(
+        runId,
+        this.replay.snapshot(runId),
+        this.replay.events,
+        filter,
+        signal,
+      );
+    } finally {
+      release();
+    }
   }
 
   private startEventPump(): Promise<void> {
@@ -340,7 +381,7 @@ export class OpenClaw {
             hasPumpError = true;
           }
         }
-        this.replay.retireBaselines();
+        this.replay.endStream();
       }
       if (hasPumpError) {
         this.replay.events.close(pumpError);

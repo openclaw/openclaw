@@ -1,4 +1,6 @@
 import { mergeChatStreamMessage } from "@openclaw/gateway-client";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import {
   isTerminalRunEvent,
   projectAssistantRunEvent,
@@ -12,32 +14,106 @@ import {
   readUnsubscribedSession,
   type ReplaySessionScope,
 } from "./replay-scope.js";
+import { recoverTerminalReply } from "./run-recovery-text.js";
+import { resolveSdkRunWaitStatus } from "./run-terminal.js";
 import {
   readGatewayEventConnectionEpoch,
   readGatewayEventReceipt,
   takeGatewayResponseReceipt,
   type GatewayEventReceipt,
+  type GatewayReconnectContext,
 } from "./transport.js";
 import type { GatewayEvent, OpenClawEvent } from "./types.js";
 
 const MAX_REPLAY_RUNS = 100;
 const MAX_REPLAY_EVENTS_PER_RUN = 500;
 
+type ReplayRun = {
+  events: OpenClawEvent[];
+  chatMessage?: unknown;
+  assistant?: AssistantProjection;
+  scope?: ReplaySessionScope;
+  textReceipt?: GatewayEventReceipt;
+  acceptanceReceipt?: GatewayEventReceipt;
+  textRevision: number;
+  observers: number;
+  outstanding: boolean;
+  settled?: boolean;
+  owned?: boolean;
+  canonicalAssistant?: boolean;
+  needsRecovery?: boolean;
+  recovery?: AbortController;
+};
+
 /** Owns normalized event publication, retained run text, and delivery-lifetime retirement. */
 export class SdkRunReplay {
   readonly events = new EventHub<OpenClawEvent>();
-  private readonly replayByRunId = new Map<
-    string,
-    {
-      events: OpenClawEvent[];
-      chatMessage?: unknown;
-      assistant?: AssistantProjection;
-      scope?: ReplaySessionScope;
-      textReceipt?: GatewayEventReceipt;
-    }
-  >();
+  private readonly replayByRunId = new Map<string, ReplayRun>();
   private readonly consumedEvents = new WeakSet<GatewayEvent>();
   private replayConnectionEpoch: object | undefined;
+  private recoveryContext: GatewayReconnectContext | undefined;
+  private recoverySequence = 0;
+  private closed = false;
+  private streamEnded = false;
+
+  private run(runId: string): ReplayRun {
+    let run = this.replayByRunId.get(runId);
+    if (!run) {
+      run = { events: [], textRevision: 0, observers: 0, outstanding: false };
+      this.replayByRunId.set(runId, run);
+    }
+    return run;
+  }
+
+  observeRun(runId: string): () => void {
+    const run = this.run(runId);
+    run.observers++;
+    run.outstanding ||= !run.settled;
+    if (
+      this.recoveryContext?.epoch.current &&
+      run.outstanding &&
+      run.needsRecovery &&
+      !run.recovery
+    ) {
+      void this.recoverRun(this.recoveryContext, runId, run);
+    }
+    return () => {
+      run.observers--;
+      if (run.observers === 0) {
+        run.owned = false;
+        run.recovery?.abort();
+      }
+      this.trimReplayRuns();
+    };
+  }
+
+  noteRunAcceptance(params: unknown, response: unknown): void {
+    const receipt = takeGatewayResponseReceipt(response);
+    if (this.closed || this.streamEnded) {
+      return;
+    }
+    const result = asRecord(response);
+    if (
+      typeof result.runId !== "string" ||
+      !["accepted", "pending", "started", "queued"].includes(String(result.status))
+    ) {
+      return;
+    }
+    const request = asRecord(params);
+    const run = this.run(result.runId);
+    run.owned = true;
+    if (receipt) {
+      run.acceptanceReceipt = { epoch: receipt.epoch, order: receipt.order };
+    }
+    run.outstanding ||= !run.settled;
+    const key = result.sessionKey ?? request.sessionKey ?? request.key;
+    run.scope = {
+      ...run.scope,
+      ...(typeof key === "string" ? { sessionKey: key } : {}),
+      ...(typeof request.agentId === "string" ? { agentId: request.agentId } : {}),
+      ...(typeof request.sessionId === "string" ? { sessionId: request.sessionId } : {}),
+    };
+  }
 
   publish(event: GatewayEvent): void {
     const connectionEpoch = readGatewayEventConnectionEpoch(event);
@@ -51,6 +127,10 @@ export class SdkRunReplay {
   }
 
   close(): void {
+    this.closed = true;
+    for (const run of this.replayByRunId.values()) {
+      run.recovery?.abort();
+    }
     this.events.close();
     this.replayByRunId.clear();
     this.replayConnectionEpoch = undefined;
@@ -62,15 +142,12 @@ export class SdkRunReplay {
       return input;
     }
     let event = input;
-    let replay = this.replayByRunId.get(runId);
-    let trimReplayRuns = !replay;
-    if (!replay) {
-      replay = { events: [] };
-      this.replayByRunId.set(runId, replay);
-    }
+    let trimReplayRuns = !this.replayByRunId.has(runId);
+    const replay = this.run(runId);
     const projection = readChatProjection(event);
     const assistant = projectAssistantRunEvent(event, replay.assistant);
     if (assistant) {
+      replay.canonicalAssistant = true;
       replay.assistant = assistant.assistant;
       event = assistant.event;
     }
@@ -82,20 +159,35 @@ export class SdkRunReplay {
         event = { ...event, data: { ...projection.payload, message: replay.chatMessage } };
       }
     } else if (projection || isTerminalRunEvent(event)) {
+      replay.outstanding = false;
+      replay.settled = true;
+      replay.needsRecovery = false;
+      replay.recovery?.abort();
       delete replay.chatMessage;
       delete replay.assistant;
       this.replayByRunId.delete(runId);
       this.replayByRunId.set(runId, replay);
       trimReplayRuns = true;
     }
+    if (projection?.state === "delta" || assistant) {
+      replay.textRevision++;
+      replay.outstanding ||= !replay.settled;
+    }
+    if (event.type === "run.started") {
+      replay.outstanding = true;
+      replay.settled = false;
+    }
+    if (event.sessionKey || event.agentId || event.sessionId) {
+      replay.scope = {
+        sessionKey: event.sessionKey ?? replay.scope?.sessionKey,
+        agentId: event.agentId ?? replay.scope?.agentId,
+        sessionId: event.sessionId ?? replay.scope?.sessionId,
+      };
+    }
     if (
       (projection?.state === "delta" && replay.chatMessage !== undefined) ||
       assistant?.assistant
     ) {
-      replay.scope = {
-        sessionKey: event.sessionKey ?? replay.scope?.sessionKey,
-        agentId: event.agentId ?? replay.scope?.agentId,
-      };
       if (event.raw) {
         replay.textReceipt = readGatewayEventReceipt(event.raw);
       }
@@ -120,6 +212,18 @@ export class SdkRunReplay {
     this.trimReplayRuns();
   }
 
+  endStream(): void {
+    this.streamEnded = true;
+    this.recoveryContext = undefined;
+    for (const run of this.replayByRunId.values()) {
+      run.owned = false;
+      run.outstanding = false;
+      run.needsRecovery = false;
+      run.recovery?.abort();
+    }
+    this.retireBaselines();
+  }
+
   async retireUnsubscribedSession(params: unknown, response: unknown): Promise<void> {
     const subscription = readUnsubscribedSession(params, response);
     if (!subscription) {
@@ -127,15 +231,7 @@ export class SdkRunReplay {
     }
     const receipt = takeGatewayResponseReceipt(response);
     const watermark = receipt?.event;
-    if (watermark && !this.consumedEvents.has(watermark)) {
-      const events = this.events.stream((event) => event.raw === watermark)[Symbol.asyncIterator]();
-      try {
-        // Projection failure cannot undo an acknowledged unsubscribe.
-        await events.next().catch(() => undefined);
-      } finally {
-        await events.return?.();
-      }
-    }
+    await this.consumeThrough(watermark);
     if (receipt?.epoch.current && this.replayConnectionEpoch !== receipt.epoch) {
       this.retireBaselines();
       this.replayConnectionEpoch = receipt.epoch;
@@ -146,14 +242,244 @@ export class SdkRunReplay {
       }
       if (
         receipt &&
-        (replay.textReceipt?.epoch !== receipt.epoch || replay.textReceipt.order > receipt.order)
+        [replay.textReceipt, replay.acceptanceReceipt].some(
+          (observed) =>
+            observed &&
+            (observed.epoch === receipt.epoch
+              ? observed.order > receipt.order
+              : observed.epoch.current || !receipt.epoch.current),
+        )
       ) {
         continue;
       }
       delete replay.chatMessage;
       delete replay.assistant;
+      if (replay.observers === 0) {
+        replay.outstanding = false;
+        replay.owned = false;
+        replay.needsRecovery = false;
+        replay.recovery?.abort();
+      }
     }
     this.trimReplayRuns();
+  }
+
+  private async consumeThrough(watermark: GatewayEvent | undefined): Promise<void> {
+    if (!watermark || this.consumedEvents.has(watermark)) {
+      return;
+    }
+    const events = this.events.stream((event) => event.raw === watermark)[Symbol.asyncIterator]();
+    try {
+      // Projection failure cannot undo an acknowledged transport transition.
+      await events.next().catch(() => undefined);
+    } finally {
+      await events.return?.();
+    }
+  }
+
+  async recover(context: GatewayReconnectContext): Promise<void> {
+    await this.consumeThrough(context.previousEvent);
+    if (this.closed || this.streamEnded || !context.epoch.current) {
+      return;
+    }
+    this.recoveryContext = context;
+    for (const run of this.replayByRunId.values()) {
+      if (run.outstanding && run.textReceipt?.epoch !== context.epoch) {
+        run.needsRecovery = true;
+      }
+    }
+    if (this.replayConnectionEpoch !== context.epoch) {
+      this.retireBaselines();
+      this.replayConnectionEpoch = context.epoch;
+    }
+    await Promise.all(
+      [...this.replayByRunId].map(async ([runId, run]) => {
+        if (run.outstanding && run.needsRecovery && (run.owned || run.observers > 0)) {
+          await this.recoverRun(context, runId, run);
+        }
+      }),
+    );
+  }
+
+  private recoveryEvent(
+    runId: string,
+    run: ReplayRun,
+    type: OpenClawEvent["type"],
+    data: Record<string, unknown>,
+  ): void {
+    this.events.publish(
+      this.recordReplayEvent({
+        version: 1,
+        id: `recovery:${++this.recoverySequence}:${runId}`,
+        ts: Date.now(),
+        type,
+        runId,
+        ...run.scope,
+        data,
+      }),
+    );
+  }
+
+  private async rebaselineChat(
+    context: GatewayReconnectContext,
+    runId: string,
+    run: ReplayRun,
+    signal: AbortSignal,
+    current: () => boolean,
+  ): Promise<boolean | undefined> {
+    if (!run.scope?.sessionKey) {
+      return false;
+    }
+    const revision = run.textRevision;
+    const scope = run.scope;
+    let history: Record<string, unknown>;
+    try {
+      history = asRecord(
+        await context.request(
+          "chat.history",
+          {
+            sessionKey: scope.sessionKey,
+            ...(scope.agentId ? { agentId: scope.agentId } : {}),
+            limit: 1,
+          },
+          signal,
+        ),
+      );
+    } catch {
+      signal.throwIfAborted();
+      if (current()) {
+        this.recoveryEvent(runId, run, "raw", {
+          recovery: { status: "unavailable", reason: "history-request-failed" },
+        });
+      }
+      return undefined;
+    }
+    if (
+      !current() ||
+      run.scope?.sessionKey !== scope.sessionKey ||
+      run.scope?.agentId !== scope.agentId ||
+      (scope.sessionId !== undefined && history.sessionId !== scope.sessionId) ||
+      (run.scope?.sessionId !== undefined && history.sessionId !== run.scope.sessionId)
+    ) {
+      return false;
+    }
+    const snapshot = asRecord(history.inFlightRun);
+    if (snapshot.runId !== runId) {
+      const activeRunIds = asRecord(history.sessionInfo).activeRunIds;
+      return Array.isArray(activeRunIds) && activeRunIds.includes(runId);
+    }
+    if (typeof history.sessionId === "string") {
+      run.scope = { ...run.scope, sessionId: history.sessionId };
+    }
+    if (
+      run.textRevision === revision &&
+      typeof snapshot.text === "string" &&
+      !run.canonicalAssistant
+    ) {
+      run.chatMessage = { role: "assistant", content: [{ type: "text", text: snapshot.text }] };
+      run.textRevision++;
+      this.recoveryEvent(runId, run, "assistant.delta", {
+        text: snapshot.text,
+        delta: snapshot.text,
+        replace: true,
+        recovery: { status: "rebaselined", projection: "chat" },
+      });
+    }
+    return true;
+  }
+
+  private async recoverRun(
+    context: GatewayReconnectContext,
+    runId: string,
+    run: ReplayRun,
+  ): Promise<void> {
+    run.recovery?.abort();
+    const recovery = new AbortController();
+    run.recovery = recovery;
+    const signal = AbortSignal.any([recovery.signal, context.signal]);
+    const current = () =>
+      !this.closed &&
+      !this.streamEnded &&
+      context.epoch.current &&
+      !signal.aborted &&
+      this.replayByRunId.get(runId) === run &&
+      run.recovery === recovery &&
+      run.outstanding;
+    let timeoutMs = 0;
+    let reportedUnavailable = false;
+    try {
+      while (current()) {
+        const result = asRecord(await context.request("agent.wait", { runId, timeoutMs }, signal));
+        if (!current()) {
+          return;
+        }
+        if (!["ok", "error", "timeout", "pending"].includes(String(result.status))) {
+          this.recoveryEvent(runId, run, "raw", {
+            recovery: { status: "unavailable", reason: "invalid-wait-response" },
+          });
+          return;
+        }
+        const status = resolveSdkRunWaitStatus(result);
+        if (status !== "accepted") {
+          const reply = await recoverTerminalReply({
+            runId,
+            scope: run.scope ?? {},
+            result,
+            request: context.request,
+            signal,
+          });
+          if (!current()) {
+            return;
+          }
+          this.recoveryEvent(runId, run, `run.${status}`, {
+            ...result,
+            phase: status === "failed" ? "error" : "end",
+            ...(reply.outputText !== undefined ? { outputText: reply.outputText } : {}),
+            recovery: {
+              status: reply.unavailable ? "unavailable" : "recovered",
+              ...(reply.unavailable ? { reason: reply.unavailable } : {}),
+            },
+          });
+          return;
+        }
+        const active =
+          timeoutMs > 0 && (result.status === "pending" || result.pendingError === true)
+            ? true
+            : await this.rebaselineChat(context, runId, run, signal, current);
+        if (!current()) {
+          return;
+        }
+        if (
+          timeoutMs > 0 &&
+          result.status === "timeout" &&
+          active === false &&
+          !reportedUnavailable
+        ) {
+          this.recoveryEvent(runId, run, "raw", {
+            recovery: { status: "unavailable", reason: "run-state-unavailable" },
+          });
+          reportedUnavailable = true;
+        }
+        timeoutMs = 30_000;
+        if (result.status === "pending" || result.pendingError === true) {
+          await sleepWithAbort(1_000, signal);
+        }
+      }
+    } catch {
+      if (current()) {
+        this.recoveryEvent(runId, run, "raw", {
+          recovery: { status: "unavailable", reason: "recovery-request-failed" },
+        });
+      }
+    } finally {
+      if (run.recovery === recovery) {
+        run.recovery = undefined;
+        if (run.observers === 0 && context.epoch.current) {
+          run.owned = false;
+          this.trimReplayRuns();
+        }
+      }
+    }
   }
 
   private trimReplayRuns(): void {
@@ -166,8 +492,11 @@ export class SdkRunReplay {
       if (
         candidate.chatMessage === undefined &&
         candidate.assistant === undefined &&
+        candidate.observers === 0 &&
+        !(candidate.owned && candidate.outstanding) &&
         ++retained > MAX_REPLAY_RUNS
       ) {
+        candidate.recovery?.abort();
         this.replayByRunId.delete(runId);
       }
     }

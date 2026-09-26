@@ -13,11 +13,38 @@ import type {
 type GatewayClientLike = Pick<GatewayClient, "request" | "stopAndWait">;
 
 const RAW_EVENT_REPLAY_LIMIT = 1000;
+export const RUN_SUBMISSION_METHODS = new Set(["agent", "chat.send", "sessions.send"]);
 type GatewayConnectionEpoch = { current: boolean };
 export type GatewayEventReceipt = { epoch: GatewayConnectionEpoch; order: number };
+export type GatewayReconnectContext = {
+  epoch: GatewayConnectionEpoch;
+  signal: AbortSignal;
+  previousEvent?: GatewayEvent;
+  request(method: string, params: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
+};
 type GatewayResponseReceipt = GatewayEventReceipt & { event?: GatewayEvent };
 const eventReceipts = new WeakMap<GatewayEvent, GatewayEventReceipt>();
 const responseReceipts = new WeakMap<object, GatewayResponseReceipt>();
+const reconnectObservers = new WeakMap<
+  OpenClawTransport,
+  Set<(context: GatewayReconnectContext) => void>
+>();
+
+export function observeGatewayReconnects(
+  transport: OpenClawTransport,
+  listener: (context: GatewayReconnectContext) => void,
+): () => void {
+  const listeners =
+    reconnectObservers.get(transport) ?? new Set<(context: GatewayReconnectContext) => void>();
+  listeners.add(listener);
+  reconnectObservers.set(transport, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      reconnectObservers.delete(transport);
+    }
+  };
+}
 
 /** Internal connection provenance; raw event objects and payloads remain unchanged. */
 export function readGatewayEventConnectionEpoch(event: GatewayEvent): object | undefined {
@@ -99,6 +126,8 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
   private rejectPendingConnect: ((error: Error) => void) | null = null;
   private closePromise: Promise<void> | null = null;
   private closed = false;
+  private connectedOnce = false;
+  private lastDisconnectedEvent: GatewayEvent | undefined;
   private readonly responseObservers = new Map<string, (receipt: GatewayResponseReceipt) => void>();
 
   constructor(options: GatewayClientTransportOptions = {}) {
@@ -115,6 +144,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     this.connectPromise = new Promise<void>((resolve, reject) => {
       this.rejectPendingConnect = reject;
       let connectionEpoch: GatewayConnectionEpoch = { current: true };
+      let connectionAbort = new AbortController();
       let eventOrder = 0;
       let lastEvent: GatewayEvent | undefined;
       const client = new GatewayClient({
@@ -134,6 +164,35 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
             if (this.client === client && this.rejectPendingConnect === reject) {
               this.rejectPendingConnect = null;
               resolve();
+            }
+            if (this.client === client && !this.closed) {
+              const reconnect = this.connectedOnce;
+              this.connectedOnce = true;
+              if (reconnect) {
+                const epoch = connectionEpoch;
+                const connectionSignal = connectionAbort.signal;
+                const context: GatewayReconnectContext = {
+                  epoch,
+                  signal: connectionSignal,
+                  previousEvent: this.lastDisconnectedEvent,
+                  request: async (method, params, signal) => {
+                    if (!epoch.current || this.client !== client) {
+                      throw new Error("Gateway recovery connection retired");
+                    }
+                    const combined = AbortSignal.any([connectionSignal, signal]);
+                    combined.throwIfAborted();
+                    const result = await client.request(method, params, {
+                      ...(method === "agent.wait" ? { timeoutMs: null } : {}),
+                      signal: combined,
+                    });
+                    combined.throwIfAborted();
+                    return result;
+                  },
+                };
+                for (const listener of reconnectObservers.get(this) ?? []) {
+                  listener(context);
+                }
+              }
             }
           }
         },
@@ -164,8 +223,11 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
           }
         },
         onClose: (code: number, reason: string) => {
+          this.lastDisconnectedEvent = lastEvent ?? this.lastDisconnectedEvent;
           connectionEpoch.current = false;
+          connectionAbort.abort();
           connectionEpoch = { current: true };
+          connectionAbort = new AbortController();
           eventOrder = 0;
           lastEvent = undefined;
           this.options.onClose?.(code, reason);
@@ -176,7 +238,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
           if (timing.ok) {
             this.responseObservers.get(timing.id)?.({
               epoch: connectionEpoch,
-              order: eventOrder,
+              order: ++eventOrder,
               event: lastEvent,
             });
           }
@@ -200,7 +262,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     if (!this.client) {
       throw new Error("gateway transport is not connected");
     }
-    if (method !== "sessions.messages.unsubscribe") {
+    if (method !== "sessions.messages.unsubscribe" && !RUN_SUBMISSION_METHODS.has(method)) {
       return await this.client.request<T>(method, params, options);
     }
     let requestId: string | undefined;

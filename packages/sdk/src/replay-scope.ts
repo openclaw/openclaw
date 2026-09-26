@@ -5,7 +5,7 @@ import {
   parseAgentSessionKey,
 } from "@openclaw/session-url-contract/session-key-normalization";
 
-export type ReplaySessionScope = { sessionKey?: string; agentId?: string };
+export type ReplaySessionScope = { sessionKey?: string; agentId?: string; sessionId?: string };
 type UnsubscribedSession = { key: string; agentId?: string };
 
 export function readUnsubscribedSession(

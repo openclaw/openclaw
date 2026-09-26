@@ -268,8 +268,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (evt.replace === true) {
         streamAssembler.drop(evt.runId);
       }
-      const message = reducedRun.currentRun?.message;
-      const displayText = streamAssembler.ingestDelta(evt.runId, message, state.showThinking);
+      const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
       if (displayText === null && evt.replace !== true) {
         return;
       }

@@ -15,30 +15,20 @@ function chatMessageText(message) {
   if (typeof content === "string") {
     return content;
   }
-  return typeof message?.text === "string" ? message.text : null;
+  return typeof message?.text === "string" ? message.text : Array.isArray(content) ? "" : null;
 }
 
 function assembleChatDelta(currentText, payload) {
   const snapshot = chatMessageText(payload?.message);
-  if (typeof payload?.deltaText === "string") {
-    if (payload.replace === true) {
-      return payload.deltaText;
-    }
-    if (currentText === null) {
-      return snapshot ?? payload.deltaText;
-    }
-    if (snapshot !== null) {
-      const prefixLength = snapshot.length - payload.deltaText.length;
-      if (
-        prefixLength !== currentText.length ||
-        snapshot.slice(0, prefixLength) !== currentText
-      ) {
-        return snapshot;
-      }
-    }
-    return `${currentText}${payload.deltaText}`;
+  if (snapshot !== null) {
+    return snapshot;
   }
-  return snapshot;
+  if (typeof payload?.deltaText !== "string") {
+    return currentText;
+  }
+  return payload.replace === true
+    ? payload.deltaText
+    : currentText === null ? null : `${currentText}${payload.deltaText}`;
 }
 
 const INLINE_WIDGET_DOCUMENTS_PATH = "/__openclaw__/canvas/documents";
@@ -910,10 +900,35 @@ function handleChatEvent(payload) {
   if (sending) {
     // The Gateway may stream before the chat.send ack reaches invoke; replay only after the native
     // command returns the accepted routing target, then apply the same session/run filters.
+    const previousIndex = pendingChatEvents.findIndex((event) =>
+      event.gatewayGeneration === payload?.gatewayGeneration &&
+      event.runId === payload?.runId && event.sessionKey === payload?.sessionKey &&
+      event.agentId === payload?.agentId);
+    const previous = pendingChatEvents[previousIndex];
+    if (previous && previous.state !== "delta") {
+      return;
+    }
+    const text = assembleChatDelta(chatMessageText(previous?.message), payload);
+    const message = payload?.message ?? previous?.message;
+    const buffered = {
+      ...payload,
+      message: text === null ? message : {
+        ...message,
+        role: message?.role ?? "assistant",
+        content: [
+          { type: "text", text },
+          ...(Array.isArray(message?.content)
+            ? message.content.filter((block) => block?.type !== "text") : []),
+        ],
+      },
+    };
+    if (previousIndex !== -1) {
+      pendingChatEvents.splice(previousIndex, 1);
+    }
     if (pendingChatEvents.length === MAX_PENDING_CHAT_EVENTS) {
       pendingChatEvents.shift();
     }
-    pendingChatEvents.push(payload);
+    pendingChatEvents.push(buffered);
     return;
   }
   if (activeReply) {

@@ -1144,9 +1144,7 @@ extension GatewayChannelActor {
             if evt.event == "connect.challenge" { return }
             if let seq = evt.seq {
                 if let last = lastSeq, seq > last + 1 {
-                    if evt.event == "chat",
-                       let state = evt.payload?.dictionaryValue?["state"]?.stringValue,
-                       ["final", "error", "aborted"].contains(state),
+                    if GatewayPush.event(evt).isTerminalChatEvent,
                        let terminal = self.liveTextProjection.project(evt)
                     {
                         await self.pushHandler?(.event(terminal), connectionGeneration)
