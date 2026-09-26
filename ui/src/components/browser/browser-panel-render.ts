@@ -377,6 +377,11 @@ function renderViewportContent(controller: BrowserPanelController) {
               autocomplete="off"
               autocapitalize="off"
               spellcheck="false"
+              @pointerdown=${(event: PointerEvent) => controller.input.handleOverlayPointerDown(event)}
+              @pointermove=${(event: PointerEvent) => controller.handleOverlayPointerMove(event)}
+              @pointerup=${(event: PointerEvent) => controller.input.handleOverlayPointerUp(event)}
+              @pointercancel=${(event: PointerEvent) => controller.input.handleOverlayPointerUp(event)}
+              @lostpointercapture=${(event: PointerEvent) => controller.input.handleOverlayPointerUp(event)}
               @click=${(event: MouseEvent) => controller.handleStageClick(event)}
               @contextmenu=${(event: MouseEvent) => controller.handleStageClick(event)}
               @beforeinput=${(event: InputEvent) => event.preventDefault()}

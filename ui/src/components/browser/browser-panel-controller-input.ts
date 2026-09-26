@@ -26,6 +26,7 @@ import {
 } from "./browser-panel-surface.ts";
 
 const INSPECT_THROTTLE_MS = 120;
+const SCROLL_DRAG_THRESHOLD = 6;
 
 type BrowserPanelInputState = {
   mode: "interact" | "annotate" | "inspect";
@@ -62,7 +63,7 @@ interface BrowserPanelInputHost extends BrowserPanelInputState {
     refreshView?: boolean,
   ): Promise<boolean>;
   reportError(error: unknown): void;
-  exitCaptureModes(): void;
+  exitCaptureModes(preserveStageClick?: boolean): void;
 }
 
 type BrowserPanelDrawingGesture = {
@@ -71,10 +72,20 @@ type BrowserPanelDrawingGesture = {
   stroke: AnnotationStroke;
 };
 
+type BrowserPanelScrollGesture = {
+  pointerId: number;
+  captureTarget: HTMLElement;
+  startX: number;
+  startY: number;
+  lastPoint: { x: number; y: number };
+  moved: boolean;
+};
+
 /** Owns pointer, keyboard, annotation, and inspection input for the browser surface. */
 export class BrowserPanelInputController {
   // An annotation stroke belongs to one pointer until that owner or the panel lifecycle ends.
   private drawingGesture: BrowserPanelDrawingGesture | null = null;
+  private scrollGesture: BrowserPanelScrollGesture | null = null;
   private suppressStageClick = false;
   private inspectionError: string | null = null;
   private pendingClick: Promise<boolean> | null = null;
@@ -83,9 +94,12 @@ export class BrowserPanelInputController {
 
   constructor(private readonly host: BrowserPanelInputHost) {}
 
-  resetCaptureState(): void {
+  resetCaptureState(preserveStageClick = false): void {
     this.host.pendingInput.clearInput();
     this.cancelOverlayPointerGesture();
+    if (!preserveStageClick) {
+      this.suppressStageClick = false;
+    }
     this.pendingClick = null;
     this.clickSequence += 1;
     this.inputGeneration += 1;
@@ -153,8 +167,17 @@ export class BrowserPanelInputController {
       return;
     }
     event.preventDefault();
+    this.queueScroll(client, targetId, event.deltaX, event.deltaY);
+  }
+
+  private queueScroll(
+    client: BrowserRequestClient,
+    targetId: string,
+    deltaX: number,
+    deltaY: number,
+  ): void {
     const epoch = this.host.operations.epoch;
-    this.host.pendingInput.queueWheel(event.deltaX, event.deltaY, 150, (deltaX, deltaY) => {
+    this.host.pendingInput.queueWheel(deltaX, deltaY, 150, (pendingX, pendingY) => {
       if (
         !this.host.operations.isLive(epoch, client) ||
         this.host.activeTargetId !== targetId ||
@@ -167,11 +190,11 @@ export class BrowserPanelInputController {
           // No page JS allowed: fall back to a coarse keyboard scroll.
           await pressBrowserKey(actionClient, {
             targetId,
-            key: deltaY >= 0 ? "PageDown" : "PageUp",
+            key: pendingY >= 0 ? "PageDown" : "PageUp",
           });
           return;
         }
-        await scrollBrowserBy(actionClient, { targetId, deltaX, deltaY });
+        await scrollBrowserBy(actionClient, { targetId, deltaX: pendingX, deltaY: pendingY });
       });
     });
   }
@@ -243,9 +266,43 @@ export class BrowserPanelInputController {
   }
 
   handleOverlayPointerDown(event: PointerEvent): void {
+    this.suppressStageClick = false;
     if (this.host.mode === "inspect") {
       this.suppressStageClick = true;
       void this.sendAnnotation({ element: this.host.inspected });
+      return;
+    }
+    if (
+      this.host.mode === "interact" &&
+      this.host.view &&
+      this.host.view.kind !== "native" &&
+      (event.pointerType === "touch" || event.pointerType === "pen") &&
+      event.button === 0 &&
+      !this.scrollGesture
+    ) {
+      const point = this.remotePoint(event);
+      const captureTarget =
+        event.currentTarget instanceof HTMLElement
+          ? event.currentTarget
+          : event.target instanceof HTMLElement
+            ? event.target
+            : null;
+      if (!point || !captureTarget) {
+        return;
+      }
+      try {
+        captureTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Detached and synthetic targets can reject capture; owner filtering still applies.
+      }
+      this.scrollGesture = {
+        pointerId: event.pointerId,
+        captureTarget,
+        startX: event.clientX,
+        startY: event.clientY,
+        lastPoint: point,
+        moved: false,
+      };
       return;
     }
     if (this.host.mode !== "annotate" || event.button !== 0 || this.drawingGesture) {
@@ -281,6 +338,33 @@ export class BrowserPanelInputController {
   }
 
   handleOverlayPointerMove(event: PointerEvent): void {
+    const scrollGesture = this.scrollGesture;
+    if (this.host.mode === "interact" && scrollGesture?.pointerId === event.pointerId) {
+      const point = this.remotePoint(event);
+      if (!point) {
+        return;
+      }
+      if (
+        !scrollGesture.moved &&
+        Math.hypot(event.clientX - scrollGesture.startX, event.clientY - scrollGesture.startY) <
+          SCROLL_DRAG_THRESHOLD
+      ) {
+        return;
+      }
+      scrollGesture.moved = true;
+      const client = this.host.operations.captureClient();
+      const targetId = this.host.activeTargetId;
+      if (client && targetId) {
+        this.queueScroll(
+          client,
+          targetId,
+          scrollGesture.lastPoint.x - point.x,
+          scrollGesture.lastPoint.y - point.y,
+        );
+      }
+      scrollGesture.lastPoint = point;
+      return;
+    }
     if (this.host.mode === "annotate") {
       const gesture = this.drawingGesture;
       if (!gesture || event.pointerId !== gesture.pointerId) {
@@ -299,23 +383,32 @@ export class BrowserPanelInputController {
   }
 
   handleOverlayPointerUp(event: PointerEvent): void {
+    if (event.pointerId === this.scrollGesture?.pointerId) {
+      if (this.scrollGesture.moved) {
+        this.suppressStageClick = true;
+      }
+      this.scrollGesture = null;
+    }
     if (event.pointerId === this.drawingGesture?.pointerId) {
       this.drawingGesture = null;
     }
   }
 
   cancelOverlayPointerGesture(): void {
-    const gesture = this.drawingGesture;
+    const gestures = [this.drawingGesture, this.scrollGesture];
     this.drawingGesture = null;
-    if (!gesture) {
-      return;
-    }
-    try {
-      if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) {
-        gesture.captureTarget.releasePointerCapture(gesture.pointerId);
+    this.scrollGesture = null;
+    for (const gesture of gestures) {
+      if (!gesture) {
+        continue;
       }
-    } catch {
-      // Capture may already be gone because its canvas was detached.
+      try {
+        if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) {
+          gesture.captureTarget.releasePointerCapture(gesture.pointerId);
+        }
+      } catch {
+        // Capture may already be gone because its target was detached.
+      }
     }
   }
 
@@ -409,7 +502,7 @@ export class BrowserPanelInputController {
     }
     this.host.setState("errorText", null);
     this.host.setState("noticeText", t("browser.annotationSent"));
-    this.host.exitCaptureModes();
+    this.host.exitCaptureModes(this.suppressStageClick);
   }
 
   /** Repaints the live stroke/highlight overlay; cheap, runs after render. */
