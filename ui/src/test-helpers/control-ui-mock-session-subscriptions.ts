@@ -28,7 +28,23 @@ export function createControlUiMockSessionSubscriptions(
     createClient() {
       const keys = new Set<string>();
       let scoped = false;
+      const hasSubscription = (payload: unknown): boolean => {
+        const source = isRecord(payload)
+          ? [payload, payload.suggestion, payload.request].find(
+              (candidate) =>
+                isRecord(candidate) &&
+                typeof candidate.sessionKey === "string" &&
+                candidate.sessionKey.trim(),
+            )
+          : undefined;
+        return (
+          isRecord(source) &&
+          typeof source.sessionKey === "string" &&
+          keys.has(subscriptionKey(source.sessionKey, source.agentId))
+        );
+      };
       return {
+        hasSubscription,
         get size() {
           return keys.size;
         },
@@ -54,19 +70,7 @@ export function createControlUiMockSessionSubscriptions(
           if (event !== "session.typing" && !(scoped && scopedEvents.has(event))) {
             return true;
           }
-          const source = isRecord(payload)
-            ? [payload, payload.suggestion, payload.request].find(
-                (candidate) =>
-                  isRecord(candidate) &&
-                  typeof candidate.sessionKey === "string" &&
-                  candidate.sessionKey.trim(),
-              )
-            : undefined;
-          return (
-            isRecord(source) &&
-            typeof source.sessionKey === "string" &&
-            keys.has(subscriptionKey(source.sessionKey, source.agentId))
-          );
+          return hasSubscription(payload);
         },
       };
     },

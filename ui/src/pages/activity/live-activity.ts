@@ -42,7 +42,17 @@ export function createLiveActivity(
     if (errors.delete(key)) {
       publish(entries);
     }
-    void pending?.then((lease) => sessions.unsubscribeMessages(lease)).catch(() => undefined);
+    const releaseClient = client;
+    void pending?.then(
+      (lease) =>
+        sessions.unsubscribeMessages(lease).catch(() => {
+          // A rejected final release retains the wire observer in the shared coordinator.
+          if (gateway.snapshot.client === releaseClient && gateway.snapshot.phase === "connected") {
+            gateway.connect();
+          }
+        }),
+      () => undefined,
+    );
   };
   const syncSubscriptions = () => {
     const connected = gateway.snapshot.phase === "connected";

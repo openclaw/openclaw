@@ -1784,12 +1784,12 @@ function installControlUiMockGateway(
 
   function emitRepeatingSessionEvent(): void {
     const events = scenario.repeatingSessionEvents.events;
-    if (events.length === 0) {
-      return;
-    }
     const event = events[sessionMessageEventIndex % events.length];
     sessionMessageEventIndex += 1;
-    if (!event || !isRecord(event.payload) || typeof event.payload.sessionKey !== "string") {
+    if (
+      !event ||
+      !MockWebSocket.latest?.sessionMessageSubscriptions.hasSubscription(event.payload)
+    ) {
       return;
     }
     emitGatewayEvent(MockWebSocket.latest, event.event, event.payload);

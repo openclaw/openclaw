@@ -521,6 +521,34 @@ describe("ActivityPage gateway lifecycle", () => {
     expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["visible output"]);
   });
 
+  it("retires the connection when a failed release would leave an orphaned observer", async () => {
+    const { gateway: source, current, clients } = activityGateway();
+    const page = bindActivity(source);
+    const previous = current();
+    const previousIdentity = source.snapshot.client;
+    const retired = createDeferred<void>();
+    const stop = source.subscribe((snapshot) => {
+      if (snapshot.client !== previousIdentity) {
+        retired.resolve();
+      }
+    });
+    previous.request.mockImplementation(async (method, params) => {
+      if (method === "sessions.messages.unsubscribe") {
+        throw new Error("unsubscribe unavailable");
+      }
+      return activityResponse(method, params);
+    });
+    try {
+      page.subscriptions.hostDisconnected();
+      await retired.promise;
+      expect(previous.stopped).toBe(1);
+      expect(current()).not.toBe(previous);
+      expect(clients).toHaveLength(2);
+    } finally {
+      stop();
+    }
+  });
+
   it("shows a failed subscription and recovers through the rendered Retry action", async () => {
     const { gateway: source, current } = activityGateway();
     const pending = createDeferred<{ key: string }>();
