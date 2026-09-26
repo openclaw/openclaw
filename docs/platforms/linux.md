@@ -273,7 +273,7 @@ file; a new Gateway release alone does not prove a new Linux app is available.
 The shipped updater still uses `releases/latest/download/latest.json`.
 Independent `linux-stable` publication tooling is not a client endpoint or
 download-link migration. That activation requires separate release approval and
-signed installed-client proof; see [Linux companion publication](/reference/RELEASING#linux-companion-publication).
+signed installed-client proof; see [Linux companion publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/platform-publication.md#linux).
 
 ### Media codecs
 
@@ -531,6 +531,12 @@ For eligible Linux child spawns, OpenClaw wraps the command in a short
 `/bin/sh` shim that attempts to raise the child's own `oom_score_adj` to
 `1000`, then `exec`s the real command. This is unprivileged: a process may
 always raise its own OOM score.
+
+The small spawn broker and service-child anchor avoid this extra shell exec:
+they temporarily raise their own score around the native spawn, then restore it.
+The child inherits `1000` before it can execute or fork descendants. If the
+helper cannot adjust its score, it uses the shim. Direct launches and PTYs
+keep the shim so the Gateway's own score never needs to change.
 
 Covered child process surfaces:
 

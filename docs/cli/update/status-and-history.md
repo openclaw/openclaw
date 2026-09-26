@@ -213,6 +213,13 @@ and its local executor have settled. A late ownership or release failure returns
 an error instead of publishing an earlier success. Existing terminal history is
 not overwritten.
 
+Unexpected executor admission, settlement, or report publication failures also
+record the last reached phase, the redacted error, and whether rollback was needed
+or attempted before offering an interactive failure report. If ownership is lost
+or pending recovery prevents a safe history write, the command reports recovery
+pending and preserves the existing history for its owning updater instead of
+starting interactive triage.
+
 Activation has an enclosing deadline derived from the update's existing phase
 budget. If it expires, the updater cancels owned work and waits within that budget
 for its child processes to settle, then records `update-activation-timeout` as a

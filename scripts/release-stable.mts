@@ -39,8 +39,6 @@ export function parseReleaseStableArgs(argv: string[]): ReleaseOptions | undefin
       "confirm-cut-sha": { type: "string" },
       "approve-publication": { type: "boolean" },
       "tooling-sha": { type: "string" },
-      "stable-soak-waiver": { type: "string" },
-      "lane-waiver": { type: "string" },
       "plugin-sdk-api-acknowledgement": { type: "string" },
       "macos-preflight-run-id": { type: "string" },
       "macos-validate-run-id": { type: "string" },
@@ -54,13 +52,11 @@ export function parseReleaseStableArgs(argv: string[]): ReleaseOptions | undefin
   --repo <owner/repo>                 Default: openclaw/openclaw
   --releases-repo <owner/repo>         Default: openclaw/releases
   --state-dir <directory>             Default: .artifacts/release-<version>
-  --operator <name>                   Name recorded for approvals and waivers
+  --operator <name>                   Name recorded for approvals
   --cut-sha <sha>                     Select the release cut
   --confirm-cut-sha <sha>             Confirm that exact cut without a TTY
   --approve-publication              Approve publication without a TTY
   --tooling-sha <sha>                 Select protected main tooling
-  --stable-soak-waiver <reason>       Override the standard waiver
-  --lane-waiver <reason>              Acknowledge deferred lanes
   --plugin-sdk-api-acknowledgement <8hex>
   --macos-preflight-run-id <id>        Seed recovery with --from macos
   --macos-validate-run-id <id>         Seed recovery with --from macos`);
@@ -114,8 +110,6 @@ export function parseReleaseStableArgs(argv: string[]): ReleaseOptions | undefin
     cutSha: values["cut-sha"],
     confirmCutSha: values["confirm-cut-sha"],
     toolingSha: values["tooling-sha"],
-    stableSoakWaiver: values["stable-soak-waiver"],
-    laneWaiver: values["lane-waiver"],
     pluginSdkApiAcknowledgement: acknowledgement,
     macosPreflightRunId: values["macos-preflight-run-id"],
     macosValidateRunId: values["macos-validate-run-id"],
@@ -246,17 +240,6 @@ export async function runReleaseStable(
       }
     }
     console.log("Cleanup reminders (run after reviewing the completed release):");
-    if (state.validate.laneWaiver) {
-      console.log(
-        shellCommand("gh", [
-          "variable",
-          "delete",
-          "OPENCLAW_FRV_LANE_WAIVER",
-          "--repo",
-          state.repo,
-        ]),
-      );
-    }
     console.log(
       "# Switch away from the local cut branches, then delete them when no longer needed:",
     );

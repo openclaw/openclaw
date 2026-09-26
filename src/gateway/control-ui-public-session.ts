@@ -110,12 +110,7 @@ function createControlUiPublicSessionRequestGate(): ControlUiPublicSessionReques
         ? { kind: "ok" }
         : { kind: "rate-limited", retryAfterSeconds: Math.ceil(retryMs / 1_000) };
     },
-    async run(params: {
-      publicationKey: string;
-      requestKey: string;
-      config: OpenClawConfig;
-      work: () => Promise<string | null>;
-    }): Promise<PublicSessionAdmissionResult> {
+    async run(params) {
       const now = Date.now();
       const publicationRetryMs = admitRateWindow(
         publicationWindows,

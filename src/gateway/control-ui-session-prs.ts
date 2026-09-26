@@ -17,7 +17,10 @@ import {
   loadSessionPullRequestReferences,
   releaseSessionPullRequestReferenceCache,
 } from "./control-ui-session-pr-references.js";
-import { fetchSessionPullRequestCheckRollup } from "./control-ui-session-prs-checks.js";
+import {
+  fetchSessionPullRequestCheckRollup,
+  sessionPullRequestRepositoryApiUrl,
+} from "./control-ui-session-prs-checks.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 
@@ -217,10 +220,8 @@ function parsePullList(value: unknown): PullListItem[] {
 }
 
 function pullsByHeadUrl(owner: string, repo: string, head: string): string {
-  const encOwner = encodeURIComponent(owner);
-  const encRepo = encodeURIComponent(repo);
   const encHead = encodeURIComponent(head);
-  return `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encOwner}/${encRepo}/pulls?head=${encHead}&state=all&sort=updated&direction=desc&per_page=5`;
+  return `${sessionPullRequestRepositoryApiUrl({ owner, repo })}/pulls?head=${encHead}&state=all&sort=updated&direction=desc&per_page=5`;
 }
 
 async function fetchParentRepo(
@@ -229,8 +230,11 @@ async function fetchParentRepo(
   fetchImpl: typeof fetch,
   token: string | undefined,
 ): Promise<{ owner: string; repo: string } | null> {
-  const url = `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-  const value = await gitHubPublicApi.fetchGitHubJson(url, fetchImpl, token);
+  const value = await gitHubPublicApi.fetchGitHubJson(
+    sessionPullRequestRepositoryApiUrl({ owner, repo }),
+    fetchImpl,
+    token,
+  );
   return resolveGitHubForkParent(value) ?? null;
 }
 
@@ -277,7 +281,7 @@ async function finishPullRequest(
   if (item.state !== "open" && item.state !== "draft") {
     return chip;
   }
-  const detailUrl = `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/pulls/${item.number}`;
+  const detailUrl = `${sessionPullRequestRepositoryApiUrl(item)}/pulls/${item.number}`;
   const [details, checks] = await Promise.all([
     knownDetails ??
       gitHubPublicApi.fetchGitHubJson(detailUrl, fetchImpl, token).catch(rethrowRateLimit),
@@ -362,7 +366,7 @@ async function fetchBranchPullRequests(
       referenced.push(existing);
       continue;
     }
-    const url = `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(context.owner)}/${encodeURIComponent(context.repo)}/pulls/${number}`;
+    const url = `${sessionPullRequestRepositoryApiUrl(context)}/pulls/${number}`;
     let details: unknown;
     try {
       details = await gitHubPublicApi.fetchGitHubJson(url, fetchImpl, token);

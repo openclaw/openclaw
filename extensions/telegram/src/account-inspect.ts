@@ -80,34 +80,19 @@ function inspectTokenValue(params: { cfg: OpenClawConfig; value: unknown }): {
   tokenSource: "config" | "env" | "none";
   tokenStatus: TelegramCredentialStatus;
 } | null {
-  // Try to resolve env-based SecretRefs from process.env for read-only inspection
   const ref = coerceSecretRef(params.value, params.cfg.secrets?.defaults);
   if (ref?.source === "env") {
-    if (
-      !canResolveEnvSecretRefInReadOnlyPath({
-        cfg: params.cfg,
-        provider: ref.provider,
-        id: ref.id,
-      })
-    ) {
-      return {
-        token: "",
-        tokenSource: "env",
-        tokenStatus: "configured_unavailable",
-      };
-    }
-    const envValue = normalizeOptionalString(process.env[ref.id]);
-    if (envValue) {
-      return {
-        token: envValue,
-        tokenSource: "env",
-        tokenStatus: "available",
-      };
-    }
+    const envValue = canResolveEnvSecretRefInReadOnlyPath({
+      cfg: params.cfg,
+      provider: ref.provider,
+      id: ref.id,
+    })
+      ? normalizeOptionalString(process.env[ref.id])
+      : undefined;
     return {
-      token: "",
+      token: envValue ?? "",
       tokenSource: "env",
-      tokenStatus: "configured_unavailable",
+      tokenStatus: envValue ? "available" : "configured_unavailable",
     };
   }
   const token = normalizeSecretInputString(params.value);

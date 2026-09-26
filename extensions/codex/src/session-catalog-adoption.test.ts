@@ -1,12 +1,12 @@
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { describe, expect, it, vi } from "vitest";
 import { createLazyCodexAppServerBindingStore } from "./app-server/session-binding-store.js";
-import { bindingStoreKey, type StoredCodexAppServerBinding } from "./app-server/session-binding.js";
+import { bindingStoreKey } from "./app-server/session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./app-server/session-binding.sqlite.test-helpers.js";
 import { listAdoptedSessionEntries } from "./session-catalog-adoption.js";
 import {
   commandRpcMocks,
@@ -43,9 +43,10 @@ import {
 
 describe("Codex supervision catalog", () => {
   it("refreshes bulk adoption authority after a generation changes or a binding disappears", async () => {
-    const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+    const state = createCodexSqliteTestBindingStateStore({
       namespace: "adoption-cohort",
       maxEntries: 10,
+      env: { ...process.env },
     });
     const bindingStore = createLazyCodexAppServerBindingStore(state);
     const entries = ["first", "second"].map((sourceThreadId) => ({
@@ -112,14 +113,16 @@ describe("Codex supervision catalog", () => {
       expect(lookupMany).toHaveBeenCalled();
       expect(lookup).not.toHaveBeenCalled();
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
     }
   });
 
   it("reports duplicate adoption across agents before decoding a later malformed bulk row", async () => {
-    const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+    const state = createCodexSqliteTestBindingStateStore({
       namespace: "adoption-order",
       maxEntries: 10,
+      env: { ...process.env },
     });
     const bindingStore = createLazyCodexAppServerBindingStore(state);
     const cohortConfig: OpenClawConfig = {
@@ -163,6 +166,7 @@ describe("Codex supervision catalog", () => {
       ).rejects.toThrow(`Invalid Codex app-server binding row: ${key}`);
       expect(lookupMany).toHaveBeenCalledTimes(2);
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
     }
   });
@@ -715,12 +719,11 @@ describe("Codex supervision actions", () => {
   });
 
   it("does not expose or reuse an initializing session while history import is paused", async () => {
-    let releaseImport: (() => void) | undefined;
-    const importGate = new Promise<void>((resolve) => {
-      releaseImport = resolve;
-    });
+    const importEntered = createDeferred<void>();
+    const importGate = createDeferred<void>();
     transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockImplementationOnce(async () => {
-      await importGate;
+      importEntered.resolve();
+      await importGate.promise;
       return { importedMessages: 0, omittedMessages: 0 };
     });
     const { runtime, entries, createSessionEntry } = createRuntime();
@@ -735,38 +738,54 @@ describe("Codex supervision actions", () => {
       control,
       threadId: "thread-1",
     });
-    await vi.waitFor(() => {
+    const pending: Promise<unknown>[] = [firstContinue];
+    try {
+      await Promise.race([
+        importEntered.promise,
+        firstContinue.then(() => {
+          throw new Error("Continue finished without entering the paused history import");
+        }),
+      ]);
       expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
-    });
 
-    const duringImport = await listCodexSessionCatalog({ bindingStore, config, runtime, control });
-    expect(duringImport.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
-    expect(entries[0]?.entry.initializationPending).toBe(true);
-    let secondSettled = false;
-    const secondContinue = continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    }).then((result) => {
-      secondSettled = true;
-      return result;
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(secondSettled).toBe(false);
-    expect(createSessionEntry).toHaveBeenCalledOnce();
+      const duringImport = await listCodexSessionCatalog({
+        bindingStore,
+        config,
+        runtime,
+        control,
+      });
+      expect(duringImport.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
+      expect(entries[0]?.entry.initializationPending).toBe(true);
+      let secondSettled = false;
+      const secondContinue = continueLocalCodexSession({
+        api,
+        bindingStore,
+        config,
+        control,
+        threadId: "thread-1",
+      }).then((result) => {
+        secondSettled = true;
+        return result;
+      });
+      pending.push(secondContinue);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(secondSettled).toBe(false);
+      expect(createSessionEntry).toHaveBeenCalledOnce();
 
-    releaseImport?.();
-    const [first, second] = await Promise.all([firstContinue, secondContinue]);
-    expect(second).toEqual(first);
-    expect(entries[0]?.entry.pluginExtensions).toEqual({
-      codex: {
-        supervision: { sourceThreadId: "thread-1", modelLocked: true },
-      },
-    });
-    expect(entries[0]?.entry.initializationPending).toBeUndefined();
+      importGate.resolve();
+      const [first, second] = await Promise.all([firstContinue, secondContinue]);
+      expect(second).toEqual(first);
+      expect(entries[0]?.entry.pluginExtensions).toEqual({
+        codex: {
+          supervision: { sourceThreadId: "thread-1", modelLocked: true },
+        },
+      });
+      expect(entries[0]?.entry.initializationPending).toBeUndefined();
+    } finally {
+      importGate.resolve();
+      await Promise.allSettled(pending);
+    }
   });
 
   it("does not archive a source with an interrupted initializing branch", async () => {
@@ -836,12 +855,11 @@ describe("Codex supervision actions", () => {
   });
 
   it("serializes archive behind an in-flight Continue and rejects the pending branch", async () => {
-    let releaseImport: (() => void) | undefined;
-    const importGate = new Promise<void>((resolve) => {
-      releaseImport = resolve;
-    });
+    const importEntered = createDeferred<void>();
+    const importGate = createDeferred<void>();
     transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockImplementationOnce(async () => {
-      await importGate;
+      importEntered.resolve();
+      await importGate.promise;
       return { importedMessages: 0, omittedMessages: 0 };
     });
     const { runtime } = createRuntime();
@@ -855,37 +873,48 @@ describe("Codex supervision actions", () => {
       control,
       threadId: "thread-1",
     });
-    await vi.waitFor(() => {
+    const pending: Promise<unknown>[] = [continuing];
+    try {
+      await Promise.race([
+        importEntered.promise,
+        continuing.then(() => {
+          throw new Error("Continue finished without entering the paused history import");
+        }),
+      ]);
       expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
-    });
 
-    let archiveSettled = false;
-    const archiving = archiveTestSession({ control, bindingStore, runtime }).then(
-      (value) => {
-        archiveSettled = true;
-        return { ok: true as const, value };
-      },
-      (error: unknown) => {
-        archiveSettled = true;
-        return { ok: false as const, error };
-      },
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(archiveSettled).toBe(false);
-    expect(control.archiveThread).not.toHaveBeenCalled();
+      let archiveSettled = false;
+      const archiving = archiveTestSession({ control, bindingStore, runtime }).then(
+        (value) => {
+          archiveSettled = true;
+          return { ok: true as const, value };
+        },
+        (error: unknown) => {
+          archiveSettled = true;
+          return { ok: false as const, error };
+        },
+      );
+      pending.push(archiving);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(archiveSettled).toBe(false);
+      expect(control.archiveThread).not.toHaveBeenCalled();
 
-    releaseImport?.();
-    await expect(continuing).resolves.toMatchObject({ disposition: "forked" });
-    const archiveResult = await archiving;
-    expect(archiveResult.ok).toBe(false);
-    if (archiveResult.ok) {
-      throw new Error("archive unexpectedly succeeded");
+      importGate.resolve();
+      await expect(continuing).resolves.toMatchObject({ disposition: "forked" });
+      const archiveResult = await archiving;
+      expect(archiveResult.ok).toBe(false);
+      if (archiveResult.ok) {
+        throw new Error("archive unexpectedly succeeded");
+      }
+      expect(archiveResult.error).toBeInstanceOf(Error);
+      expect((archiveResult.error as Error).message).toContain(
+        "cannot be archived until its OpenClaw branch starts",
+      );
+      expect(control.archiveThread).not.toHaveBeenCalled();
+    } finally {
+      importGate.resolve();
+      await Promise.allSettled(pending);
     }
-    expect(archiveResult.error).toBeInstanceOf(Error);
-    expect((archiveResult.error as Error).message).toContain(
-      "cannot be archived until its OpenClaw branch starts",
-    );
-    expect(control.archiveThread).not.toHaveBeenCalled();
   });
 });

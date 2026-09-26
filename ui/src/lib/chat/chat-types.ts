@@ -68,6 +68,13 @@ export type ChatComposerDraftRetry = {
   draftRevision: number;
 };
 
+export type ChatReplyTarget = {
+  messageId: string;
+  text: string;
+  senderLabel?: string | null;
+  sourceMessageId?: string | null;
+};
+
 export type ChatGoalDraftMode = { sessionId?: string } & (
   | { action: "start" }
   | { action: "edit"; goalId: string; previousDraft: string }
@@ -90,6 +97,7 @@ export type ChatComposerMemoryFallback = {
   incognito?: boolean;
   awaitingDefaults?: true;
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   message: string;
   mentions?: readonly HumanMention[];
   attachments: ChatAttachment[];
