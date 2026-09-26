@@ -20,7 +20,10 @@ function desktopHello(methods: string[], scopes: string[]): GatewayHelloOk {
 }
 
 function createTerminalPane(client: GatewayBrowserClient) {
-  const { pane, state } = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
+  const { pane, state } = createTestChatPane({
+    client,
+    sessions: createSessionCapabilityFixture(),
+  });
   const container = document.createElement("div");
   const paint = (
     row: GatewaySessionRow | undefined,

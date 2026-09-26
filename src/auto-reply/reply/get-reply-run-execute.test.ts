@@ -10,9 +10,9 @@ const BASE = {
 
 describe("fresh channel cron authority turn", () => {
   it("recognizes a fresh authenticated turn without channel-specific policy", () => {
-    expect(
-      isFreshChannelCronAuthorityTurn({ ...BASE, messageProvider: "custom-channel" }),
-    ).toBe(true);
+    expect(isFreshChannelCronAuthorityTurn({ ...BASE, messageProvider: "custom-channel" })).toBe(
+      true,
+    );
   });
 
   it.each([
