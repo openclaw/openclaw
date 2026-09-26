@@ -140,7 +140,7 @@ describe("Codex network proxy config admission", () => {
       string,
       { network: Record<string, unknown> }
     >;
-    expect(permissions["repository-broker-test"].network).not.toHaveProperty("private_endpoints");
+    expect(permissions["repository-broker-test"]?.network).not.toHaveProperty("private_endpoints");
   });
 
   it("preserves blank-field admission and fallback without an enabled proxy", () => {
