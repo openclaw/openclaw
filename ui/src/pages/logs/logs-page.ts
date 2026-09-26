@@ -247,7 +247,8 @@ class LogsPage extends OpenClawLightDomElement {
   override render() {
     const body = renderLogs({
       loading: this.logsTask.status === TaskStatus.PENDING && !this.logsTaskQuiet,
-      refreshDisabled: !this.gateway.connected || this.logsTask.status === TaskStatus.PENDING,
+      refreshDisabled: !this.gateway.connected,
+      refreshPending: this.logsTask.status === TaskStatus.PENDING,
       status: this.logsStatus,
       file: this.logsFile,
       entries: this.logsEntries,
