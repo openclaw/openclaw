@@ -285,57 +285,82 @@ describe("durable cron task maintenance", () => {
     },
   );
 
-  it("publishes a runless same-ID completion committed while its recovery hook yields", async () => {
-    await withCronMaintenanceState(async () => {
-      const target = createTaskFixture("cron", {
-        sourceId: "synthetic-runless-late-result",
-        task: "Synthetic runless retained execution",
-        lastEventAt: Date.now() - 600_000,
-        notifyPolicy: "silent",
-        requesterOrigin: { channel: "discord", to: "channel:synthetic-cron-maintenance" },
-      });
-      expect(target.runId).toBeUndefined();
-      const delivery = structuredClone(
-        expectDefined(taskDeliveryStates.get(target.taskId), "delivery bookkeeping"),
-      );
-      await prepareCronFixtures([{ target }]);
-      const endedAt = Date.now();
-      const terminal: TaskRecord = {
-        ...target,
-        status: "succeeded",
-        endedAt,
-        lastEventAt: endedAt,
-        terminalSummary: "late\n  durable outcome",
-        detail: { kind: "cron-run", status: "ok" },
-      };
-      const hook = vi.fn(async () => {
-        await Promise.resolve();
+  it.each([false, true])(
+    "publishes a runless peer completion with existing retention=%s",
+    async (retentionPresent) => {
+      await withCronMaintenanceState(async () => {
+        const created = createTaskFixture("cron", {
+          sourceId: "synthetic-runless-late-result",
+          task: "Synthetic runless retained execution",
+          lastEventAt: Date.now() - 600_000,
+          notifyPolicy: "silent",
+          requesterOrigin: { channel: "discord", to: "channel:synthetic-cron-maintenance" },
+        });
+        const flow = expectDefined(createTaskFlowForTask({ task: created }), "mirrored peer flow");
+        const target = { ...created, parentFlowId: flow.flowId };
+        expect(target.runId).toBeUndefined();
+        const delivery = structuredClone(
+          expectDefined(taskDeliveryStates.get(target.taskId), "delivery bookkeeping"),
+        );
         getTaskRegistryStore().upsertTaskWithDeliveryState({
-          task: terminal,
+          task: target,
           deliveryState: delivery,
         });
-        return { recovered: false };
+        await prepareCronFixtures([{ target }]);
+        const endedAt = Date.now();
+        const cleanupAfter = endedAt + 7 * 24 * 60 * 60_000;
+        const terminal: TaskRecord = {
+          ...target,
+          status: "succeeded",
+          endedAt,
+          lastEventAt: endedAt,
+          terminalSummary: "late\n  durable outcome",
+          detail: { kind: "cron-run", status: "ok" },
+          ...(retentionPresent ? { cleanupAfter } : {}),
+        };
+        const hook = vi.fn(async () => {
+          await Promise.resolve();
+          getTaskRegistryStore().upsertTaskWithDeliveryState({
+            task: terminal,
+            deliveryState: delivery,
+          });
+          return { recovered: false };
+        });
+        setDetachedTaskLifecycleRuntime({
+          ...getDetachedTaskLifecycleRuntime(),
+          tryRecoverTaskBeforeMarkLost: hook,
+        });
+        const receipts: unknown[] = [];
+        const store = getTaskRegistryStore();
+        const runMutation = store.runInitialMutationAsync.bind(store);
+        using _mutationResults = vi
+          .spyOn(store, "runInitialMutationAsync")
+          .mockImplementation(async (context, command, assertCurrent, onGranted) => {
+            const result = await runMutation(context, command, assertCurrent, onGranted);
+            if (command.type === "tasks.maintainCron" && result !== null) {
+              receipts.push(result);
+            }
+            return result;
+          });
+        const summary = await runTaskRegistryMaintenance();
+        expect(hook).toHaveBeenCalledOnce();
+        expect(receipts).toEqual([expect.objectContaining({ persisted: !retentionPresent })]);
+        expect(summary).toEqual({ reconciled: 0, recovered: 1, cleanupStamped: 0, pruned: 0 });
+        expect(tasks.get(target.taskId)).toMatchObject({
+          taskId: target.taskId,
+          status: terminal.status,
+          endedAt,
+          lastEventAt: endedAt,
+          task: terminal.task,
+          terminalSummary: terminal.terminalSummary,
+          detail: terminal.detail,
+        });
+        expect(tasks.get(target.taskId)?.cleanupAfter).toBe(cleanupAfter);
+        expect(readResidentTaskFlow(flow.flowId)).toMatchObject({ status: "succeeded" });
+        const durable = loadTaskRegistryStateFromSqliteReadOnly();
+        expect(durable.tasks.get(target.taskId)).toEqual(tasks.get(target.taskId));
+        expect(durable.deliveryStates.get(target.taskId)).toEqual(delivery);
       });
-      setDetachedTaskLifecycleRuntime({
-        ...getDetachedTaskLifecycleRuntime(),
-        tryRecoverTaskBeforeMarkLost: hook,
-      });
-      const summary = await runTaskRegistryMaintenance();
-      expect(hook).toHaveBeenCalledOnce();
-      expect(summary).toEqual({ reconciled: 0, recovered: 1, cleanupStamped: 0, pruned: 0 });
-      expect(tasks.get(target.taskId)).toMatchObject({
-        taskId: target.taskId,
-        status: terminal.status,
-        endedAt,
-        lastEventAt: endedAt,
-        task: terminal.task,
-        terminalSummary: terminal.terminalSummary,
-        detail: terminal.detail,
-      });
-      expect(tasks.get(target.taskId)?.cleanupAfter).toBe(endedAt + 7 * 24 * 60 * 60_000);
-      const durable = loadTaskRegistryStateFromSqliteReadOnly();
-      expect(durable.tasks.get(target.taskId)).toEqual(tasks.get(target.taskId));
-      expect(durable.deliveryStates.get(target.taskId)).toEqual(delivery);
-    });
-  });
+    },
+  );
 });
