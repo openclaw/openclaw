@@ -24,7 +24,7 @@ const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
 );
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
 const stopSubagentsForRequesterMock = vi.hoisted(() =>
-  vi.fn<typeof import("./abort.js").stopSubagentsForRequester>(async (params) => {
+  vi.fn<typeof import("./abort-operation.js").stopSubagentsForRequester>(async (params) => {
     await params.beforeKill?.();
     return { stopped: 0, failed: 0 };
   }),

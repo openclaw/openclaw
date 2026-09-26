@@ -24,9 +24,7 @@ async function collectDiagnostic(
   let diagnostic: string | null = null;
   await noteWebFetchProxyDiagnostic({
     ...params,
-    noteFn: (message, title) => {
-      expect(title).toBe("Web fetch proxy");
-      expect(diagnostic).toBeNull();
+    noteFn: (message) => {
       if (typeof message !== "string") {
         throw new TypeError("expected doctor proxy diagnostic to be a string");
       }
@@ -140,6 +138,21 @@ describe("web_fetch proxy doctor diagnostic", () => {
     ).resolves.toBeNull();
     expect(service.readCommand).not.toHaveBeenCalled();
     expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("emits one titled note", async () => {
+    const noteFn = vi.fn();
+
+    await noteWebFetchProxyDiagnostic({
+      cfg: {},
+      env: { HTTPS_PROXY: "http://proxy.example:8080" },
+      service: serviceWithEnv(),
+      probeDirectConnectivity: vi.fn(async () => "reachable" as const),
+      noteFn,
+    });
+
+    expect(noteFn).toHaveBeenCalledTimes(1);
+    expect(noteFn).toHaveBeenCalledWith(expect.stringContaining("web_fetch"), "Web fetch proxy");
   });
 });
 

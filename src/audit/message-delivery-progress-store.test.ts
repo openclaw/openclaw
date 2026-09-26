@@ -533,7 +533,10 @@ describe("outbound message progress companion", () => {
     const { db } = openOpenClawStateDatabase(database);
     db.exec("DELETE FROM outbound_message_progress");
     const now = Date.now();
-    recordAuditEventInDatabase(terminalInput({ occurredAt: now }), { ...database, database: openOpenClawStateDatabase(database) });
+    recordAuditEventInDatabase(terminalInput({ occurredAt: now }), {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
     const expiredAt = now - 31 * 24 * 60 * 60_000;
     db.prepare(
       `WITH RECURSIVE numbers(n) AS (
