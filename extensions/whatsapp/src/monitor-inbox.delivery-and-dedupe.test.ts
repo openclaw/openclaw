@@ -1,4 +1,5 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import { observeChannelIngressQueueWrite } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -144,7 +145,9 @@ describe("web monitor inbox delivery and dedupe", () => {
         if (!claim) {
           throw new Error("expected the replayed approval claim");
         }
+        const completed = observeChannelIngressQueueWrite(queue, "complete", claim.id);
         finishReplay.resolve();
+        expect(await completed).toBe(true);
         await waitForInboundWorkDrained();
         expect(approvalResolver).toHaveBeenCalledTimes(3);
         expect(approvalResolver.mock.calls[1]).toEqual(approvalResolver.mock.calls[0]);
@@ -174,6 +177,10 @@ describe("web monitor inbox delivery and dedupe", () => {
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const readReceiptSent = createDeferred<void>();
+    sock.readMessages.mockImplementationOnce(async () => {
+      readReceiptSent.resolve();
+    });
     expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
     const messageId = nextMessageId("stream");
     const upsert = buildNotifyMessageUpsert({
@@ -186,6 +193,7 @@ describe("web monitor inbox delivery and dedupe", () => {
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
+    await readReceiptSent.promise;
 
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
@@ -829,7 +837,8 @@ describe("web monitor inbox delivery and dedupe", () => {
         },
       ],
     });
-    await waitForMessageCalls(onMessage, 1);
+    await waitForInboundWorkDrained();
+    expect(onMessage).toHaveBeenCalledTimes(1);
 
     sock.ev.emit("messages.upsert", {
       type: "notify",
@@ -841,9 +850,7 @@ describe("web monitor inbox delivery and dedupe", () => {
         },
       ],
     });
-    await settleInboundWork();
-
-    await waitForMessageCalls(onMessage, 2);
+    await waitForInboundWorkDrained();
     expect(onMessage.mock.calls.map(([message]) => message.payload.body)).toEqual(["ping", "pong"]);
     expect(await queue.listClaims()).toHaveLength(1);
     expect(await queue.listPending({ limit: "all" })).toEqual([]);
