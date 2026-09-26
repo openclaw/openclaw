@@ -134,7 +134,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   );
   const assistant = classifyAssistantTurn(params);
   return (
-    completion.outcome === "silent" &&
+    (completion.outcome === "silent" || assistant.silent) &&
     !shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: true }) &&
     resolveSourceReplyDelivery(params.attempt) === "missing" &&
     (!params.onlyExplicitSilentReply || assistant.silent) &&

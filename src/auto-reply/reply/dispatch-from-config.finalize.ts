@@ -383,9 +383,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           ? "delivered"
           : pendingContinuation || owned?.outcome === "pending" || getObservedReplyDelivery()
             ? "pending"
-            : delivery === "missing"
-              ? "empty"
-              : delivery,
+            : owned?.outcome === "silent"
+              ? "silent"
+              : delivery === "missing"
+                ? "empty"
+                : delivery,
     );
   };
   const replyAdmission = state.replyOperationRunState.admission;

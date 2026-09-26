@@ -105,15 +105,27 @@ describe("incomplete-turn recovery policy", () => {
     }
   });
 
-  it.each([
-    { name: "a completed reaction", aborted: false, timedOut: false, yielded: false, error: false },
-    { name: "a failed reaction", aborted: false, timedOut: false, yielded: false, error: true },
-    { name: "an aborted turn", aborted: true, timedOut: false, yielded: false, error: false },
-    { name: "a timed-out turn", aborted: false, timedOut: true, yielded: false, error: false },
-    { name: "pending work", aborted: false, timedOut: false, yielded: true, error: false },
-  ])(
-    "classifies optional NO_REPLY after $name without replay",
-    ({ aborted, timedOut, yielded, error }) => {
+  it.each(
+    [
+      {
+        name: "a completed reaction",
+        aborted: false,
+        timedOut: false,
+        yielded: false,
+        error: false,
+      },
+      { name: "a failed reaction", aborted: false, timedOut: false, yielded: false, error: true },
+      { name: "an aborted turn", aborted: true, timedOut: false, yielded: false, error: false },
+      { name: "a timed-out turn", aborted: false, timedOut: true, yielded: false, error: false },
+      { name: "pending work", aborted: false, timedOut: false, yielded: true, error: false },
+    ].flatMap((scenario) =>
+      (["required", "optional"] as const).map((terminalReplyExpectation) =>
+        Object.assign({}, scenario, { terminalReplyExpectation }),
+      ),
+    ),
+  )(
+    "classifies NO_REPLY after $name without replay (reply=$terminalReplyExpectation)",
+    ({ aborted, timedOut, yielded, error, terminalReplyExpectation }) => {
       const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
       const attempt = makeEmbeddedRunnerAttempt({
         assistantTexts: ["NO_REPLY"],
@@ -125,12 +137,12 @@ describe("incomplete-turn recovery policy", () => {
         ...(yielded ? { yieldDetected: true } : {}),
         ...(error ? { lastToolError: { toolName: "message", error: "reaction failed" } } : {}),
       });
-      // Optional replies can tolerate completed effects, but never replay them
+      // Explicit silence can tolerate completed effects, but never replay them
       // or take completion ownership from failed, cancelled, or pending work.
       expect(
         shouldTreatEmptyAssistantReplyAsSilent({
           allowEmptyAssistantReplyAsSilent: false,
-          terminalReplyExpectation: "optional",
+          terminalReplyExpectation,
           payloadCount: 0,
           aborted,
           timedOut,

@@ -261,7 +261,7 @@ describe("resolveFollowupDeliveryDecision", () => {
   );
 
   it.each(["required", "optional"] as const)(
-    "honors a queued %s reply expectation over heartbeat drain options and NO_REPLY",
+    "keeps explicit NO_REPLY silent for queued %s turns under heartbeat drain options",
     async (expectation) => {
       const turn = createTurn();
       turn.queued.run.terminalReplyExpectation = expectation;
@@ -277,17 +277,7 @@ describe("resolveFollowupDeliveryDecision", () => {
         opts: { isHeartbeat: true },
       });
 
-      if (expectation === "optional") {
-        expect(decision).toEqual({ kind: "suppress", reason: "silent" });
-      } else {
-        expect(decision).toMatchObject({
-          kind: "deliver",
-          payloads: [{ isError: true, text: expect.any(String) }],
-        });
-        if (decision.kind === "deliver") {
-          expect(decision.payloads[0]?.text).not.toContain("NO_REPLY");
-        }
-      }
+      expect(decision).toEqual({ kind: "suppress", reason: "silent" });
     },
   );
 
