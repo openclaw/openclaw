@@ -108,7 +108,7 @@ describe("Zalo polling image handling", () => {
           });
           expect(first.status).toBe(200);
           expect(replay.status).toBe(200);
-          await settleAsyncWork();
+          await monitor.waitForIdle();
         },
       );
 

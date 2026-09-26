@@ -347,12 +347,10 @@ export async function postWebhookReplay(params: {
   path: string;
   secret: string;
   payload: Record<string, unknown>;
-  settleBeforeReplay?: boolean;
+  settleBeforeReplay?: () => Promise<void>;
 }) {
   const first = await postWebhookUpdate(params);
-  if (params.settleBeforeReplay) {
-    await settleAsyncWork();
-  }
+  await params.settleBeforeReplay?.();
   const replay = await postWebhookUpdate(params);
   return { first, replay };
 }
