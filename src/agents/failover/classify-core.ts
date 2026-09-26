@@ -1,6 +1,7 @@
 /** Classifies prepared error facts without resolving provider runtime. */
 import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
 import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -237,6 +238,29 @@ function mergeMessageAndDetailClassification(
   return messageClassification.reason === "format" ? detailClassification : messageClassification;
 }
 
+function hasIndependentTransientMessage(
+  raw: string | undefined,
+  reason: FailoverReason,
+  provider: string | undefined,
+): boolean {
+  const text = raw && (extractLeadingHttpStatus(raw)?.rest ?? raw);
+  const info = parseApiErrorInfo(text);
+  const payload = !info && text ? safeParseJsonRecord(text) : null;
+  const prose = info
+    ? info.message
+    : payload
+      ? typeof payload.message === "string"
+        ? payload.message
+        : undefined
+      : text;
+  return Boolean(
+    prose &&
+    classifyFailoverReasonFromCode(prose) !== reason &&
+    failoverReasonFromClassification(classifyFailoverClassificationFromMessage(prose, provider)) ===
+      reason,
+  );
+}
+
 export function classifyFailoverSignalCore(
   signal: FailoverSignal,
   classifyProviderError?: ProviderErrorClassifier,
@@ -352,16 +376,12 @@ export function classifyFailoverSignalCore(
     // Inspect prose, not the JSON code that supplied the presentation reason.
     // Bedrock throttling text and provider-owned decisions remain retryable.
     const info = parseApiErrorInfo(signal.message);
-    const prose = info ? info.message : signal.message;
-    const proseReason = prose
-      ? failoverReasonFromClassification(
-          classifyFailoverClassificationFromMessage(prose, signal.provider),
-        )
-      : null;
-    if (
-      proseReason !== codeReason &&
-      !/^throttling_?exception$/i.test(signal.code ?? info?.code ?? "")
-    ) {
+    const hasTransientProse =
+      hasIndependentTransientMessage(signal.message, codeReason, signal.provider) ||
+      signal.details?.some((detail) =>
+        hasIndependentTransientMessage(detail, codeReason, signal.provider),
+      );
+    if (!hasTransientProse && !/^throttling_?exception$/i.test(signal.code ?? info?.code ?? "")) {
       return { ...classification, sameModelRetry: false };
     }
   }

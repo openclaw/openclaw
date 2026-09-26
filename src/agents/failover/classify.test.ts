@@ -109,6 +109,10 @@ describe("HTTP request rejection retry eligibility", () => {
       code: "rate_limit_exceeded",
       message:
         "400 This prompt is longer than the free tier allows for a single request. Shorten it.",
+      details: [
+        '{"code":"rate_limit_exceeded","message":"This prompt is longer than the free tier allows for a single request. Shorten it."}',
+        "rate_limit_exceeded",
+      ],
     },
     {
       status: 422,
@@ -128,6 +132,12 @@ describe("HTTP request rejection retry eligibility", () => {
     { status: 400, code: "ThrottlingException", message: "400 provider refusal" },
     { status: 429, code: "rate_limit_exceeded", message: "Request rejected" },
     { code: "rate_limit_exceeded", message: "Request rejected" },
+    {
+      status: 400,
+      code: "rate_limit_exceeded",
+      message: "400 Request rejected",
+      details: ['{"code":"rate_limit_exceeded","message":"Too many concurrent requests"}'],
+    },
   ])("retains independent throttling or status evidence: $status $code", (signal) => {
     expect(classifyFailoverSignal(signal, { providerPlugin: null })).toEqual({
       kind: "reason",

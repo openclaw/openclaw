@@ -7,6 +7,7 @@ import { sleepWithAbort } from "../../../infra/backoff.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
 import { registerSingleProviderPlugin } from "../../../test-utils/plugin-registration.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
+import { coerceToFailoverError } from "../../failover-error.js";
 import { recoverAfterTransportDrop } from "./attempt-recovery.test-support.js";
 
 vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
@@ -64,6 +65,43 @@ async function fetchRealPerDayCapErrorMessage(): Promise<string | undefined> {
 }
 
 describe("recoverEmbeddedRunAttempt", () => {
+  it.each(["assistant", "prompt", "coerced"] as const)(
+    "does not retry a code-only HTTP 400 rejection from %s",
+    async (source) => {
+      const message = "400 This prompt is longer than the free tier allows for a single request.";
+      const code = "rate_limit_exceeded";
+      const error = Object.assign(new Error(message), { status: 400, code });
+      vi.mocked(sleepWithAbort).mockClear();
+      const recovery = recoverAfterTransportDrop({
+        errorMessage: message,
+        errorCode: code,
+        diagnostics: [],
+        content: [],
+        replaySafe: true,
+        fallbackConfigured: true,
+        ...(source === "assistant"
+          ? {}
+          : {
+              terminal: {
+                kind: "failed",
+                source: "prompt",
+                error: source === "coerced" ? coerceToFailoverError(error) : error,
+              },
+            }),
+      });
+      if (source === "assistant") {
+        await expect(recovery).resolves.toMatchObject({ recovery: { action: "proceed" } });
+      } else {
+        await expect(recovery).rejects.toMatchObject({
+          name: "FailoverError",
+          reason: "rate_limit",
+          status: 400,
+        });
+      }
+      expect(sleepWithAbort).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes a real HTTP per-day 429 straight to fallback with zero same-model retries", async () => {
     // Message text comes from a real local HTTP 429 response round-tripped through
     // the real OpenRouter transport (streamOpenAICompletions) and the real
