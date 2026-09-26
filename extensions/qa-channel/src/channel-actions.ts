@@ -1,5 +1,8 @@
-// Qa Channel plugin module implements channel actions behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "openclaw/plugin-sdk/channel-contract";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { Type } from "typebox";
@@ -18,7 +21,6 @@ import {
   type QaBusMessage,
 } from "./bus-client.js";
 import { QA_CHANNEL_ID } from "./channel-base.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 function listQaChannelActions(
@@ -99,16 +101,12 @@ function readQaMessageTarget(
   };
 }
 
-function qaMessageMatchesTarget(message: QaBusMessage, target: QaMessageTarget): boolean {
-  return (
-    message.conversation.id === target.conversationId &&
-    message.conversation.kind === target.conversationKind &&
-    (message.threadId ?? null) === target.threadId
-  );
-}
-
 function assertQaMessageMatchesTarget(message: QaBusMessage, target: QaMessageTarget): void {
-  if (!qaMessageMatchesTarget(message, target)) {
+  if (
+    message.conversation.id !== target.conversationId ||
+    message.conversation.kind !== target.conversationKind ||
+    (message.threadId ?? null) !== target.threadId
+  ) {
     throw new Error("qa-channel message is not in the selected conversation");
   }
 }

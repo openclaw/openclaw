@@ -1,4 +1,3 @@
-// Codex tests cover node cli sessions plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,6 +48,16 @@ async function completeResume(argv: string[]) {
     killed: false,
     termination: "exit" as const,
   };
+}
+
+async function listLocalSessions(params: { filter?: string; limit?: number }) {
+  const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
+    (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
+  );
+  const raw = await command?.handle(JSON.stringify(params));
+  return JSON.parse(raw ?? "{}") as Awaited<
+    ReturnType<typeof listCodexCliSessionsOnNode>
+  >["result"];
 }
 
 describe("codex cli node sessions", () => {
@@ -130,18 +139,7 @@ describe("codex cli node sessions", () => {
       })}\n`,
     );
 
-    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
-    );
-    const raw = await command?.handle(JSON.stringify({ filter: "latest", limit: 5 }));
-    const parsed = JSON.parse(raw ?? "{}") as {
-      sessions?: Array<{
-        sessionId?: string;
-        cwd?: string;
-        lastMessage?: string;
-        messageCount?: number;
-      }>;
-    };
+    const parsed = await listLocalSessions({ filter: "latest", limit: 5 });
 
     expect(parsed.sessions).toEqual([
       {
@@ -634,73 +632,12 @@ describe("codex cli node sessions", () => {
       JSON.stringify({ session_id: sessionId, ts: 8_700_000_000_000, text: "bad timestamp" }),
     );
 
-    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
-    );
-    const raw = await command?.handle(JSON.stringify({ filter: "bad timestamp", limit: 5 }));
-    const parsed = JSON.parse(raw ?? "{}") as {
-      sessions?: Array<{
-        sessionId?: string;
-        updatedAt?: string;
-        lastMessage?: string;
-        messageCount?: number;
-      }>;
-    };
+    const parsed = await listLocalSessions({ filter: "bad timestamp", limit: 5 });
 
     expect(parsed.sessions).toEqual([
       {
         sessionId,
         lastMessage: "bad timestamp",
-        messageCount: 1,
-      },
-    ]);
-  });
-
-  it("lists sessions from Codex session files when history is absent", async () => {
-    const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5249";
-    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
-    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          timestamp: "2026-05-14T00:10:23.618Z",
-          type: "session_meta",
-          payload: { id: sessionId, cwd: "/tmp/codex-work" },
-        }),
-        JSON.stringify({
-          timestamp: "2026-05-14T00:10:23.619Z",
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "Reply with exactly: CRABBOX" }],
-          },
-        }),
-      ].join("\n"),
-    );
-
-    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
-    );
-    const raw = await command?.handle(JSON.stringify({ filter: "crabbox", limit: 5 }));
-    const parsed = JSON.parse(raw ?? "{}") as {
-      sessions?: Array<{
-        sessionId?: string;
-        cwd?: string;
-        lastMessage?: string;
-        messageCount?: number;
-      }>;
-    };
-
-    expect(parsed.sessions).toEqual([
-      {
-        sessionId,
-        updatedAt: "2026-05-14T00:10:23.619Z",
-        lastMessage: "Reply with exactly: CRABBOX",
-        cwd: "/tmp/codex-work",
-        sessionFile,
         messageCount: 1,
       },
     ]);
@@ -738,18 +675,7 @@ describe("codex cli node sessions", () => {
     );
     const readFile = vi.spyOn(fs, "readFile");
 
-    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
-    );
-    const raw = await command?.handle(JSON.stringify({ limit: 5 }));
-    const parsed = JSON.parse(raw ?? "{}") as {
-      sessions?: Array<{
-        sessionId?: string;
-        cwd?: string;
-        lastMessage?: string;
-        messageCount?: number;
-      }>;
-    };
+    const parsed = await listLocalSessions({ limit: 5 });
 
     expect(readFile).not.toHaveBeenCalledWith(sessionFile, "utf8");
     expect(parsed.sessions).toEqual([
@@ -788,11 +714,7 @@ describe("codex cli node sessions", () => {
       .mockRejectedValueOnce(Object.assign(new Error("read failed"), { code: "EIO" }));
     vi.spyOn(fs, "open").mockResolvedValue({ read, close } as never);
 
-    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
-    );
-    const raw = await command?.handle(JSON.stringify({ limit: 5 }));
-    const parsed = JSON.parse(raw ?? "{}") as { sessions?: unknown[] };
+    const parsed = await listLocalSessions({ limit: 5 });
 
     expect(parsed.sessions).toEqual([]);
     expect(read).toHaveBeenCalledTimes(2);
@@ -836,20 +758,7 @@ describe("codex cli node sessions", () => {
       .mockResolvedValueOnce({ bytesRead: 0, buffer: Buffer.alloc(0) });
     vi.spyOn(fs, "open").mockResolvedValue({ read, close } as never);
 
-    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
-    );
-    const raw = await command?.handle(JSON.stringify({ limit: 5 }));
-    const parsed = JSON.parse(raw ?? "{}") as {
-      sessions?: Array<{
-        sessionId?: string;
-        updatedAt?: string;
-        cwd?: string;
-        lastMessage?: string;
-        sessionFile?: string;
-        messageCount?: number;
-      }>;
-    };
+    const parsed = await listLocalSessions({ limit: 5 });
 
     expect(parsed.sessions).toEqual([
       {
@@ -901,13 +810,7 @@ describe("codex cli node sessions", () => {
       JSON.stringify({ session_id: sessionId, ts: 1778678322, text }),
     );
 
-    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
-    );
-    const raw = await command?.handle(JSON.stringify({ filter: "", limit: 5 }));
-    const parsed = JSON.parse(raw ?? "{}") as {
-      sessions?: Array<{ lastMessage?: string }>;
-    };
+    const parsed = await listLocalSessions({ filter: "", limit: 5 });
 
     expect(parsed.sessions?.[0]?.lastMessage).toBe(`${"a".repeat(136)}...`);
     expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\ud83e");
@@ -941,15 +844,18 @@ describe("codex cli node sessions", () => {
       ].join("\n"),
     );
 
-    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
-      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
-    );
-    const raw = await command?.handle(JSON.stringify({ filter: "", limit: 5 }));
-    const parsed = JSON.parse(raw ?? "{}") as {
-      sessions?: Array<{ lastMessage?: string }>;
-    };
+    const parsed = await listLocalSessions({ filter: "", limit: 5 });
 
-    expect(parsed.sessions?.[0]?.lastMessage).toBe(`${"b".repeat(136)}...`);
+    expect(parsed.sessions).toEqual([
+      {
+        sessionId,
+        updatedAt: "2026-05-14T00:10:23.619Z",
+        lastMessage: `${"b".repeat(136)}...`,
+        cwd: "/tmp/codex-work",
+        sessionFile,
+        messageCount: 1,
+      },
+    ]);
     expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\ud83e");
     expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\udd16");
   });

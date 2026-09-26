@@ -100,21 +100,7 @@ export async function runGit(
       }),
     };
   }
-  const baseEnv = options.baseEnv ?? { ...process.env };
-  const env = gitEnvironment(options.env, args, process.platform, baseEnv);
-  // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
-  const fetchesRefs = args[0] === "fetch";
-  const run = (gitArgs: string[]) => {
-    return executeGitCommand(cwd, gitArgs, {
-      ...options,
-      beforeRun: gitArgs === args ? options.beforeRun : undefined,
-      baseEnv,
-      env,
-      input: gitArgs === args ? options.input : undefined,
-      killProcessTree: options.killProcessTree ?? (fetchesRefs && gitArgs === args),
-    });
-  };
-  return await withGitRefAdmission(cwd, args, run, options.signal);
+  return await runOwnedGitCommand(cwd, args, options, executeGitCommand);
 }
 
 /** Parent-only command execution for text consumers whose decoding runs in a worker. */
@@ -123,21 +109,32 @@ export async function runGitBytes(
   args: string[],
   options: Parameters<typeof runGit>[2] = {},
 ) {
+  return await runOwnedGitCommand(cwd, args, options, executeGitCommandBytes);
+}
+
+async function runOwnedGitCommand<
+  T extends { termination: string; code: number | null; stdout: string | Uint8Array },
+>(
+  cwd: string,
+  args: string[],
+  options: GitCommandOptions,
+  execute: (cwd: string, args: string[], options: GitCommandOptions) => Promise<T>,
+): Promise<T> {
   const baseEnv = options.baseEnv ?? { ...process.env };
   const env = gitEnvironment(options.env, args, process.platform, baseEnv);
   return await withGitRefAdmission(
     cwd,
     args,
-    (gitArgs) => {
-      return executeGitCommandBytes(cwd, gitArgs, {
+    (gitArgs) =>
+      execute(cwd, gitArgs, {
         ...options,
         beforeRun: gitArgs === args ? options.beforeRun : undefined,
         baseEnv,
         env,
         input: gitArgs === args ? options.input : undefined,
+        // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
         killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
-      });
-    },
+      }),
     options.signal,
   );
 }

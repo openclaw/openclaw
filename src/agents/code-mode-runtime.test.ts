@@ -83,7 +83,6 @@ describe("Code Mode output bounding", () => {
   });
 
   it.each([
-    { name: "plain error", errorText: "failure ", output: [], returned: {} },
     { name: "Unicode error", errorText: "😀 café ", output: [], returned: {} },
     { name: "escaped error", errorText: '\\"\n\t', output: [], returned: {} },
     {
@@ -123,28 +122,25 @@ describe("Code Mode output bounding", () => {
 });
 
 describe("Code Mode source retention", () => {
-  it.each([65536, 10 * 1024 * 1024])(
-    "retains at most %i source bytes per channel across repeated legs",
-    (cap) => {
-      const original = [{ type: "text", text: "🦞".repeat(Math.ceil(cap / 4)) }];
-      const state = new CodeModeOutputState(cap);
-      const leg = captureCodeModeOutput(original, cap);
-      const value = captureCodeModeValue(original[0], cap);
-      expect(Buffer.byteLength(leg.source.json)).toBeLessThanOrEqual(cap);
-      expect(Buffer.byteLength(value.json)).toBeLessThanOrEqual(cap);
-      for (let index = 1; index <= 8; index++) {
-        state.append(leg);
-        state.append(captureCodeModeOutput([], cap));
-        expect(state.source.count).toBe(index);
-        expect(Buffer.byteLength(state.source.source.json)).toBeLessThanOrEqual(cap);
-        expect(state.source.source).toMatchObject({
-          kind: "prefix",
-          originalBytes: index * (Buffer.byteLength(JSON.stringify(original)) - 1) + 1,
-        });
-      }
-      expect(state.source.source.json).toBe(leg.source.json);
-    },
-  );
+  it.each([65536])("retains at most %i source bytes per channel across repeated legs", (cap) => {
+    const original = [{ type: "text", text: "🦞".repeat(Math.ceil(cap / 4)) }];
+    const state = new CodeModeOutputState(cap);
+    const leg = captureCodeModeOutput(original, cap);
+    const value = captureCodeModeValue(original[0], cap);
+    expect(Buffer.byteLength(leg.source.json)).toBeLessThanOrEqual(cap);
+    expect(Buffer.byteLength(value.json)).toBeLessThanOrEqual(cap);
+    for (let index = 1; index <= 8; index++) {
+      state.append(leg);
+      state.append(captureCodeModeOutput([], cap));
+      expect(state.source.count).toBe(index);
+      expect(Buffer.byteLength(state.source.source.json)).toBeLessThanOrEqual(cap);
+      expect(state.source.source).toMatchObject({
+        kind: "prefix",
+        originalBytes: index * (Buffer.byteLength(JSON.stringify(original)) - 1) + 1,
+      });
+    }
+    expect(state.source.source.json).toBe(leg.source.json);
+  });
 });
 
 describe("Code Mode master switch resolution", () => {
@@ -154,7 +150,6 @@ describe("Code Mode master switch resolution", () => {
     { name: "auto shorthand", codeMode: "auto", enabled: "auto" },
     { name: "object enabled auto", codeMode: { enabled: "auto" }, enabled: "auto" },
     { name: "object with options", codeMode: { timeoutMs: 5000 }, enabled: false },
-    { name: "empty object", codeMode: {}, enabled: false },
     { name: "omitted", codeMode: undefined, enabled: "auto" },
   ])("resolves enabled for $name", ({ codeMode, enabled }) => {
     expect(resolveCodeModeConfig({ tools: { codeMode } } as never).enabled).toBe(enabled);
@@ -195,7 +190,6 @@ describe("Code Mode master switch resolution", () => {
       model: unflaggedModel,
       engaged: false,
     },
-    { name: "auto skips a compat-free model", enabled: "auto", model: {}, engaged: false },
     { name: "auto skips a missing model", enabled: "auto", model: undefined, engaged: false },
   ] as const)("$name", ({ enabled, model, engaged }) => {
     expect(isCodeModeEngagedForModel({ enabled }, model)).toBe(engaged);

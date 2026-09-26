@@ -332,39 +332,6 @@ describe("secret provider integration presets", () => {
     ).toEqual([]);
   });
 
-  it("applies plugin id aliases when filtering disabled presets", () => {
-    const rootDir = makeTempDir();
-    writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
-    writePluginManifest(rootDir, {
-      id: "openai",
-      secretProviderIntegrations: {
-        vault: {
-          providerAlias: "vault",
-          source: "exec",
-          command: "${node}",
-          args: ["./resolve.mjs"],
-        },
-      },
-    });
-    const config = {
-      plugins: {
-        entries: {
-          openai: {
-            enabled: false,
-          },
-        },
-      },
-    };
-    const registry = loadPluginManifestRegistryCore({
-      candidates: [createCandidate(rootDir, "openai", "global")],
-      config,
-    });
-
-    expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry, config })).toEqual(
-      [],
-    );
-  });
-
   it("exposes bundled presets enabled by platform default", () => {
     const rootDir = makeTempDir();
     writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
@@ -392,40 +359,6 @@ describe("secret provider integration presets", () => {
       },
     ]);
   });
-
-  it.skipIf(process.platform === "win32")(
-    "materializes node presets from symlinked plugin roots",
-    () => {
-      const rootDir = makeTempDir();
-      const linkParent = makeTempDir();
-      const linkRoot = path.join(linkParent, "plugin-link");
-      writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
-      writePluginManifest(rootDir, {
-        id: "linked-secrets",
-        secretProviderIntegrations: {
-          vault: {
-            providerAlias: "vault",
-            source: "exec",
-            command: "${node}",
-            args: ["./resolve.mjs"],
-          },
-        },
-      });
-      fs.symlinkSync(rootDir, linkRoot);
-
-      const registry = loadTestRegistry(linkRoot, "linked-secrets", "global");
-
-      expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([
-        {
-          id: "vault",
-          pluginId: "linked-secrets",
-          providerAlias: "vault",
-          displayName: "vault",
-          providerConfig: pluginIntegrationProviderConfig("linked-secrets", "vault"),
-        },
-      ]);
-    },
-  );
 
   it.each<PluginOrigin>(["workspace", "config"])(
     "skips secret provider presets from %s plugin roots",

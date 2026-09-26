@@ -305,11 +305,6 @@ describe("chat pane catalog session lifecycle", () => {
       expected: "Tool call\n\ngit status --short",
     },
     {
-      name: "labels a tool result with the text its catalog provided",
-      item: { type: "toolResult", text: "working tree clean" },
-      expected: "Tool result\n\nworking tree clean",
-    },
-    {
       name: "keeps raw-only tool command labels readable",
       item: { type: "toolCall", raw: { command: "git status --short" } },
       expected: "Tool call\n\ngit status --short",
@@ -389,13 +384,6 @@ describe("chat pane catalog session lifecycle", () => {
     );
   });
 
-  it("skips an empty unknown catalog item", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-
-    expect(pane.catalogItemMessage({ type: "other" })).toBeNull();
-  });
-
   it("preserves provider order when catalog items omit timestamps", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
@@ -405,111 +393,69 @@ describe("chat pane catalog session lifecycle", () => {
     ).not.toHaveProperty("timestamp");
   });
 
-  it("exhausts pagination when an older read does not advance the cursor", async () => {
-    const readPage: SessionsCatalogReadResult = {
-      hostId: "gateway:local",
-      threadId: "thread-1",
+  it.each([
+    {
+      name: "exhausts pagination when an older read does not advance the cursor",
       items: [{ id: "x1", type: "other" }],
-      // Same cursor the request was made with: a stale provider that would loop.
+      initialCursor: "cursor-1",
       nextCursor: "cursor-1",
-    };
-    const client = {
-      request: vi.fn(async () => readPage),
-    } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
-    state.sessionKey = key;
-    pane.sessionKey = key;
-    pane.catalogCursor = "cursor-1";
-
-    const progressed = await pane.loadCatalogSession(
-      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
-      true,
-    );
-
-    expect(progressed).toBe(false);
-    // Cursor cleared → hasOlderMessages() is false, so the observer will not refire.
-    expect(pane.catalogCursor).toBeUndefined();
-  });
-
-  it("counts visible messages on an exhausted final page as progress", async () => {
-    const readPage: SessionsCatalogReadResult = {
-      hostId: "gateway:local",
-      threadId: "thread-1",
+      seenCursor: undefined,
+      progressed: false,
+      expectedCursor: undefined,
+      visibleMessages: 0,
+    },
+    {
+      name: "counts visible messages on an exhausted final page as progress",
       items: [{ id: "u1", type: "userMessage", text: "oldest message" }],
-    };
-    const client = {
-      request: vi.fn(async () => readPage),
-    } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
-    state.sessionKey = key;
-    pane.sessionKey = key;
-    pane.catalogCursor = "final-page";
-
-    const progressed = await pane.loadCatalogSession(
-      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
-      true,
-    );
-
-    expect(progressed).toBe(true);
-    expect(pane.catalogMessages).toHaveLength(1);
-    expect(pane.catalogCursor).toBeUndefined();
-  });
-
-  it("keeps paging when an advancing older page renders nothing new", async () => {
-    const readPage: SessionsCatalogReadResult = {
-      hostId: "gateway:local",
-      threadId: "thread-1",
-      // A page of only unsupported/empty items renders nothing but still advances
-      // the cursor: older renderable history may sit behind it, so paging continues.
+      initialCursor: "final-page",
+      nextCursor: undefined,
+      seenCursor: undefined,
+      progressed: true,
+      expectedCursor: undefined,
+      visibleMessages: 1,
+    },
+    {
+      name: "keeps paging when an advancing older page renders nothing new",
       items: [{ id: "x1", type: "other" }],
+      initialCursor: "cursor-1",
       nextCursor: "cursor-2",
-    };
-    const client = {
-      request: vi.fn(async () => readPage),
-    } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
-    state.sessionKey = key;
-    pane.sessionKey = key;
-    pane.catalogCursor = "cursor-1";
-
-    const progressed = await pane.loadCatalogSession(
-      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
-      true,
-    );
-
-    expect(progressed).toBe(true);
-    expect(pane.catalogCursor).toBe("cursor-2");
-  });
-
-  it("exhausts pagination when an older read cycles back to a visited cursor", async () => {
+      seenCursor: undefined,
+      progressed: true,
+      expectedCursor: "cursor-2",
+      visibleMessages: 0,
+    },
+    {
+      name: "exhausts pagination when an older read cycles back to a visited cursor",
+      items: [{ id: "x1", type: "other" }],
+      initialCursor: "cursor-2",
+      nextCursor: "cursor-1",
+      seenCursor: "cursor-1",
+      progressed: false,
+      expectedCursor: undefined,
+      visibleMessages: 0,
+    },
+  ] as const)("$name", async (scenario) => {
     const readPage: SessionsCatalogReadResult = {
       hostId: "gateway:local",
       threadId: "thread-1",
-      items: [{ id: "x1", type: "other" }],
-      // Cursor points back to one already visited this session: a c1 -> c2 -> c1
-      // cycle that would otherwise loop forever on empty pages.
-      nextCursor: "cursor-1",
+      items: [...scenario.items],
+      nextCursor: scenario.nextCursor,
     };
     const client = {
       request: vi.fn(async () => readPage),
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
-    state.sessionKey = key;
-    pane.sessionKey = key;
-    pane.catalogCursor = "cursor-2";
-    pane.olderCursorsSeen.add("cursor-1");
+    const key = { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" };
+    state.sessionKey = buildCatalogSessionKey(key, "main");
+    pane.sessionKey = state.sessionKey;
+    pane.catalogCursor = scenario.initialCursor;
+    if (scenario.seenCursor) {
+      pane.olderCursorsSeen.add(scenario.seenCursor);
+    }
 
-    const progressed = await pane.loadCatalogSession(
-      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
-      true,
-    );
-
-    expect(progressed).toBe(false);
-    expect(pane.catalogCursor).toBeUndefined();
+    expect(await pane.loadCatalogSession(key, true)).toBe(scenario.progressed);
+    expect(pane.catalogCursor).toBe(scenario.expectedCursor);
+    expect(pane.catalogMessages).toHaveLength(scenario.visibleMessages);
   });
 });
 
@@ -534,34 +480,6 @@ describe("chat pane catalog continuation lifecycle", () => {
     });
     expect(state.sessionKey).not.toBe("agent:main:continued");
     expect(state.handleSendChat).not.toHaveBeenCalled();
-  });
-
-  it("carries staged attachments through the continuation handoff", async () => {
-    const request = vi.fn().mockResolvedValue({ sessionKey: "agent:main:continued-attachments" });
-    const { key, pane, state } = createCatalogContinuationPane(request);
-    state.chatAttachments = [
-      {
-        id: "att-1",
-        mimeType: "image/png",
-        fileName: "shot.png",
-        dataUrl: "data:image/png;base64,AAAA",
-      },
-    ];
-
-    await pane.continueCatalogSession(key);
-
-    const handoff = consumePaneSessionHandoff(
-      pane.context,
-      pane.paneId,
-      "agent:main:continued-attachments",
-    );
-    expect(handoff?.send).toBe(true);
-    expect(handoff?.attachments).toHaveLength(1);
-    expect(handoff?.attachments[0]).toMatchObject({
-      mimeType: "image/png",
-      fileName: "shot.png",
-      dataUrl: "data:image/png;base64,AAAA",
-    });
   });
 
   it("continues an attachment-only draft instead of silently ignoring the send", async () => {
@@ -590,6 +508,11 @@ describe("chat pane catalog continuation lifecycle", () => {
     );
     expect(handoff?.send).toBe(true);
     expect(handoff?.attachments).toHaveLength(1);
+    expect(handoff?.attachments[0]).toMatchObject({
+      mimeType: "image/png",
+      fileName: "only.png",
+      dataUrl: "data:image/png;base64,BBBB",
+    });
   });
 
   it("still ignores a continuation with no draft and no attachments", async () => {

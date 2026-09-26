@@ -75,6 +75,7 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
     icon: renderArtTile(plugin.id, plugin.catalog.name, {
       iconUrl: packageIcon,
       authorIconUrl: authorIcon,
+      whiteBackground: plugin.catalog.official && Boolean(packageIcon),
       loading: Boolean(
         (plugin.catalog.imageUrl && props.iconLoading?.(plugin.catalog.imageUrl)) ||
         (detail.author?.imageUrl && props.iconLoading?.(detail.author.imageUrl)),

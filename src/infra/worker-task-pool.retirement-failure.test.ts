@@ -14,9 +14,10 @@ type FakeWorker = EventEmitter & {
 const workers = vi.hoisted(() => [] as FakeWorker[]);
 const cleanup = vi.hoisted(() => vi.fn<() => Promise<void>>());
 
-vi.mock("node:worker_threads", async () => {
+vi.mock("node:worker_threads", async (importOriginal) => {
   const { EventEmitter } = await import("node:events");
   return {
+    ...(await importOriginal<typeof import("node:worker_threads")>()),
     parentPort: null,
     Worker: class extends EventEmitter {
       constructor() {
@@ -33,7 +34,10 @@ vi.mock("node:worker_threads", async () => {
     },
   };
 });
-vi.mock("node:os", () => ({ availableParallelism: () => 2 }));
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 2,
+}));
 vi.mock("./runtime-worker-url.js", () => ({ resolveRuntimeWorkerThreadExecArgv: () => [] }));
 vi.mock("./temp-artifact-cleanup.js", () => ({ removeTemporaryArtifacts: cleanup }));
 

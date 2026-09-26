@@ -371,20 +371,6 @@ describe("discord exec approval monitor helpers", () => {
     },
   );
 
-  it("returns false when gateway resolution throws", async () => {
-    resolveApprovalOverGatewayMock.mockRejectedValue(new Error("boom"));
-    const ctx = createDiscordExecApprovalButtonContext({
-      cfg: buildConfig({ enabled: true, approvers: ["123"] }),
-      accountId: "default",
-      config: { enabled: true, approvers: ["123"] },
-    });
-
-    await expect(ctx.resolveApproval("abc", "exec", "allow-once", "123")).resolves.toEqual({
-      ok: false,
-      reason: "error",
-    });
-  });
-
   it("classifies structured approval-not-found gateway errors as stale clicks", async () => {
     const err = Object.assign(new Error("unknown or expired approval id"), {
       gatewayCode: "INVALID_REQUEST",

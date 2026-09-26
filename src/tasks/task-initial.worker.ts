@@ -8,6 +8,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { maintainCronTaskInDatabase } from "./task-cron-maintenance.kernel.js";
 import {
   createInitialTaskFlowInDatabase,
   deleteUnlinkedInitialTaskFlowInDatabase,
@@ -24,6 +25,8 @@ import {
 } from "./task-notification.kernel.js";
 import { captureTaskCreationEventTarget } from "./task-registry-agent-event-target.js";
 import { createTaskRecordInDatabase } from "./task-registry-create.kernel.js";
+import { captureTaskRetentionCommit } from "./task-registry-retention-receipt.js";
+import { applyTaskRetentionInDatabase } from "./task-registry-retention.kernel.js";
 import { transitionTaskRecordInDatabase } from "./task-registry-transition.kernel.js";
 import { readTaskRecord } from "./task-registry.store.kernel.js";
 
@@ -38,14 +41,15 @@ export function executeTaskInitialMutation(
   const accept = (result: Result) => {
     committed = { result };
   };
+  const admissionFacts = {
+    kind: "task-registry-mutation",
+    operation: command.type,
+    taskId: command.input.taskId,
+  };
   const assertCurrent = () =>
     requestSqliteWorkerOperationAdmission({
       stage: "transaction",
-      facts: {
-        kind: "task-registry-mutation",
-        operation: command.type,
-        taskId: command.input.taskId,
-      },
+      facts: admissionFacts,
     });
   const write = <T>(operation: () => T): T =>
     runOpenClawStateWriteTransaction(
@@ -53,6 +57,7 @@ export function executeTaskInitialMutation(
         const result = operation();
         if (
           command.type === "tasks.bindRunOwner" ||
+          command.type === "tasks.maintainCron" ||
           command.type === "tasks.finalizeActive" ||
           command.type === "tasks.settleUnstarted"
         ) {
@@ -111,6 +116,24 @@ export function executeTaskInitialMutation(
         return write(() => {
           let result: Result;
           switch (command.type) {
+            case "tasks.maintainCron":
+              result = maintainCronTaskInDatabase(database.db, command.input, assertCurrent);
+              break;
+            case "tasks.applyRetention": {
+              const retained = applyTaskRetentionInDatabase(
+                database.db,
+                command.input,
+                assertCurrent,
+              );
+              if (retained.kind === "unchanged") {
+                result = retained;
+                break;
+              }
+              requestSqliteWorkerOperationAdmission({ stage: "commit", facts: admissionFacts });
+              result = captureTaskRetentionCommit(command.input, retained);
+              deferSqliteWorkerCommitReceipt(database.db, result);
+              break;
+            }
             case "tasks.transitionRunRow": {
               result = transitionTaskRecordInDatabase(
                 database.db,

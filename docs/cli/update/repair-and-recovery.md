@@ -130,6 +130,11 @@ openclaw update repair --json
 openclaw update repair --accept-capabilities
 ```
 
+When repair runs under Bun, its fresh Doctor, config validation, readiness,
+completion, and non-interactive failure-diagnostic commands use that same Bun
+executable. Node and command-shim invocations keep their existing Node selection
+policy. Managed-service runtime selection remains owned by the service configuration.
+
 If an older updater publishes the new core but then reports
 `update-executor-settlement-failed` with `Parent executor is suspended for its candidate.`,
 wait for that updater to exit and run `openclaw update repair --yes --json` from

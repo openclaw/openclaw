@@ -174,6 +174,18 @@ the captured task owner and database lifecycle still authorize the operation.
 Maintenance joins the sweep before completing; expiry, storage formats, and
 update behavior are unchanged.
 
+Task retention also runs in the shared-state worker. Maintenance keeps its existing
+task selection, sweep time, and cron-history limits, then rechecks each selected
+task inside the admitted transaction. The read worker prepares the exact row and a
+fingerprint; the write worker verifies that source before mutation and rechecks
+live authority before commit. A compact native commit receipt preserves the known
+outcome if result delivery fails, without replaying the write or carrying task
+payloads through the commit channel. Deletes remove the task, delivery state, and
+execution-owner metadata together; cleanup-deadline stamps preserve delivery and
+activity timestamps. Committed receipts update resident indexes and activity before
+observer events, while newer task publications supersede stale replies. Shutdown
+joins accepted work. Retention policy, schema, and update behavior are unchanged.
+
 Warm profile ensures read existing email, provider, and Gateway-owner identities
 without writer admission. Missing identities and display-name changes recheck
 their authoritative rows inside the existing write transaction. Exec authorization
@@ -789,7 +801,11 @@ read transaction. Bootstrap preparation and Doctor readiness await that result;
 inspection does not create missing state or register aliases. Selected snapshots
 and artifact-preserving scopes keep their existing lifetime and cleanup owner.
 Generic composite preparation, borrowed-source backup and source-exclusion
-compatibility paths retain their native owners. Mutable workspace reads, writes,
+compatibility paths retain their native owners. Attestation refreshes use the
+shared-state writer, including lifecycle coordinator acquisition, with live host
+checks at transaction and commit admission. Every observation retains its durable
+timestamp so the 24-hour disappearance guard survives restart; unchanged generated
+hashes reuse the transaction's stored rows. Mutable workspace reads, setup writes,
 and Doctor alias repair keep their existing transaction owners. Schemas,
 retention, and update behavior are unchanged.
 
@@ -1742,6 +1758,15 @@ Candidate-only preservation providers, incognito databases, prepared native
 deletion hooks, commit-authorization joins, archive publication bookkeeping, and
 repository/worktree cleanup retain their existing parent-side owners.
 
+Canonical session creation initializes its transcript header and replaces its entry
+in one agent-worker command and transaction. Failed creation rolls both back;
+committed receipts publish lifecycle facts before entry notifications and follow-up
+registration. Lost replies retain the native commit receipt and never replay the
+write. Existing partial-header state remains readable and recoverable. Alias
+adoption retains its separate header initialization and native deletion rollback
+composition. Pending-archive recovery still follows the replacement receipt after
+writer release. Stored formats, schemas, retention, and update behavior are unchanged.
+
 Session reclamation keeps its deletion transaction on a worker connection.
 The worker opens its database under the session writer, then releases that writer
 while any required first full integrity and foreign-key checks run on the same
@@ -1749,13 +1774,19 @@ connection. Unrelated session writes can continue during those checks. Workers
 can borrow the Gateway's remembered verification for the same physical agent
 database under live write admission. The worker reacquires the writer and
 revalidates current authority before index repair, schema work, or deletion.
-The process retains at most one validated reclamation worker connection and lease,
+The process retains at most one validated reclamation worker connection and lease per physical store,
 with a 30-minute idle retirement. Each deletion keeps its own transaction, retained
 parent claim, numbered write admission, and current-authority checks in its own
 async context. The worker clears operation buffers and acknowledges transaction
 settlement before the parent publishes committed removals and releases that
 operation's writer admission. Later requests reuse the connection only for the
 same physical database and shared-state owner; every request checks its live lease.
+Ordinary reclamation's refused admission or commit requests leave an already admitted worker reusable only
+after confirmed rollback, with an open retained connection and current parent
+authority. The caller still receives its refusal; no mutation is replayed. Native
+failures and uncertain settlement still retire the worker. Retirement logs include
+the reason, last operation kind, age, operation count, and worker thread ID.
+Canonical validation scopes retain their existing native failure and drainage contract.
 
 During Doctor maintenance, session mutation and worker-close jobs borrow its
 existing state-lifecycle coordinator through a live delegate bound to the actor,
@@ -1764,7 +1795,7 @@ cleanup until the original result settles or native exit is joined. Revocation
 still prevents later writes. Failed coordinator cleanup remains owned for drainage;
 a confirmed mutation stays successful if only subsequent cleanup fails.
 
-Switching databases, deletion, quarantine, maintenance, root retirement, and shutdown
+Deletion, quarantine, maintenance scopes, root retirement, and shutdown
 revoke reuse and join native worker exit before releasing the database owner. Pending
 commit requests are rejected before synchronous close can wait on their writer lock.
 Requests still waiting in the shared archive queue drop their callback before releasing

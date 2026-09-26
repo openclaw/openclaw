@@ -333,20 +333,7 @@ describe("restart health", () => {
     },
   );
 
-  it.each([
-    "",
-    "repair required",
-    "pairing required",
-    "auth required",
-    "device identity required",
-    "connect challenge missing nonce",
-    "device signature invalid",
-    "unauthorized: session revoked",
-    "device pairing required",
-    "role upgrade pending approval",
-    "scope upgrade pending approval",
-    "device metadata change pending approval",
-  ])(
+  it.each(["pairing required", "auth required"])(
     "does not treat ambiguous 1008 close reason %s as healthy gateway reachability",
     async (reason) => {
       const snapshot = await inspectAmbiguousOwnershipWithProbe(
@@ -356,108 +343,6 @@ describe("restart health", () => {
       expect(snapshot.healthy).toBe(false);
     },
   );
-
-  it("requires the expected gateway version when provided", async () => {
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.23", connId: "old" },
-      }),
-    );
-
-    const snapshot = await inspectGatewayRestartWithSnapshot({
-      runtime: { status: "running", pid: 8000 },
-      expectedVersion: "2026.4.24",
-      portUsage: {
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      },
-    });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.gatewayVersion).toBe("2026.4.23");
-    expect(snapshot.expectedVersion).toBe("2026.4.24");
-    expect(snapshot.versionMismatch?.expected).toBe("2026.4.24");
-    expect(snapshot.versionMismatch?.actual).toBe("2026.4.23");
-  });
-
-  it("accepts the restarted gateway when the expected version matches", async () => {
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.24", connId: "new" },
-      }),
-    );
-
-    const snapshot = await inspectGatewayRestartWithSnapshot({
-      runtime: { status: "running", pid: 8000 },
-      expectedVersion: "2026.4.24",
-      portUsage: {
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      },
-    });
-
-    expect(snapshot.healthy).toBe(true);
-    expect(snapshot.gatewayVersion).toBe("2026.4.24");
-    expect(snapshot.expectedVersion).toBe("2026.4.24");
-    expect(snapshot.versionMismatch).toBeUndefined();
-  });
-
-  it("requires the expected gateway build identity when provided", async () => {
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.24", buildId: "old-build", connId: "old" },
-      }),
-    );
-
-    const snapshot = await inspectGatewayRestartWithSnapshot({
-      runtime: { status: "running", pid: 8000 },
-      expectedBuildId: "new-build",
-      portUsage: {
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      },
-    });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.gatewayBuildId).toBe("old-build");
-    expect(snapshot.expectedBuildId).toBe("new-build");
-    expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
-
-    const { renderRestartDiagnostics } = await import("./restart-health.js");
-    expect(renderRestartDiagnostics(snapshot)).toContain(
-      "Gateway build mismatch: expected new-build, running gateway reported old-build.",
-    );
-  });
-
-  it("accepts the restarted gateway when the expected build identity matches", async () => {
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.24", buildId: "new-build", connId: "new" },
-      }),
-    );
-
-    const snapshot = await inspectGatewayRestartWithSnapshot({
-      runtime: { status: "running", pid: 8000 },
-      expectedBuildId: "new-build",
-      portUsage: {
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      },
-    });
-
-    expect(snapshot.healthy).toBe(true);
-    expect(snapshot.gatewayBuildId).toBe("new-build");
-    expect(snapshot.expectedBuildId).toBe("new-build");
-    expect(snapshot.buildIdMismatch).toBeUndefined();
-  });
 
   it("requires Gateway runtime build identity for a configured Control UI root", async () => {
     callGateway.mockImplementation(

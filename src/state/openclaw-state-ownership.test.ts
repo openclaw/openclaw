@@ -149,37 +149,25 @@ describe("external shared-state ownership", () => {
     expect(fs.existsSync(missingStateDir)).toBe(false);
   });
 
-  it.each(["missing", "orphaned", "existing"])(
-    "rejects canceled %s ownership admission before recovery or staging",
-    async (layout) => {
-      const env = createEnv();
-      const databasePath = resolveOpenClawStateSqlitePath(env);
-      if (layout === "existing") {
-        openOpenClawStateDatabase({ env });
-        closeOpenClawStateDatabaseForTest();
-      } else if (layout === "orphaned") {
-        fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-        fs.writeFileSync(`${databasePath}-wal`, Buffer.alloc(64, 1));
-      }
-      const before = layout === "missing" ? undefined : snapshotSqliteFamily(databasePath);
-      const controller = new AbortController();
-      const reason = new Error("ownership admission stopped");
-      controller.abort(reason);
-      const snapshot = vi.spyOn(sqliteReadonlyLocation, "prepareSqliteReadOnlyLocation");
-      try {
-        const options = { databasePath, env, signal: controller.signal };
-        await expect(assertOpenClawStateWriteAllowedAtPath(options)).rejects.toBe(reason);
-        expect(snapshot).not.toHaveBeenCalled();
-        if (layout === "missing") {
-          expect(fs.existsSync(path.dirname(databasePath))).toBe(false);
-        } else {
-          assert.deepStrictEqual(snapshotSqliteFamily(databasePath), before);
-        }
-      } finally {
-        snapshot.mockRestore();
-      }
-    },
-  );
+  it("rejects canceled ownership admission before orphan recovery or staging", async () => {
+    const env = createEnv();
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.writeFileSync(`${databasePath}-wal`, Buffer.alloc(64, 1));
+    const before = snapshotSqliteFamily(databasePath);
+    const controller = new AbortController();
+    const reason = new Error("ownership admission stopped");
+    controller.abort(reason);
+    const snapshot = vi.spyOn(sqliteReadonlyLocation, "prepareSqliteReadOnlyLocation");
+    try {
+      const options = { databasePath, env, signal: controller.signal };
+      await expect(assertOpenClawStateWriteAllowedAtPath(options)).rejects.toBe(reason);
+      expect(snapshot).not.toHaveBeenCalled();
+      assert.deepStrictEqual(snapshotSqliteFamily(databasePath), before);
+    } finally {
+      snapshot.mockRestore();
+    }
+  });
 
   it.each([
     { mode: "unmarked", external: false, recoverOrphanedSidecars: undefined },

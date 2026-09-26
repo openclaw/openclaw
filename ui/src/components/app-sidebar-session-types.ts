@@ -403,13 +403,14 @@ export function loadStoredSidebarSessionSortMode(): SidebarSessionSortMode {
   return stored === "updated" || stored === "people" ? stored : "created";
 }
 
-export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
+function loadStoredSidebarStringSet(
+  key: string,
+  fallback: readonly string[] = [],
+): ReadonlySet<string> {
   try {
-    const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
+    const raw = getSafeLocalStorage()?.getItem(key);
     if (raw == null) {
-      // First run: Coding stays muted while Online preserves its expanded
-      // default until the user explicitly collapses it.
-      return new Set(["work"]);
+      return new Set(fallback);
     }
     const parsed: unknown = JSON.parse(raw);
     return new Set(
@@ -418,23 +419,17 @@ export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
         : [],
     );
   } catch {
-    return new Set(["work"]);
+    return new Set(fallback);
   }
 }
 
+export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
+  // First run: Coding stays muted; Online keeps its expanded default.
+  return loadStoredSidebarStringSet(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY, ["work"]);
+}
+
 export function loadStoredHiddenSessionCatalogIds(): ReadonlySet<string> {
-  try {
-    const parsed: unknown = JSON.parse(
-      getSafeLocalStorage()?.getItem(SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY) ?? "[]",
-    );
-    return new Set(
-      Array.isArray(parsed)
-        ? parsed.flatMap((value) => (typeof value === "string" && value ? [value] : []))
-        : [],
-    );
-  } catch {
-    return new Set();
-  }
+  return loadStoredSidebarStringSet(SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY);
 }
 
 function storeSidebarSessionPreference(key: string, value: string): void {

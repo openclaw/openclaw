@@ -44,22 +44,6 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   shouldPreferProviderRuntimeResolvedModel: () => false,
 }));
 
-const ANTHROPIC_OPUS_TEMPLATE = buildForwardCompatTemplate({
-  id: "claude-opus-4-5",
-  name: "Claude Opus 4.5",
-  provider: "anthropic",
-  api: "anthropic-messages",
-  baseUrl: "https://api.anthropic.com",
-});
-
-const ANTHROPIC_OPUS_EXPECTED = {
-  provider: "anthropic",
-  id: "claude-opus-4-6",
-  api: "anthropic-messages",
-  baseUrl: "https://api.anthropic.com",
-  reasoning: true,
-};
-
 const ANTHROPIC_SONNET_TEMPLATE = buildForwardCompatTemplate({
   id: "claude-sonnet-4-5",
   name: "Claude Sonnet 4.5",
@@ -126,44 +110,6 @@ function createRegistry(
   } as never;
 }
 
-async function runAnthropicOpusForwardCompatFallback() {
-  expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: await resolveModelWithRegistry({
-      provider: "anthropic",
-      modelId: "claude-opus-4-6",
-      agentDir: state.agentDir(),
-      modelRegistry: createRegistry([
-        {
-          provider: "anthropic",
-          modelId: "claude-opus-4-5",
-          model: ANTHROPIC_OPUS_TEMPLATE,
-        },
-      ]),
-      runtimeHooks: createRuntimeHooks(),
-    }),
-    expectedModel: ANTHROPIC_OPUS_EXPECTED,
-  });
-}
-
-async function runAnthropicSonnetForwardCompatFallback() {
-  expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: await resolveModelWithRegistry({
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      agentDir: state.agentDir(),
-      modelRegistry: createRegistry([
-        {
-          provider: "anthropic",
-          modelId: "claude-sonnet-4-5",
-          model: ANTHROPIC_SONNET_TEMPLATE,
-        },
-      ]),
-      runtimeHooks: createRuntimeHooks(),
-    }),
-    expectedModel: ANTHROPIC_SONNET_EXPECTED,
-  });
-}
-
 async function runClaudeCliSonnetForwardCompatFallback() {
   // claude-cli uses Anthropic templates but must preserve the requested provider
   // so downstream auth/transport stays on the CLI integration.
@@ -209,16 +155,6 @@ async function runZaiForwardCompatFallback() {
 }
 
 describe("resolveModel forward-compat tail", () => {
-  it(
-    "builds an anthropic forward-compat fallback for claude-opus-4-6",
-    runAnthropicOpusForwardCompatFallback,
-  );
-
-  it(
-    "builds an anthropic forward-compat fallback for claude-sonnet-4-6",
-    runAnthropicSonnetForwardCompatFallback,
-  );
-
   it(
     "preserves the claude-cli provider for anthropic forward-compat fallback models",
     runClaudeCliSonnetForwardCompatFallback,

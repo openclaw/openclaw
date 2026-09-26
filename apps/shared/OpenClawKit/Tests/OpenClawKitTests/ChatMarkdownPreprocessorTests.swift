@@ -259,6 +259,20 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.cleaned == "User message")
     }
 
+    @Test func `context termination preserves adjacent content`() {
+        let cases = [
+            ("", ""),
+            ("\nUser message", "User message"),
+            ("```json\n{\"x\": 1}", ""),
+            ("```json\n{\"x\": 1}\n```\nUser message", "User message"),
+            ("\nSender: \(Self.ctx)\n```json\n{}\n```\nUser message", "User message"),
+        ]
+        for (body, expected) in cases {
+            let result = ChatMarkdownPreprocessor.preprocess(markdown: "Conversation info: \(Self.ctx)\n" + body)
+            #expect(result.cleaned == expected)
+        }
+    }
+
     @Test func stripsAllKnownInboundMetadataSentinels() {
         let sentinels = [
             "Conversation info:",

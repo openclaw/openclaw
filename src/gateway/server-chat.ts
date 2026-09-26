@@ -23,11 +23,7 @@ import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js"
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getRuntimeConfig } from "../config/io.js";
-import {
-  type AgentEventPayload,
-  type AgentEventRuntimePayload,
-  getAgentEventLifecycleGeneration,
-} from "../infra/agent-events.js";
+import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { getAgentRunContext, getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -167,8 +163,6 @@ function shouldMirrorAgentEventToHiddenSessionMessages(evt: AgentEventPayload): 
 
 const LIVE_TEXT_PACING_MS = 75;
 
-export type ChatEventBroadcast = GatewayBroadcastFn;
-
 export type NodeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
 
 // Derived from ChatErrorEventSchema.errorKind (gateway-protocol); keep set in sync.
@@ -250,7 +244,7 @@ function excludeConnIds(
 }
 
 export type AgentEventHandlerOptions = {
-  broadcast: ChatEventBroadcast;
+  broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   nodeSendToSession: NodeSendToSession;
   nodeHasSessionSubscribers: (sessionKey: string) => boolean;
@@ -378,18 +372,16 @@ export function createAgentEventHandler({
   updateRunToolErrorSummary,
   resolveSessionActiveRunState,
 }: AgentEventHandlerOptions): AgentEventHandler {
-  const shouldProcessOwnedEvent = (evt: AgentEventRuntimePayload): boolean => {
-    const claimId = evt.contextClaimId;
-    if (!claimId) {
-      return true;
-    }
-    const lifecycleGeneration = evt.lifecycleGeneration;
-    if (!lifecycleGeneration || lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-      return false;
-    }
-    // A missing claim means detach or supersession revoked this terminal event.
-    return getAgentRunContextOwnerStatus(evt.runId, claimId, lifecycleGeneration) === "active";
-  };
+  const shouldProcessOwnedEvent = (
+    runId: string,
+    claimId: string | undefined,
+    lifecycleGeneration: string | undefined,
+  ): boolean =>
+    !claimId ||
+    Boolean(
+      lifecycleGeneration &&
+      getAgentRunContextOwnerStatus(runId, claimId, lifecycleGeneration) === "active",
+    );
   const clearRunContextForEvent = (evt: AgentEventRuntimePayload): void => {
     if (evt.contextClaimId) {
       clearAgentRunContext(evt.runId, evt.lifecycleGeneration, evt.contextClaimId);
@@ -580,7 +572,7 @@ export function createAgentEventHandler({
     evt: AgentEventRuntimePayload,
     opts?: TerminalLifecycleOptions,
   ) => {
-    if (!shouldProcessOwnedEvent(evt)) {
+    if (!shouldProcessOwnedEvent(evt.runId, evt.contextClaimId, evt.lifecycleGeneration)) {
       return;
     }
     const lifecyclePhase =
@@ -1372,7 +1364,12 @@ export function createAgentEventHandler({
 
   const handleEvent = (event: AgentEventPayload) => {
     const evt = event as AgentEventRuntimePayload;
-    const isCurrent = () => shouldProcessOwnedEvent(evt);
+    const isCurrent = shouldProcessOwnedEvent.bind(
+      null,
+      evt.runId,
+      evt.contextClaimId,
+      evt.lifecycleGeneration,
+    );
     if (!isCurrent()) {
       return;
     }

@@ -1,4 +1,3 @@
-// Logbook plugin config resolution: clamps operator input into safe runtime bounds.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type LogbookConfig = {

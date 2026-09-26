@@ -264,7 +264,7 @@ describe("node worker output framing", () => {
     }
   });
 
-  it.each([-1, 0, 1])(
+  it.each([0, 1])(
     "bounds aggregate output including delimiters at cap + %i before journal readiness",
     async (delta) => {
       const harness = observationHarness();

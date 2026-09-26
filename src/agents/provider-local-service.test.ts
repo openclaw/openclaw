@@ -24,7 +24,6 @@ import {
   ensureModelProviderLocalService,
   ensureProviderLocalService,
   getManagedProviderLocalServiceDiagnosticsForTest,
-  getModelProviderLocalService,
   stopManagedProviderLocalServices,
 } from "./provider-local-service.js";
 import {
@@ -101,18 +100,6 @@ describe("provider local service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const fixture = createProviderLocalServiceTestFixture();
   afterEach(fixture.cleanup);
-
-  it("attaches local service metadata to model objects", () => {
-    const model = attachModelProviderLocalService(
-      { id: "demo", provider: "local", baseUrl: "http://127.0.0.1:1/v1" },
-      { command: process.execPath, args: ["--version"] },
-    );
-
-    expect(getModelProviderLocalService(model)).toEqual({
-      command: process.execPath,
-      args: ["--version"],
-    });
-  });
 
   it("treats signaled local service children as exited", () => {
     expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);

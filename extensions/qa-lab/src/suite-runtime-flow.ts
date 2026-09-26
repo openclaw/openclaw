@@ -26,6 +26,7 @@ import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import type { QaSuiteScenarioResult, QaSuiteStep } from "./suite-types.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
+import { projectQaToolMessages } from "./tool-activity.js";
 import * as webRuntime from "./web-runtime.js";
 
 type QaSuiteScenarioFlowEnv = {
@@ -39,6 +40,7 @@ const qaSuiteScenarioIdentityDeps = {
   path,
   sleep,
   randomUUID,
+  projectQaToolMessages,
   ...suiteRuntimeAgent,
   ...suiteRuntimeGateway,
   ...suiteRuntimeTransport,

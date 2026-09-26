@@ -96,11 +96,17 @@ const logNames = [
   "webhooks-only-policy/update.err",
   "webhooks-only-policy/gateway.log",
   "webhooks-only-policy/baseline-gateway.log",
+  "legacy-operator-post-update-cron-history.json",
+  "legacy-operator-candidate-cron-history.json",
   "dreaming-cron-proof.json",
   "legacy-operator-baseline-turn.out",
   "legacy-operator-baseline-turn.err",
   "legacy-operator-candidate-turn.out",
   "legacy-operator-candidate-turn.err",
+  "legacy-operator-run-survivor-default-owner.out",
+  "legacy-operator-run-survivor-default-owner.err",
+  "legacy-operator-run-survivor-ops-owner.out",
+  "legacy-operator-run-survivor-ops-owner.err",
   "gateway.log",
   "gateway.log.doctor",
   "missing-load-path/baseline-gateway.log",
@@ -1758,6 +1764,15 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)
           ? ["legacy-operator-cron-history-proof.json"]
+          : []),
+        ...(snapshot.scenario === "legacy-operator-state" &&
+        (snapshot.baseline.version === "2026.9.6" ||
+          (snapshot.updateRestartMode === "manual" &&
+            ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)))
+          ? [
+              "legacy-operator-post-update-cron-history.json",
+              "legacy-operator-candidate-cron-history.json",
+            ]
           : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&

@@ -276,8 +276,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
       '@openclaw/proxyline':
         specifier: 0.3.12
         version: 0.3.12(undici@8.10.2)
@@ -551,7 +551,7 @@ importers:
         version: 7.1.3
       nostr-tools:
         specifier: 2.25.2
-        version: 2.25.2(typescript@7.0.2)
+        version: 2.25.2(typescript@7.1.0-dev.20260917.1)
       oxfmt:
         specifier: 0.68.0
         version: 0.68.0
@@ -590,10 +590,10 @@ importers:
         version: 8.2.2
       stylelint:
         specifier: 17.15.0
-        version: 17.15.0(supports-color@10.2.2)(typescript@7.0.2)
+        version: 17.15.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260917.1)
       stylelint-config-recommended:
         specifier: 18.0.0
-        version: 18.0.0(stylelint@17.15.0(supports-color@10.2.2)(typescript@7.0.2))
+        version: 18.0.0(stylelint@17.15.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260917.1))
       tinyglobby:
         specifier: 0.2.17
         version: 0.2.17
@@ -602,13 +602,13 @@ importers:
         version: 0.25.1
       tsdown:
         specifier: 0.23.0
-        version: 0.23.0(tsx@4.23.13)(typescript@7.0.2)(unrun@0.3.1)
+        version: 0.23.0(tsx@4.23.13)(typescript@7.1.0-dev.20260917.1)(unrun@0.3.1)
       tsx:
         specifier: 4.23.13
         version: 4.23.13
       typescript:
-        specifier: 7.0.2
-        version: 7.0.2
+        specifier: 7.1.0-dev.20260917.1
+        version: 7.1.0-dev.20260917.1
       unrun:
         specifier: 0.3.1
         version: 0.3.1
@@ -651,8 +651,8 @@ importers:
         specifier: 1.12.0
         version: 1.12.0
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
       acpx:
         specifier: 0.19.1
         version: 0.19.1
@@ -840,7 +840,7 @@ importers:
     dependencies:
       nostr-tools:
         specifier: 2.25.2
-        version: 2.25.2(typescript@7.0.2)
+        version: 2.25.2(typescript@7.1.0-dev.20260917.1)
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -936,8 +936,8 @@ importers:
         specifier: 0.155.1
         version: 0.155.1
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
       semver:
         specifier: 7.8.5
         version: 7.8.5
@@ -995,8 +995,8 @@ importers:
   extensions/cua-computer:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
       '@trycua/cua-driver':
         specifier: 0.28.2
         version: 0.28.2
@@ -1208,8 +1208,8 @@ importers:
         specifier: 1.74.0
         version: 1.74.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)
@@ -1236,8 +1236,8 @@ importers:
   extensions/file-transfer:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
       minimatch:
         specifier: 10.2.6
         version: 10.2.6
@@ -1475,8 +1475,8 @@ importers:
   extensions/llama-cpp:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1531,8 +1531,8 @@ importers:
         specifier: 18.8.0
         version: 18.8.0
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
       fake-indexeddb:
         specifier: 6.2.5
         version: 6.2.5
@@ -1575,8 +1575,8 @@ importers:
   extensions/memory-core:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
       chokidar:
         specifier: 5.0.0
         version: 5.0.0
@@ -1688,8 +1688,8 @@ importers:
   extensions/migrate-claude:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1799,7 +1799,7 @@ importers:
     dependencies:
       nostr-tools:
         specifier: 2.25.2
-        version: 2.25.2(typescript@7.0.2)
+        version: 2.25.2(typescript@7.1.0-dev.20260917.1)
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -1858,8 +1858,8 @@ importers:
   extensions/onepassword:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1925,8 +1925,8 @@ importers:
   extensions/openshell:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
       p-limit:
         specifier: 7.3.2
         version: 7.3.2
@@ -2000,8 +2000,8 @@ importers:
         specifier: 0.1.27
         version: 0.1.27
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
       playwright-core:
         specifier: 1.63.0
         version: 1.63.0
@@ -2129,8 +2129,8 @@ importers:
   extensions/signal:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.18.2
-        version: 0.18.2
+        specifier: 0.20.0
+        version: 0.20.0
       ws:
         specifier: 8.21.3
         version: 8.21.3
@@ -4521,8 +4521,8 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
-  '@openclaw/fs-safe-darwin-arm64@0.18.2':
-    resolution: {integrity: sha512-RtmkhA1Aukwo4CIKjSL4xH7hb3+UH4kEWgB/quSup0R3LXriw1PgFaN1osWcQtrMyXRvYb8QKB7Bnghf1vrZyw==}
+  '@openclaw/fs-safe-darwin-arm64@0.20.0':
+    resolution: {integrity: sha512-96lFpqGy6kSiLSxQGme9JTivbH1qolJLBYNGAESgdRS896RlpW22XTPZrBlXQ9yHd3Y0+BI5JXUq4JjKC9B0wQ==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [darwin]
@@ -4533,8 +4533,8 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@openclaw/fs-safe-darwin-x64@0.18.2':
-    resolution: {integrity: sha512-kXW+GOtW5JZM5V41EPOJGnIV8bcTQXrBz88MFbi78ooJ/23t+6pVrp9joepYUWGx66GgyWDXmOT3y9CJoOSqeg==}
+  '@openclaw/fs-safe-darwin-x64@0.20.0':
+    resolution: {integrity: sha512-4p6pJ8/QYgAwBj4yzQNzcFn2x7Lw0gZ/9VVcCfBTO75kuad18vGVUKgZFlBIDvKjQ02KAk4MftAYtvlz+iamUw==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [darwin]
@@ -4546,8 +4546,8 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/fs-safe-linux-arm64-gnu@0.18.2':
-    resolution: {integrity: sha512-9Yoq7uG8akQYlFS95u0AKegjtSfG/Flu/LbfSixKVFnC/3Hm4cpMCWeVgSmMY2QzCzyjXgmd5taWl/UhoKko+w==}
+  '@openclaw/fs-safe-linux-arm64-gnu@0.20.0':
+    resolution: {integrity: sha512-enO85SSP1wfQA+rnyKS7T2waXWmNRlveMyR5z4EF7APmXwV5TcFQlGQbdz2H8Z2MMvr3A2nlw6vEYV/wqpRZGA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
@@ -4560,8 +4560,8 @@ packages:
     os: [linux]
     libc: [musl]
 
-  '@openclaw/fs-safe-linux-arm64-musl@0.18.2':
-    resolution: {integrity: sha512-beLkypNfUfUBMmWuCCYJSzQSLMi7rzTjGEVv30ZwaD0W2vrYdmm90cXzkeNBolxLf1pxdXG51BpNIMXDlGaovQ==}
+  '@openclaw/fs-safe-linux-arm64-musl@0.20.0':
+    resolution: {integrity: sha512-k3g84E/TdxowZlfMO3xwNcaP4UFrCdCSBy1TjP52ppbIPmtY78pVsyCkn+D7NrlrJCU0VdUDjuAuZGRO2N+98A==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
@@ -4574,8 +4574,8 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/fs-safe-linux-x64-gnu@0.18.2':
-    resolution: {integrity: sha512-4h596MLiKBr0frgSkruX6SHUsF8OfRJmwuqAQnGRGRewPZyUczlDFCbzkybg7J96cLA5qr7t25FiyB/wEls+Kw==}
+  '@openclaw/fs-safe-linux-x64-gnu@0.20.0':
+    resolution: {integrity: sha512-XCdGPfRG3739ILzhqUO2qACOVQ6V7Tnc88IJ1YPg13IleqsjWwegqQtnWhralw3bO82gnxRzu81Hw2cJmPSqsQ==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
@@ -4588,8 +4588,8 @@ packages:
     os: [linux]
     libc: [musl]
 
-  '@openclaw/fs-safe-linux-x64-musl@0.18.2':
-    resolution: {integrity: sha512-W+vao31yFDhU/qHZxC28TnijQVfFFeY3TA7TJEcD9+/cFHUsOswoZIO0PoWMreP37fNs/6ZTr0TL40D582PjjA==}
+  '@openclaw/fs-safe-linux-x64-musl@0.20.0':
+    resolution: {integrity: sha512-t27hoQYnGpw7xBAgTIleUR2Owy8bqtVAUpR7tCQ8F0xnhrW0ZpkN8zHq9U+0luaK352+C0yLl/BQ1/Se/1iIFw==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
@@ -4601,8 +4601,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe-win32-x64-msvc@0.18.2':
-    resolution: {integrity: sha512-YGYTM1LZZoadjAWXwjAxyTjCALos1gRjCIuS4IlXRhRIJIVivRrxUy3ef5rY4KbWYdssW/XaxNA8x26vha4glg==}
+  '@openclaw/fs-safe-win32-x64-msvc@0.20.0':
+    resolution: {integrity: sha512-DTEzowTyObbJd9dlC/CResyhMuIaH4rVx2lph8UFQC/ag1D7C3Ss6GFE7bg00jonjDEpoBFtgZlKyqmwosJ/gA==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [win32]
@@ -4611,8 +4611,8 @@ packages:
     resolution: {integrity: sha512-Dwu2BZL6+n9pTeSLwijjL+dUBN0ktOjyucZPDjwSpuIkiPx9aussFWdyiWUD9UvNu3gwfLRAcktz1HfYT8QW1w==}
     engines: {node: '>=22'}
 
-  '@openclaw/fs-safe@0.18.2':
-    resolution: {integrity: sha512-ZurOE7wousc+xT1HhVw+/lkqLHms378GcHz8O9dlMAsXY+MGNLKpZncmjpuEVHPz292n82FC1mp2SCCRUnvbNg==}
+  '@openclaw/fs-safe@0.20.0':
+    resolution: {integrity: sha512-XEFZEnQXiJt0CDfQgjvfWk1bYFrB4mZQv7pNXu9FwvuQ+PbW1lumHX/ICLUlISxDRc5vjMQZLRAbRVAl79wCeQ==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.6':
@@ -5955,122 +5955,44 @@ packages:
   '@types/yargs-parser@21.0.3':
     resolution: {integrity: sha512-I4q9QU9MQv4oEOz4tAHJtNz1cwuLxn2F3xcc2iV5WdqLPpUnj30aUuxt1mAxYTG+oe8CZMV/+6rU4S4gRDzqtQ==}
 
-  '@typescript/typescript-aix-ppc64@7.0.2':
-    resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
-    engines: {node: '>=16.20.0'}
-    cpu: [ppc64]
-    os: [aix]
-
-  '@typescript/typescript-darwin-arm64@7.0.2':
-    resolution: {integrity: sha512-gowzar9MwS/aRWp6f3a4KUqzRjAZjOsmGNCM6LcTgXum+dBfgsBVMN+AgvOCCbguXyick6LJhpBszxMebJ8syA==}
+  '@typescript/typescript-darwin-arm64@7.1.0-dev.20260917.1':
+    resolution: {integrity: sha512-Xh+k4mgp9YZKZNsvqF3qJmXuBsdJ6O4wjY+++pliKvFXrSq7QUn2WjKnaKtIkU9XIXhTtHwdeaFVMwC2hOeCSg==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [darwin]
 
-  '@typescript/typescript-darwin-x64@7.0.2':
-    resolution: {integrity: sha512-SZ9xZInqApNlNGc9s0W1VSsktYSOe9cFqNOIqmN1Gs8SmkjKZYFt017G4VwPxASInODuAdbTW7sXiFUf893RgA==}
+  '@typescript/typescript-darwin-x64@7.1.0-dev.20260917.1':
+    resolution: {integrity: sha512-n0RJzJsXMzm0SJ21awMCTd4DJJd7Qv80RRz5W2bM1qpqppb3eHZxgd6TmM5L0dobwkcHoYanfuJpQ1HzSNFr9Q==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [darwin]
 
-  '@typescript/typescript-freebsd-arm64@7.0.2':
-    resolution: {integrity: sha512-W5NH4y/J0plIIS5b2xvTEkU7JFxyqdMAOgf+Ilhl0vHQXKO5dZoxd+C/jEtq56c4F3wk71RB4BMRQ2XdI+bwYQ==}
-    engines: {node: '>=16.20.0'}
-    cpu: [arm64]
-    os: [freebsd]
-
-  '@typescript/typescript-freebsd-x64@7.0.2':
-    resolution: {integrity: sha512-UMGDx5sTpzNw3WiPebH7l90IWfJggEd+egHt/q6p7/Cm3zqoV7VxkGXt+3DxPIw8CcmvAB0j3sVVfbhX+M4Tpw==}
-    engines: {node: '>=16.20.0'}
-    cpu: [x64]
-    os: [freebsd]
-
-  '@typescript/typescript-linux-arm64@7.0.2':
-    resolution: {integrity: sha512-Qh4eU4/y3yDjnfjjyPYihMj5/ODIlmt+Bzu17OI+fiSRDW57QmU5SiN63exPRNJPKUzcc1INa1NXdrJ+MqHjUQ==}
+  '@typescript/typescript-linux-arm64@7.1.0-dev.20260917.1':
+    resolution: {integrity: sha512-E1nilsSSid1OI8rCZbzF+aRS46IkHecK3eRNZLECf5Uj8ASLmoi2UBghGjJM1T8UD/hgRKuSM2LvCkXN9AxPVQ==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [linux]
 
-  '@typescript/typescript-linux-arm@7.0.2':
-    resolution: {integrity: sha512-gffT3xPz9sR7j/YJExkyPntrI0P2EP9XbOyWzth2/Gs0RstK+90RBcO0ncXoXy/beYll1SXw846Nf2zdnEz0QQ==}
+  '@typescript/typescript-linux-arm@7.1.0-dev.20260917.1':
+    resolution: {integrity: sha512-y69VYKvcFKjojsytSPHdOUjbOeVpLZixBF9XwQeKac9Kz1o3Zjofv5geLekABJei8ShRyqVUy5QadOMbL3dczw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm]
     os: [linux]
 
-  '@typescript/typescript-linux-loong64@7.0.2':
-    resolution: {integrity: sha512-uEHck9i8hoAzXPiYRib1O7miOnz23SxIeVl6F4LXox+qov1K35jHcEW6VHKvZI+pyvl7fZEP4MCU5LYvIq1GuQ==}
-    engines: {node: '>=16.20.0'}
-    cpu: [loong64]
-    os: [linux]
-
-  '@typescript/typescript-linux-mips64el@7.0.2':
-    resolution: {integrity: sha512-R4KvAMnE43W5Qeqb0Ly56O3mWMWIAgsMyz36DCaycd5nbg/9kzm0liw3JocfRqyJY0KPmzFjbswozXyW0DnIYA==}
-    engines: {node: '>=16.20.0'}
-    cpu: [mips64el]
-    os: [linux]
-
-  '@typescript/typescript-linux-ppc64@7.0.2':
-    resolution: {integrity: sha512-DORx5b3sd/4S7eayxm4FQv+A7CrkUIGRaHiwI8oiHTAI1fAPWhF4J0vAlkC8biAlHSVVwxMQ3tjZ2/DVbnQiiA==}
-    engines: {node: '>=16.20.0'}
-    cpu: [ppc64]
-    os: [linux]
-
-  '@typescript/typescript-linux-riscv64@7.0.2':
-    resolution: {integrity: sha512-wf0jqEDOjrPRnKwYRyyJDRo11KMbvMFrU+q4zqKyChODBzvlkbhNQfKvLxQCcwTpdDaXSHZTVuh0JoCrKCUMHQ==}
-    engines: {node: '>=16.20.0'}
-    cpu: [riscv64]
-    os: [linux]
-
-  '@typescript/typescript-linux-s390x@7.0.2':
-    resolution: {integrity: sha512-IkwJc3L7yhytWd/ewjyxNDfOmswCm9GWMJT/ue/dU4aZNbwZeYAetq42VyLmsmSjvoX7z74X6ZaYCtzAr0EuGw==}
-    engines: {node: '>=16.20.0'}
-    cpu: [s390x]
-    os: [linux]
-
-  '@typescript/typescript-linux-x64@7.0.2':
-    resolution: {integrity: sha512-EYdf2cNg7rgCWJnxCdJ+F3V39O8ihb37eHAu1LK8oAFizgTQbPOK7zHHXbPt8rX24COqODXeI3sIf0fCXG7H/A==}
+  '@typescript/typescript-linux-x64@7.1.0-dev.20260917.1':
+    resolution: {integrity: sha512-oAR9Aq3n1LFpUrLkc8cBdODA2NKDnMCPcjdBrdDTYvIUe2TFyzSTTU8z2Njwe2Eaoo8HInqCqQ3MG7tZ7FWsqA==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [linux]
 
-  '@typescript/typescript-netbsd-arm64@7.0.2':
-    resolution: {integrity: sha512-+polYF4MF04aPpO5FTkHran9yUQDSXqy5GiSDKpsll5jy3l3+g9QLhpf39T+ePtefhXLOGrLl0QIjkQP6VnelA==}
-    engines: {node: '>=16.20.0'}
-    cpu: [arm64]
-    os: [netbsd]
-
-  '@typescript/typescript-netbsd-x64@7.0.2':
-    resolution: {integrity: sha512-8YIT0EHM/3dq10ZOVF/A7pc/YSMtbcecct4rWtexrnSCHOPcpC2KTLXfTCR6vDpnSiY12heNb1GiN/wu+T/FyA==}
-    engines: {node: '>=16.20.0'}
-    cpu: [x64]
-    os: [netbsd]
-
-  '@typescript/typescript-openbsd-arm64@7.0.2':
-    resolution: {integrity: sha512-APT8+ClYnuYm1u9+kgGXoMj2VzWzcymwh2gNSQVySHfkRDGOTVkoWLjCmOQSaO+PoqQ57B0flRp9SA+7GnnkzQ==}
-    engines: {node: '>=16.20.0'}
-    cpu: [arm64]
-    os: [openbsd]
-
-  '@typescript/typescript-openbsd-x64@7.0.2':
-    resolution: {integrity: sha512-yX7s+Q0Dln0Dt9tEzZsAjXXR/+ytBM7AlglaqyeMPxQszJ1JhlJdZ6jLA+IzldHtflX81em7lDao1xXu+aRRkg==}
-    engines: {node: '>=16.20.0'}
-    cpu: [x64]
-    os: [openbsd]
-
-  '@typescript/typescript-sunos-x64@7.0.2':
-    resolution: {integrity: sha512-dLJDGaLZ1D4HPQn62u1n8mBDkJREwMsAkCdkwd4Ieqw+x3TUyTsqY0YiBCtE6H6OzzgGk3iuZ3vFWRS+E8/d1g==}
-    engines: {node: '>=16.20.0'}
-    cpu: [x64]
-    os: [sunos]
-
-  '@typescript/typescript-win32-arm64@7.0.2':
-    resolution: {integrity: sha512-Gyl1Vy6OsWesLzmq+EP0Fb7b4Nid5232AvcA2SFcdYreldpNtYFFofPjnt62y9hQy7VTaZp65ICJjuAQRaVcIQ==}
+  '@typescript/typescript-win32-arm64@7.1.0-dev.20260917.1':
+    resolution: {integrity: sha512-8jAa6rnRPuTrKL2fvd8Ta1lpzqGz4ijiM+klXywzELOwDu85QYF72uFFkDnkSPa1kbIFgaDqqSu5Q+YwQKTpXQ==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [win32]
 
-  '@typescript/typescript-win32-x64@7.0.2':
-    resolution: {integrity: sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g==}
+  '@typescript/typescript-win32-x64@7.1.0-dev.20260917.1':
+    resolution: {integrity: sha512-pVNBDlAK3H68thFAESvPuxKqsWK71dU4SZ8DZbaw9vPhS+fyJdSAYxPxZjCh7vA9JaBiO05qxwI8ioC9ZtdIHg==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
@@ -9769,8 +9691,8 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  typescript@7.0.2:
-    resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
+  typescript@7.1.0-dev.20260917.1:
+    resolution: {integrity: sha512-War5cgUqD2+S+n+HwhIRfCurpK/VSKeKnaxeeeQLU9zzA40b/l0saBL1vFlBpIFvUApyuerxxNSqEhqtiFbhmw==}
     engines: {node: '>=16.20.0'}
     hasBin: true
 
@@ -12151,43 +12073,43 @@ snapshots:
   '@openclaw/fs-safe-darwin-arm64@0.12.0':
     optional: true
 
-  '@openclaw/fs-safe-darwin-arm64@0.18.2':
+  '@openclaw/fs-safe-darwin-arm64@0.20.0':
     optional: true
 
   '@openclaw/fs-safe-darwin-x64@0.12.0':
     optional: true
 
-  '@openclaw/fs-safe-darwin-x64@0.18.2':
+  '@openclaw/fs-safe-darwin-x64@0.20.0':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-gnu@0.12.0':
     optional: true
 
-  '@openclaw/fs-safe-linux-arm64-gnu@0.18.2':
+  '@openclaw/fs-safe-linux-arm64-gnu@0.20.0':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-musl@0.12.0':
     optional: true
 
-  '@openclaw/fs-safe-linux-arm64-musl@0.18.2':
+  '@openclaw/fs-safe-linux-arm64-musl@0.20.0':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-gnu@0.12.0':
     optional: true
 
-  '@openclaw/fs-safe-linux-x64-gnu@0.18.2':
+  '@openclaw/fs-safe-linux-x64-gnu@0.20.0':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-musl@0.12.0':
     optional: true
 
-  '@openclaw/fs-safe-linux-x64-musl@0.18.2':
+  '@openclaw/fs-safe-linux-x64-musl@0.20.0':
     optional: true
 
   '@openclaw/fs-safe-win32-x64-msvc@0.12.0':
     optional: true
 
-  '@openclaw/fs-safe-win32-x64-msvc@0.18.2':
+  '@openclaw/fs-safe-win32-x64-msvc@0.20.0':
     optional: true
 
   '@openclaw/fs-safe@0.12.0':
@@ -12201,15 +12123,15 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.12.0
       jszip: 3.10.2
 
-  '@openclaw/fs-safe@0.18.2':
+  '@openclaw/fs-safe@0.20.0':
     optionalDependencies:
-      '@openclaw/fs-safe-darwin-arm64': 0.18.2
-      '@openclaw/fs-safe-darwin-x64': 0.18.2
-      '@openclaw/fs-safe-linux-arm64-gnu': 0.18.2
-      '@openclaw/fs-safe-linux-arm64-musl': 0.18.2
-      '@openclaw/fs-safe-linux-x64-gnu': 0.18.2
-      '@openclaw/fs-safe-linux-x64-musl': 0.18.2
-      '@openclaw/fs-safe-win32-x64-msvc': 0.18.2
+      '@openclaw/fs-safe-darwin-arm64': 0.20.0
+      '@openclaw/fs-safe-darwin-x64': 0.20.0
+      '@openclaw/fs-safe-linux-arm64-gnu': 0.20.0
+      '@openclaw/fs-safe-linux-arm64-musl': 0.20.0
+      '@openclaw/fs-safe-linux-x64-gnu': 0.20.0
+      '@openclaw/fs-safe-linux-x64-musl': 0.20.0
+      '@openclaw/fs-safe-win32-x64-msvc': 0.20.0
       jszip: 3.10.2
 
   '@openclaw/libterminal@0.3.6':
@@ -13521,64 +13443,25 @@ snapshots:
 
   '@types/yargs-parser@21.0.3': {}
 
-  '@typescript/typescript-aix-ppc64@7.0.2':
+  '@typescript/typescript-darwin-arm64@7.1.0-dev.20260917.1':
     optional: true
 
-  '@typescript/typescript-darwin-arm64@7.0.2':
+  '@typescript/typescript-darwin-x64@7.1.0-dev.20260917.1':
     optional: true
 
-  '@typescript/typescript-darwin-x64@7.0.2':
+  '@typescript/typescript-linux-arm64@7.1.0-dev.20260917.1':
     optional: true
 
-  '@typescript/typescript-freebsd-arm64@7.0.2':
+  '@typescript/typescript-linux-arm@7.1.0-dev.20260917.1':
     optional: true
 
-  '@typescript/typescript-freebsd-x64@7.0.2':
+  '@typescript/typescript-linux-x64@7.1.0-dev.20260917.1':
     optional: true
 
-  '@typescript/typescript-linux-arm64@7.0.2':
+  '@typescript/typescript-win32-arm64@7.1.0-dev.20260917.1':
     optional: true
 
-  '@typescript/typescript-linux-arm@7.0.2':
-    optional: true
-
-  '@typescript/typescript-linux-loong64@7.0.2':
-    optional: true
-
-  '@typescript/typescript-linux-mips64el@7.0.2':
-    optional: true
-
-  '@typescript/typescript-linux-ppc64@7.0.2':
-    optional: true
-
-  '@typescript/typescript-linux-riscv64@7.0.2':
-    optional: true
-
-  '@typescript/typescript-linux-s390x@7.0.2':
-    optional: true
-
-  '@typescript/typescript-linux-x64@7.0.2':
-    optional: true
-
-  '@typescript/typescript-netbsd-arm64@7.0.2':
-    optional: true
-
-  '@typescript/typescript-netbsd-x64@7.0.2':
-    optional: true
-
-  '@typescript/typescript-openbsd-arm64@7.0.2':
-    optional: true
-
-  '@typescript/typescript-openbsd-x64@7.0.2':
-    optional: true
-
-  '@typescript/typescript-sunos-x64@7.0.2':
-    optional: true
-
-  '@typescript/typescript-win32-arm64@7.0.2':
-    optional: true
-
-  '@typescript/typescript-win32-x64@7.0.2':
+  '@typescript/typescript-win32-x64@7.1.0-dev.20260917.1':
     optional: true
 
   '@typespec/ts-http-runtime@0.3.9(supports-color@10.2.2)':
@@ -14259,14 +14142,14 @@ snapshots:
     dependencies:
       layout-base: 2.0.1
 
-  cosmiconfig@9.0.2(typescript@7.0.2):
+  cosmiconfig@9.0.2(typescript@7.1.0-dev.20260917.1):
     dependencies:
       env-paths: 2.2.1
       import-fresh: 3.3.1
       js-yaml: 4.3.2
       parse-json: 5.2.0
     optionalDependencies:
-      typescript: 7.0.2
+      typescript: 7.1.0-dev.20260917.1
 
   crelt@1.0.7: {}
 
@@ -16504,7 +16387,7 @@ snapshots:
 
   normalize-path@3.0.0: {}
 
-  nostr-tools@2.25.2(typescript@7.0.2):
+  nostr-tools@2.25.2(typescript@7.1.0-dev.20260917.1):
     dependencies:
       '@noble/ciphers': 2.1.1
       '@noble/curves': 2.0.1
@@ -16514,7 +16397,7 @@ snapshots:
       '@scure/bip39': 2.0.1
       nostr-wasm: 0.1.0
     optionalDependencies:
-      typescript: 7.0.2
+      typescript: 7.1.0-dev.20260917.1
 
   nostr-wasm@0.1.0: {}
 
@@ -17084,7 +16967,7 @@ snapshots:
 
   robust-predicates@3.0.3: {}
 
-  rolldown-plugin-dts@0.28.6(rolldown@1.2.9)(typescript@7.0.2):
+  rolldown-plugin-dts@0.28.6(rolldown@1.2.9)(typescript@7.1.0-dev.20260917.1):
     dependencies:
       dts-resolver: 3.0.0
       get-tsconfig: 5.0.0-beta.6
@@ -17094,7 +16977,7 @@ snapshots:
       yuku-codegen: 0.10.2
       yuku-parser: 0.10.2
     optionalDependencies:
-      typescript: 7.0.2
+      typescript: 7.1.0-dev.20260917.1
     transitivePeerDependencies:
       - oxc-resolver
 
@@ -17432,11 +17315,11 @@ snapshots:
     dependencies:
       inline-style-parser: 0.2.7
 
-  stylelint-config-recommended@18.0.0(stylelint@17.15.0(supports-color@10.2.2)(typescript@7.0.2)):
+  stylelint-config-recommended@18.0.0(stylelint@17.15.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260917.1)):
     dependencies:
-      stylelint: 17.15.0(supports-color@10.2.2)(typescript@7.0.2)
+      stylelint: 17.15.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260917.1)
 
-  stylelint@17.15.0(supports-color@10.2.2)(typescript@7.0.2):
+  stylelint@17.15.0(supports-color@10.2.2)(typescript@7.1.0-dev.20260917.1):
     dependencies:
       '@csstools/css-calc': 3.4.0(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)
       '@csstools/css-parser-algorithms': 4.0.0(@csstools/css-tokenizer@4.0.0)
@@ -17446,7 +17329,7 @@ snapshots:
       '@csstools/selector-resolve-nested': 4.0.1(postcss-selector-parser@7.1.6)
       '@csstools/selector-specificity': 6.0.0(postcss-selector-parser@7.1.6)
       colord: 2.10.0
-      cosmiconfig: 9.0.2(typescript@7.0.2)
+      cosmiconfig: 9.0.2(typescript@7.1.0-dev.20260917.1)
       css-functions-list: 3.3.3
       css-tree: 3.2.1
       debug: 4.4.3(supports-color@10.2.2)
@@ -17616,7 +17499,7 @@ snapshots:
 
   ts-simple-type@2.0.0-next.0: {}
 
-  tsdown@0.23.0(tsx@4.23.13)(typescript@7.0.2)(unrun@0.3.1):
+  tsdown@0.23.0(tsx@4.23.13)(typescript@7.1.0-dev.20260917.1)(unrun@0.3.1):
     dependencies:
       cac: 7.0.0
       defu: 6.1.7
@@ -17626,7 +17509,7 @@ snapshots:
       obug: 2.2.1
       picomatch: 4.0.7
       rolldown: 1.2.9
-      rolldown-plugin-dts: 0.28.6(rolldown@1.2.9)(typescript@7.0.2)
+      rolldown-plugin-dts: 0.28.6(rolldown@1.2.9)(typescript@7.1.0-dev.20260917.1)
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
       tree-kill: 1.2.2
@@ -17634,7 +17517,7 @@ snapshots:
       verkit: 0.4.0
     optionalDependencies:
       tsx: 4.23.13
-      typescript: 7.0.2
+      typescript: 7.1.0-dev.20260917.1
       unrun: 0.3.1
     transitivePeerDependencies:
       - '@typescript/native-preview'
@@ -17684,28 +17567,15 @@ snapshots:
 
   typescript@5.9.3: {}
 
-  typescript@7.0.2:
+  typescript@7.1.0-dev.20260917.1:
     optionalDependencies:
-      '@typescript/typescript-aix-ppc64': 7.0.2
-      '@typescript/typescript-darwin-arm64': 7.0.2
-      '@typescript/typescript-darwin-x64': 7.0.2
-      '@typescript/typescript-freebsd-arm64': 7.0.2
-      '@typescript/typescript-freebsd-x64': 7.0.2
-      '@typescript/typescript-linux-arm': 7.0.2
-      '@typescript/typescript-linux-arm64': 7.0.2
-      '@typescript/typescript-linux-loong64': 7.0.2
-      '@typescript/typescript-linux-mips64el': 7.0.2
-      '@typescript/typescript-linux-ppc64': 7.0.2
-      '@typescript/typescript-linux-riscv64': 7.0.2
-      '@typescript/typescript-linux-s390x': 7.0.2
-      '@typescript/typescript-linux-x64': 7.0.2
-      '@typescript/typescript-netbsd-arm64': 7.0.2
-      '@typescript/typescript-netbsd-x64': 7.0.2
-      '@typescript/typescript-openbsd-arm64': 7.0.2
-      '@typescript/typescript-openbsd-x64': 7.0.2
-      '@typescript/typescript-sunos-x64': 7.0.2
-      '@typescript/typescript-win32-arm64': 7.0.2
-      '@typescript/typescript-win32-x64': 7.0.2
+      '@typescript/typescript-darwin-arm64': 7.1.0-dev.20260917.1
+      '@typescript/typescript-darwin-x64': 7.1.0-dev.20260917.1
+      '@typescript/typescript-linux-arm': 7.1.0-dev.20260917.1
+      '@typescript/typescript-linux-arm64': 7.1.0-dev.20260917.1
+      '@typescript/typescript-linux-x64': 7.1.0-dev.20260917.1
+      '@typescript/typescript-win32-arm64': 7.1.0-dev.20260917.1
+      '@typescript/typescript-win32-x64': 7.1.0-dev.20260917.1
 
   uc.micro@2.1.0: {}
 

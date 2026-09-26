@@ -1124,7 +1124,7 @@ describe("config schema", () => {
     );
   });
 
-  it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(
+  it.each([undefined, {}, false, { enabled: false }])(
     "preserves authored Swarm config %j without materializing defaults",
     (swarm) => {
       expect(ToolsSchema.parse(swarm === undefined ? {} : { swarm })?.swarm).toEqual(swarm);
@@ -1284,6 +1284,7 @@ describe("config schema", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.entries.main.runtime");
     expect(lookup?.path).toBe("agents.entries.main.runtime");
     expect(lookup?.hintPath).toBe("agents.entries.*.runtime");
+    expect(lookup?.hint?.label).toBe("Agent Runtime");
     expect(lookup?.schema).not.toHaveProperty("allOf");
     expect(lookup?.schema).not.toHaveProperty("oneOf");
     const schema = lookup?.schema as { anyOf?: Array<{ properties?: Record<string, unknown> }> };
@@ -1328,13 +1329,6 @@ describe("config schema", () => {
   it("rejects quoted bracket map paths", () => {
     const lookup = lookupConfigSchema(baseSchema, 'agents.entries["main"].identity.avatar');
     expect(lookup).toBeNull();
-  });
-
-  it("matches ui hints for keyed record entries", () => {
-    const lookup = lookupConfigSchema(baseSchema, "agents.entries.main.runtime");
-    expect(lookup?.path).toBe("agents.entries.main.runtime");
-    expect(lookup?.hintPath).toBe("agents.entries.*.runtime");
-    expect(lookup?.hint?.label).toBe("Agent Runtime");
   });
 
   it("uses the indexed tuple item schema for positional array lookups", () => {

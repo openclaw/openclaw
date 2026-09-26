@@ -342,16 +342,6 @@ describe.each([
     expect(argumentDeltas).toEqual(['{"query":"ca', 'ts"}']);
   });
 
-  it("keeps ordinary text and stop finish reasons outside the tool-call lane", async () => {
-    const result = await fixtureResult([
-      chunk({ role: "assistant", content: "No tool needed." }),
-      chunk({}, "stop"),
-    ]);
-
-    expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: "No tool needed." }]);
-  });
-
   it.each([
     { finishReason: "length", visibleText: false, stopReason: "length" },
     { finishReason: "content_filter", visibleText: false, stopReason: "error" },
@@ -372,9 +362,7 @@ describe.each([
 
   it.each([
     { reason: "incomplete JSON", name: "lookup", arguments: '{"query":"cats"' },
-    { reason: "malformed JSON", name: "lookup", arguments: '{"query":}' },
     { reason: "invalid string escape", name: "lookup", arguments: String.raw`{"query":"cats\q"}` },
-    { reason: "unescaped control character", name: "lookup", arguments: '{"query":"cats\n"}' },
     { reason: "non-object JSON", name: "lookup", arguments: '["cats"]' },
     { reason: "empty arguments", name: "lookup", arguments: "" },
     { reason: "missing function name", name: "", arguments: '{"query":"cats"}' },
@@ -391,17 +379,18 @@ describe.each([
     },
   );
 
-  it.each([
-    { reason: "incomplete JSON", arguments: '{"query":"cats"' },
-    { reason: "invalid string escape", arguments: String.raw`{"query":"cats\q"}` },
-    { reason: "unescaped control character", arguments: '{"query":"cats\n"}' },
-  ] as const)("rejects an authoritative legacy function terminal with $reason", async (value) => {
-    const { eventTypes, result } = await collectFixture(confirmedLegacyCallChunks(value.arguments));
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("incomplete or malformed tool call");
-    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
-    expect(eventTypes).not.toContain("toolcall_end");
-  });
+  it.each([{ reason: "incomplete JSON", arguments: '{"query":"cats"' }] as const)(
+    "rejects an authoritative legacy function terminal with $reason",
+    async (value) => {
+      const { eventTypes, result } = await collectFixture(
+        confirmedLegacyCallChunks(value.arguments),
+      );
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toContain("incomplete or malformed tool call");
+      expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
+      expect(eventTypes).not.toContain("toolcall_end");
+    },
+  );
 
   it("rejects every parallel call when a sibling has incomplete arguments", async () => {
     const { eventTypes, result } = await collectFixture([

@@ -14,7 +14,7 @@ export function resolveDropIndicator(
   x: number,
   y: number,
 ): DropIndicator | null {
-  const paneId = pane.paneId;
+  const paneId = pane.paneId ?? pane.dataset.unboundPaneId;
   const container = host.querySelector<HTMLElement>(".chat-split-view__drop-container");
   if (!paneId || !container) {
     return null;

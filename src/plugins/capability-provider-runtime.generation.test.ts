@@ -384,7 +384,8 @@ describe("capability loading from a Gateway generation", () => {
     },
   );
 
-  it.each(voiceKeys)("uses register() for an uncovered %s family", (key) => {
+  it("uses register() for an uncovered speech family", () => {
+    const key = "speechProviders";
     withSpeechFixture((fixture) => {
       fixture.config.plugins = { enabled: true };
       const { runtimeImported } = declareCapabilityCatalog(
@@ -806,14 +807,15 @@ describe("capability loading from a Gateway generation", () => {
     });
   });
 
-  it.each(
-    voiceKeys.flatMap((key) =>
-      [{ deny: [id] }, { entries: { [id]: { enabled: false } } }].map((policy) => ({
-        key,
-        policy,
-      })),
-    ),
-  )("preserves explicit $key owner denial: $policy", ({ key, policy }) => {
+  it.each([
+    { key: "speechProviders", policy: { deny: [id] } },
+    { key: "speechProviders", policy: { entries: { [id]: { enabled: false } } } },
+    { key: "realtimeTranscriptionProviders", policy: { deny: [id] } },
+    { key: "realtimeVoiceProviders", policy: { entries: { [id]: { enabled: false } } } },
+  ] satisfies Array<{
+    key: (typeof voiceKeys)[number];
+    policy: NonNullable<OpenClawConfig["plugins"]>;
+  }>)("preserves explicit $key owner denial: $policy", ({ key, policy }) => {
     withSpeechFixture((fixture) => {
       fixture.config.plugins = { enabled: key !== "speechProviders", ...policy };
       const { runtimeImported } = declareCapabilityCatalog(fixture);

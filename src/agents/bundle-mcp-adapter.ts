@@ -1,17 +1,10 @@
 // Shared mechanics for projecting bundle MCP config into provider-owned runners.
-import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { filterStringRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
-export { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
-
-export function normalizeMcpStringRecord(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const entries = Object.entries(value).filter((entry): entry is [string, string] => {
-    return typeof entry[1] === "string";
-  });
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-}
+export {
+  filterStringRecord as normalizeMcpStringRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 
 export function decodeHeaderEnvPlaceholder(
   value: string,
@@ -47,7 +40,7 @@ export function normalizeBundleMcpServerConfig(
   if (args) {
     next.args = args;
   }
-  const env = normalizeMcpStringRecord(server.env);
+  const env = filterStringRecord(server.env);
   if (env) {
     next.env = env;
   }

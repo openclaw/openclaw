@@ -137,29 +137,26 @@ function read\u0053tring() {}`;
     });
   });
 
-  it.each(["method", "field", "property"] as const)(
-    "treats %s drift as both excess and stale function ownership",
-    (kind) => {
-      const declaration: CoercionHelperDeclaration = {
-        file: "src/owner.ts",
-        kind,
-        line: 3,
-        name: "isRecord",
-      };
-      const carveOut: CoercionHelperCarveOut = {
-        file: "src/owner.ts",
-        name: "isRecord",
-        kind: "function",
-        reason: "Exact function owner.",
-      };
+  it("treats declaration-kind drift as both excess and stale function ownership", () => {
+    const declaration: CoercionHelperDeclaration = {
+      file: "src/owner.ts",
+      kind: "property",
+      line: 3,
+      name: "isRecord",
+    };
+    const carveOut: CoercionHelperCarveOut = {
+      file: "src/owner.ts",
+      name: "isRecord",
+      kind: "function",
+      reason: "Exact function owner.",
+    };
 
-      expect(auditCoercionHelperDeclarations([declaration], [carveOut])).toEqual({
-        excessDeclarations: [declaration],
-        invalidCarveOuts: [],
-        staleCarveOuts: [carveOut],
-      });
-    },
-  );
+    expect(auditCoercionHelperDeclarations([declaration], [carveOut])).toEqual({
+      excessDeclarations: [declaration],
+      invalidCarveOuts: [],
+      staleCarveOuts: [carveOut],
+    });
+  });
 
   it("rejects duplicate, non-banned, and malformed carve-outs", () => {
     const valid: CoercionHelperCarveOut = {

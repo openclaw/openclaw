@@ -143,21 +143,13 @@ export type CodexComputerUseSetupParams = {
   releaseNativeConfigFence?: () => void;
 };
 
-type CodexComputerUseInspectionParams = {
-  pluginConfig?: unknown;
-  config?: CodexComputerUseSetupParams["config"];
-  agentDir?: string;
-  request?: CodexComputerUseRequest;
-  client?: CodexAppServerClient;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  assertCurrent?: () => void;
+type CodexComputerUseInspectionParams = Omit<
+  CodexComputerUseSetupParams,
+  "overrides" | "forceEnable"
+> & {
   computerUseConfig: ResolvedCodexComputerUseConfig;
   runLiveTest: boolean;
   installPlugin: boolean;
-  defaultBundledMarketplacePath?: string;
-  defaultBundledMarketplacePathCandidates?: readonly string[];
-  releaseNativeConfigFence?: () => void;
   explicitManagedInstall?: ExplicitManagedComputerUseInstallContext;
 };
 

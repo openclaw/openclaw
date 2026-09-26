@@ -1,46 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
-import { createTestSessionCapability } from "./session-capability.test-support.ts";
-
-function createGatewayHarness(client: GatewayBrowserClient) {
-  let snapshot: {
-    client: GatewayBrowserClient | null;
-    phase: "connected" | "reconnecting";
-    sessionKey: string;
-    assistantAgentId: string | null;
-    hello: GatewayHelloOk | null;
-  } = {
-    client,
-    phase: "connected",
-    sessionKey: "agent:main:main",
-    assistantAgentId: "main",
-    hello: null,
-  };
-  const listeners = new Set<(next: typeof snapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
-  return {
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe(listener: (next: typeof snapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-        eventListeners.add(listener);
-        return () => eventListeners.delete(listener);
-      },
-    },
-    publish: (connected: boolean) => {
-      snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-  };
-}
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "./session-capability.test-support.ts";
 
 describe("session capability message cuts", () => {
   it("returns a committed rewind result after the connection is replaced", async () => {

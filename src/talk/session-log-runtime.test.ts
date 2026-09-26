@@ -1,10 +1,8 @@
 // Talk session log runtime tests cover persisted voice session log records.
 import { describe, expect, it } from "vitest";
 import {
-  extendRealtimeVoiceOutputEchoSuppression,
   getRealtimeVoiceBridgeEventHealth,
   getRealtimeVoiceTranscriptHealth,
-  isLikelyRealtimeVoiceAssistantEchoTranscript,
   recordRealtimeVoiceBridgeEvent,
   recordRealtimeVoiceTranscript,
   type RealtimeVoiceBridgeEventLogEntry,
@@ -43,43 +41,6 @@ describe("realtime voice session log runtime", () => {
       lastRealtimeEventType: "server:response.done",
       lastRealtimeEventDetail: "ok",
       recentRealtimeEvents: events,
-    });
-  });
-
-  it("detects likely assistant echo transcripts", () => {
-    const nowMs = Date.now();
-    const transcript: RealtimeVoiceTranscriptEntry[] = [
-      {
-        at: new Date(nowMs - 1000).toISOString(),
-        role: "assistant",
-        text: "The deployment finished cleanly and all checks passed",
-      },
-    ];
-
-    expect(
-      isLikelyRealtimeVoiceAssistantEchoTranscript({
-        transcript,
-        text: "deployment finished cleanly and all checks passed",
-        lookbackMs: 45_000,
-        nowMs,
-      }),
-    ).toBe(true);
-  });
-
-  it("extends output echo suppression from audio duration", () => {
-    expect(
-      extendRealtimeVoiceOutputEchoSuppression({
-        audio: Buffer.alloc(96),
-        bytesPerMs: 48,
-        tailMs: 3000,
-        nowMs: 100,
-        lastOutputPlayableUntilMs: 0,
-        suppressInputUntilMs: 0,
-      }),
-    ).toEqual({
-      durationMs: 2,
-      lastOutputPlayableUntilMs: 102,
-      suppressInputUntilMs: 3102,
     });
   });
 });

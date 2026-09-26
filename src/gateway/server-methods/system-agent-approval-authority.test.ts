@@ -21,6 +21,23 @@ afterEach(() => {
   resetAgentRunRegistryForTest();
 });
 
+function approvalSession(
+  proposal: NonNullable<ReturnType<SystemAgentChatSession["engine"]["getPendingOperatorProposal"]>>,
+  resolveOperatorApproval: SystemAgentChatSession["engine"]["resolveOperatorApproval"],
+) {
+  return {
+    engine: {
+      historyLength: () => 0,
+      historySince: () => [],
+      noteAssistantMessage: vi.fn(),
+      getPendingOperatorProposal: () => proposal,
+      resolveOperatorApproval,
+    },
+    lastUsedAt: 1,
+    ownerKey: "agent:main:main",
+  } as unknown as SystemAgentChatSession;
+}
+
 async function resolveTestProposal(
   params: Parameters<typeof prepareDelegatedSystemAgentApproval>[0] & {
     proposal: NonNullable<
@@ -57,17 +74,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       hash: "a".repeat(64),
     };
     const resolveOperatorApproval = vi.fn().mockResolvedValue(null);
-    const session = {
-      engine: {
-        historyLength: () => 0,
-        historySince: () => [],
-        noteAssistantMessage: vi.fn(),
-        getPendingOperatorProposal: () => proposal,
-        resolveOperatorApproval,
-      },
-      lastUsedAt: 1,
-      ownerKey: "agent:main:main",
-    } as unknown as SystemAgentChatSession;
+    const session = approvalSession(proposal, resolveOperatorApproval);
     const sessions = new Map([["delegate-closed", session]]);
     const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
       approvalKind: "system-agent",
@@ -139,17 +146,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
         return null;
       },
     );
-    const session = {
-      engine: {
-        historyLength: () => 0,
-        historySince: () => [],
-        noteAssistantMessage: vi.fn(),
-        getPendingOperatorProposal: () => proposal,
-        resolveOperatorApproval,
-      },
-      lastUsedAt: 1,
-      ownerKey: "agent:main:main",
-    } as unknown as SystemAgentChatSession;
+    const session = approvalSession(proposal, resolveOperatorApproval);
     const sessions = new Map([["delegate-race", session]]);
     const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
       approvalKind: "system-agent",
@@ -286,17 +283,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       action: "none" as const,
       applied: true,
     });
-    const session = {
-      engine: {
-        historyLength: () => 0,
-        historySince: () => [],
-        noteAssistantMessage: vi.fn(),
-        getPendingOperatorProposal: () => proposal,
-        resolveOperatorApproval,
-      },
-      lastUsedAt: 1,
-      ownerKey: "agent:main:main",
-    } as unknown as SystemAgentChatSession;
+    const session = approvalSession(proposal, resolveOperatorApproval);
     const sessions = new Map([["delegate-applied", session]]);
     const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
       approvalKind: "system-agent",
@@ -365,17 +352,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
         return null;
       },
     );
-    const session = {
-      engine: {
-        historyLength: () => 0,
-        historySince: () => [],
-        noteAssistantMessage: vi.fn(),
-        getPendingOperatorProposal: () => proposal,
-        resolveOperatorApproval,
-      },
-      lastUsedAt: 1,
-      ownerKey: "agent:main:main",
-    } as unknown as SystemAgentChatSession;
+    const session = approvalSession(proposal, resolveOperatorApproval);
     const sessions = new Map([["delegate-worker", session]]);
     const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
       approvalKind: "system-agent",
@@ -429,17 +406,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
         operation: { kind: "gateway-restart" as const },
         hash: "e".repeat(64),
       };
-      const session = {
-        engine: {
-          historyLength: () => 0,
-          historySince: () => [],
-          noteAssistantMessage: vi.fn(),
-          getPendingOperatorProposal: () => proposal,
-          resolveOperatorApproval: vi.fn().mockResolvedValue(null),
-        },
-        lastUsedAt: 1,
-        ownerKey: "agent:main:main",
-      } as unknown as SystemAgentChatSession;
+      const session = approvalSession(proposal, vi.fn().mockResolvedValue(null));
       const sessions = new Map([["delegate-worker", session]]);
       const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
         approvalKind: "system-agent",

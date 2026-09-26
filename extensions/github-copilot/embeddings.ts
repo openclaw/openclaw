@@ -1,4 +1,3 @@
-// Github Copilot plugin module implements embeddings behavior.
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,
@@ -33,18 +32,6 @@ const PREFERRED_MODELS = [
 
 const COPILOT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
-
-function buildSsrfPolicy(baseUrl: string): SsrFPolicy | undefined {
-  try {
-    const parsed = new URL(baseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return { allowedHostnames: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
-}
 
 type CopilotModelEntry = {
   id?: unknown;
@@ -274,7 +261,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
   normalizeModel: ({ model }) => normalizeCopilotEmbeddingModel(model),
   autoSelectPriority: 15,
   allowExplicitWhenConfiguredAuto: true,
-  shouldContinueAutoSelection: (err: unknown) => isCopilotSetupError(err),
+  shouldContinueAutoSelection: isCopilotSetupError,
   create: async (options) => {
     const explicitValue = normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,
@@ -318,7 +305,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
         githubDomain,
       }));
     const baseUrl = runtimeAuth.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
-    const ssrfPolicy = buildSsrfPolicy(baseUrl);
+    const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
     const headers = buildCopilotRuntimeHeaders({
       config: options.config,
       headers: { "Content-Type": "application/json", ...options.remote?.headers },

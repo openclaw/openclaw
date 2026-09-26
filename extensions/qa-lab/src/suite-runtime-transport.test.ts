@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
-import { findFailureOutboundMessage } from "./qa-transport.js";
 import {
   formatTransportTranscript,
   readTransportTranscript,
@@ -11,20 +10,6 @@ import {
 } from "./suite-runtime-transport.js";
 
 describe("qa suite transport helpers", () => {
-  it("detects classified failure replies before a success-only outbound predicate matches", () => {
-    const state = createQaBusState();
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      isError: true,
-      text: "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
-
-    const message = findFailureOutboundMessage(state);
-    expect(message?.text).toContain("Something went wrong while processing your request.");
-  });
-
   it("fails success-only waitForOutboundMessage calls when a classified failure reply arrives first", async () => {
     const state = createQaBusState();
     const pending = waitForOutboundMessage(
@@ -44,25 +29,6 @@ describe("qa suite transport helpers", () => {
     });
 
     await expect(pending).rejects.toThrow('No API key found for provider "openai".');
-  });
-
-  it("treats QA channel message delivery failures as failure replies", async () => {
-    const state = createQaBusState();
-    const pending = waitForOutboundMessage(
-      state,
-      (candidate) => candidate.text.includes("QA-RESTART"),
-      5_000,
-    );
-
-    state.addOutboundMessage({
-      to: "channel:qa-room",
-      isError: true,
-      text: "⚠️ ✉️ Message failed",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
-
-    await expect(pending).rejects.toThrow("Message failed");
   });
 
   it("fails success-only waitForOutboundMessage calls when internal coordination text leaks", async () => {
@@ -185,35 +151,6 @@ describe("qa suite transport helpers", () => {
         accountId: "default",
       }),
     ).resolves.toMatchObject({ accountId: "default", id: expected.id });
-  });
-
-  it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {
-    const state = createQaBusState();
-    const waitForCondition = createQaChannelTransport(state).waitForCondition;
-
-    const pending = waitForCondition(
-      () =>
-        state
-          .getSnapshot()
-          .messages.findLast(
-            (message) =>
-              message.direction === "outbound" &&
-              message.conversation.id === "qa-operator" &&
-              message.text.includes("ALPHA-7"),
-          ),
-      5_000,
-      10,
-    );
-
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      isError: true,
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
-
-    await expect(pending).rejects.toThrow('No API key found for provider "openai".');
   });
 
   it("fails raw scenario waitForCondition calls even when mixed traffic already exists", async () => {

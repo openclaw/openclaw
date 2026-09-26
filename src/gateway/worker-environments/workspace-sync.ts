@@ -454,6 +454,7 @@ export function createWorkerWorkspaceActions(
     );
     const stagingRoot = path.join(temporaryDirectory, "staging");
     const manifestRoot = path.join(temporaryDirectory, "manifests");
+    // Inbound files stay private until verified; stable names keep live quota scans complete.
     const transferListPath = path.join(temporaryDirectory, "transfer-list");
     const acceptedWorkspacePublisher = createAcceptedWorkspacePublisherFactory({
       runWorkspaceCommand,
@@ -473,6 +474,7 @@ export function createWorkerWorkspaceActions(
         argv: (rsyncSsh) => [
           "rsync",
           "--archive",
+          "--inplace",
           "--no-recursive",
           "--checksum",
           `--max-size=${MAX_WORKSPACE_MANIFEST_BYTES}`,
@@ -551,6 +553,7 @@ export function createWorkerWorkspaceActions(
             argv: (rsyncSsh) => [
               "rsync",
               "--archive",
+              "--inplace",
               "--checksum",
               `--max-size=${MAX_RECONCILIATION_FILE_BYTES}`,
               `--bwlimit=${INBOUND_RSYNC_BW_LIMIT_KIB}`,

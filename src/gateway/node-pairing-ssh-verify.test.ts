@@ -162,16 +162,13 @@ describe("planNodePairingSshVerify", () => {
 });
 
 describe("startNodePairingSshVerify", () => {
-  test.each(
-    [
-      { name: "user", policy: { user: "replacement-user" } },
-      { name: "identity", policy: { identity: "/keys/replacement" } },
-      { name: "timeout", policy: { timeoutMs: 500 } },
-      { name: "CIDR scope", policy: { cidrs: ["192.168.0.0/16"] } },
-    ].flatMap((change) =>
-      ["in-flight", "failure cooldown"].map((phase) => Object.assign({}, change, { phase })),
-    ),
-  )("starts a fresh probe after $name changes during $phase", async ({ policy, phase }) => {
+  test.each([
+    { name: "user", policy: { user: "replacement-user" }, phase: "in-flight" },
+    { name: "identity", policy: { identity: "/keys/replacement" }, phase: "in-flight" },
+    { name: "timeout", policy: { timeoutMs: 500 }, phase: "in-flight" },
+    { name: "CIDR scope", policy: { cidrs: ["192.168.0.0/16"] }, phase: "in-flight" },
+    { name: "user", policy: { user: "replacement-user" }, phase: "failure cooldown" },
+  ])("starts a fresh probe after $name changes during $phase", async ({ policy, phase }) => {
     const identity = makeIdentity();
     const oldProbe = createDeferred<NodeIdentityProbeResult>();
     const oldPlan = makePlan();

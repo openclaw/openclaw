@@ -61,6 +61,42 @@ const TEST_ATTACHMENT = {
   hideDownload: false,
 } as const;
 
+function createMessage(
+  overrides: Partial<NextcloudTalkInboundMessage> = {},
+): NextcloudTalkInboundMessage {
+  return {
+    messageId: "m-1",
+    roomToken: "room-1",
+    roomName: "Room 1",
+    senderId: "attacker",
+    senderName: "Attacker",
+    text: "hello",
+    mediaType: "text/plain",
+    timestamp: Date.now(),
+    isGroupChat: true,
+    ...overrides,
+  };
+}
+
+function createAccount(
+  config: ResolvedNextcloudTalkAccount["config"] = {},
+): ResolvedNextcloudTalkAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    baseUrl: "",
+    secret: "",
+    secretSource: "none",
+    config: {
+      dmPolicy: "pairing",
+      allowFrom: [],
+      groupPolicy: "allowlist",
+      groupAllowFrom: [],
+      ...config,
+    },
+  };
+}
+
 describe("nextcloud-talk inbound authz", () => {
   it("revalidates paired DM access after metadata lookup before staging", async () => {
     resolveNextcloudTalkAuthenticatedMediaSourceMock.mockReset();
@@ -390,47 +426,11 @@ describe("nextcloud-talk inbound authz", () => {
       buildMentionRegexes,
     });
 
-    const message: NextcloudTalkInboundMessage = {
-      messageId: "m-1",
-      roomToken: "room-1",
-      roomName: "Room 1",
-      senderId: "attacker",
-      senderName: "Attacker",
-      text: "hello",
-      mediaType: "text/plain",
-      timestamp: Date.now(),
-      isGroupChat: true,
-      attachment: TEST_ATTACHMENT,
-    };
-
-    const account: ResolvedNextcloudTalkAccount = {
-      accountId: "default",
-      enabled: true,
-      baseUrl: "https://cloud.example.com",
-      secret: "",
-      secretSource: "none", // pragma: allowlist secret
-      config: {
-        dmPolicy: "pairing",
-        allowFrom: [],
-        groupPolicy: "allowlist",
-        groupAllowFrom: [],
-        mediaAllowFrom: ["*"],
-      },
-    };
-
-    const config: CoreConfig = {
-      channels: {
-        "nextcloud-talk": {
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      },
-    };
+    const account = createAccount({ mediaAllowFrom: ["*"] });
+    const config: CoreConfig = { channels: { "nextcloud-talk": account.config } };
 
     await handleNextcloudTalkInbound({
-      message,
+      message: createMessage({ attachment: TEST_ATTACHMENT }),
       account,
       config,
       runtime: createRuntimeSpies(),
@@ -450,42 +450,20 @@ describe("nextcloud-talk inbound authz", () => {
       buildMentionRegexes,
     });
 
-    const message: NextcloudTalkInboundMessage = {
-      messageId: "m-2",
-      roomToken: "room-attacker",
-      roomName: "Room Trusted",
-      senderId: "trusted-user",
-      senderName: "Trusted User",
-      text: "hello",
-      mediaType: "text/plain",
-      timestamp: Date.now(),
-      isGroupChat: true,
-      attachment: TEST_ATTACHMENT,
-    };
-
-    const account: ResolvedNextcloudTalkAccount = {
-      accountId: "default",
-      enabled: true,
-      baseUrl: "https://cloud.example.com",
-      secret: "",
-      secretSource: "none",
-      config: {
-        dmPolicy: "pairing",
-        allowFrom: [],
-        groupPolicy: "allowlist",
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        messageId: "m-2",
+        roomToken: "room-attacker",
+        roomName: "Room Trusted",
+        senderId: "trusted-user",
+        senderName: "Trusted User",
+        attachment: TEST_ATTACHMENT,
+      }),
+      account: createAccount({
         groupAllowFrom: ["trusted-user"],
         mediaAllowFrom: ["*"],
-        rooms: {
-          "room-trusted": {
-            enabled: true,
-          },
-        },
-      },
-    };
-
-    await handleNextcloudTalkInbound({
-      message,
-      account,
+        rooms: { "room-trusted": { enabled: true } },
+      }),
       config: {
         channels: {
           "nextcloud-talk": {

@@ -2,23 +2,16 @@ import AppKit
 import SwiftUI
 
 extension OnboardingView {
-    /// The inference-first flow hands off to the dashboard as soon as AI connects.
-    var usesCompactHero: Bool {
-        false
-    }
-
     var body: some View {
         GeometryReader { windowGeometry in
-            let contentHeight = self.contentHeight(for: windowGeometry.size.height)
+            let contentHeight = Self.contentHeight(for: windowGeometry.size.height)
             VStack(spacing: 0) {
-                // Chat-heavy pages shrink the mascot so the content gets the room.
                 GlowingOpenClawIcon(
-                    size: self.heroSize,
+                    size: 130,
                     mood: self.mascotMood,
                     accessory: self.mascotAccessory)
-                    .offset(y: self.usesCompactHero ? 4 : 10)
-                    .frame(height: self.heroFrameHeight)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
+                    .offset(y: 10)
+                    .frame(height: 145)
 
                 GeometryReader { _ in
                     HStack(spacing: 0) {
@@ -35,7 +28,6 @@ extension OnboardingView {
                     .clipped()
                 }
                 .frame(height: contentHeight)
-                .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
 
                 Spacer(minLength: 0)
                 self.navigationBar
@@ -123,11 +115,10 @@ extension OnboardingView {
         self.returnToInferenceSetupIfNeeded()
         if let updatePageMonitoring {
             updatePageMonitoring(self.activePageIndex)
-            self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
-            return
+        } else {
+            // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
+            updateMonitoring(for: self.activePageIndex)
         }
-        // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
-        updateMonitoring(for: self.activePageIndex)
         self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
     }
 
@@ -464,10 +455,6 @@ extension OnboardingView {
                 .shadow(color: .black.opacity(0.06), radius: 8, y: 3))
     }
 
-    func featureRow(title: String, subtitle: String, systemImage: String) -> some View {
-        self.featureRowContent(title: title, subtitle: subtitle, systemImage: systemImage)
-    }
-
     func featureActionRow(
         title: String,
         subtitle: String,
@@ -475,7 +462,7 @@ extension OnboardingView {
         buttonTitle: String,
         action: @escaping () -> Void) -> some View
     {
-        self.featureRowContent(
+        self.featureRow(
             title: title,
             subtitle: subtitle,
             systemImage: systemImage,
@@ -485,7 +472,7 @@ extension OnboardingView {
                     .padding(.top, 2)))
     }
 
-    private func featureRowContent(
+    func featureRow(
         title: String,
         subtitle: String,
         systemImage: String,

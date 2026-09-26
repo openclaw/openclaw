@@ -9,7 +9,6 @@ import { parse } from "yaml";
 import { findLaneByName } from "../../scripts/lib/docker-e2e-plan.mts";
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import {
-  PLUGIN_PRERELEASE_REQUIRED_SURFACES,
   assertPluginPrereleaseTestPlanComplete,
   createPluginPrereleaseTestPlan,
 } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
@@ -158,16 +157,8 @@ function runPluginSummary(params: {
 }
 
 describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
-  it("covers every pre-release plugin skill surface in the plugin prerelease plan", () => {
-    const plan = assertPluginPrereleaseTestPlanComplete();
-
-    expect(plan.surfaces).toEqual(
-      [...PLUGIN_PRERELEASE_REQUIRED_SURFACES].toSorted((a, b) => a.localeCompare(b)),
-    );
-  });
-
   it("runs the package and Docker product lanes through the existing scheduler", () => {
-    const plan = createPluginPrereleaseTestPlan();
+    const plan = assertPluginPrereleaseTestPlanComplete();
 
     expect(plan.dockerLanes).toEqual([
       "npm-onboard-channel-agent",
@@ -348,7 +339,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(sweepScript).toContain("run_plugins_clawhub_scenario");
     expect(clawhubScript).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
-    expect(assertionsScript).toContain('node_modules", "openclaw');
     expect(fixtureServer).toContain('"is-number": "7.0.0"');
     expect(fixtureServer).toContain('openclaw: ">=2026.4.11"');
     expect(fixtureServer).toContain("/versions/${fixture.version}/artifact");

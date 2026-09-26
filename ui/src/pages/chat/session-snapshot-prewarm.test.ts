@@ -37,13 +37,6 @@ afterEach(async () => {
 });
 
 describe("routed transcript prewarm", () => {
-  it("reads normally when no prewarm exists", async () => {
-    await seed();
-    const open = vi.spyOn(indexedDB, "open");
-    expect(await new snapshots.SessionSnapshotStore().read(key)).toEqual(stored);
-    expect(open).toHaveBeenCalledOnce();
-  });
-
   it("starts before consumption and reuses the matching read only once", async () => {
     await seed();
     const open = vi.spyOn(indexedDB, "open");

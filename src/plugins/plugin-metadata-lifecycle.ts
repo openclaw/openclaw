@@ -1,4 +1,5 @@
 /** Coordinates plugin metadata snapshot and process memo cache lifecycle resets. */
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearCurrentPluginMetadataSnapshot,
@@ -21,10 +22,7 @@ import {
 } from "./plugin-cache.js";
 import { retainPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-import {
-  retainPluginSourceCaptureInstance,
-  sweepPluginSourceCaptureDirectories,
-} from "./plugin-source-capture-directory.js";
+import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 
 const pluginMetadataProcessMemoClears = new Map<() => void, "process" | "operation">();
@@ -50,7 +48,11 @@ function hasClosingGateway(): boolean {
 }
 
 /** The kernel owns bootstrap acquisition, published inventory, and unfinished retirement. */
-export function retainGatewayPluginMetadata(onAllGatewaysClosing?: () => Promise<void>) {
+export function retainGatewayPluginMetadata(
+  scheduler: GatewayScheduler,
+  onAllGatewaysClosing?: () => Promise<void>,
+) {
+  scheduler.signal.throwIfAborted();
   const bootstrapCache = getPluginCache();
   if (hasClosingGateway() || bootstrapCache.retirement) {
     throw new Error(
@@ -58,8 +60,8 @@ export function retainGatewayPluginMetadata(onAllGatewaysClosing?: () => Promise
     );
   }
   const sourceCaptures = retainPluginSourceCaptureInstance();
+  const sourceSweep = sourceCaptures.startMaintenance(scheduler);
   const releaseReaders = retainPluginMetadataSnapshotReaders();
-  void sweepPluginSourceCaptureDirectories();
   const owner: GatewayMetadataOwner = {
     cache: bootstrapCache,
     phase: "booting",
@@ -247,6 +249,7 @@ export function retainGatewayPluginMetadata(onAllGatewaysClosing?: () => Promise
           if (final) {
             clearPluginMetadataCaches();
           }
+          await sourceSweep;
           await sourceCaptures.releaseAsync();
           gatewayMetadataOwners.delete(owner);
           releaseReaders();

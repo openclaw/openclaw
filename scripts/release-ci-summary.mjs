@@ -291,7 +291,7 @@ function jsonGh(args) {
   return JSON.parse(gh(args));
 }
 
-export function githubRestArgs(pathSuffix, repository = DEFAULT_REPO) {
+function githubRestArgs(pathSuffix, repository = DEFAULT_REPO) {
   return ["api", `repos/${repository}/${pathSuffix}`];
 }
 
@@ -303,7 +303,7 @@ async function githubRestJsonAsync(pathSuffix, repository = DEFAULT_REPO) {
   return JSON.parse(await ghAsync(githubRestArgs(pathSuffix, repository)));
 }
 
-export function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
+function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
   return ["api", `repos/${repository}/actions/artifacts/${artifactId}/zip`];
 }
 
