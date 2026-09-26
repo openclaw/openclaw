@@ -298,6 +298,59 @@ describe("chat pane catalog session lifecycle", () => {
     expect(pane.catalogMessages).toEqual([]);
   });
 
+  it("blocks older history loads while retained history is refreshing", async () => {
+    const key = {
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-101",
+    } satisfies CatalogSessionKey;
+    const lookup = createDeferred<SessionsCatalogListResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => lookup.promise)
+      .mockResolvedValueOnce({ hostId: key.hostId, threadId: key.threadId, items: [] });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    pane.sessionKey = state.sessionKey = buildCatalogSessionKey(key, "main");
+    state.assistantAgentId = "main";
+    pane.catalogCursor = "older-page";
+
+    const refresh = pane.loadCatalogSession(key, false, { retainLoadedHistory: true });
+
+    expect(pane.catalogLoading).toBe(true);
+    await expect(pane.loadOlderMessages()).resolves.toBe(false);
+    expect(request).toHaveBeenCalledOnce();
+
+    lookup.resolve({
+      catalogs: [
+        {
+          id: key.catalogId,
+          label: "Codex",
+          capabilities: { continueSession: false, archive: false },
+          hosts: [
+            {
+              hostId: key.hostId,
+              label: "Gateway",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                {
+                  threadId: key.threadId,
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: true,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    await expect(refresh).resolves.toBe(true);
+    expect(pane.catalogLoading).toBe(false);
+  });
+
   it.each([
     {
       name: "labels a tool call with the text its catalog provided",

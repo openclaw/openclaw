@@ -23,9 +23,23 @@ export type CatalogSessionContinuedDetail = CatalogSessionKey & {
   sessionKey: string;
 };
 
+/** Fired when a catalog-backed terminal writer exits so its retained reader can
+    reconcile with the provider's authoritative row and transcript. */
+export const CATALOG_SESSION_RELEASED_EVENT = "openclaw-session-catalog-released";
+
+export type CatalogSessionReleasedDetail = CatalogSessionKey & {
+  agentId: string;
+};
+
 export function announceCatalogSessionContinued(detail: CatalogSessionContinuedDetail): void {
   document.dispatchEvent(
     new CustomEvent<CatalogSessionContinuedDetail>(CATALOG_SESSION_CONTINUED_EVENT, { detail }),
+  );
+}
+
+export function announceCatalogSessionReleased(detail: CatalogSessionReleasedDetail): void {
+  document.dispatchEvent(
+    new CustomEvent<CatalogSessionReleasedDetail>(CATALOG_SESSION_RELEASED_EVENT, { detail }),
   );
 }
 

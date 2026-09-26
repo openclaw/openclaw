@@ -417,7 +417,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         this.activateComposerPresentation();
       }),
     );
-    this.subscribeSessionRepositoryContext();
+    this.subscribeSessionContext();
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         if (event.event === "sessions.changed" || event.event === "session.message") {

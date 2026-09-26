@@ -13,6 +13,7 @@ import {
 import { disposeTerminalController } from "./terminal-controller-lifecycle.ts";
 import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
 import { bootTerminalPanelSession } from "./terminal-panel-session-boot.ts";
+import { applyTerminalSessionExit, type TerminalExitInfo } from "./terminal-panel-session-exit.ts";
 import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
 import {
   resolveTerminalPanelOwnerSessionKey,
@@ -365,6 +366,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
   private async bootTab(
     operation: TerminalOperation,
     options: {
+      action?: TerminalPanelOpenAction;
       awaitFirstOutput?: boolean;
       restore?: { batch: TerminalRestoreBatch; sessionId: string };
     } = {},
@@ -377,7 +379,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       awaitFirstOutput: options.awaitFirstOutput === true,
       isCurrent: () => this.isTerminalOperationCurrent(operation, options.restore?.batch),
       onReady: (tab) => this.readiness.markReady(tab),
-      onExit: (tab, info) => this.handleExit(tab.id, info),
+      onExit: (tab, info) => this.handleExit(tab.id, info, options.action),
     });
     if (!this.isTerminalOperationCurrent(operation, options.restore?.batch)) {
       disposeTerminalController(boot.tab.controller, boot.tab.host);
@@ -457,7 +459,8 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     // Tracked outside the try so the catch can dispose a tab whose open failed.
     let createdTab: TerminalPanelSessionTab | undefined;
     try {
-      const boot = await this.bootTab(operation, { awaitFirstOutput: Boolean(catalog) });
+      const bootOptions = { action, awaitFirstOutput: Boolean(catalog) };
+      const boot = await this.bootTab(operation, bootOptions);
       createdTab = boot.tab;
       boot.tab.pendingOpen = action;
       const result = await boot.connection.open(
@@ -623,7 +626,8 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
 
   private handleExit(
     tabId: string,
-    info: { reason?: string; exitCode: number | null; signal?: number | null; error?: string },
+    info: TerminalExitInfo,
+    action?: TerminalPanelOpenAction,
   ): void {
     const tab = this.tabs.find((entry) => entry.id === tabId);
     if (!tab) {
@@ -631,11 +635,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     }
     this.retireRestoredTab(tab);
     this.readiness.stop(tab);
-    delete tab.pendingOpen;
-    tab.status = "exited";
-    tab.exitReason = info.reason;
-    tab.exitCode = info.exitCode;
-    tab.exitSignal = info.signal;
+    applyTerminalSessionExit(tab, info, action);
     if (info.error?.trim()) {
       this.setError(formatUiExternalText(info.error));
     }
