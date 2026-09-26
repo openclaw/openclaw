@@ -6,7 +6,6 @@ import type { SessionTranscriptInitializationPublication } from "../config/sessi
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
-import type { SqliteWalCheckpointSnapshot } from "../infra/sqlite-wal-checkpoint.js";
 import {
   SQLITE_WORKER_CLOSE_RECEIPT,
   SQLITE_WORKER_OPERATION_CLEANUP,
@@ -43,7 +42,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
-import { closeAgentDatabaseWithCheckpoint } from "./openclaw-agent-execution-cleanup.worker.js";
+import { closeAgentDatabaseExecution } from "./openclaw-agent-execution-close.js";
 import type {
   AgentDatabaseExecutionIdentity,
   AgentDatabaseExecutionOpen,
@@ -664,42 +663,13 @@ function openAgentDatabaseBackend(
     close() {
       closed = true;
       closeReceipt = undefined;
-      let checkpoint: SqliteWalCheckpointSnapshot | undefined;
-      const errors: unknown[] = [];
-      for (const cleanup of [
-        () => domain.close(),
-        () => {
-          checkpoint = closeAgentDatabaseWithCheckpoint(database);
-        },
-        () => releaseBorrow?.(),
-        () => sharedBorrow?.release(),
-      ]) {
-        try {
-          cleanup();
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw createSqliteLifecycleAggregateError(
-          errors,
-          "Agent database cleanup failed",
-          errors[0],
-        );
-      }
-      if (identity && checkpoint) {
-        closeReceipt = {
-          identity: {
-            key: `file:${identity.physicalIdentity}`,
-            canonicalPath: identity.nativeLocation,
-          },
-          incarnation: identity.incarnation,
-          checkpoint,
-        };
-      }
+      closeReceipt = closeAgentDatabaseExecution({
+        database,
+        identity,
+        closeDomain: () => domain.close(),
+        releaseBorrow,
+        releaseSharedBorrow: () => sharedBorrow?.release(),
+      });
     },
   };
 }

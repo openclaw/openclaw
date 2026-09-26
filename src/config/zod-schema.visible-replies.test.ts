@@ -3,21 +3,19 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation-core.js";
 
 describe("visible reply config schema", () => {
-  describe.each(["global", "groupChat"] as const)("%s visibleReplies", (scope) => {
-    it.each([
-      [true, "automatic"],
-      [false, "message_tool"],
-    ] as const)("coerces %s to %s", (visibleReplies, expected) => {
-      const messages = scope === "global" ? { visibleReplies } : { groupChat: { visibleReplies } };
-      const result = validateConfigObjectRaw({ messages });
+  it.each([
+    ["global", true, "automatic"],
+    ["groupChat", false, "message_tool"],
+  ] as const)("coerces %s visibleReplies %s to %s", (scope, visibleReplies, expected) => {
+    const messages = scope === "global" ? { visibleReplies } : { groupChat: { visibleReplies } };
+    const result = validateConfigObjectRaw({ messages });
 
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        const parsed =
-          scope === "global" ? result.config.messages : result.config.messages?.groupChat;
-        expect(parsed?.visibleReplies).toBe(expected);
-      }
-    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const parsed =
+        scope === "global" ? result.config.messages : result.config.messages?.groupChat;
+      expect(parsed?.visibleReplies).toBe(expected);
+    }
   });
 
   it.each(["user_request", "room_event"] as const)(

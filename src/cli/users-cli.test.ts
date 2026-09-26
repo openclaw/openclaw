@@ -10,19 +10,23 @@ afterEach(() => {
   callGatewayFromCli.mockReset();
 });
 
+function createProgram(response: unknown) {
+  const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  callGatewayFromCli.mockResolvedValue(response);
+  const program = new Command().exitOverride();
+  registerUsersCli(program);
+  return { output, program };
+}
+
 describe("registerUsersCli", () => {
   it("reports the authoritative linked profile and uses the admin gateway method", async () => {
-    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    callGatewayFromCli.mockResolvedValue({
+    const { output, program } = createProgram({
       profile: {
         id: "p-1\nshadow",
         displayName: "Ada\tadmin\u001b[2J",
         emails: ["ada@example.com\nnext@example.com"],
       },
     });
-    const program = new Command().exitOverride();
-    registerUsersCli(program);
-
     await program.parseAsync([
       "node",
       "openclaw",
@@ -45,10 +49,7 @@ describe("registerUsersCli", () => {
   });
 
   it("reports an empty user profile list", async () => {
-    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    callGatewayFromCli.mockResolvedValue({ profiles: [] });
-    const program = new Command().exitOverride();
-    registerUsersCli(program);
+    const { output, program } = createProgram({ profiles: [] });
 
     await program.parseAsync(["node", "openclaw", "users", "list"]);
 
@@ -62,10 +63,7 @@ describe("registerUsersCli", () => {
   });
 
   it("preserves the empty profile list JSON response", async () => {
-    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    callGatewayFromCli.mockResolvedValue({ profiles: [] });
-    const program = new Command().exitOverride();
-    registerUsersCli(program);
+    const { output, program } = createProgram({ profiles: [] });
 
     await program.parseAsync(["node", "openclaw", "users", "list", "--json"]);
 
@@ -73,10 +71,7 @@ describe("registerUsersCli", () => {
   });
 
   it("prints the link result as JSON when requested", async () => {
-    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    callGatewayFromCli.mockResolvedValue({ profile: { id: "p-1" } });
-    const program = new Command().exitOverride();
-    registerUsersCli(program);
+    const { output, program } = createProgram({ profile: { id: "p-1" } });
 
     await program.parseAsync([
       "node",

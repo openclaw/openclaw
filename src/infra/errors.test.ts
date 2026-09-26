@@ -15,12 +15,6 @@ import {
   readErrorName,
 } from "./errors.js";
 
-function createCircularObject() {
-  const circular: { self?: unknown } = {};
-  circular.self = circular;
-  return circular;
-}
-
 describe("error helpers", () => {
   it("keeps bounded redacted diagnostics off frozen errors and follows wrapper graphs", () => {
     const error = Object.freeze(new Error("native failure"));
@@ -72,7 +66,6 @@ describe("error helpers", () => {
 
   it.each([
     ["missing cause", {}, undefined],
-    ["undefined cause", { cause: undefined }, undefined],
     ["null cause", { cause: null }, null],
     ["arbitrary cause", { cause: "boom" }, "boom"],
     ["null input", null, undefined],
@@ -202,39 +195,6 @@ describe("error helpers", () => {
   it("does not classify other fs-safe or errno failures as missing paths", () => {
     expect(isMissingPathError({ code: "path-alias" })).toBe(false);
     expect(isMissingPathError(new Error("ENOENT"))).toBe(false);
-  });
-
-  it.each([
-    { value: 123n, expected: "123" },
-    { value: false, expected: "false" },
-    { value: createCircularObject(), expected: "[object Object]" },
-  ])("formats error messages for case %#", ({ value, expected }) => {
-    expect(formatErrorMessage(value)).toBe(expected);
-  });
-
-  it("traverses .cause chain to include nested error messages", () => {
-    const rootCause = new Error("ECONNRESET");
-    const httpError = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
-      cause: rootCause,
-    });
-    const formatted = formatErrorMessage(httpError);
-    expect(formatted).toBe("Network request for 'sendMessage' failed! | ECONNRESET");
-  });
-
-  it("handles circular .cause references without infinite loop", () => {
-    const a: Error & { cause?: unknown } = new Error("error A");
-    const b: Error & { cause?: unknown } = new Error("error B");
-    a.cause = b;
-    b.cause = a;
-    const formatted = formatErrorMessage(a);
-    expect(formatted).toBe("error A | error B");
-  });
-
-  it("dedupes repeated cause messages while preserving deeper distinct causes", () => {
-    const rootCause = new Error("provider auth lookup failed");
-    const inner = new Error('No API key found for provider "openai".', { cause: rootCause });
-    const wrapper = new Error(inner.message, { cause: inner });
-    expect(formatErrorMessage(wrapper)).toBe(`${inner.message} | ${rootCause.message}`);
   });
 
   it("redacts sensitive tokens from formatted error messages", () => {

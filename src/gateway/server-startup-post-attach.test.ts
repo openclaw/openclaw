@@ -292,10 +292,11 @@ function composeTrackedPublisher(
 }
 
 function startGatewaySidecars(
-  params: Omit<GatewaySidecarsParams, "onPostReadySidecars"> &
-    Partial<Pick<GatewaySidecarsParams, "onPostReadySidecars">>,
+  params: Omit<GatewaySidecarsParams, "onPostReadySidecars" | "scheduler"> &
+    Partial<Pick<GatewaySidecarsParams, "onPostReadySidecars" | "scheduler">>,
 ) {
   return startGatewaySidecarsImpl({
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     ...params,
     onPostReadySidecars: composeTrackedPublisher(
       publishedPostReadySidecars,
@@ -3524,6 +3525,7 @@ describe("startGatewayPostAttachRuntime", () => {
           await import("./server-startup-post-attach.js");
 
         await startGatewaySidecarsWithDelayedImport({
+          scheduler: createTestGatewayScheduler(),
           cfg: {
             hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
           } as never,
@@ -4178,6 +4180,7 @@ describe("startGatewayPostAttachRuntime", () => {
           return managerModule;
         });
         await startFreshGatewaySidecars({
+          scheduler: params.scheduler,
           cfg: { ...params.cfgAtStart, acp: { enabled: true, backend: "acpx" } },
           pluginRegistry: params.pluginRegistry,
           defaultWorkspaceDir: params.defaultWorkspaceDir,

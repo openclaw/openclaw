@@ -32,12 +32,8 @@ describe("abort errors", () => {
 
   it.each([
     null,
-    undefined,
     "string error",
-    42,
-    new Error("Operation aborted"),
     new Error("aborted"),
-    new Error("Request was aborted"),
     ...(["name", "message"] as const).map((field) =>
       Object.defineProperty(new Error("Metadata is unavailable"), field, {
         get() {

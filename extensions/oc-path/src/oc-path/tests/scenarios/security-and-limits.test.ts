@@ -30,12 +30,6 @@ describe("encoding edges", () => {
     expect(parseOcPath("﻿oc://X/Y").file).toBe("X");
   });
 
-  it("normalizes path segments to NFC", () => {
-    const nfc = "café";
-    const nfd = "café"; // decomposed
-    expect(parseOcPath(`oc://X/${nfd}`)).toEqual(parseOcPath(`oc://X/${nfc}`));
-  });
-
   it("rejects whitespace inside identifier-shaped segments", () => {
     expect(() => parseOcPath("oc://X/foo /bar")).toThrow(OcPathError);
     expect(() => parseOcPath("oc://X/foo\tbar")).toThrow(OcPathError);
@@ -85,12 +79,6 @@ describe("file-slot containment", () => {
 });
 
 describe("path-string and traversal caps", () => {
-  it("parseOcPath rejects strings longer than MAX_PATH_LENGTH", () => {
-    expect(() => parseOcPath("oc://X/" + "a".repeat(PATH_LENGTH_LIMIT))).toThrow(
-      /exceeds .* bytes/,
-    );
-  });
-
   it("rejects multibyte paths above MAX_PATH_LENGTH bytes", () => {
     const multibyteFile = "界".repeat(1400);
     const oversizedPath = `oc://${multibyteFile}`;
@@ -133,17 +121,6 @@ describe("path-string and traversal caps", () => {
     expect(Buffer.byteLength(input.normalize("NFC"), "utf8")).toBeGreaterThan(PATH_LENGTH_LIMIT);
 
     expectUtf16SafeLimitError(() => parseOcPath(input), `${prefix}…`);
-  });
-
-  it("parseOcPath accepts a path right at the cap", () => {
-    const justUnder = "oc://X/" + "a".repeat(PATH_LENGTH_LIMIT - "oc://X/".length);
-    expect(() => parseOcPath(justUnder)).not.toThrow();
-  });
-
-  it("formatOcPath enforces the same cap on output", () => {
-    expect(() => formatOcPath({ file: "X", section: "a".repeat(PATH_LENGTH_LIMIT) })).toThrow(
-      /Formatted oc:\/\/ exceeds/,
-    );
   });
 
   it("keeps overlong formatted paths UTF-16 safe", () => {

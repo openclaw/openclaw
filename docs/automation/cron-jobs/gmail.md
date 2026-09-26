@@ -135,6 +135,9 @@ Check forwarding and completion separately. A watcher success only acknowledges 
 
 When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
 
+After sleep, an overdue renewal runs once instead of replaying missed intervals.
+Shutdown cancels and waits for any in-flight renewal before stopping the watcher.
+
 With `forEach: "messages"`, the Gateway prepares one action per email, up to the 200-item fan-out cap. Gmail-path mappings receive a larger request-body allowance derived from `hooks.gmail.maxBytes`, capped at 32 MiB. The upstream history page size is not a strict email count, so oversized batches can still hit limits. See the [Gmail reference](/gateway/config-hooks#gmail-integration) for the exact allowance and [fan-out retry behavior](/gateway/config-hooks#hook-retries-and-fan-out).
 
 Do not run `openclaw webhooks gmail run` or another `gog gmail watch serve` on the same listener while the Gateway-managed watcher is running. Check logs for watch-registration failures, forwarding failures, and bind conflicts; starting the serve process alone does not prove Gmail registration succeeded.
