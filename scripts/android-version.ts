@@ -1,17 +1,28 @@
 // Android Version script supports OpenClaw repository automation.
-import { resolveAndroidVersion } from "./lib/android-version.ts";
+import {
+  resolveAndroidVersion,
+  resolveGatewayVersionForAndroidRelease,
+} from "./lib/android-version.ts";
 import { parseVersionQueryArgs } from "./lib/version-script-args.ts";
 
 function printUsage(): void {
   process.stdout.write(
-    "Usage: node --import tsx scripts/android-version.ts [--json|--shell] [--field name] [--root dir]\n\n",
+    "Usage: node --import tsx scripts/android-version.ts [--json|--shell] [--field name] [--from-gateway] [--root dir]\n\n",
   );
 }
 
 function main(argv = process.argv.slice(2)): number {
-  const options = parseVersionQueryArgs(argv);
+  const fromGateway = argv.includes("--from-gateway");
+  const options = parseVersionQueryArgs(argv.filter((arg) => arg !== "--from-gateway"));
   if (options.help) {
     printUsage();
+    return 0;
+  }
+
+  if (fromGateway) {
+    process.stdout.write(
+      `${JSON.stringify(resolveGatewayVersionForAndroidRelease(options.rootDir), null, 2)}\n`,
+    );
     return 0;
   }
 

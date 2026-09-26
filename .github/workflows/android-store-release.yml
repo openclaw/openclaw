@@ -1,0 +1,266 @@
+name: Android Release
+
+on:
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+  queue: max
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.21.0"
+  GIT_AUTHOR_NAME: github-actions[bot]
+  GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+  GIT_COMMITTER_NAME: github-actions[bot]
+  GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+
+jobs:
+  release:
+    name: Prepare and upload Android release
+    if: github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: android-store-release
+    outputs:
+      recovery_artifact_id: ${{ steps.recovery.outputs.artifact-id }}
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare trusted Linux Android tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS/$RUNNER_ARCH" = "Linux/X64"
+          for executable in /usr/bin/apt-get /usr/bin/sudo /usr/bin/timeout; do
+            test -x "$executable"
+          done
+          apt_source="/etc/apt/sources.list.d/ubuntu.sources"
+          apt_source_parts="$RUNNER_TEMP/openclaw-android-apt-sourceparts-disabled"
+          test -s "$apt_source"
+          if [[ -e "$apt_source_parts" || -L "$apt_source_parts" ]]; then
+            echo "::error::Task-private APT source-parts path must remain absent"
+            exit 1
+          fi
+          apt_options=(
+            -o "Dir::Etc::sourcelist=$apt_source"
+            -o "Dir::Etc::sourceparts=$apt_source_parts"
+          )
+          /usr/bin/timeout --signal=TERM --kill-after=10s 300s \
+            /usr/bin/sudo env DEBIAN_FRONTEND=noninteractive \
+            /usr/bin/apt-get "${apt_options[@]}" update
+          /usr/bin/timeout --signal=TERM --kill-after=10s 300s \
+            /usr/bin/sudo env DEBIAN_FRONTEND=noninteractive \
+            /usr/bin/apt-get "${apt_options[@]}" install \
+            -y --no-install-recommends acl imagemagick
+          test -x /usr/bin/convert
+          test -x /usr/bin/identify
+
+          tool_dir="$RUNNER_TEMP/openclaw-android-tools"
+          mkdir -p "$tool_dir"
+          install -m 700 scripts/android-sips-linux.sh "$tool_dir/android-sips-linux.sh"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "true"
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Android toolchain
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: off
+          install-screenshot-emulators: "true"
+
+      - name: Verify Linux KVM acceleration
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_kvm_acceleration() {
+            local output_file="$1"
+            local raw_output="${output_file}.raw"
+            local accel_status
+            local accel_timed_out=false
+
+            if /usr/bin/timeout --signal=TERM --kill-after=2s 15s \
+              emulator -accel-check >"$raw_output" 2>&1; then
+              accel_status=0
+            else
+              accel_status=$?
+            fi
+            if [[ "$accel_status" == "124" || "$accel_status" == "137" ]]; then
+              accel_timed_out=true
+            fi
+            head -c 16384 "$raw_output" >"$output_file"
+            rm -f "$raw_output"
+            {
+              printf '\nexit_status=%s\n' "$accel_status"
+              printf 'timed_out=%s\n' "$accel_timed_out"
+            } >>"$output_file"
+            cat "$output_file"
+            if [[ "$accel_status" -ne 0 || "$accel_timed_out" != "false" ]]; then
+              echo "::error::Android emulator acceleration check failed"
+              return 1
+            fi
+            if ! grep -Eiq '\bKVM\b.*\b(available|usable)\b' "$output_file"; then
+              echo "::error::Android emulator did not confirm usable KVM acceleration"
+              return 1
+            fi
+          }
+
+          test "$RUNNER_OS/$RUNNER_ARCH" = "Linux/X64"
+          test -c /dev/kvm
+          current_user="$(id -un)"
+          /usr/bin/sudo /usr/bin/setfacl -m "u:${current_user}:rw" /dev/kvm
+          /usr/bin/getfacl -cp /dev/kvm | grep -Fqx "user:${current_user}:rw-"
+          KVM_DEVICE=/dev/kvm /bin/bash -c \
+            'test -c "$KVM_DEVICE" && test -r "$KVM_DEVICE" && test -w "$KVM_DEVICE"'
+          verify_kvm_acceleration "$RUNNER_TEMP/android-emulator-kvm-check.txt"
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
+        with:
+          ruby-version: "3.4.10"
+          bundler: "4.0.21"
+          bundler-cache: false
+          working-directory: apps/android
+
+      - name: Install locked Fastlane bundle
+        working-directory: apps/android
+        run: |
+          set -euo pipefail
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+
+      - name: Create apps-signing read token
+        id: apps-signing-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: apps-signing
+          permission-contents: read
+
+      - name: Checkout encrypted Android signing assets
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/apps-signing
+          ref: main
+          path: apps/android/build/release-signing/apps-signing
+          token: ${{ steps.apps-signing-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Materialize Android release signing
+        env:
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        run: node scripts/android-release-signing.mjs --mode materialize
+
+      - name: Prepare and upload Android release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.GOOGLE_PLAY_JSON_KEY_DATA }}
+          GOOGLE_PLAY_PACKAGE_NAME: ai.openclaw.app
+          GOOGLE_PLAY_RELEASE_STATUS: completed
+          GOOGLE_PLAY_TRACK: internal
+          GOOGLE_PLAY_VALIDATE_ONLY: "0"
+          SIPS: ${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh
+          SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW: "true"
+          SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW: "false"
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          pnpm android:release:upload -- --defer-finalization \
+            --recovery-dir "$RUNNER_TEMP/android-release-recovery"
+
+      - name: Remove materialized signing files
+        if: always()
+        run: |
+          rm -rf apps/android/build/release-signing \
+            "$RUNNER_TEMP/android-release-recovery/source/apps/android/build/release-signing"
+
+      - name: Retain prepared release for Git recovery
+        id: recovery
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-release-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-release-recovery/release.bundle
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retain signed release artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-release-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/android-release-recovery/artifacts/*.ipa
+            ${{ runner.temp }}/android-release-recovery/artifacts/*.aab
+            ${{ runner.temp }}/android-release-recovery/artifacts/*.apk
+            ${{ runner.temp }}/android-release-recovery/artifacts/*.sha256
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 30
+
+  finalize:
+    name: Finalize Android release on main
+    needs: release
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: android-store-release
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Download exact release recovery bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.release.outputs.recovery_artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/android-release-recovery
+
+      - name: Create release finalization token
+        id: release-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: openclaw
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Publish preparation changes with linear history
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          node scripts/mobile-release.mjs finalize --platform android \
+            --recovery-dir "$RUNNER_TEMP/android-release-recovery"

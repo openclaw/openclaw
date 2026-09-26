@@ -112,8 +112,8 @@ approval; core npm and GitHub release finalization do not wait for it. The whole
 parent can remain active after core publication while native qualification
 finishes. Existing full evidence and macOS's independent validation retain their
 native qualification contracts. A mismatched Android pin skips both native
-qualification and APK publication, with the pin, release train, and shared
-mobile cutter (`scripts/mobile-release-version.ts --prepare`) remedy recorded
+qualification and APK publication, with the pin, release train, and Android
+version pinning (`pnpm android:version:pin -- --from-gateway`) remedy recorded
 in the parent summary and release proof.
 Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
 package list. Plugin-only `all-publishable` runs require the same immutable npm

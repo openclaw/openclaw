@@ -136,23 +136,21 @@ CI pins SimSlim 0.8.0 for the selected iPhone test simulator and iPhone/iPad
 screenshot devices. It disables only search and family services. Preparation
 must succeed before capture; Watch and default local runs remain stock.
 
-Upload to App Store Connect:
+From a clean local `main` matching `origin/main`, upload to App Store Connect:
 
 ```bash
-node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
-pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
-# Review all five cutter outputs and commit every changed output.
 pnpm ios:release:upload
 ```
 
-Direct Fastlane upload is disabled. Use the package script so the release
-wrapper, App Store push mode, and exported-IPA validation gate all run in the
-same path.
+The entry point plans and cuts iOS release notes automatically, commits changed
+notes locally for clean build provenance, and uploads the prepared commit.
+After success it opens a metadata-only PR for squash auto-merge under the
+existing `main` gates. The uploaded source SHA remains immutable. Failed uploads
+leave `main` unchanged. Direct Fastlane upload is disabled.
 
 ## Native release qualification
 
-On an Apple Silicon Mac with Xcode 27.0 (27A266a), the iOS 26.5 runtime, iPhone 17 Pro
+On an Apple Silicon Mac with `/Applications/Xcode.app`, the iOS 26.5 runtime, iPhone 17 Pro
 device type, and the repository's pinned native tools installed:
 
 ```bash
@@ -174,9 +172,10 @@ Gateway, and fresh setup code. Chat uses the deterministic local
 `openai/ios-e2e` provider fixture. Native Overview runs with Control UI disabled;
 this is not screenshot mode or a substitute for external-provider validation.
 
-The stock gate is required between beta authorization and release. It checks out
-the exact approved SHA, even when that differs from the workflow SHA, and fails
-if that target lacks the harness. Manual CI also requires the stock gate when
+The stock gate runs in **iOS Release** after native tool setup and before signing
+assets are accessed. It qualifies the checked-out `main` commit used for release
+preparation and records the installed Xcode version and build without requiring
+a specific Xcode version. Manual CI also requires the stock gate when
 `validation_tier=full` and its checkout revision equals the workflow run's SHA.
 Main-tier and alternate-target manual runs retain their existing coverage.
 Existing compatibility admission still excludes historical and
@@ -184,9 +183,8 @@ pinned-target CI paths; this does not claim universal pinned-target FRV coverage
 Local direct upload behavior is unchanged.
 
 Manual dispatch of `iOS Release E2E` qualifies the selected workflow revision;
-it does not accept an alternate target SHA. Ordinary CI callers must also use
-their own revision. Only the protected beta workflow can pass a different
-candidate, after its existing release authorization succeeds.
+it does not accept an alternate target SHA. CI callers must also use their own
+revision.
 
 Compare runs four serial matched pairs in stock/slim, slim/stock, stock/slim,
 slim/stock order, with both tests fresh in every arm. SimSlim keeps the existing
@@ -204,20 +202,17 @@ resources. If owned cleanup cannot be confirmed, the working root is retained.
 Only sanitized JSON proof is uploaded, including on failure, with fixed operation
 labels and bounded exit/error diagnostics rather than raw logs or setup codes.
 
-## Protected beta CI
+## GitHub Actions
 
-`iOS Beta Release` is a separate, manual workflow. Dispatch it from trusted
-`main` with a canonical `release/YYYY.M.PATCH-mobile` branch and that branch's
-exact full commit SHA. The workflow derives the frozen Code SHA from the release
-branch and the dispatch's trusted Tooling SHA. That Tooling SHA must be an
-ancestor of the observed `main` head, and `main` may only advance forward while
-authority validates the candidate. Divergence, rewind, or an unstable ancestry
-lookup fails closed. Every later candidate commit must be linear and may change
-only the five generated mobile release metadata files. All five target files
-must byte-match regeneration using the dispatch's trusted tooling and the frozen
-Code SHA metadata. Approval of the `ios-beta-release` environment
-gates all access to signing assets, App Store Connect credentials, and immutable
-release-ref mutation.
+Run **iOS Release** from `main` using the `ios-store-release` environment for
+upload and Git finalization. The workflow has no input parameters and uses
+the same `pnpm ios:release:upload` entry point. It installs the pinned build
+tools, uses readonly encrypted signing assets and a job-owned temporary
+keychain, and uploads screenshots, release notes, the App Review PDF attachment,
+and the IPA. A separate finalization job opens the metadata PR and waits for
+squash merging. App Review submission remains manual. If only finalization
+fails, rerun that job or use the
+[shared recovery commands](../VERSIONING.md#git-finalization-and-recovery); do not repeat the upload.
 
 Repository/environment secrets required by name:
 
@@ -227,73 +222,10 @@ Repository/environment secrets required by name:
 - `APP_STORE_CONNECT_KEY_ID`
 - `APP_STORE_CONNECT_KEY_CONTENT`
 
-Protected `ios-beta-release` environment variable required:
+App Store Connect supplies the revision and next build number. No TestFlight
+group ID or manually prepared mobile release branch is required.
 
-- `TESTFLIGHT_INTERNAL_GROUP`: immutable App Store Connect beta-group ID
-
-The CI lane must distribute the processed build to one pre-approved internal
-TestFlight group. The value is ID-only and is never matched as a display name.
-The lane fails before upload when the ID is blank, unknown, external, duplicated,
-collides with another group's display name, or any other internal group does not
-explicitly disable automatic all-build access. After processing, it freshly
-resolves the exact group and uploaded build, then requires that build ID to be
-assigned only to the approved group. Existing access is reconciled without
-reassigning the build. An automatic target group must expose the exact build in
-its live relationships; its all-build flag alone is not distribution proof. A
-missing relationship permits one assignment only for a freshly validated manual
-group. Unexpected access or unreadable state fails closed before assignment,
-and successful reconciliation still requires fresh exclusive-access readback.
-External distribution and Beta App Review submission remain disabled.
-
-After verified internal distribution, the workflow writes a bounded signed
-intent and records `refs/openclaw/mobile-releases/ios/<app-store-version>-<build>`
-at the exact candidate SHA. A failed post-upload recording step may be recovered
-with the workflow's `record-only` operation, the original failed run ID, and the
-same release ref/SHA tuple. Recovery enters `ios-beta-release`, executes only
-trusted workflow-SHA tooling, and admits the recovery dispatch against the
-current `main` lineage. Candidate regeneration, receipts, and attestations remain
-bound to the original upload run's Tooling SHA. Recovery fails on missing
-artifacts, replay, moved refs, mismatched digests, divergent or rewound `main`,
-or a conflicting immutable ref. App Review and production promotion remain
-manual.
-
-### Read-only protected inspection
-
-After review and landing, dispatch `iOS Beta Release` from `main` with
-`operation=inspect`, the approved `target_ref` and exact `target_sha`, and
-`inspect_build_number` for the existing build. The App Store version comes from
-that candidate's validated cutter output, not a free-form version override.
-A fresh `ios-beta-release` environment approval is required. Inspection shares
-the uploader's concurrency group and revalidates the live actor, original run
-attempt, trusted workflow lineage, and unchanged candidate before credential
-access and again before retaining observations.
-
-Only the trusted workflow-SHA checkout executes Node, Fastlane 2.240.1, and
-locked dependencies. The candidate checkout supplies version/changelog data;
-none of its scripts, Fastfile, Gemfile, or actions execute. The canonical planner
-runs against this data without a forced revision/build override. Its `plan.json`
-selects the next live upload, not the historical build being inspected. A failed
-planner produces no plan; `inspection.json` records `planValidation=failed`.
-
-The separate `ios-release-inspection-<run>-1` artifact retains only the plan,
-selected app/build IDs, group IDs/policy flags/exact build relationships, and
-validation outcomes for seven days. It contains no tester lists, emails, group
-names, signing data, intent, or authority receipt. Relationship API failures stop
-inspection; planner failures produce no plan. Unsafe or missing relationships
-are reported without repair. These are sequential observations, not an atomic
-store snapshot. Even a successful
-inspection always says `publicationVerified=false`: current relationships do
-not prove historical upload provenance or authorize recording. The upload and
-`record-only` contracts are unchanged, including rejection of a missing original
-intent. No automatic-access toggle, group assignment, signing, screenshot,
-archive, upload, App Review submission, or release-ref mutation runs here.
-
-A green inspection job means observations were captured, not that its plan or
-distribution passed. Review the report's plan and policy outcomes before making
-a separate source, recovery-contract, audience, or publication decision. This
-operation neither changes the selected source nor authorizes any such decision.
-
-Maintainer recovery path for a fresh clone on the same Mac:
+Local authentication setup for a fresh clone on the same Mac:
 
 1. Reuse the existing Keychain-backed App Store Connect key on that machine.
 2. Restore or recreate `apps/ios/fastlane/.env` so it contains the non-secret variables:
@@ -312,37 +244,30 @@ cd apps/ios
 BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check
 ```
 
-4. Prepare and finalize the shared mobile release:
+4. Inspect the live plan if needed, then run the release entry point:
 
 ```bash
-node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
-pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
-```
-
-5. Review all five cutter outputs, commit every changed output, then upload:
-
-```bash
+pnpm ios:release:plan -- --json
 pnpm ios:release:upload
 ```
 
 Quick verification after upload:
 
-- confirm `apps/ios/build/app-store/OpenClaw-<version>.ipa` exists
+- confirm the exported IPA exists under `artifacts/` in the printed recovery directory
 - confirm Fastlane validates the exported IPA before upload
 - confirm Fastlane prints `Uploaded iOS App Store build: version=<version> short=<short> build=<build>`
-- remember that App Store Connect processing can take a few minutes after the upload succeeds
+- submit the processed build for App Review manually in App Store Connect
 
 Versioning rules:
 
-- App Store release uploads derive the gateway from `apps/mobile/version.json` and revision/build state from App Store Connect
-- explicit `--version`, `--revision`, and `--build-number` values are checked overrides
+- App Store release uploads derive the gateway from root `package.json` and revision/build state from App Store Connect
+- The planner accepts checked `--version`, `--revision`, and `--build-number` overrides; no release arguments are required
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
 - Gateway versions use CalVer: `YYYY.M.PATCH`
 - Fastlane appends one unpadded revision digit: gateway `YYYY.M.PATCH`, revision `R`, becomes `YYYY.M.PATCHR`
 - Gateway `2026.7.2`, revision `1` sets `CFBundleShortVersionString` to `2026.7.21`
 - Fastlane resolves `CFBundleVersion` from the maximum awaiting, processing, failed, or complete build-upload record plus one
-- Run the shared mobile cutter prepare/plan/finalize flow after changing `## Unreleased`, then review all five outputs and commit every changed output
+- The release entry point runs `pnpm ios:release:cut` automatically and persists the exact encoded heading only after upload succeeds
 - `pnpm ios:version:check` validates that release notes can be generated from the iOS changelog
 - The release flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched

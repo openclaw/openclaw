@@ -19,7 +19,7 @@ import {
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  checkAndroidVersioning,
+  syncAndroidVersioning,
   resolveAndroidVersion,
 } from "../../../scripts/lib/android-version.ts";
 
@@ -393,7 +393,7 @@ function main() {
     return;
   }
 
-  checkAndroidVersioning({ rootDir });
+  syncAndroidVersioning({ mode: "check", rootDir });
   const version = resolveAndroidVersion(rootDir);
   const buildMetadata = resolveAndroidBuildMetadata();
   const artifacts = releaseArtifacts(version.canonicalVersion).filter(

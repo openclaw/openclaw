@@ -2,7 +2,7 @@
 
 OpenClaw iOS releases retain their gateway association while allowing multiple
 public App Store releases for one gateway version. The release planner derives
-the active release identity from the mobile gateway version and App Store Connect.
+the active release identity from the repository and App Store Connect.
 
 ## Goals
 
@@ -44,19 +44,29 @@ exact versions again; all future uploads use the appended single-digit format.
 
 ## Release commands
 
-Prepare the shared mobile release, inspect the live iOS plan, finalize the
-shared release notes, commit the five release artifacts, then upload:
+Run **iOS Release** in GitHub Actions from `main`, or use the same release entry
+point from a clean local `main` checkout that matches `origin/main`:
 
 ```bash
-node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
-pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 pnpm ios:release:upload
 ```
 
-`--version`, `--revision`, and `--build-number` remain available as checked
-overrides. Upload rejects any override that differs from the live plan. Offline
-archive validation still requires explicit values:
+The entry point selects the live plan, cuts `## Unreleased` notes with
+`pnpm ios:release:cut`, and commits changed release metadata locally before
+building in an isolated worktree. It uploads the exact prepared commit. After a
+successful upload, it opens a metadata-only PR and enables squash auto-merge
+under the existing `main` review and CI gates. The uploaded source commit remains
+immutable even though the final commit on `main` has a different SHA. Failed
+uploads do not change `main`; unchanged preparation needs no PR.
+
+Inspect the read-only plan separately:
+
+```bash
+pnpm ios:release:plan -- --json
+```
+
+The planner's `--version`, `--revision`, and `--build-number` options are checked
+overrides, never alternate release identities. No release arguments are required. Local archive validation still requires explicit values:
 
 ```bash
 pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
@@ -122,17 +132,17 @@ Production revision builds do not fall back to the gateway heading or
 `## Unreleased`. Local version checks without `--revision` retain the existing
 gateway/`Unreleased` fallback for development.
 
-The mobile cutter moves new notes into that exact heading and is idempotent:
+The cutter moves new notes into that exact heading and is idempotent:
 
 ```bash
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --check
+pnpm ios:release:cut
 ```
 
 ## Source of truth and generated files
 
 Source files:
 
-- `apps/mobile/version.json`: default gateway version for mobile builds and release planning
+- root `package.json`: default gateway version for local builds and release planning
 - App Store Connect versions and build uploads: revision/build lifecycle state
 - explicit release arguments: checked overrides only
 - `apps/ios/CHANGELOG.md`: exact App Store release notes
@@ -150,14 +160,12 @@ The canonical implementation is split across:
 - `scripts/lib/ios-version.ts`: validation, encoding, and release-note rendering
 - `scripts/lib/ios-release-plan.ts`: deterministic revision/build selection and
   changelog cutting
-- `scripts/lib/mobile-version.ts`: canonical mobile gateway version parsing and reading
-- `scripts/mobile-release-version.ts`: shared Android preparation and iOS finalization
 - `scripts/ios-version.ts`: JSON, shell, and single-field queries
 - `scripts/ios-release-plan.ts`: pure planner CLI used by the Fastlane adapter
-- `scripts/ios-release-plan.sh`: public read-only planning entry point
-- `scripts/ios-release-cut.{sh,ts}`: retired compatibility entry points
+- `scripts/ios-release-{plan,cut}.sh`: public planning and cutting entry points
 - `scripts/ios-sync-versioning.ts`: release-note validation
-- `scripts/ios-release-upload.sh`: guarded upload entry point
+- `scripts/mobile-release.mjs`: isolated preparation, upload orchestration, and Git finalization
+- `scripts/ios-release-upload.sh`: guarded Fastlane upload wrapper invoked by the release entry point
 - `apps/ios/fastlane/Fastfile`: remote preflight, build allocation, metadata,
   archive, validation, and upload
 
@@ -180,29 +188,58 @@ Connect accepts the upload. Existing refs are immutable.
 
 ## Normal workflow
 
-1. Prepare the mobile gateway and Android release artifacts:
-
-```bash
-node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
-```
-
-2. Capture the live iOS plan, then finalize and commit the five release artifacts:
-
-```bash
-pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
-```
-
-3. Upload the planned build:
-
-```bash
-pnpm ios:release:upload
-```
-
-4. If the run fails, stop. After a human repairs App Store Connect, rerun the
-   same pipeline; it keeps the revision and advances the build automatically.
+1. Add iOS release notes under `## Unreleased` and commit the app changes.
+2. Run **iOS Release** from `main`, or run `pnpm ios:release:upload` locally.
+3. The pipeline prepares and commits notes locally, uploads the planned build,
+   and persists those notes only after success.
+4. If preparation or upload fails, stop and inspect the failing step and store
+   state before retrying. An Apple-visible attempt consumes its build number.
+   If only Git finalization failed, use the recovery path below.
 5. Select one processed build and submit it manually in App Store Connect.
 6. After distribution, the next run allocates the next App Store revision.
+
+## Git finalization and recovery
+
+Both mobile pipelines use `scripts/mobile-release.mjs` for Git finalization.
+After a successful upload, it applies only the prepared release metadata to
+current `main`, opens a PR, and requests squash auto-merge. Existing reviews and
+CI remain required. Finalization creates no merge commits and never force-pushes
+branches or rewrites the immutable uploaded source ref.
+
+If only finalization fails or waits for repository gates, rerun only the
+**Finalize iOS release on main** job. Do not rerun the upload job or dispatch a
+new release to repair Git bookkeeping. The finalizer reuses its existing PR and
+recognizes a completed finalization.
+
+The release command prints its recovery directory. It retains the prepared
+source in `release.bundle` and copies any exported signed binaries into
+`artifacts/`. CI uploads these as separate artifacts with 30-day retention.
+
+For local recovery, keep that directory, or extract the workflow's recovery
+artifact containing `release.bundle` into a directory. From a clean checkout, run:
+
+```bash
+node scripts/mobile-release.mjs finalize --platform ios --recovery-dir /path/to/recovery
+```
+
+If the artifact is unavailable, recover from the full source SHA printed by the
+successful upload. The finalizer verifies and fetches its immutable release ref:
+
+```bash
+node scripts/mobile-release.mjs finalize --platform ios --source-sha <full-uploaded-source-sha>
+```
+
+Use `--platform android` for the same Android recovery commands. Finalization
+requires repository access and performs no store calls or uploads. If no
+successful release ref exists, inspect the store outcome before further action;
+these commands cannot establish that an uncertain upload succeeded.
+
+A conflict retains the finalization worktree at the reported path. Resolve only
+the release metadata, preserve newer notes and version data, and finish the
+cherry-pick. Keep the commit trailers `Mobile-Release-Platform: ios` (or
+`android`) and `Mobile-Release-Source: <full-uploaded-source-sha>`, then rerun
+finalization with the same recovery directory. Do not replace an existing
+finalization branch with a force push.
 
 Agent-driven uploads must use `pnpm ios:release:upload`. A failed upload is
 terminal for that attempt: report the failing step rather than switching to a

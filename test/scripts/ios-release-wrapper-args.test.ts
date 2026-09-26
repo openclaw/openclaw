@@ -1,6 +1,6 @@
 // iOS release wrapper tests keep release args fail-closed before Fastlane work.
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -8,14 +8,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
-const mobileReleasePaths = [
-  "apps/mobile/version.json",
-  "apps/android/version.json",
-  "apps/android/Config/Version.properties",
-  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-  "apps/ios/CHANGELOG.md",
-] as const;
-
 type WrapperCase = readonly [scriptPath: string, args: readonly string[], option: string];
 
 function runScript(
@@ -163,37 +155,34 @@ describe("iOS release shell wrapper arguments", () => {
     expect(script).toContain('export GIT_COMMIT="${RELEASE_GIT_COMMIT}"');
   });
 
-  it("retires standalone iOS cutting before any shared release artifact changes", () => {
-    const before = new Map(
-      mobileReleasePaths.map((relativePath) => [
-        relativePath,
-        readFileSync(path.join(process.cwd(), relativePath), "utf8"),
-      ]),
-    );
-    const shellResult = runScript(path.join(process.cwd(), "scripts", "ios-release-cut.sh"), []);
-    const directResult = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        path.join(process.cwd(), "scripts", "ios-release-cut.ts"),
-        "--plan",
-        "/tmp/legacy-ios-plan.json",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+  it("cuts the planned iOS notes independently and keeps repeated preparation idempotent", () => {
+    const root = tempDirs.make("openclaw-ios-cut-");
+    const changelog = path.join(root, "apps/ios/CHANGELOG.md");
+    mkdirSync(path.dirname(changelog), { recursive: true });
+    writeFileSync(changelog, "# iOS Changelog\n\n## Unreleased\n\nNew release note.\n");
+    const plan = path.join(root, "plan.json");
+    writeFileSync(plan, JSON.stringify({ appStoreVersion: "2026.7.21" }));
+    const cut = () =>
+      spawnSync(
+        process.execPath,
+        [
+          "--import",
+          path.join(process.cwd(), "scripts/tsx.mjs"),
+          path.join(process.cwd(), "scripts/ios-release-cut.ts"),
+          "--plan",
+          plan,
+        ],
+        { cwd: root, encoding: "utf8" },
+      );
 
-    expect(shellResult.ok).toBe(false);
-    expect(shellResult.stderr).toContain("Standalone iOS release cutting is retired");
-    expect(shellResult.stderr).not.toContain("fastlane");
-    expect(directResult.status).toBe(1);
-    expect(directResult.stderr).toContain("Standalone iOS release cutting is retired");
-    for (const [relativePath, content] of before) {
-      expect(readFileSync(path.join(process.cwd(), relativePath), "utf8")).toBe(content);
-    }
+    const first = cut();
+    expect(first.status, first.stderr).toBe(0);
+    expect(readFileSync(changelog, "utf8")).toBe(
+      "# iOS Changelog\n\n## Unreleased\n\n## 2026.7.21\n\nNew release note.\n",
+    );
+    const second = cut();
+    expect(second.status, second.stderr).toBe(0);
+    expect(second.stdout).toBe("iOS App Store release notes for 2026.7.21 are already cut.\n");
   });
 
   function runSharedFastlane(options: {

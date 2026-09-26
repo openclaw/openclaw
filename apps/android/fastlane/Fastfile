@@ -10,7 +10,6 @@ ANDROID_FASTLANE_ROOT = File.expand_path(__dir__, Dir.pwd)
 DEFAULT_PLAY_PACKAGE_NAME = "ai.openclaw.app"
 DEFAULT_PLAY_TRACK = "internal"
 DEFAULT_PLAY_RELEASE_STATUS = "completed"
-ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV = "_OPENCLAW_ANDROID_FASTLANE_EXECUTION_PROVENANCE"
 ANDROID_RELEASE_SIGNING_GRADLE_PROPERTIES = [
   "OPENCLAW_ANDROID_STORE_FILE",
   "OPENCLAW_ANDROID_STORE_PASSWORD",
@@ -27,7 +26,6 @@ def load_env_file(path)
 
     key, value = stripped.split("=", 2)
     next if key.nil? || key.empty? || value.nil?
-    next if key == ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV
 
     ENV[key] = value if ENV[key].nil? || ENV[key].strip.empty?
   end
@@ -80,43 +78,6 @@ def play_validate_only?
   ENV["GOOGLE_PLAY_VALIDATE_ONLY"] == "1"
 end
 
-def mobile_release_intent_context!(gateway_version:)
-  mode = ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip
-  return nil if mode.empty?
-
-  UI.user_error!("OPENCLAW_MOBILE_RELEASE_REF_MODE must be empty or intent.") unless mode == "intent"
-  intent_path = ENV.fetch("OPENCLAW_MOBILE_RELEASE_INTENT_PATH", "").strip
-  receipt_digest = ENV.fetch("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST", "").strip
-  target_ref = ENV.fetch("OPENCLAW_MOBILE_RELEASE_TARGET_REF", "").strip
-  UI.user_error!("OPENCLAW_MOBILE_RELEASE_INTENT_PATH is required in intent mode.") if intent_path.empty?
-  unless receipt_digest.match?(/\Asha256:[0-9a-f]{64}\z/)
-    UI.user_error!("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST must be a canonical SHA-256 digest.")
-  end
-  unless target_ref == "release/#{gateway_version}-mobile"
-    UI.user_error!("OPENCLAW_MOBILE_RELEASE_TARGET_REF must exactly match the mobile gateway version.")
-  end
-  {
-    intent_path: intent_path,
-    receipt_digest: receipt_digest,
-    target_ref: target_ref
-  }
-end
-
-def validate_android_fastlane_execution_provenance!
-  mode = ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip
-  return unless mode == "intent"
-  return if ENV.fetch(ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV, "").strip == "locked"
-
-  UI.user_error!("Protected Android beta CI requires the checksum-locked Android Fastlane bundle.")
-end
-
-def validate_ci_play_destination!(intent_context:)
-  return unless intent_context
-  return if play_track == "internal" && wear_play_track == "wear:internal"
-
-  UI.user_error!("Protected Android beta CI may upload only to internal and wear:internal.")
-end
-
 def play_metadata_upload_requested?
   ENV["SUPPLY_UPLOAD_METADATA"] == "1"
 end
@@ -142,22 +103,27 @@ def play_auth_options
   UI.user_error!("Missing Google Play API credentials. Set GOOGLE_PLAY_JSON_KEY or GOOGLE_PLAY_JSON_KEY_DATA.")
 end
 
+def play_version_codes(client)
+  # Supply exposes every APK/AAB in the edit, including builds outside the destination tracks.
+  (client.aab_version_codes + client.apks_version_codes).map do |value|
+    text = value.to_s
+    UI.user_error!("Google Play returned an invalid versionCode: #{text.inspect}.") unless text.match?(/\A[1-9][0-9]*\z/)
+    code = text.to_i
+    UI.user_error!("Google Play returned an out-of-range versionCode: #{code}.") if code > 2_100_000_000
+    code
+  end.uniq
+end
+
 def validate_play_auth!(version_metadata: nil)
   client = nil
   begin
     client = Supply::Client.make_from_config(params: play_auth_options)
     client.begin_edit(package_name: play_package_name)
     if version_metadata
-      expected_codes = [
-        version_metadata.fetch(:version_code),
-        wear_version_code(version_metadata.fetch(:version_code))
-      ]
-      consumed_codes = client.aab_version_codes.map(&:to_i)
-      conflicts = expected_codes & consumed_codes
+      expected_codes = [version_metadata.fetch(:version_code), wear_version_code(version_metadata.fetch(:version_code))]
+      conflicts = expected_codes & play_version_codes(client)
       unless conflicts.empty?
-        UI.user_error!(
-          "Google Play already contains planned versionCode values: #{conflicts.join(', ')}. Cut a new mobile release plan before uploading."
-        )
+        UI.user_error!("Google Play already contains planned versionCode values: #{conflicts.join(', ')}. Prepare a new Android release before uploading.")
       end
     end
   rescue FastlaneCore::Interface::FastlaneError
@@ -173,6 +139,44 @@ def validate_play_auth!(version_metadata: nil)
       end
     end
   end
+end
+
+def plan_android_release!
+  stdout, stderr, status = Open3.capture3(
+    "node", "--import", "tsx", File.join(repo_root, "scripts", "android-version.ts"),
+    "--from-gateway", "--root", repo_root
+  )
+  UI.user_error!("Failed to read Gateway release version: #{stderr.strip}") unless status.success?
+  gateway = JSON.parse(stdout)
+  version = gateway.fetch("pinnedAndroidVersion")
+  base_code = gateway.fetch("versionCode") - 1
+  pinned = read_android_version_metadata
+  UI.user_error!("Gateway version #{version} precedes the pinned Android release #{pinned.fetch(:version)}.") if pinned.fetch(:version_code) / 100 > base_code / 100
+  next_build = pinned.fetch(:version_code) / 100 == base_code / 100 ? pinned.fetch(:version_code) % 100 : 1
+
+  client = nil
+  begin
+    client = Supply::Client.make_from_config(params: play_auth_options)
+    client.begin_edit(package_name: play_package_name)
+    play_version_codes(client).each do |code|
+      UI.user_error!("Google Play already contains a newer Android release (versionCode #{code}) than #{version}.") if code / 100 > base_code / 100
+      next if code / 100 < base_code / 100
+
+      suffix = code % 100
+      unless (1..49).cover?(suffix) || (51..99).cover?(suffix)
+        UI.user_error!("Google Play versionCode #{code} does not fit the Android phone/Wear build ranges.")
+      end
+      # Phone and Wear have disjoint device targets. Advance each range together;
+      # a phone code need not exceed a previously uploaded Wear code.
+      build = suffix > 50 ? suffix - 50 : suffix
+      next_build = [next_build, build + 1].max
+    end
+  ensure
+    client.abort_current_edit if client&.current_edit
+  end
+  UI.user_error!("Android #{version} has exhausted phone builds 01 through 49. Advance the Gateway release version.") unless (1..49).cover?(next_build)
+  phone_code = base_code + next_build
+  { version: version, versionCode: phone_code, wearVersionCode: wear_version_code(phone_code) }
 end
 
 def read_android_version_metadata
@@ -201,8 +205,8 @@ rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from Android version helper: #{e.message}")
 end
 
-def check_android_versioning!
-  sh(shell_join(["node", "--import", "tsx", File.join(repo_root, "scripts", "android-sync-versioning.ts"), "--check", "--require-mobile-release", "--root", repo_root]))
+def sync_android_versioning!
+  sh(shell_join(["node", "--import", "tsx", File.join(repo_root, "scripts", "android-sync-versioning.ts"), "--check", "--root", repo_root]))
 end
 
 def android_release_notes_path
@@ -211,7 +215,7 @@ end
 
 def validate_android_release_notes!
   release_notes_path = android_release_notes_path
-  UI.user_error!("Missing Android release notes at #{release_notes_path}. Run the shared mobile cutter and commit its outputs.") unless File.exist?(release_notes_path)
+  UI.user_error!("Missing Android release notes at #{release_notes_path}. Run `pnpm android:version:sync`.") unless File.exist?(release_notes_path)
   UI.user_error!("Android release notes at #{release_notes_path} are empty.") unless env_present?(File.read(release_notes_path))
 end
 
@@ -354,14 +358,9 @@ def upload_play_builds_atomically!(phone_artifact_path:, wear_artifact_path:, ve
     if play_validate_only?
       client.validate_current_edit!
       UI.success("Successfully validated the atomic phone and Wear upload.")
-      nil
     else
       client.commit_current_edit!
       UI.success("Successfully committed the atomic phone and Wear upload.")
-      {
-        phone_version_code: phone_version_code.to_i,
-        wear_version_code: wear_version_code_value.to_i
-      }
     end
   ensure
     if client&.current_edit
@@ -465,49 +464,6 @@ def record_mobile_release_ref!(platform:, version:, build: nil, version_code: ni
   )
 end
 
-def finalize_mobile_release_ref!(platform:, gateway_version:, version_name:, phone_track:, phone_version_code:, wear_track:, wear_version_code:, release_status:, play_edit_state:, intent_context:, sha:)
-  unless intent_context
-    record_mobile_release_ref!(
-      platform: platform,
-      version: version_name,
-      version_code: phone_version_code,
-      sha: sha
-    )
-    return
-  end
-  sh(shell_join([
-    "node",
-    File.join(repo_root, "scripts", "mobile-release-intent.mjs"),
-    "write",
-    "--output",
-    intent_context.fetch(:intent_path),
-    "--platform",
-    platform,
-    "--authority-receipt-digest",
-    intent_context.fetch(:receipt_digest),
-    "--gateway-version",
-    gateway_version,
-    "--phone-track",
-    phone_track,
-    "--version-name",
-    version_name,
-    "--phone-version-code",
-    phone_version_code.to_s,
-    "--play-edit-state",
-    play_edit_state,
-    "--release-status",
-    release_status,
-    "--wear-track",
-    wear_track,
-    "--wear-version-code",
-    wear_version_code.to_s,
-    "--target-ref",
-    intent_context.fetch(:target_ref),
-    "--target-sha",
-    sha
-  ]))
-end
-
 def read_android_release_signing_properties!(path)
   UI.user_error!("Missing materialized Android release signing properties at #{path}.") unless File.exist?(path)
 
@@ -603,8 +559,6 @@ end
 
 def upload_play_store_build!(version_metadata, upload_metadata: false, upload_images: false, upload_screenshots: false)
   release_sha = release_git_sha
-  intent_context = mobile_release_intent_context!(gateway_version: version_metadata.fetch(:version))
-  validate_ci_play_destination!(intent_context: intent_context)
   ensure_mobile_release_ref_available!(
     platform: "android",
     version: version_metadata.fetch(:version),
@@ -621,7 +575,7 @@ def upload_play_store_build!(version_metadata, upload_metadata: false, upload_im
   end
 
   phone_artifact_path, wear_artifact_path = artifact_paths
-  accepted = upload_play_builds_atomically!(
+  upload_play_builds_atomically!(
     phone_artifact_path: phone_artifact_path,
     wear_artifact_path: wear_artifact_path,
     version_metadata: version_metadata,
@@ -631,26 +585,27 @@ def upload_play_store_build!(version_metadata, upload_metadata: false, upload_im
   )
 
   unless play_validate_only?
-    finalize_mobile_release_ref!(
+    record_mobile_release_ref!(
       platform: "android",
-      gateway_version: version_metadata.fetch(:version),
-      version_name: version_metadata.fetch(:version),
-      phone_track: play_track,
-      phone_version_code: accepted.fetch(:phone_version_code),
-      wear_track: wear_play_track,
-      wear_version_code: accepted.fetch(:wear_version_code),
-      release_status: play_release_status,
-      play_edit_state: "committed",
-      intent_context: intent_context,
+      version: version_metadata.fetch(:version),
+      version_code: version_metadata.fetch(:version_code),
       sha: release_sha
     )
   end
 end
 
 load_env_file(File.join(ANDROID_FASTLANE_ROOT, ".env"))
-validate_android_fastlane_execution_provenance!
 
 platform :android do
+  desc "Plan the next Android phone and Wear build numbers from Google Play"
+  lane :release_plan do |options|
+    output_path = options[:output_path].to_s.strip
+    UI.user_error!("release_plan requires output_path.") if output_path.empty?
+    plan = plan_android_release!
+    File.write(File.expand_path(output_path), "#{JSON.pretty_generate(plan)}\n")
+    UI.success("Planned Android #{plan.fetch(:version)}: phone #{plan.fetch(:versionCode)}, Wear #{plan.fetch(:wearVersionCode)}.")
+  end
+
   desc "Validate Google Play API credentials"
   lane :auth_check do
     validate_play_auth!
@@ -683,7 +638,7 @@ platform :android do
 
   desc "Validate Android Play release auth, signing, versioning, and release notes"
   lane :release_preflight do
-    check_android_versioning!
+    sync_android_versioning!
     version_metadata = read_android_version_metadata
     validate_android_release_preflight!(version_metadata)
     UI.success("Android Play release preflight passed for #{version_metadata[:version]} (#{version_metadata[:version_code]}).")
@@ -691,7 +646,7 @@ platform :android do
 
   desc "Upload Google Play metadata, changelog, and optional screenshots"
   lane :metadata do
-    check_android_versioning!
+    sync_android_versioning!
     version_metadata = read_android_version_metadata
     ENV["SUPPLY_UPLOAD_METADATA"] = "1" unless ENV.key?("SUPPLY_UPLOAD_METADATA")
     upload_play_store_metadata!(version_metadata)
@@ -700,7 +655,7 @@ platform :android do
 
   desc "Build signed Android release artifacts locally without uploading"
   lane :play_store_archive do
-    check_android_versioning!
+    sync_android_versioning!
     prepare_android_release_signing!
     build_release_artifacts!
   end
@@ -712,7 +667,7 @@ platform :android do
 
   desc "Upload the signed Play AAB to Google Play"
   lane :play_store do
-    check_android_versioning!
+    sync_android_versioning!
     version_metadata = read_android_version_metadata
     upload_play_store_build!(version_metadata)
     UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
@@ -720,7 +675,7 @@ platform :android do
 
   desc "Upload Android metadata, archive release artifacts, then upload the Play AAB"
   lane :release_upload do
-    check_android_versioning!
+    sync_android_versioning!
     version_metadata = read_android_version_metadata
     validate_android_release_preflight!(version_metadata)
     screenshots

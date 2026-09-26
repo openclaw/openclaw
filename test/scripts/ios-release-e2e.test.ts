@@ -364,29 +364,13 @@ describe("fresh trial ownership", () => {
 
 describe("release qualification workflow authority", () => {
   const workflow = parse(readFileSync(".github/workflows/ios-release-e2e.yml", "utf8"));
-  const beta = parse(readFileSync(".github/workflows/ios-beta-release.yml", "utf8"));
+  const release = parse(readFileSync(".github/workflows/ios-release.yml", "utf8"));
   const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
   it.each([
     ["manual current revision", {}, true],
     ["CI current revision", { caller: "ci" }, true],
     ["manual arbitrary target", { target: "b".repeat(40) }, false],
     ["CI arbitrary target", { caller: "ci", target: "b".repeat(40) }, false],
-    ["approved beta target", { caller: "ios-beta-release", target: "b".repeat(40) }, true],
-    [
-      "beta branch caller",
-      { caller: "ios-beta-release", target: "b".repeat(40), ref: "refs/heads/feature" },
-      false,
-    ],
-    [
-      "beta fork caller",
-      { caller: "ios-beta-release", target: "b".repeat(40), repository: "example/fork" },
-      false,
-    ],
-    [
-      "beta non-dispatch caller",
-      { caller: "ios-beta-release", target: "b".repeat(40), event: "schedule" },
-      false,
-    ],
     ["invalid SHA", { target: "main" }, false],
     ["invalid mode", { mode: "unknown" }, false],
   ])("checks %s before checkout", (_name, options, admitted) => {
@@ -394,8 +378,8 @@ describe("release qualification workflow authority", () => {
     const output = path.join(root, "outputs");
     const sha = "a".repeat(40);
     const target = "target" in options ? options.target : sha;
-    const repository = "repository" in options ? options.repository : "openclaw/openclaw";
-    const ref = "ref" in options ? options.ref : "refs/heads/main";
+    const repository = "openclaw/openclaw";
+    const ref = "refs/heads/main";
     const caller = "caller" in options ? options.caller : "ios-release-e2e";
     const first = workflow.jobs.qualify.steps[0];
     expect(first.id).toBe("start");
@@ -410,7 +394,7 @@ describe("release qualification workflow authority", () => {
         GITHUB_REPOSITORY: repository,
         GITHUB_REF: ref,
         GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/${caller}.yml@${ref}`,
-        GITHUB_EVENT_NAME: "event" in options ? options.event : "workflow_dispatch",
+        GITHUB_EVENT_NAME: "workflow_dispatch",
         TARGET_SHA: target,
         E2E_MODE: "mode" in options ? options.mode : "stock",
       },
@@ -423,20 +407,29 @@ describe("release qualification workflow authority", () => {
       trials: [],
     });
   });
-  it("requires exact approved SHA qualification before beta release, without signing authority", () => {
-    expect(beta.jobs.qualify.with).toEqual({
-      target_sha: "${{ needs.authorize.outputs.target_sha }}",
-      mode: "stock",
-    });
-    expect(beta.jobs.qualify.needs).toBe("authorize");
-    expect(beta.jobs.release.needs).toEqual(["authorize", "qualify"]);
-    expect(beta.jobs.qualify.permissions).toEqual({ contents: "read" });
-    expect(beta.jobs.qualify.secrets).toBeUndefined();
+  it("qualifies the checked-out release source before accessing signing assets", () => {
+    const steps = release.jobs.release.steps;
+    const qualify = steps.findIndex(
+      (step: { name: string }) => step.name === "Qualify native iOS pairing and chat",
+    );
+    const signing = steps.findIndex(
+      (step: { name: string }) => step.name === "Create apps-signing read token",
+    );
+    const upload = steps.findIndex(
+      (step: { name: string }) => step.name === "Prepare and upload iOS release",
+    );
+    expect(qualify).toBeGreaterThan(-1);
+    expect(signing).toBeGreaterThan(qualify);
+    expect(upload).toBeGreaterThan(signing);
+    expect(steps[qualify].run).toContain('--mode stock --target-sha "$(git rev-parse HEAD)"');
+    for (const step of [steps[qualify], steps[signing], steps[upload]]) {
+      expect(step.if).toBeUndefined();
+      expect(step["continue-on-error"]).toBeUndefined();
+    }
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.qualify.environment).toBeUndefined();
     expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
     expect(workflow.jobs.qualify.env.TARGET_SHA).toBe("${{ inputs.target_sha || github.sha }}");
-    expect(beta.jobs.qualify.if).toContain("needs.authorize.outputs.approved == 'true'");
   });
   it("fails missing target harnesses and uses a step-scoped compare binary", () => {
     const steps = workflow.jobs.qualify.steps;
@@ -507,8 +500,9 @@ describe("native command adapter", () => {
     "success",
     "dirty-tracked",
     "dirty-untracked",
-    "wrong-xcode",
-    "wrong-xcode-build",
+    "different-xcode",
+    "different-xcode-build",
+    "invalid-xcode-output",
     "wrong-runtime",
     "cleanup-failure",
     "build-unjoined",
@@ -577,11 +571,13 @@ describe("native command adapter", () => {
         stdout.write("1".repeat(40));
       } else if (args.includes("-version")) {
         stdout.write(
-          scenario === "wrong-xcode"
+          scenario === "different-xcode"
             ? "Xcode 26.6\nBuild version 17F113\n"
-            : scenario === "wrong-xcode-build"
+            : scenario === "different-xcode-build"
               ? "Xcode 27.0\nBuild version 27A000\n"
-              : "Xcode 27.0\nBuild version 27A266a\n",
+              : scenario === "invalid-xcode-output"
+                ? "unrecognized toolchain\n"
+                : "Xcode 27.0\nBuild version 27A266a\n",
         );
       } else if (args.includes("runtimes")) {
         stdout.write(
@@ -642,12 +638,12 @@ describe("native command adapter", () => {
       expect(readdirSync(temp)).toEqual([]);
       return;
     }
-    if (scenario.startsWith("wrong-")) {
+    if (scenario === "wrong-runtime" || scenario === "invalid-xcode-output") {
       await expect(admission).rejects.toMatchObject({
         diagnostic:
           scenario === "wrong-runtime"
             ? { operation: "simulator-runtime", code: "not-found" }
-            : { operation: "xcode-version", code: "unsupported" },
+            : { operation: "xcode-version", code: "failed" },
       });
       expect(
         nativeMocks.command.mock.calls.some(([{ args }]) => args.includes("build-for-testing")),
@@ -668,8 +664,13 @@ describe("native command adapter", () => {
     }
     const native = await admission;
     expect(proof).toMatchObject({
-      xcode: "27.0",
-      xcodeBuild: "27A266a",
+      xcode: scenario === "different-xcode" ? "26.6" : "27.0",
+      xcodeBuild:
+        scenario === "different-xcode"
+          ? "17F113"
+          : scenario === "different-xcode-build"
+            ? "27A000"
+            : "27A266a",
       runtime: "26.5",
       runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
     });

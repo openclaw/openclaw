@@ -127,14 +127,14 @@ Release behavior:
 - App Review submission is manual in App Store Connect. The release lane uploads a build, public metadata, and the App Review PDF attachment, but it does not submit for review or upload the App Store Connect `Notes` field.
 - Before submitting a HealthKit-enabled build, the release owner must update the public privacy policy and App Store Connect privacy details for the Health & Fitness aggregates shared with the user's configured AI provider.
 - The release flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
-- Release uploads derive the gateway from `apps/mobile/version.json` and the App Store revision/build from live App Store Connect state.
+- Release uploads derive the gateway from root `package.json` and the App Store revision/build from live App Store Connect state.
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source.
 - The gateway version must use CalVer like `2026.7.2`.
 - Gateway `2026.7.2`, App Store revision `1` becomes:
   - `CFBundleShortVersionString = 2026.7.21`
   - `CFBundleVersion = next App Store Connect build number for 2026.7.21`
 - Each App Store version has its own build sequence beginning at `1`.
-- Local defaults and release planning derive the gateway from `apps/mobile/version.json`; App Store Connect versions and build uploads determine the release revision and build.
+- Local defaults and release planning derive the gateway from root `package.json`; App Store Connect versions and build uploads determine the release revision and build.
 - See `apps/ios/VERSIONING.md` for the full workflow.
 
 Relay behavior for App Store builds:
@@ -176,24 +176,20 @@ pnpm ios:release:archive -- --version 2026.7.2 --revision 1
 This command is for local archive validation only. It is not a fallback upload
 path after `pnpm ios:release:upload` fails.
 
-Prepare and finalize the shared mobile release:
-
-```bash
-node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
-pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
-```
-
-Review all five cutter outputs, commit every changed output, then archive and upload to App Store Connect:
+Run **iOS Release** in GitHub Actions from `main`, with no input parameters, or
+run the same entry point from a clean local `main` matching `origin/main`:
 
 ```bash
 pnpm ios:release:upload
 ```
 
-Explicit `--version`, `--revision`, and `--build-number` values are checked
-overrides and must match the live plan.
+The entry point selects the live App Store plan, cuts iOS release notes, and
+commits changed notes locally before building. It uploads that prepared commit,
+then opens a metadata-only PR for squash auto-merge after the existing review
+and CI gates pass. The uploaded source SHA stays immutable. Failed uploads leave
+`main` unchanged. App Review submission remains manual.
 
-### Maintainer Quick Release Checklist
+## Maintainer Quick Release Checklist
 
 Use this when a clone is missing local iOS release setup and you want the shortest path to an App Store Connect upload.
 
@@ -225,82 +221,38 @@ This should create `apps/ios/fastlane/.env` with non-secret App Store Connect va
 
    Use `pnpm ios:release:signing:setup` for the initial portal setup, then `MATCH_PASSWORD=... pnpm ios:release:signing:sync:push` to publish encrypted Fastlane match assets to the shared private repo.
 
-4. Prepare the shared release, capture the plan, and finalize all five release artifacts:
+4. Inspect the plan if needed, then release:
 
 ```bash
-node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
-pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
-```
-
-5. Review all five cutter outputs, commit every changed output, then upload:
-
-```bash
+pnpm ios:release:plan -- --json
 pnpm ios:release:upload
 ```
 
-6. If `pnpm ios:release:upload` fails, stop at that failure. Do not archive
-   and upload the IPA through another command. Fix the failing release-lane
-   step, then rerun `pnpm ios:release:upload`.
-
-7. Expected behavior:
-   - Fastlane resolves the gateway, revision, and next build from repository and App Store Connect state
-   - validates iOS versioning inputs for that version
-   - resolves the next App Store Connect build number for that short version
-   - generates deterministic App Store screenshots
-   - uploads release notes, screenshots, and the App Review PDF attachment to the editable App Store version
-   - generates `apps/ios/build/AppStoreRelease.xcconfig`
-   - archives `OpenClaw`
-   - validates the exported IPA's push mode, signed entitlements, and embedded App Store profile
-   - validates the IPA with Apple, uploads it, and waits for App Store Connect processing
-   - leaves App Review submission for a maintainer to complete manually
-
-8. Expected outputs after a successful run:
-   - `apps/ios/build/app-store/OpenClaw-<version>.ipa`
-   - `apps/ios/build/app-store/OpenClaw-<version>.app.dSYM.zip`
-   - Fastlane log line like `Uploaded iOS App Store build: version=<version> short=<short> build=<build>`
-   - a complete App Store Connect build-upload record for that version and build
-
-9. If this is a fresh clone on a maintainer machine that already works elsewhere, it is OK to copy the non-secret `apps/ios/fastlane/.env` from another trusted local clone on the same Mac. The Keychain-backed private key remains machine-local and is not stored in the repo.
+If upload succeeds but Git finalization fails, rerun only the finalization job
+or CLI operation. Follow [Git finalization and recovery](VERSIONING.md#git-finalization-and-recovery);
+do not upload another build to repair repository bookkeeping.
 
 ## iOS Versioning Workflow
 
-- Release gateway version: `apps/mobile/version.json`, with an optional checked `--version` override
-- App Store revision and build: deterministic App Store Connect plan
-- Local default version: `apps/mobile/version.json`
-- iOS-only changelog: `apps/ios/CHANGELOG.md`
-- Generated local artifacts:
-  - `apps/ios/build/Version.xcconfig`
-  - `apps/ios/SwiftSources.input.xcfilelist`
-  - temporary Fastlane metadata containing release notes rendered from `apps/ios/CHANGELOG.md`
-- Useful commands:
+- Release gateway and local default version: root `package.json`.
+- App Store revision and build: deterministic App Store Connect plan.
+- iOS-only changelog: `apps/ios/CHANGELOG.md`.
+- Generated local artifacts: `apps/ios/build/Version.xcconfig`,
+  `apps/ios/build/AppStoreRelease.xcconfig`, and `apps/ios/SwiftSources.input.xcfilelist`.
+
+Inspect versioning without uploading:
 
 ```bash
 pnpm ios:version
 pnpm ios:version:check
-node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
-pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
-pnpm ios:filelist:gen
+pnpm ios:release:plan -- --json
 ```
 
-Recommended flow:
-
-### App Store Connect iteration on an existing train
-
-1. Run the shared mobile cutter `--prepare` phase for the selected gateway.
-2. Capture `pnpm ios:release:plan -- --json`, then run the cutter `--finalize` phase.
-3. Review all five cutter outputs and commit every changed output.
-4. Run `pnpm ios:release:upload`.
-5. Failed, processing, and complete Apple-visible uploads all advance the next numeric build.
-
-### Starting the next App Store revision
-
-1. Select the target gateway version for `apps/mobile/version.json`.
-2. Add release notes under `## Unreleased`.
-3. Run the shared cutter `--prepare` phase and capture the live iOS plan; released history determines the next revision.
-4. Run the cutter `--finalize` phase, review all five outputs, commit every changed output, then run `pnpm ios:release:upload`.
-5. Keep rerunning the planner-driven upload until the release candidate is ready.
+Add notes under `## Unreleased`, commit the app changes, then run
+`pnpm ios:release:upload`. Its `pnpm ios:release:cut` step moves those notes into
+the planned encoded heading. Failed, processing, and complete Apple-visible
+uploads all advance the next numeric build. After App Store distribution, the
+planner allocates the next revision automatically.
 
 See `apps/ios/VERSIONING.md` for the detailed spec.
 

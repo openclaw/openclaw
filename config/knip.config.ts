@@ -28,8 +28,6 @@ const repositoryScriptEntries = [
   ".github/actions/git-owner/test-prerequisites.mjs!",
   // The compiler below exposes this workflow's inline and generated-config imports.
   ".github/workflows/plugin-prerelease.yml!",
-  // mobile-release-authority invokes this helper from composite-action YAML.
-  ".github/actions/mobile-release-authority/authority.mjs!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",

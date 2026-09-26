@@ -2,7 +2,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { extractChangelogSection } from "./mobile-changelog.ts";
-import { mobileVersionPath, readMobileVersionManifest } from "./mobile-version.ts";
 import { parsePinnedReleaseVersion, parseReleaseVersion } from "./release-version.mjs";
 
 const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
@@ -16,7 +15,7 @@ type ResolvedIosVersion = {
   marketingVersion: string;
   buildVersion: string;
   changelogPath: string;
-  versionSource: "explicit" | "mobile";
+  versionSource: "explicit" | "package";
   versionSourcePath: string | null;
 };
 
@@ -73,14 +72,44 @@ export function encodeIosAppStoreVersion(
   return `${parsed.year}.${parsed.month}.${encodedPatch}`;
 }
 
+function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): string {
+  const trimmed = rawVersion.trim().replace(/^v/u, "");
+  if (!trimmed) {
+    throw new Error("Missing root package.json version.");
+  }
+
+  const parsed = parseReleaseVersion(trimmed);
+  if (!parsed) {
+    throw new Error(
+      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-alpha.N, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
+    );
+  }
+
+  return parsed.baseVersion;
+}
+
+function rootPackageJsonPath(rootDir = path.resolve(".")): string {
+  return path.join(rootDir, "package.json");
+}
+
+function readRootPackageVersion(rootDir = path.resolve(".")): string {
+  const packageJsonPath = rootPackageJsonPath(rootDir);
+  const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
+  const version = typeof parsed.version === "string" ? parsed.version.trim() : "";
+  if (!version) {
+    throw new Error(`Missing package.json version in ${packageJsonPath}.`);
+  }
+  return version;
+}
+
 export function resolveGatewayVersionForIosRelease(rootDir = path.resolve(".")): {
-  gatewayVersion: string;
+  packageVersion: string;
   pinnedIosVersion: string;
 } {
-  const gatewayVersion = readMobileVersionManifest(rootDir).version;
+  const packageVersion = readRootPackageVersion(rootDir);
   return {
-    gatewayVersion,
-    pinnedIosVersion: normalizePinnedIosVersion(gatewayVersion),
+    packageVersion,
+    pinnedIosVersion: normalizeGatewayVersionToPinnedIosVersion(packageVersion),
   };
 }
 
@@ -109,8 +138,8 @@ export function resolveIosVersion(
     marketingVersion: appStoreVersion ?? canonicalVersion,
     buildVersion: "1",
     changelogPath,
-    versionSource: explicitReleaseVersion ? "explicit" : "mobile",
-    versionSourcePath: explicitReleaseVersion ? null : mobileVersionPath(rootDir),
+    versionSource: explicitReleaseVersion ? "explicit" : "package",
+    versionSourcePath: explicitReleaseVersion ? null : rootPackageJsonPath(rootDir),
   };
 }
 
