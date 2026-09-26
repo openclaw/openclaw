@@ -308,18 +308,41 @@ See [Music Generation](/tools/music-generation) for shared tool parameters, prov
 
 ## Text-to-speech
 
-The bundled `google` speech provider uses the Gemini API TTS path with
-`gemini-3.1-flash-tts-preview`.
+The bundled `google` speech provider uses Gemini API TTS. The default model
+stays `gemini-3.1-flash-tts-preview`. Set `model` to `gemini-3.8-flash-tts` to
+opt in to Gemini 3.8, or `gemini-3.8-flash-lite-tts` for the faster, lower-cost
+variant. `gemini-2.5-flash-preview-tts` and `gemini-2.5-pro-preview-tts` remain
+available.
 
 - Default voice: `Kore`
 - Auth: `tts.providers.google.apiKey`, `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
 - Output: WAV for regular TTS attachments, Opus for voice-note targets, PCM for Talk/telephony
 - Voice-note output: Google PCM is wrapped as WAV and transcoded to 48 kHz Opus with `ffmpeg`
 
-Google's batch Gemini TTS path returns generated audio in the completed
-`generateContent` response. For lowest-latency spoken conversations, use the
-Google realtime voice provider backed by the Gemini Live API instead of batch
-TTS.
+Gemini 3.8 TTS uses the Interactions API (`POST /v1beta/interactions`). OpenClaw
+asks for headerless 24 kHz PCM (`audio/l16`) and still wraps that PCM locally.
+`audioProfile`, `speakerName`, and persona notes are sent as
+`speech_metadata.style`, not spoken as part of the transcript. Momentary 3.8
+vocal tags use angle brackets, such as `<laugh>` or `<short pause>`.
+
+Set `speakers` to exactly two `{ speaker, voice, style? }` entries to cast a
+dialogue. Label each turn as `Name: spoken words`. Those labels are not spoken.
+Words before the first label are spoken by that first speaker, not dropped.
+A transcript with no labels stays on the single-voice path. Multi-speaker
+dialogue requires `gemini-3.8-flash-tts` or `gemini-3.8-flash-lite-tts`.
+
+```text
+Puck: Headphones on. <laugh> We opened it.
+Kore: It is waiting at the maintainer gate.
+```
+
+Gemini 3.1 and 2.5 preview TTS still use `generateContent`. Those models keep
+the older behavior: `audioProfile` is prepended to the transcript, and
+expressive tags use square brackets such as `[whispers]`. An unknown
+`gemini-3.8-*-tts` id fails closed instead of being sent to `generateContent`.
+
+For lowest-latency spoken conversations, use the Google realtime voice provider
+backed by the Gemini Live API instead of batch TTS.
 
 To use Google as the default TTS provider:
 
@@ -330,9 +353,13 @@ To use Google as the default TTS provider:
     provider: "google",
     providers: {
       google: {
-        model: "gemini-3.1-flash-tts-preview",
+        model: "gemini-3.8-flash-tts",
         speakerVoice: "Kore",
         audioProfile: "Speak professionally with a calm tone.",
+        speakers: [
+          { speaker: "Puck", voice: "Puck", style: "bright" },
+          { speaker: "Kore", voice: "Kore", style: "whispered" },
+        ],
       },
     },
   },
@@ -340,18 +367,21 @@ To use Google as the default TTS provider:
 ```
 
 Gemini API TTS uses natural-language prompting for style control. Set
-`audioProfile` to prepend a reusable style prompt before the spoken text. Set
-`speakerName` when your prompt text refers to a named speaker.
+`audioProfile` for a reusable delivery style. On Gemini 3.8 that style is
+`speech_metadata` and is not read aloud. On Gemini 3.1 and 2.5 preview models
+it is still prepended to the spoken text. Set `speakerName` when the performance
+needs a named speaker; 3.8 sends it as style metadata too.
 
-Gemini API TTS also accepts expressive square-bracket audio tags in the text,
-such as `[whispers]` or `[laughs]`. To keep tags out of the visible chat reply
+Gemini 3.1 and 2.5 preview TTS accept expressive square-bracket audio tags in
+the text, such as `[whispers]` or `[laughs]`. Gemini 3.8 uses angle-bracket
+vocal tags such as `<laugh>` instead. To keep tags out of the visible chat reply
 while sending them to TTS, put them inside a `[[tts:text]]...[[/tts:text]]`
 block:
 
 ```text
 Here is the clean reply text.
 
-[[tts:text]][whispers] Here is the spoken version.[[/tts:text]]
+[[tts:text]]<whispers> Here is the spoken version.[[/tts:text]]
 ```
 
 <Note>
