@@ -68,6 +68,23 @@ describe("createVllmQwenThinkingWrapper", () => {
     });
   });
 
+  it("keeps binary chat-template thinking at the template default effort", () => {
+    expect(
+      capturePayload({
+        format: "chat-template",
+        thinkingLevel: "low",
+        initialPayload: {
+          chat_template_kwargs: { enable_thinking: true, reasoning_effort: "low" },
+        },
+      }),
+    ).toEqual({
+      chat_template_kwargs: {
+        enable_thinking: true,
+        preserve_thinking: true,
+      },
+    });
+  });
+
   it("preserves explicit chat-template kwargs while setting enable_thinking", () => {
     expect(
       capturePayload({

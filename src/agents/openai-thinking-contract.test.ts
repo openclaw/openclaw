@@ -163,6 +163,52 @@ describe("OpenAI thinking contract", () => {
     },
   );
 
+  it.each(
+    (["managed", "direct"] as const).flatMap((transport) =>
+      (
+        [
+          ["minimal", "low"],
+          ["low", "low"],
+          ["medium", "medium"],
+          ["high", "xhigh"],
+          ["xhigh", "xhigh"],
+          ["max", "xhigh"],
+        ] as const
+      ).map(([thinkingLevel, reasoningEffort]) => ({ transport, thinkingLevel, reasoningEffort })),
+    ),
+  )(
+    "maps Agent $thinkingLevel to Qwen chat-template effort $reasoningEffort over $transport HTTP",
+    async ({ transport, thinkingLevel, reasoningEffort }) => {
+      const payload = await captureHttpProviderPayload({
+        api: "openai-completions",
+        thinkingFormat: "qwen-chat-template",
+        transport,
+        thinkingLevel,
+        mode: "agent",
+      });
+      expect(payload.chat_template_kwargs).toMatchObject({
+        enable_thinking: true,
+        reasoning_effort: reasoningEffort,
+      });
+      expect(payload).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
+  it.each(["managed", "direct"] as const)(
+    "omits Qwen chat-template effort when Agent thinking is off over %s HTTP",
+    async (transport) => {
+      const payload = await captureHttpProviderPayload({
+        api: "openai-completions",
+        thinkingFormat: "qwen-chat-template",
+        transport,
+        thinkingLevel: "off",
+        mode: "agent",
+      });
+      expect(payload.chat_template_kwargs).toMatchObject({ enable_thinking: false });
+      expect(payload).not.toHaveProperty("chat_template_kwargs.reasoning_effort");
+    },
+  );
+
   it("preserves explicit Agent off when a managed Responses request asks for a summary", async () => {
     for (const thinkingLevel of ["off", "high"] as const) {
       const payload = await captureHttpProviderPayload({
@@ -256,7 +302,7 @@ async function captureHttpProviderPayload(params: {
   thinkingFormat?: "qwen" | "qwen-chat-template";
   transport?: "managed" | "direct";
   thinkingLevelMap?: Model["thinkingLevelMap"];
-  thinkingLevel?: "off" | "high";
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   reasoningSummary?: "auto";
   mode: "agent" | "standalone";
 }): Promise<Record<string, unknown>> {

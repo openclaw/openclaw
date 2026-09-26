@@ -178,7 +178,7 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
     }
     ```
 
-    Non-`off` thinking levels send `enable_thinking: true`. If your endpoint expects DashScope-style top-level flags instead, use `compat.thinkingFormat: "qwen"` to send `enable_thinking` at the request root.
+    Non-`off` thinking levels send `enable_thinking: true` and leave `reasoning_effort` at the chat template's default. To pin a tier on templates that read it, such as Qwen 3.8 (`low`, `medium`, or `xhigh`), set `chat_template_kwargs.reasoning_effort` in the model's [`params`](/gateway/config-agents/models). If your endpoint expects DashScope-style top-level flags instead, use `compat.thinkingFormat: "qwen"` to send `enable_thinking` at the request root.
 
   </Accordion>
 

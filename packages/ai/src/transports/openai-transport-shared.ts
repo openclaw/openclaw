@@ -416,6 +416,28 @@ export function isOpenAICompletionsThinkingEnabled(effort: string): boolean {
   return normalized !== "off" && normalized !== "none";
 }
 
+/**
+ * Qwen 3.8 chat templates accept `reasoning_effort` values low, medium, and xhigh, and use
+ * xhigh when it is unset. Disabled or unknown levels leave the template default in place.
+ */
+export function resolveQwenChatTemplateReasoningEffort(
+  effort: string | undefined,
+): "low" | "medium" | "xhigh" | undefined {
+  switch (effort?.trim().toLowerCase()) {
+    case "minimal":
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "high":
+    case "xhigh":
+    case "max":
+      return "xhigh";
+    default:
+      return undefined;
+  }
+}
+
 export function readOpenAICompletionsContentDeltas(
   content: unknown,
   topLevelRefusal?: unknown,

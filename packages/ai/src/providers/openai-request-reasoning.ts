@@ -28,7 +28,7 @@ export function resolveOpenAIRequestReasoning(
     compat?: unknown;
   },
   reasoning: string | undefined,
-): { effort: string | undefined; thinkingEnabled: boolean | undefined } {
+): { effort: string | undefined; level: string | undefined; thinkingEnabled: boolean | undefined } {
   // Logical off can map to a minimum effort; native none only uses its own explicit mapping.
   const requested = normalizeOpenAIReasoningEffort(reasoning ?? "off");
   const modelLevel = MODEL_CATALOG_THINKING_LEVELS.find((candidate) => candidate === requested);
@@ -57,6 +57,9 @@ export function resolveOpenAIRequestReasoning(
             fallbackMap: { [requested]: intent },
           });
   return {
+    // Chat-template and binary controls carry the requested level itself; they are not
+    // gated by scalar reasoning_effort support.
+    level: intent === undefined ? undefined : normalizedIntent,
     // Sol and Luna accept none on ChatGPT; other subscription models need route metadata.
     effort:
       effort === "none" &&
