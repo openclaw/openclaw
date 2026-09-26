@@ -112,7 +112,7 @@ describe("chat sidebar region", () => {
       [...root(region).querySelectorAll(".tabstrip-tab__label")].map((tab) => tab.textContent),
     ).toContain("Files");
 
-    region.conversationTab = { label: "", icon: nothing };
+    region.conversationTab = { label: "", icon: html`` };
     await region.updateComplete;
     expect(label()?.textContent).toBe("Chat");
     expect(
