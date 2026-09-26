@@ -136,7 +136,7 @@
     {"id":"native.android.2063bb42a5604308","source":"API key removed, but provider status could not refresh. Tap Refresh to check it.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ProviderAuthController.kt"}]},
     {"id":"native.android.609b9a10861dc90b","source":"API key removed.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ProviderAuthController.kt"}]},
     {"id":"native.android.772681663305ba62","source":"API key saved","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ProviderAuthController.kt"}]},
-    {"id":"native.android.d7936177bbc4f0bb","source":"API key saved. Tap Refresh to apply it.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ProviderAuthController.kt"}]},
+    {"id":"native.android.de1e167c67b93772","source":"API key saved. Tap Refresh in this dialog to apply it.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ProviderAuthController.kt"}]},
     {"id":"native.android.320991e18a2baaf0","source":"API key set in config","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ProviderModelsCard.kt"}]},
     {"id":"native.android.9ed7c8ef767dd50b","source":"Abort run","surface":"android","sites":[{"kind":"resource-string","path":"apps/android/wear/src/main/res/values/strings.xml"}]},
     {"id":"native.android.ee1c7b1e0d4d76c7","source":"Aborted","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt"}]},

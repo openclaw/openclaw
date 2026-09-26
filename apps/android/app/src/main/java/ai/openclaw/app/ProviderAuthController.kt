@@ -243,7 +243,7 @@ internal class ProviderAuthController(
           wizard = null,
           apiKeySaveRevision = it.apiKeySaveRevision + 1,
           noticeText =
-            if (result["warning"] != null) nativeText("API key saved. Tap Refresh to apply it.") else nativeText("API key saved"),
+            if (result["warning"] != null) nativeText("API key saved. Tap Refresh in this dialog to apply it.") else nativeText("API key saved"),
         )
       }
       refreshPublishedAuthStatus()

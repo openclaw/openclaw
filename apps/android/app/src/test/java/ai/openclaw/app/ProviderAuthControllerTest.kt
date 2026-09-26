@@ -183,7 +183,7 @@ class ProviderAuthControllerTest {
       runCurrent()
       assertEquals(savedNotice, fixture.controller.state.value.noticeText)
       assertEquals(savedRevision, fixture.controller.state.value.apiKeySaveRevision)
-      assertEquals(nativeText("API key saved. Tap Refresh to apply it."), savedNotice)
+      assertEquals(nativeText("API key saved. Tap Refresh in this dialog to apply it."), savedNotice)
       assertNull(fixture.controller.state.value.connectedProviderId)
       fixture.changed = false
       fixture.controller.refresh(refresh = true)
