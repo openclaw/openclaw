@@ -18,13 +18,57 @@ impl AppView {
         let p = Palette::get(cx);
         if self.chat.messages.is_empty()
             && self.chat.active_run.is_none()
+            && self.chat.manual_compaction.is_none()
             && self.chat.note.is_none()
             && self.chat.history_error.is_none()
         {
             return self.transcript_welcome(cx);
         }
         let view = cx.entity().downgrade();
+        let focus = self
+            .transcript_state
+            .focus
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone();
         div()
+            .id("chat-transcript")
+            .track_focus(&focus)
+            .tab_index(0)
+            .role(Role::ScrollView)
+            .aria_label("Conversation messages")
+            .on_click(cx.listener(|this, _, window, cx| {
+                if let Some(focus) = &this.transcript_state.focus
+                    && !focus.contains_focused(window, cx)
+                {
+                    focus.focus(window, cx);
+                }
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                let modifiers = event.keystroke.modifiers;
+                if modifiers.control || modifiers.alt || modifiers.platform || modifiers.shift {
+                    return;
+                }
+                let page =
+                    this.transcript_list.viewport_bounds().size.height * T::SCROLL_PAGE_FRACTION;
+                match event.keystroke.key.as_str() {
+                    "pageup" => this.transcript_list.scroll_by(-page),
+                    "pagedown" => this.transcript_list.scroll_by(page),
+                    "home" => {
+                        this.transcript_list.pause_following_tail();
+                        this.transcript_list.scroll_to(ListOffset {
+                            item_ix: 0,
+                            offset_in_item: px(0.),
+                        });
+                    }
+                    "end" => {
+                        this.transcript_list.set_follow_mode(FollowMode::Tail);
+                        this.transcript_list.scroll_to_end();
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
             .relative()
             .v_flex()
             .flex_1()
@@ -69,8 +113,8 @@ impl AppView {
                 )
             })
             .child(
-                list(self.transcript_list.clone(), move |index, _, cx| {
-                    view.update(cx, |this, cx| this.transcript_row(index, cx))
+                list(self.transcript_list.clone(), move |index, window, cx| {
+                    view.update(cx, |this, cx| this.transcript_row(index, window, cx))
                         .unwrap_or_else(|_| div().into_any_element())
                 })
                 .w_full()
@@ -106,8 +150,16 @@ impl AppView {
             .children(self.render_reply_preview(cx))
             .into_any_element()
     }
-    fn transcript_row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn transcript_row(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let p = Palette::get(cx);
+        let manual_index = self.chat.messages.len() + usize::from(self.chat.active_run.is_some());
+        let recap_index = manual_index + usize::from(self.chat.manual_compaction.is_some());
+        let note_index = recap_index + usize::from(self.chat.turn_recap.is_some());
         let content = if let Some(mut message) = self.chat.messages.get(index).cloned() {
             message.tools = self.chat.history_tools(index);
             if !message.visible() {
@@ -123,7 +175,7 @@ impl AppView {
                     previous.visible().then_some(previous)
                 });
             let group = crate::model::grouping::starts_group(previous.as_ref(), &message);
-            self.render_message(index, &message, group, false, cx)
+            self.render_message(index, &message, group, false, window, cx)
         } else if index == self.chat.messages.len() && self.chat.active_run.is_some() {
             let message = Message {
                 role: "assistant".into(),
@@ -143,16 +195,19 @@ impl AppView {
             div()
                 .v_flex()
                 .gap_3()
-                .child(self.render_message(index, &message, true, true, cx))
-                .when(self.chat.compacting, |this| {
-                    this.child(super::transcript_notices::system_line(
-                        "Compacting context…",
-                        None,
-                        true,
-                        true,
-                        cx,
-                    ))
-                })
+                .child(self.render_message(index, &message, true, true, window, cx))
+                .when(
+                    self.chat.compacting && self.chat.manual_compaction.is_none(),
+                    |this| {
+                        this.child(super::transcript_notices::system_line(
+                            "Compacting context…",
+                            None,
+                            true,
+                            true,
+                            cx,
+                        ))
+                    },
+                )
                 .child(self.render_working_indicator(
                     waiting,
                     elapsed,
@@ -160,9 +215,21 @@ impl AppView {
                     cx,
                 ))
                 .into_any_element()
-        } else if let Some(recap) = self.chat.turn_recap.as_ref() {
+        } else if index == manual_index && self.chat.manual_compaction.is_some() {
+            super::transcript_notices::system_line("Compacting context…", None, true, true, cx)
+        } else if let Some(recap) = self
+            .chat
+            .turn_recap
+            .as_ref()
+            .filter(|_| index == recap_index)
+        {
             self.render_turn_recap(recap.runtime_ms, recap.output_tokens, cx)
-        } else if let Some(note) = self.chat.note.as_ref().filter(|note| !note.error) {
+        } else if let Some(note) = self
+            .chat
+            .note
+            .as_ref()
+            .filter(|note| !note.error && index == note_index)
+        {
             div()
                 .my_3()
                 .text_size(px(T::SMALL_TEXT))

@@ -6,7 +6,7 @@ use super::super::{
     theme::{MarkdownTokens as M, Palette},
 };
 use crate::model::markdown::{
-    fenced_code, image_destination, parse_json_tree, should_collapse_user,
+    fenced_code, image_destination, parse_json_tree, should_collapse_user, table_cell_source,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gpui_kit::{
@@ -59,6 +59,22 @@ fn build_extensions(user: bool, owner: Option<WeakEntity<AppView>>) -> MarkdownE
         .plugin(MarkdownImages)
         .block_parser(move |node, parse| parse_block(node, parse, user, parser_owner.clone()))
         .block_renderer("transcript-code", render_code)
+        .block_renderer("transcript-user-code", |node, _, cx| {
+            let style = TextViewStyle::default().code_block(
+                StyleRefinement::default()
+                    .p_0()
+                    .border_0()
+                    .rounded_none()
+                    .bg(transparent_black())
+                    .font_family(gpui_kit::component::Theme::global(cx).font_family.clone())
+                    .text_size(px(M::BODY))
+                    .line_height(px(M::LINE)),
+            );
+            TextView::markdown("user-code", fenced_code("", node.as_text()))
+                .style(style)
+                .selectable(true)
+                .scrollable(false)
+        })
         .block_renderer("transcript-table", render_table)
         .block_renderer("transcript-image", |node, _, cx| {
             let p = Palette::get(cx);
@@ -68,10 +84,10 @@ fn build_extensions(user: bool, owner: Option<WeakEntity<AppView>>) -> MarkdownE
                     node.source_range().map_or(0, |range| range.start),
                 ))
                 .text_color(p.muted)
-                .bg(p.sidebar)
-                .rounded(px(M::RADIUS))
+                .bg(p.hover)
+                .rounded(px(M::IMAGE_RADIUS))
                 .when_some(node.data::<ImageBlock>(), |this, image| {
-                    this.child(render_image(image))
+                    this.child(render_image(image, cx))
                 })
         })
         .block_renderer("transcript-quote", move |node, _, cx| {
@@ -98,6 +114,7 @@ fn build_extensions(user: bool, owner: Option<WeakEntity<AppView>>) -> MarkdownE
                 )
                 .child(
                     TextView::markdown("quote", node.as_markdown().to_owned())
+                        .text_color(p.muted)
                         .style(transcript_text_style(p))
                         .markdown_extensions(
                             quote_extensions
@@ -144,7 +161,7 @@ fn build_extensions(user: bool, owner: Option<WeakEntity<AppView>>) -> MarkdownE
                                         } else {
                                             p.border_strong
                                         })
-                                        .rounded(px(M::SMALL_RADIUS))
+                                        .rounded(px(M::TASK_RADIUS))
                                         .bg(if checked {
                                             p.bg.blend(Hsla {
                                                 a: M::TASK_ACCENT_ALPHA,
@@ -188,7 +205,10 @@ fn parse_block(
     owner: Option<WeakEntity<AppView>>,
 ) -> Option<MarkdownNode> {
     match node {
-        Node::Code(code) if !user => {
+        Node::Code(code) if user => {
+            Some(MarkdownNode::new("transcript-user-code", ()).text(code.value.clone()))
+        }
+        Node::Code(code) => {
             let language = code.lang.clone().unwrap_or_default().to_lowercase();
             let json = if language.is_empty() || language == "json" {
                 parse_json_tree(&code.value)
@@ -217,13 +237,7 @@ fn parse_block(
                     row.children()
                         .into_iter()
                         .flatten()
-                        .map(|cell| {
-                            parse
-                                .node_source(cell)
-                                .unwrap_or_default()
-                                .trim()
-                                .to_owned()
-                        })
+                        .map(|cell| table_cell_source(cell, parse.source()))
                         .collect()
                 })
                 .collect();
@@ -239,15 +253,8 @@ fn parse_block(
                 })
                 .collect();
             Some(
-                MarkdownNode::new(
-                    "transcript-table",
-                    TableBlock {
-                        cells,
-                        plain,
-                        align: table.align.clone(),
-                    },
-                )
-                .markdown(parse.node_source(node).unwrap_or_default().to_owned()),
+                MarkdownNode::new("transcript-table", TableBlock { cells, plain })
+                    .markdown(parse.node_source(node).unwrap_or_default().to_owned()),
             )
         }
         Node::Paragraph(paragraph) if paragraph.children.len() == 1 => match &paragraph.children[0]
@@ -332,9 +339,9 @@ impl MarkdownPlugin for MarkdownImages {
         let label = plain_text(node);
         Some(MarkdownNode::new(self.name(), image_block(&label, &url)).text(label))
     }
-    fn render(&self, node: &MarkdownNode, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(&self, node: &MarkdownNode, _: &mut Window, cx: &mut App) -> impl IntoElement {
         node.data::<ImageBlock>()
-            .map(render_image)
+            .map(|image| render_image(image, cx))
             .unwrap_or_else(|| div().into_any_element())
     }
     fn render_inline(
@@ -442,12 +449,25 @@ impl AppView {
                 Button::new(SharedString::from(disclosure_key.clone()))
                     .ghost()
                     .small()
+                    .self_start()
+                    .justify_start()
+                    .px_0()
+                    .mt(px(M::DISCLOSURE_GAP))
+                    .relative()
+                    .top(px(M::DISCLOSURE_OFFSET))
+                    .h(px(M::DISCLOSURE_HEIGHT))
+                    .text_size(px(M::DISCLOSURE_TEXT))
+                    .line_height(px(M::DISCLOSURE_TEXT))
+                    .text_color(p.muted)
                     .label(if expanded { "Show less" } else { "Show more" })
-                    .icon(if expanded {
-                        IconName::ChevronUp
-                    } else {
-                        IconName::ChevronDown
-                    })
+                    .child(
+                        Icon::new(if expanded {
+                            IconName::ChevronUp
+                        } else {
+                            IconName::ChevronDown
+                        })
+                        .size(px(M::ICON)),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.transcript_state.expanded.remove(&disclosure_key) {
                             this.transcript_state

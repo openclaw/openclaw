@@ -75,7 +75,7 @@ the selected session; changing it is not yet supported by this client.
 
 Instrument Sans is embedded under the SIL Open Font License, with system UI as
 fallback. Static weights preserve native font matching; see the
-[font derivation](assets/fonts/README.md). Message text uses 14px/1.6 line height.
+[font derivation](assets/fonts/README.md). Message text uses 14px/1.5 line height.
 
 Tool history and live events share invocation identity, including Gateway
 `tool_call` dispatch wrappers and their concrete children. Completed results
@@ -92,6 +92,7 @@ show the tool action and its primary argument; expanded cards retain raw argumen
 | Cmd+K | Open conversation search |
 | Cmd+B | Collapse or expand the sidebar |
 | Cmd+R | Refresh conversations and selected history |
+| Page Up / Page Down / Home / End | Scroll the focused transcript by a page / to its beginning or latest message |
 | Cmd+[ / Cmd+] | Previous / next loaded conversation |
 | Enter / Shift+Enter | Send / insert a newline; IME composition does not submit |
 | Up at the start of the composer | Recall previous user inputs |

@@ -27,6 +27,12 @@ pub struct TurnRecap {
     pub output_tokens: Option<u64>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ManualCompaction {
+    pub operation_id: String,
+    pub started_at: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestScope {
     pub session_key: String,
@@ -100,6 +106,7 @@ pub struct ChatState {
     pub output_tokens: u64,
     pub turn_recap: Option<TurnRecap>,
     pub compacting: bool,
+    pub manual_compaction: Option<ManualCompaction>,
     pub session_info: SessionInfo,
     pub dirty_from: Option<usize>,
     generation: u64,
@@ -541,6 +548,63 @@ impl ChatState {
         }
         outcome
     }
+    pub fn apply_session_operation(&mut self, payload: &Value) -> EventOutcome {
+        let mut outcome = EventOutcome::default();
+        if self.selected_session.is_none()
+            || !self.event_matches(payload)
+            || payload.get("operation").and_then(Value::as_str) != Some("compact")
+        {
+            return outcome;
+        }
+        let Some(operation_id) = payload
+            .get("operationId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+        else {
+            return outcome;
+        };
+        match payload.get("phase").and_then(Value::as_str) {
+            Some("start") => {
+                let Some(started_at) = payload.get("ts").and_then(Value::as_u64) else {
+                    return outcome;
+                };
+                if self.manual_compaction.as_ref().is_some_and(|held| {
+                    held.operation_id == operation_id || held.started_at > started_at
+                }) {
+                    return outcome;
+                }
+                self.manual_compaction = Some(ManualCompaction {
+                    operation_id: operation_id.to_owned(),
+                    started_at,
+                });
+            }
+            Some("end") => {
+                if self.manual_compaction.is_none() {
+                    // The operator may have left and returned while compaction ran.
+                    outcome.terminal =
+                        payload.get("completed").and_then(Value::as_bool) == Some(true);
+                    return outcome;
+                }
+                if self
+                    .manual_compaction
+                    .as_ref()
+                    .is_none_or(|held| held.operation_id != operation_id)
+                {
+                    return outcome;
+                }
+                self.manual_compaction = None;
+                outcome.terminal = payload.get("completed").and_then(Value::as_bool) == Some(true);
+            }
+            _ => return outcome,
+        }
+        self.dirty_from = Some(
+            self.dirty_from
+                .map_or(self.messages.len(), |old| old.min(self.messages.len())),
+        );
+        outcome.changed = true;
+        outcome
+    }
+
     fn event_matches(&self, payload: &Value) -> bool {
         self.selected_session.as_deref() == payload.get("sessionKey").and_then(Value::as_str)
             && payload

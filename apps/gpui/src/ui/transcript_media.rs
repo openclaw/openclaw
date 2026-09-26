@@ -130,7 +130,7 @@ impl AppView {
                             .max_w(px(T::MEDIA_IMAGE_MAX))
                             .max_h(px(T::MEDIA_IMAGE_MAX))
                             .object_fit(ObjectFit::Contain)
-                            .rounded(px(T::BUBBLE_RADIUS)),
+                            .rounded(px(T::MEDIA_IMAGE_RADIUS)),
                     )
                     .into_any_element();
             }

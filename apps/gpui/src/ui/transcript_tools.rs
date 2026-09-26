@@ -39,6 +39,8 @@ impl AppView {
                 Button::new(SharedString::from(group_key.clone()))
                     .ghost()
                     .small()
+                    .self_start()
+                    .max_w_full()
                     .icon(if collapsed {
                         IconName::ChevronRight
                     } else {
@@ -72,6 +74,9 @@ impl AppView {
                     Button::new(SharedString::from(key.clone()))
                         .ghost()
                         .small()
+                        .self_start()
+                        .max_w_full()
+                        .accessibility_label(tool.summary())
                         .px(px(T::INLINE_PADDING))
                         .py(px(T::ROW_PADDING))
                         .h_auto()
@@ -369,6 +374,7 @@ impl AppView {
                 Button::new(SharedString::from(raw_key.clone()))
                     .ghost()
                     .xsmall()
+                    .self_start()
                     .label("Raw details")
                     .icon(if shown {
                         IconName::ChevronDown

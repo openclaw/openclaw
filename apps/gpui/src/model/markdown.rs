@@ -110,6 +110,66 @@ pub fn literal_text(source: &str) -> String {
     result
 }
 
+/// mdast TableCell spans include the pipe delimiters; inline-child spans contain only authored content.
+pub fn table_cell_source(cell: &Node, source: &str) -> String {
+    let Some(children) = cell.children() else {
+        return String::new();
+    };
+    let Some(start) = children
+        .first()
+        .and_then(Node::position)
+        .map(|position| position.start.offset)
+    else {
+        return String::new();
+    };
+    let Some(end) = children
+        .last()
+        .and_then(Node::position)
+        .map(|position| position.end.offset)
+    else {
+        return String::new();
+    };
+    let mut codes = Vec::new();
+    fn collect_code(node: &Node, codes: &mut Vec<(usize, usize, String)>) {
+        if let Node::InlineCode(code) = node {
+            if let Some(position) = &code.position {
+                let fence = "`".repeat(
+                    code.value
+                        .split(|ch| ch != '`')
+                        .map(str::len)
+                        .max()
+                        .unwrap_or(0)
+                        + 1,
+                );
+                let value = if code.value.chars().all(char::is_whitespace) {
+                    code.value.clone()
+                } else {
+                    format!(" {} ", code.value)
+                };
+                codes.push((
+                    position.start.offset,
+                    position.end.offset,
+                    format!("{fence}{value}{fence}"),
+                ));
+            }
+        } else {
+            for child in node.children().into_iter().flatten() {
+                collect_code(child, codes);
+            }
+        }
+    }
+    collect_code(cell, &mut codes);
+    let mut result = String::new();
+    let mut offset = start;
+    for (start, end, replacement) in codes {
+        result.push_str(&source[offset..start]);
+        result.push_str(&replacement);
+        offset = end;
+    }
+    result.push_str(&source[offset..end]);
+    result.trim().to_owned()
+}
+
 pub fn should_collapse_user(source: &str) -> bool {
     source.encode_utf16().count() > 1200 || source.split('\n').count() > 40
 }
@@ -268,6 +328,46 @@ mod tests {
         assert_eq!(
             image_destination(&link.url).as_deref(),
             Some("https://example.test/image.png")
+        );
+    }
+    #[test]
+    fn table_cells_omit_structural_pipes_and_keep_authored_inline_content() {
+        let source = "| **Surface** | State | Result |\n| --- | :---: | ---: |\n| left \\| right | `a\\|b` | |";
+        let tree = markdown::to_mdast(source, &parse_options()).unwrap();
+        let table = &tree.children().unwrap()[0];
+        let cells: Vec<Vec<String>> = table
+            .children()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                row.children()
+                    .unwrap()
+                    .iter()
+                    .map(|cell| table_cell_source(cell, source))
+                    .collect()
+            })
+            .collect();
+        fn visible(node: &Node) -> String {
+            match node {
+                Node::Text(text) => text.value.clone(),
+                Node::InlineCode(code) => code.value.clone(),
+                _ => node.children().into_iter().flatten().map(visible).collect(),
+            }
+        }
+        let rendered: Vec<Vec<String>> = cells
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| visible(&markdown::to_mdast(cell, &parse_options()).unwrap()))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                vec!["Surface", "State", "Result"],
+                vec!["left | right", "a|b", ""]
+            ]
         );
     }
     #[test]

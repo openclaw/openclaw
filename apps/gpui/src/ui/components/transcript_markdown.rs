@@ -1,6 +1,7 @@
 use crate::model::markdown::{JsonTree, fenced_code};
 use crate::ui::theme::{MarkdownTokens as M, Palette};
 use gpui_kit::{
+    base::ElementExt,
     component::{
         IconName, Selectable, Sizable, StyledExt, Theme, WindowExt,
         button::{Button, ButtonVariants},
@@ -25,6 +26,8 @@ struct CodeState {
     wrapped: bool,
     raw: bool,
     closed_json: HashSet<String>,
+    viewport_width: Pixels,
+    measured_code: Option<(String, SharedString, Pixels)>,
 }
 
 #[derive(Default)]
@@ -128,7 +131,23 @@ pub(crate) fn render_code(node: &MarkdownNode, window: &mut Window, cx: &mut App
         CodeState::default()
     });
     let resize = block.owner.clone();
+    let mono = Theme::global(cx).mono_font_family.clone();
+    if state
+        .read(cx)
+        .measured_code
+        .as_ref()
+        .is_none_or(|(source, family, _)| source != &block.code || family != &mono)
+    {
+        let width = text_width(&block.code, font(mono.clone()), px(M::CODE_TEXT), window);
+        state.update(cx, |state, _| {
+            state.measured_code = Some((block.code.clone(), mono, width))
+        });
+    }
     let data = state.read(cx);
+    let has_overflow = data.viewport_width > px(0.)
+        && data.measured_code.as_ref().is_some_and(|(_, _, width)| {
+            *width > data.viewport_width - px(M::CODE_PAD * 2. + M::CODE_BORDER * 2.)
+        });
     let expanded = data.expanded;
     let wrapped = data.wrapped;
     let raw = data.raw;
@@ -164,7 +183,7 @@ pub(crate) fn render_code(node: &MarkdownNode, window: &mut Window, cx: &mut App
             );
         }
     }
-    if hidden == 0 || expanded {
+    if (hidden == 0 || expanded) && (has_overflow || wrapped) {
         let state = state.clone();
         let resize = resize.clone();
         actions = actions.child(
@@ -201,17 +220,26 @@ pub(crate) fn render_code(node: &MarkdownNode, window: &mut Window, cx: &mut App
         window,
         cx,
     ));
+    let measure_state = state.clone();
     let mut frame = div()
         .id(("transcript-code", offset))
         .w_full()
         .min_w_0()
-        .rounded(px(M::RADIUS))
+        .rounded(px(M::CODE_RADIUS))
         .border_1()
         .border_color(Hsla {
             a: M::CODE_BORDER_ALPHA,
             ..p.text
         })
         .overflow_hidden()
+        .on_prepaint(move |bounds, _, cx| {
+            measure_state.update(cx, |state, cx| {
+                if state.viewport_width != bounds.size.width {
+                    state.viewport_width = bounds.size.width;
+                    cx.notify();
+                }
+            })
+        })
         .child(
             div()
                 .h_flex()
@@ -226,7 +254,7 @@ pub(crate) fn render_code(node: &MarkdownNode, window: &mut Window, cx: &mut App
                 .text_color(p.muted)
                 .child(
                     div()
-                        .font_family("monospace")
+                        .font_family(Theme::global(cx).mono_font_family.clone())
                         .child(if block.language.is_empty() {
                             "text".to_owned()
                         } else {
@@ -240,16 +268,21 @@ pub(crate) fn render_code(node: &MarkdownNode, window: &mut Window, cx: &mut App
     {
         frame = frame.child(
             div()
+                .id("json-tree")
+                .max_h(px(M::JSON_HEIGHT))
+                .overflow_y_scroll()
                 .px(px(M::CODE_PAD))
-                .pb(px(M::CODE_PAD))
-                .font_family("monospace")
+                .pt(px(M::JSON_PAD_TOP))
+                .pb(px(M::JSON_PAD_BOTTOM))
+                .text_color(p.muted)
+                .font_family(Theme::global(cx).mono_font_family.clone())
                 .text_size(px(M::CODE_TEXT))
-                .line_height(px(M::CODE_LINE))
+                .line_height(px(M::JSON_LINE))
                 .child(render_json(
                     json,
                     "root".to_owned(),
                     None,
-                    0,
+                    false,
                     &state,
                     &resize,
                     cx,
@@ -276,6 +309,15 @@ pub(crate) fn render_code(node: &MarkdownNode, window: &mut Window, cx: &mut App
                 Button::new("expand-code")
                     .ghost()
                     .small()
+                    .self_start()
+                    .justify_start()
+                    .h(px(M::CONTROL))
+                    .ml(px(M::GAP))
+                    .px(px(M::GAP))
+                    .py_0()
+                    .font_family(Theme::global(cx).mono_font_family.clone())
+                    .text_size(px(M::CODE_LABEL))
+                    .text_color(p.muted)
                     .icon(IconName::ChevronDown)
                     .label(format!(
                         "{hidden} hidden {}",
@@ -299,14 +341,25 @@ fn render_json(
     value: &JsonTree,
     path: String,
     label: Option<&str>,
-    depth: usize,
+    trailing: bool,
     state: &Entity<CodeState>,
     resize: &Option<WeakEntity<crate::ui::AppView>>,
     cx: &App,
 ) -> AnyElement {
     let p = Palette::get(cx);
+    let syntax = M::syntax(Theme::global(cx).is_dark());
+    let string_color = syntax
+        .string
+        .map(HighlightStyle::from)
+        .and_then(|style| style.color)
+        .unwrap_or(p.text);
+    let literal_color = syntax
+        .number
+        .map(HighlightStyle::from)
+        .and_then(|style| style.color)
+        .unwrap_or(p.text);
     let children: Vec<(String, &JsonTree)> = match value {
-        JsonTree::Object(map) => map
+        JsonTree::Object(members) => members
             .iter()
             .map(|(key, value)| (key.clone(), value))
             .collect(),
@@ -320,25 +373,47 @@ fn render_json(
     let label = label
         .map(|label| format!("{label:?}: "))
         .unwrap_or_default();
+    let suffix = if trailing { "," } else { "" };
     if children.is_empty() {
-        let text = match value {
-            JsonTree::Scalar(value) => value.to_string(),
-            JsonTree::Object(_) => "{}".to_owned(),
-            JsonTree::Array(_) => "[]".to_owned(),
+        let (text, color) = match value {
+            JsonTree::Scalar(value) => (
+                value.to_string(),
+                if value.is_string() {
+                    string_color
+                } else if value.is_null() {
+                    p.muted
+                } else {
+                    literal_color
+                },
+            ),
+            JsonTree::Object(_) => ("{}".to_owned(), p.muted),
+            JsonTree::Array(_) => ("[]".to_owned(), p.muted),
         };
         return div()
-            .text_color(p.text)
-            .child(format!("{label}{text}"))
+            .h_flex()
+            .gap_0()
+            .text_color(p.muted)
+            .when(!label.is_empty(), |this| {
+                this.child(div().text_color(string_color).child(label))
+            })
+            .child(div().text_color(color).child(text))
+            .child(suffix)
             .into_any_element();
     }
+    let depth = path.matches('/').count();
     let closed = state.read(cx).closed_json.contains(&path) != (depth >= 2);
     let array = matches!(value, JsonTree::Array(_));
-    let summary = format!(
-        "{label}{} {} {}",
-        if array { "[" } else { "{" },
-        children.len(),
-        if array { "items" } else { "keys" }
-    );
+    let summary = if closed {
+        format!(
+            "{} ({} {}){suffix}",
+            if array { "Array" } else { "Object" },
+            children.len(),
+            if array { "items" } else { "keys" }
+        )
+    } else {
+        if array { "[" } else { "{" }.to_owned()
+    };
+    let accessibility = format!("{label}{summary}");
     let toggle = state.clone();
     let toggle_path = path.clone();
     let toggle_resize = resize.clone();
@@ -346,12 +421,30 @@ fn render_json(
         Button::new(SharedString::from(path.clone()))
             .ghost()
             .small()
+            .self_start()
+            .justify_start()
+            .h(px(M::JSON_LINE))
+            .ml(px(-M::ICON))
+            .px_0()
+            .py_0()
+            .font_family(Theme::global(cx).mono_font_family.clone())
+            .text_size(px(M::CODE_TEXT))
+            .text_color(p.muted)
             .icon(if closed {
                 IconName::ChevronRight
             } else {
                 IconName::ChevronDown
             })
-            .label(summary)
+            .accessibility_label(accessibility)
+            .child(
+                div()
+                    .h_flex()
+                    .gap_0()
+                    .when(!label.is_empty(), |this| {
+                        this.child(div().text_color(string_color).child(label))
+                    })
+                    .child(div().when(closed, |this| this.italic()).child(summary)),
+            )
             .on_click(move |_, window, cx| {
                 toggle.update(cx, |state, cx| {
                     if !state.closed_json.remove(&toggle_path) {
@@ -364,10 +457,11 @@ fn render_json(
             }),
     );
     if !closed {
+        let count = children.len();
         result = result
             .child(
                 div()
-                    .pl(px(M::CODE_PAD))
+                    .pl(px(M::JSON_INDENT))
                     .children(
                         children
                             .into_iter()
@@ -377,7 +471,7 @@ fn render_json(
                                     value,
                                     format!("{path}/{index}"),
                                     (!array).then_some(key.as_str()),
-                                    depth + 1,
+                                    index + 1 < count,
                                     state,
                                     resize,
                                     cx,
@@ -385,7 +479,7 @@ fn render_json(
                             }),
                     ),
             )
-            .child(if array { "]" } else { "}" });
+            .child(format!("{}{suffix}", if array { "]" } else { "}" }));
     }
     result.into_any_element()
 }
@@ -394,7 +488,6 @@ fn render_json(
 pub(crate) struct TableBlock {
     pub cells: Vec<Vec<String>>,
     pub plain: Vec<Vec<String>>,
-    pub align: Vec<markdown::mdast::AlignKind>,
 }
 
 pub(crate) fn render_table(node: &MarkdownNode, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -422,7 +515,7 @@ pub(crate) fn render_table(node: &MarkdownNode, window: &mut Window, cx: &mut Ap
         .relative()
         .w_full()
         .min_w_0()
-        .child(table_body(table, cx))
+        .child(table_body(table, window, cx))
         .child(
             div()
                 .id("table-controls")
@@ -432,8 +525,11 @@ pub(crate) fn render_table(node: &MarkdownNode, window: &mut Window, cx: &mut Ap
                 .top_0()
                 .h_flex()
                 .bg(p.bg)
-                .opacity(0.)
-                .in_focus(|this| this.opacity(1.))
+                .opacity(if focus.contains_focused(window, cx) {
+                    1.
+                } else {
+                    0.
+                })
                 .group_hover("transcript-table", |this| this.opacity(1.))
                 .child(
                     Button::new("expand-table")
@@ -443,13 +539,13 @@ pub(crate) fn render_table(node: &MarkdownNode, window: &mut Window, cx: &mut Ap
                         .label("Expand table")
                         .on_click(move |_, window, cx| {
                             let table = expanded.clone();
-                            window.open_dialog(cx, move |dialog, _, cx| {
+                            window.open_dialog(cx, move |dialog, window, cx| {
                                 dialog.title("Expanded table").w(px(M::DIALOG_WIDTH)).child(
                                     div()
                                         .id("expanded-table-scroll")
                                         .max_h(px(M::DIALOG_HEIGHT))
                                         .overflow_scroll()
-                                        .child(table_body(&table, cx)),
+                                        .child(table_body(&table, window, cx)),
                                 )
                             });
                         }),
@@ -466,19 +562,37 @@ pub(crate) fn render_table(node: &MarkdownNode, window: &mut Window, cx: &mut Ap
         .into_any_element()
 }
 
-fn table_body(table: &TableBlock, cx: &App) -> AnyElement {
+fn table_body(table: &TableBlock, window: &mut Window, cx: &App) -> AnyElement {
     let p = Palette::get(cx);
     let columns = table.cells.first().map_or(1, Vec::len).max(1);
+    let mut widths = vec![M::CELL_PAD; columns];
+    for (row, cells) in table.plain.iter().enumerate() {
+        for (column, text) in cells.iter().take(columns).enumerate() {
+            let mut face = font(Theme::global(cx).font_family.clone());
+            face.weight = if row == 0 {
+                FontWeight::SEMIBOLD
+            } else if column == 0 {
+                FontWeight::MEDIUM
+            } else {
+                FontWeight::NORMAL
+            };
+            let padding = M::CELL_PAD * if column == 0 { 1. } else { 2. };
+            widths[column] = widths[column]
+                .max(f32::from(text_width(text, face, px(M::TABLE_TEXT), window)) + padding);
+        }
+    }
+    let total: f32 = widths.iter().sum();
     div()
         .w_full()
         .min_w_0()
         .text_size(px(M::TABLE_TEXT))
+        .line_height(px(M::TABLE_LINE))
         .children(table.cells.iter().enumerate().map(|(row, cells)| {
             div()
                 .flex()
                 .w_full()
                 .items_start()
-                .border_b_1()
+                .when(row + 1 < table.cells.len(), |this| this.border_b_1())
                 .border_color(if row == 0 {
                     p.border_strong
                 } else {
@@ -489,7 +603,7 @@ fn table_body(table: &TableBlock, cx: &App) -> AnyElement {
                 })
                 .children(cells.iter().enumerate().map(|(column, cell)| {
                     div()
-                        .w(relative(1. / columns as f32))
+                        .w(relative(widths[column] / total))
                         .min_w_0()
                         .px(px(M::CELL_PAD))
                         .py(px(M::CELL_PAD))
@@ -500,16 +614,13 @@ fn table_body(table: &TableBlock, cx: &App) -> AnyElement {
                         .when(row > 0 && column == 0, |this| {
                             this.font_weight(FontWeight::MEDIUM).text_color(p.strong)
                         })
-                        .when(
-                            table.align.get(column) == Some(&markdown::mdast::AlignKind::Right),
-                            |this| this.text_right(),
-                        )
-                        .when(
-                            table.align.get(column) == Some(&markdown::mdast::AlignKind::Center),
-                            |this| this.text_center(),
-                        )
                         .child(
                             TextView::markdown(("cell", row * columns + column), cell.clone())
+                                .text_color(if row == 0 || column == 0 {
+                                    p.strong
+                                } else {
+                                    p.text
+                                })
                                 .markdown_extensions(
                                     crate::ui::transcript_state::code_markdown_extensions(),
                                 )
@@ -528,7 +639,8 @@ pub(crate) struct ImageBlock {
     pub image: Option<Arc<Image>>,
 }
 
-pub(crate) fn render_image(image: &ImageBlock) -> AnyElement {
+pub(crate) fn render_image(image: &ImageBlock, cx: &App) -> AnyElement {
+    let p = Palette::get(cx);
     let p_label = image.label.clone();
     if let Some(image) = &image.image {
         return div()
@@ -555,7 +667,7 @@ pub(crate) fn render_image(image: &ImageBlock) -> AnyElement {
         .gap(px(M::GAP))
         .px(px(M::IMAGE_PAD_X))
         .py(px(M::IMAGE_PAD_Y))
-        .rounded(px(M::RADIUS))
+        .rounded(px(M::IMAGE_RADIUS))
         .child(format!(
             "External image not loaded{}",
             if p_label.is_empty() {
@@ -567,7 +679,18 @@ pub(crate) fn render_image(image: &ImageBlock) -> AnyElement {
         .when_some(target, |this, target| {
             this.child(
                 Button::new("open-image")
+                    .ghost()
                     .small()
+                    .border_0()
+                    .h(px(M::IMAGE_ACTION_HEIGHT))
+                    .px(px(M::IMAGE_ACTION_PAD_X))
+                    .py(px(M::IMAGE_ACTION_PAD_Y))
+                    .rounded(px(M::SMALL_RADIUS))
+                    .bg(Hsla {
+                        a: M::IMAGE_ACTION_ALPHA,
+                        ..p.text
+                    })
+                    .text_color(p.accent)
                     .label("Open image")
                     .on_click(move |_, _, cx| cx.open_url(target.as_str())),
             )
@@ -586,4 +709,29 @@ fn remeasure(owner: &Option<WeakEntity<crate::ui::AppView>>, cx: &mut App) {
 
 fn wrap_icon() -> gpui_kit::component::Icon {
     gpui_kit::component::Icon::default().data(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h15a3 3 0 1 1 0 6h-4m2-2-2 2 2 2M3 18h7"/></svg>"#)
+}
+
+fn text_width(source: &str, face: Font, size: Pixels, window: &mut Window) -> Pixels {
+    source
+        .lines()
+        .map(|line| {
+            window
+                .text_system()
+                .shape_line(
+                    line.to_owned().into(),
+                    size,
+                    &[TextRun {
+                        len: line.len(),
+                        font: face.clone(),
+                        color: transparent_black(),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    }],
+                    None,
+                )
+                .width()
+        })
+        .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or(px(0.))
 }

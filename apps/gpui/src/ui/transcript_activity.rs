@@ -28,6 +28,7 @@ impl AppView {
         let button = Button::new(SharedString::from(key.clone()))
             .ghost()
             .small()
+            .self_start()
             .label("Reasoning")
             .icon(if expanded {
                 IconName::ChevronDown

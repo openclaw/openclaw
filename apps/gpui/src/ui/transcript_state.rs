@@ -25,6 +25,7 @@ pub(super) struct TranscriptUi {
     pub error_expanded: bool,
     pub fork_request: u64,
     pub scroll_installed: bool,
+    pub focus: Option<FocusHandle>,
     pub owner: Option<crate::model::chat::RequestScope>,
 }
 pub(super) struct CachedMarkdown {
@@ -125,6 +126,7 @@ impl AppView {
         }
         let count = self.chat.messages.len()
             + usize::from(self.chat.active_run.is_some())
+            + usize::from(self.chat.manual_compaction.is_some())
             + usize::from(self.chat.turn_recap.is_some())
             + usize::from(self.chat.note.as_ref().is_some_and(|note| !note.error));
         let old = self.transcript_list.item_count();

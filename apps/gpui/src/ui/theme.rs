@@ -83,7 +83,7 @@ impl Palette {
                 ..accent
             }),
             user_bubble: if dark {
-                bg.blend(Hsla { a: 0.1, ..accent })
+                Hsla { a: 0.1, ..accent }
             } else {
                 bg.blend(Hsla { a: 0.15, ..accent })
             },
@@ -99,25 +99,63 @@ pub(super) struct TranscriptTokens;
 impl TranscriptTokens {
     pub const AVATAR: f32 = 36.;
     pub const AVATAR_GAP: f32 = 10.;
+    pub const AVATAR_INITIALS_SIZE: f32 = 12.;
+    pub const AVATAR_TEXT_SIZE: f32 = 13.;
     pub const BUBBLE_RADIUS: f32 = 17.5;
     pub const BUBBLE_PADDING_X: f32 = 16.;
     pub const BUBBLE_PADDING_Y: f32 = 16.;
     pub const FOOTER_HEIGHT: f32 = 24.;
     pub const FOOTER_GAP: f32 = 8.;
     pub const MESSAGE_GAP: f32 = 2.;
-    pub const TURN_GAP: f32 = 6.;
+    pub const TURN_GAP: f32 = 2.;
+    pub const CONTINUATION_GAP: f32 = 6.;
     pub const FIRST_TURN_INSET: f32 = 28.;
     pub const TEXT_SIZE: f32 = 14.;
     pub const META_SIZE: f32 = 12.;
-    pub const LINE_HEIGHT: f32 = 1.6;
+    pub const LINE_HEIGHT: f32 = 1.5;
     pub const ROW_INSET: f32 = 4.;
     pub const OWN_TRAILING_INSET: f32 = 16.;
     pub const ASSISTANT_TRAILING_INSET: f32 = 62.;
+    pub const ASSISTANT_PADDING_Y: f32 = 4.;
     pub const USER_MAX_WIDTH: f32 = 0.68;
-    pub const MEDIA_IMAGE_MAX: f32 = 420.;
+    pub const MEDIA_IMAGE_MAX: f32 = 400.;
+    pub const MEDIA_IMAGE_RADIUS: f32 = 25.;
+    pub const REPLY_RADIUS: f32 = 15.;
+    pub const REPLY_ICON: f32 = 14.;
+    pub const REPLY_GAP: f32 = 9.;
+    pub const REPLY_LINE_HEIGHT: f32 = 1.55;
+    pub const REPLY_PADDING_Y: f32 = 7.;
+    pub const REPLY_PADDING_LEFT: f32 = 12.;
+    pub const REPLY_PADDING_RIGHT: f32 = 10.;
+    pub const REPLY_MIN_HEIGHT: f32 = 36.;
+    pub const REPLY_MARGIN_BOTTOM: f32 = 2.;
+    pub const ATTRIBUTION_GAP: f32 = 5.;
+    pub const ATTRIBUTION_MARGIN_BOTTOM: f32 = 4.;
     pub const DETAIL_WIDTH: f32 = 380.;
     pub const COPY_FEEDBACK_MS: u64 = 1500;
     pub const COPY_FAILURE_MS: u64 = 2000;
+
+    pub fn sender_label(hue: u16, dark: bool) -> Hsla {
+        hsla(
+            f32::from(hue) / 360.,
+            if dark { 0.45 } else { 0.60 },
+            if dark { 0.70 } else { 0.36 },
+            1.,
+        )
+    }
+
+    pub fn reply_fill(p: Palette) -> Hsla {
+        Hsla {
+            a: 0.04,
+            ..p.strong
+        }
+    }
+    pub fn reply_border(p: Palette) -> Hsla {
+        Hsla {
+            a: 0.10,
+            ..p.strong
+        }
+    }
 
     pub fn sender_bubble(p: Palette, hue: u16, dark: bool) -> Hsla {
         let hue = f32::from(hue) / 360.;
@@ -216,10 +254,13 @@ pub fn apply(window: &mut Window, cx: &mut App) {
 /// Transcript Markdown measurements from chat/text.css and markdown-code-blocks.ts.
 pub(super) struct MarkdownTokens;
 impl MarkdownTokens {
-    pub const LINE: f32 = 22.4;
+    pub const BODY: f32 = 14.;
+    pub const LINE: f32 = 21.;
     pub const PARAGRAPH_REM: f32 = 0.875;
     pub const TABLE_TEXT: f32 = 13.;
+    pub const TABLE_LINE: f32 = 19.5;
     pub const CELL_PAD: f32 = 12.;
+    pub const CODE_BORDER: f32 = 1.;
     pub const CODE_BORDER_ALPHA: f32 = 0.22;
     pub const TABLE_BORDER_ALPHA: f32 = 0.42;
     pub const TASK_ACCENT_ALPHA: f32 = 0.72;
@@ -229,8 +270,14 @@ impl MarkdownTokens {
     pub const CODE_LABEL: f32 = 11.;
     pub const CODE_PAD: f32 = 14.;
     pub const RADIUS: f32 = 8.;
-    pub const SMALL_RADIUS: f32 = 4.;
-    pub const CONTROL: f32 = 28.;
+    pub const SMALL_RADIUS: f32 = 6.;
+    pub const CODE_RADIUS: f32 = 17.5;
+    pub const IMAGE_RADIUS: f32 = 10.;
+    pub const IMAGE_ACTION_HEIGHT: f32 = 28.;
+    pub const IMAGE_ACTION_PAD_X: f32 = 9.;
+    pub const IMAGE_ACTION_PAD_Y: f32 = 3.;
+    pub const IMAGE_ACTION_ALPHA: f32 = 0.08;
+    pub const CONTROL: f32 = 32.;
     pub const ICON: f32 = 14.;
     pub const GAP: f32 = 8.;
     pub const QUOTE_PAD_X: f32 = 12.;
@@ -238,12 +285,22 @@ impl MarkdownTokens {
     pub const QUOTE_BAR: f32 = 3.;
     pub const QUOTE_INSET: f32 = 4.;
     pub const TASK: f32 = 16.;
+    pub const TASK_RADIUS: f32 = 6.;
     pub const TASK_GAP: f32 = 8.;
     pub const LIST_GAP: f32 = 5.6;
     pub const IMAGE_PAD_X: f32 = 11.2;
     pub const IMAGE_PAD_Y: f32 = 9.8;
     pub const IMAGE_MAX_HEIGHT: f32 = 400.;
     pub const USER_PREVIEW: f32 = 105.;
+    pub const DISCLOSURE_GAP: f32 = 8.;
+    pub const DISCLOSURE_OFFSET: f32 = 6.;
+    pub const DISCLOSURE_HEIGHT: f32 = 14.;
+    pub const DISCLOSURE_TEXT: f32 = 12.;
+    pub const JSON_LINE: f32 = 20.4;
+    pub const JSON_INDENT: f32 = 20.;
+    pub const JSON_HEIGHT: f32 = 360.;
+    pub const JSON_PAD_TOP: f32 = 6.;
+    pub const JSON_PAD_BOTTOM: f32 = 16.;
     pub const DIALOG_WIDTH: f32 = 1000.;
     pub const DIALOG_HEIGHT: f32 = 600.;
 
@@ -357,6 +414,7 @@ impl TranscriptSurfaceTokens {
     pub const SCROLL_SIZE: f32 = 36.;
     pub const SCROLL_ICON: f32 = 16.;
     pub const SCROLL_OFFSET: f32 = 12.;
+    pub const SCROLL_PAGE_FRACTION: f32 = 0.9;
     pub const ERROR_WIDTH: f32 = 576.;
     pub const ERROR_BORDER_ALPHA: f32 = 0.32;
     pub const ERROR_FILL_ALPHA: f32 = 0.09;

@@ -15,6 +15,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Clone, Copy)]
+pub(super) struct AvatarTypography {
+    pub initials_size: f32,
+    pub text_size: f32,
+    pub initials_weight: FontWeight,
+}
+
 const MAX_CACHED_AVATARS: usize = 128;
 const FAILED_AVATAR_RETRY_AFTER: Duration = Duration::from_secs(60);
 
@@ -101,7 +108,7 @@ impl AppView {
             .as_ref()
             .map(|auth| auth.gateway_url.as_str())
             .unwrap_or("");
-        self.render_avatar_spec(&avatars::person_avatar(person, gateway), size, cx)
+        self.render_avatar_spec(&avatars::person_avatar(person, gateway), size, None, cx)
     }
 
     pub(super) fn render_agent_avatar(&self, agent: &Agent, size: f32, cx: &App) -> AnyElement {
@@ -120,6 +127,7 @@ impl AppView {
                 gateway,
             ),
             size,
+            None,
             cx,
         )
     }
@@ -269,6 +277,7 @@ impl AppView {
             .child(div().relative().child(self.render_avatar_spec(
                 &avatars::owner_avatar(&owner, gateway),
                 size,
+                None,
                 cx,
             )))
             .into_any_element()
@@ -326,7 +335,13 @@ impl AppView {
         repeated_section || repeated_filter
     }
 
-    pub(super) fn render_avatar_spec(&self, spec: &AvatarSpec, size: f32, cx: &App) -> AnyElement {
+    pub(super) fn render_avatar_spec(
+        &self,
+        spec: &AvatarSpec,
+        size: f32,
+        typography: Option<AvatarTypography>,
+        cx: &App,
+    ) -> AnyElement {
         avatar_element(
             spec,
             self.sidebar_state.avatars.image(spec),
@@ -336,6 +351,7 @@ impl AppView {
             },
             size,
             Palette::get(cx),
+            typography,
         )
     }
 
@@ -541,6 +557,7 @@ pub(super) fn avatar_element(
     face: Option<Arc<Image>>,
     size: f32,
     p: Palette,
+    typography: Option<AvatarTypography>,
 ) -> AnyElement {
     let fallback = match &spec.fallback {
         AvatarFallback::Initials { text, hue, owner } => div()
@@ -556,8 +573,10 @@ pub(super) fn avatar_element(
                 1.,
             ))
             .text_color(rgb(0xffffff))
-            .text_size(px(size * 0.4))
-            .font_weight(FontWeight::BOLD)
+            .text_size(px(
+                typography.map_or(size * 0.4, |style| style.initials_size)
+            ))
+            .font_weight(typography.map_or(FontWeight::BOLD, |style| style.initials_weight))
             .child(text.clone())
             .into_any_element(),
         AvatarFallback::Text(text) => div()
@@ -567,7 +586,7 @@ pub(super) fn avatar_element(
             .items_center()
             .justify_center()
             .bg(p.elevated)
-            .text_size(px(size * 0.72))
+            .text_size(px(typography.map_or(size * 0.72, |style| style.text_size)))
             .child(text.clone())
             .into_any_element(),
         AvatarFallback::AgentFace(_) => face

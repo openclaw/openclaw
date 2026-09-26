@@ -225,6 +225,8 @@ impl AppView {
                 self.browser_open_requested = false;
                 self.connection_message = Some(message);
                 self.router.disconnected(self.epoch);
+                self.chat.manual_compaction = None;
+                self.sync_transcript();
                 self.sidebar_state.reconnect_at = retry_after.map(|delay| Instant::now() + delay);
                 self.composer_state.attachment_generation += 1;
                 self.composer_state.reading = 0;
@@ -315,6 +317,16 @@ impl AppView {
                     crate::model::chat::now_ms(),
                 );
                 match event.event.as_str() {
+                    "session.operation" => {
+                        let outcome = self.chat.apply_session_operation(&event.payload);
+                        if outcome.changed {
+                            self.sync_transcript();
+                        }
+                        if outcome.terminal {
+                            self.load_history(cx);
+                            self.schedule_refresh(cx);
+                        }
+                    }
                     "presence" => self.sidebar_presence(&event.payload, cx),
                     "controlUi.sessionPullRequests.changed" => {
                         self.sidebar_state

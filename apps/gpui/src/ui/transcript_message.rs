@@ -11,7 +11,7 @@ use crate::model::{
 use gpui_kit::{
     assets::IconName,
     component::{
-        Sizable, StyledExt,
+        Icon, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         popover::Popover,
     },
@@ -32,6 +32,7 @@ impl AppView {
         message: &Message,
         group: bool,
         streaming: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let p = Palette::get(cx);
@@ -40,24 +41,34 @@ impl AppView {
             return self.render_system_notice(index, &key, message, cx);
         }
         let user = message.role == "user";
+        let ends_group = self
+            .chat
+            .messages
+            .get(index + 1..)
+            .and_then(|remaining| remaining.iter().find(|next| next.visible()))
+            .is_none_or(|next| crate::model::grouping::starts_group(Some(message), next));
         let peer = message.is_peer(self.sidebar_state.people.self_user.as_ref());
         let own = user && !peer;
         let author = self.message_author(message);
         let source_label = message.source_label();
         let persistent_identity =
             user && (message.sender_person.is_some() || !source_label.is_empty());
-        let bubble = message
-            .sender_person
-            .as_ref()
-            .filter(|person| !person.id.is_empty())
-            .map(|person| {
-                T::sender_bubble(
-                    p,
-                    (avatars::fnv1a_utf16(&person.id) % 360) as u16,
-                    gpui_kit::component::Theme::global(cx).is_dark(),
-                )
-            })
+        let sender_hue = message.sender_person.as_ref().map(|person| {
+            let identity = if person.id.trim().is_empty() {
+                person.label()
+            } else {
+                &person.id
+            };
+            (avatars::fnv1a_utf16(identity) % 360) as u16
+        });
+        let dark = gpui_kit::component::Theme::global(cx).is_dark();
+        let bubble = sender_hue
+            .map(|hue| T::sender_bubble(p, hue, dark))
             .unwrap_or(p.user_bubble);
+        let author_color = sender_hue
+            .filter(|_| user)
+            .map(|hue| T::sender_label(hue, dark))
+            .unwrap_or(p.muted);
         let mut content = div()
             .group(SharedString::from(key.clone()))
             .relative()
@@ -67,28 +78,81 @@ impl AppView {
             .gap(px(T::MESSAGE_GAP))
             .text_size(px(T::TEXT_SIZE))
             .line_height(relative(T::LINE_HEIGHT))
-            .when(user, |this| this.max_w(relative(T::USER_MAX_WIDTH)))
+            .when(user, |this| {
+                this.max_w(relative(T::USER_MAX_WIDTH)).items_start()
+            })
             .when(own, |this| this.items_end());
-        if let Some(reply) = self.resolve_message_reply(message) {
-            let target = reply.id.clone();
+        if group
+            && message.role == "assistant"
+            && message.sender_agent.is_none()
+            && let Some(recipient) = self.message_reply_attribution(index)
+        {
             content = content.child(
                 div()
-                    .id(SharedString::from(format!("{key}:reply-preview")))
-                    .w_full()
-                    .border_l_2()
-                    .border_color(p.accent)
-                    .pl_3()
-                    .py_1()
+                    .h_flex()
+                    .flex_wrap()
+                    .gap(px(T::ATTRIBUTION_GAP))
+                    .mb(px(T::ATTRIBUTION_MARGIN_BOTTOM))
                     .text_size(px(T::META_SIZE))
+                    .line_height(relative(T::REPLY_LINE_HEIGHT))
                     .text_color(p.muted)
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(reply.sender))
-                    .child(div().truncate().child(reply.text))
+                    .child(Icon::new(IconName::CornerDownLeft).size(px(T::REPLY_ICON)))
+                    .child(recipient),
+            );
+        }
+        if let Some(reply) = self.resolve_message_reply(message) {
+            let target = reply.id.clone();
+            let label = format!("Replying to {}", reply.sender);
+            let preview = reply.text.chars().take(120).collect::<String>();
+            let preview = if reply.text.chars().count() > 120 {
+                format!("{preview}...")
+            } else {
+                preview
+            };
+            content = content.child(
+                Button::new(SharedString::from(format!("{key}:reply-preview")))
+                    .ghost()
+                    .max_w_full()
+                    .h_auto()
+                    .min_h(px(T::REPLY_MIN_HEIGHT))
+                    .self_start()
+                    .mt_1()
+                    .mb(px(T::REPLY_MARGIN_BOTTOM))
+                    .py(px(T::REPLY_PADDING_Y))
+                    .pl(px(T::REPLY_PADDING_LEFT))
+                    .pr(px(T::REPLY_PADDING_RIGHT))
+                    .rounded(px(T::REPLY_RADIUS))
+                    .border_1()
+                    .border_color(T::reply_border(p))
+                    .bg(T::reply_fill(p))
+                    .text_color(p.muted)
+                    .accessibility_label(label.clone())
+                    .child(
+                        div()
+                            .h_flex()
+                            .min_w_0()
+                            .gap(px(T::REPLY_GAP))
+                            .text_size(px(T::TEXT_SIZE))
+                            .line_height(relative(T::REPLY_LINE_HEIGHT))
+                            .child(
+                                Icon::new(IconName::MessageSquare)
+                                    .size(px(T::REPLY_ICON))
+                                    .flex_shrink_0(),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(p.text)
+                                    .child(label),
+                            )
+                            .child(div().min_w_0().truncate().child(preview)),
+                    )
                     .when_some(target, |this, target| {
-                        this.cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.sidebar_state.search_target = Some(target.clone());
-                                this.reveal_search_target(cx);
-                            }))
+                        this.on_click(cx.listener(move |this, _, _, cx| {
+                            this.sidebar_state.search_target = Some(target.clone());
+                            this.reveal_search_target(cx);
+                        }))
                     }),
             );
         }
@@ -115,11 +179,13 @@ impl AppView {
                             .max_w_full()
                             .when(user, |this| {
                                 this.bg(bubble)
+                                    .border_1()
+                                    .border_color(transparent_black())
                                     .rounded(px(T::BUBBLE_RADIUS))
                                     .px(px(T::BUBBLE_PADDING_X))
                                     .py(px(T::BUBBLE_PADDING_Y))
                             })
-                            .when(!user, |this| this.w_full().py_1())
+                            .when(!user, |this| this.w_full().py(px(T::ASSISTANT_PADDING_Y)))
                             .child(markdown),
                     );
                 }
@@ -174,12 +240,6 @@ impl AppView {
             );
         }
         if !streaming && !message.text.is_empty() {
-            let ends_group = self
-                .chat
-                .messages
-                .get(index + 1..)
-                .and_then(|remaining| remaining.iter().find(|next| next.visible()))
-                .is_none_or(|next| crate::model::grouping::starts_group(Some(message), next));
             let focus = self
                 .transcript_state
                 .footer_focus
@@ -194,6 +254,7 @@ impl AppView {
                 .get(&key)
                 .map(|(copied, _)| *copied);
             let metadata_key = format!("{key}:metadata");
+            let metadata_trigger = metadata_key.clone();
             let details_open = self.transcript_state.expanded.contains(&metadata_key);
             let feedback = copied.is_some() || details_open;
             let reply = ReplyTarget {
@@ -208,7 +269,8 @@ impl AppView {
                     Button::new(SharedString::from(format!("reply-{key}")))
                         .ghost()
                         .xsmall()
-                        .icon(IconName::Reply)
+                        .icon(IconName::MessageSquare)
+                        .text_color(p.muted)
                         .accessibility_label("Reply to message")
                         .tooltip("Reply to message")
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -249,6 +311,7 @@ impl AppView {
                         .ghost()
                         .xsmall()
                         .icon(IconName::GitFork)
+                        .text_color(p.muted)
                         .accessibility_label("Fork from here")
                         .tooltip("Fork from here")
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -277,7 +340,19 @@ impl AppView {
                         .xsmall()
                         .text_color(p.muted)
                         .label(relative_timestamp(message.timestamp))
-                        .tooltip(info.clone()),
+                        .tooltip(info.clone())
+                        .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                            // Popover owns pointer mouse-down; named button activation
+                            // supplies the equivalent keyboard/accessibility route.
+                            if event.is_keyboard() {
+                                if !this.transcript_state.expanded.remove(&metadata_trigger) {
+                                    this.transcript_state
+                                        .expanded
+                                        .insert(metadata_trigger.clone());
+                                }
+                                cx.notify();
+                            }
+                        })),
                 )
                 .child(
                     div()
@@ -291,9 +366,12 @@ impl AppView {
                 .h_flex()
                 .flex_wrap()
                 .gap(px(T::FOOTER_GAP))
-                .opacity(if feedback { 1. } else { 0. })
+                .opacity(if feedback || focus.contains_focused(window, cx) {
+                    1.
+                } else {
+                    0.
+                })
                 .hover(|this| this.opacity(1.))
-                .in_focus(|this| this.opacity(1.))
                 .group_hover(SharedString::from(key.clone()), |this| this.opacity(1.))
                 .when(ends_group && !user, |this| {
                     this.child(
@@ -302,9 +380,16 @@ impl AppView {
                             .text_color(p.muted)
                             .child(author.clone()),
                     )
-                })
-                .child(actions)
-                .when(ends_group, |this| this.child(timestamp));
+                });
+            let controls = if user {
+                controls
+                    .child(actions)
+                    .when(ends_group, |this| this.child(timestamp))
+            } else {
+                controls
+                    .when(ends_group, |this| this.child(timestamp))
+                    .child(actions)
+            };
             content = content.child(
                 div()
                     .id(SharedString::from(format!("{key}:footer")))
@@ -318,7 +403,8 @@ impl AppView {
                         this.child(
                             div()
                                 .text_size(px(T::META_SIZE))
-                                .text_color(p.muted)
+                                .text_color(author_color)
+                                .font_weight(FontWeight::MEDIUM)
                                 .child(author.clone()),
                         )
                         .child(
@@ -333,7 +419,8 @@ impl AppView {
                         this.child(
                             div()
                                 .text_size(px(T::META_SIZE))
-                                .text_color(p.muted)
+                                .text_color(author_color)
+                                .font_weight(FontWeight::MEDIUM)
                                 .child(author),
                         )
                         .child(
@@ -361,15 +448,23 @@ impl AppView {
             } else if group {
                 T::TURN_GAP
             } else {
-                T::MESSAGE_GAP
+                T::CONTINUATION_GAP
             }))
             .when(own, |this| this.justify_end())
             .when(!own, |this| {
-                this.child(self.render_message_avatar_slot(message, group, cx))
+                this.child(self.render_message_avatar_slot(
+                    message,
+                    if user { ends_group } else { group },
+                    cx,
+                ))
             })
             .child(content)
             .when(own, |this| {
-                this.child(self.render_message_avatar_slot(message, group, cx))
+                this.child(self.render_message_avatar_slot(
+                    message,
+                    if user { ends_group } else { group },
+                    cx,
+                ))
             })
             .into_any_element()
     }
@@ -385,6 +480,17 @@ impl AppView {
     }
 
     fn render_message_avatar(&self, message: &Message, cx: &App) -> AnyElement {
+        let gateway = self
+            .web
+            .auth
+            .as_ref()
+            .map(|auth| auth.gateway_url.as_str())
+            .unwrap_or("");
+        let typography = Some(super::sidebar_avatar::AvatarTypography {
+            initials_size: T::AVATAR_INITIALS_SIZE,
+            text_size: T::AVATAR_TEXT_SIZE,
+            initials_weight: FontWeight::SEMIBOLD,
+        });
         if message.role == "user" {
             if message.sender_person.is_none()
                 && message.sender.is_none()
@@ -399,15 +505,25 @@ impl AppView {
                 name: Some("You".into()),
                 ..Default::default()
             };
-            return self.render_person_avatar(
-                message
-                    .sender_person
-                    .as_ref()
-                    .or(self.sidebar_state.people.self_user.as_ref())
-                    .unwrap_or(&fallback),
-                T::AVATAR,
-                cx,
-            );
+            let person = message
+                .sender_person
+                .as_ref()
+                .or(self.sidebar_state.people.self_user.as_ref())
+                .unwrap_or(&fallback);
+            let mut avatar = avatars::person_avatar(person, gateway);
+            if message.sender_person.is_none() {
+                // Unattributed local messages use the local display-name fallback,
+                // while keeping the same admitted profile-image route and cache.
+                avatar.fallback = avatars::person_avatar(
+                    &Person {
+                        name: Some(person.label().to_owned()),
+                        ..Default::default()
+                    },
+                    gateway,
+                )
+                .fallback;
+            }
+            return self.render_avatar_spec(&avatar, T::AVATAR, typography, cx);
         }
         let agent_id = message
             .sender_agent
@@ -419,7 +535,18 @@ impl AppView {
             .iter()
             .find(|agent| Some(agent.id.as_str()) == agent_id)
         {
-            return self.render_agent_avatar(agent, T::AVATAR, cx);
+            return self.render_avatar_spec(
+                &avatars::agent_avatar(
+                    &agent.id,
+                    agent.identity.avatar.as_deref(),
+                    agent.identity.avatar_url.as_deref(),
+                    agent.identity.emoji.as_deref(),
+                    gateway,
+                ),
+                T::AVATAR,
+                typography,
+                cx,
+            );
         }
         if message.sender_agent.is_some() {
             return div().into_any_element();
@@ -430,6 +557,7 @@ impl AppView {
                 fallback: avatars::AvatarFallback::Text(self.selected_agent_avatar()),
             },
             T::AVATAR,
+            typography,
             cx,
         )
     }
@@ -451,7 +579,7 @@ impl AppView {
                 .max_w(px(T::MEDIA_IMAGE_MAX))
                 .max_h(px(T::MEDIA_IMAGE_MAX))
                 .object_fit(ObjectFit::Contain)
-                .rounded(px(T::BUBBLE_RADIUS))
+                .rounded(px(T::MEDIA_IMAGE_RADIUS))
                 .into_any_element();
         }
         div()
@@ -507,6 +635,35 @@ impl AppView {
                     self.selected_agent_name()
                 }
             })
+    }
+
+    fn message_reply_attribution(&self, index: usize) -> Option<String> {
+        let mut senders = self
+            .chat
+            .messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .filter_map(|message| message.sender_person.as_ref())
+            .map(Person::key);
+        let first = senders.next()?;
+        if !senders.any(|sender| sender != first) {
+            return None;
+        }
+        let previous = self
+            .chat
+            .messages
+            .get(..index)?
+            .iter()
+            .rev()
+            .find(|message| message.role == "user" || message.sender_agent.is_some())?;
+        (previous.role == "user")
+            .then(|| {
+                previous
+                    .sender_person
+                    .as_ref()
+                    .map(|person| person.label().to_owned())
+            })
+            .flatten()
     }
 
     fn resolve_message_reply(&self, message: &Message) -> Option<ReplyTarget> {
