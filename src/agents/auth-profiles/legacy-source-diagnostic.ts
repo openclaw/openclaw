@@ -63,10 +63,15 @@ export function readLegacyAuthProfileProviders(
       if (!isRecord(profiles)) {
         return null;
       }
-      // A recognized but empty set is positive data: this file owns nobody's
-      // credentials. Only an unreadable or unrecognized shape is unknown scope.
+      // A recognized envelope carrying an explicit empty set is positive data:
+      // this file owns nobody's credentials. A bare `{}` with no `profiles` key
+      // says nothing about which shape it was meant to be, so it keeps the
+      // owner-wide refusal.
       if (Object.keys(profiles).length === 0) {
-        continue;
+        if (nested) {
+          continue;
+        }
+        return null;
       }
       for (const [key, profile] of Object.entries(profiles)) {
         const credential = nested
