@@ -248,6 +248,13 @@ describe("native Talk action ownership through public plugin registration", () =
         const { socket, result } = await connectNativeSession(fixture);
         socket.serverEvent(nativeTranscript(spoken));
         await flushNativeTranscript(result);
+        await Promise.all(publications);
+        expect(
+          published.mock.calls.some(
+            ([event, payload]) =>
+              event === "session.message" && extractText(payload.message) === spoken,
+          ),
+        ).toBe(true);
         socket.serverEvent(nativeDelegation("custody-request", delegated));
         await providerStarted.promise;
         expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
@@ -330,6 +337,7 @@ describe("native Talk action ownership through public plugin registration", () =
           expect.objectContaining({ api: "realtime", content: [{ type: "text", text: dialogue }] }),
         ]);
         await fixture.invoke("talk.client.close", { voiceSessionId: result.voiceSessionId });
+        await Promise.all(publications);
         const rawCompleted = rawTranscriptRows();
         expect(
           await closeOpenClawAgentDatabaseByPathAsync(
