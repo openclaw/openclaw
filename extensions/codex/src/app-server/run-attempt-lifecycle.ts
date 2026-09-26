@@ -32,10 +32,15 @@ export function shouldKeepCodexSharedAbortOpen(params: {
 export function withCodexAppServerFastModeServiceTier(
   appServer: CodexAppServerRuntimeOptions,
   params: EmbeddedRunAttemptParams,
+  configuredServiceTier = appServer.serviceTier,
 ): CodexAppServerRuntimeOptions {
   const fastMode = typeof params.fastMode === "function" ? params.fastMode() : params.fastMode;
   const serviceTier =
-    fastMode === undefined ? appServer.serviceTier : fastMode ? "priority" : undefined;
+    fastMode === undefined
+      ? configuredServiceTier
+      : fastMode
+        ? (configuredServiceTier ?? "priority")
+        : undefined;
   if (serviceTier === appServer.serviceTier) {
     return appServer;
   }

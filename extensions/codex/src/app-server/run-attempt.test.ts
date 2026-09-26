@@ -6810,6 +6810,24 @@ describe("runCodexAppServerAttempt", () => {
       expectedServiceTier: "priority",
     },
     {
+      name: "fast on with configured tier",
+      fastMode: true,
+      configuredServiceTier: "ultrafast",
+      expectedServiceTier: "ultrafast",
+    },
+    {
+      name: "fast off with configured tier",
+      fastMode: false,
+      configuredServiceTier: "ultrafast",
+      expectedServiceTier: null,
+    },
+    {
+      name: "fast auto active with configured tier",
+      fastMode: () => true,
+      configuredServiceTier: "ultrafast",
+      expectedServiceTier: "ultrafast",
+    },
+    {
       name: "configured non-priority tier",
       fastMode: undefined,
       configuredServiceTier: "flex",
@@ -6818,8 +6836,8 @@ describe("runCodexAppServerAttempt", () => {
   ] satisfies Array<{
     name: string;
     fastMode: EmbeddedRunAttemptParams["fastMode"];
-    configuredServiceTier?: "flex" | "priority";
-    expectedServiceTier?: "flex" | "priority" | null;
+    configuredServiceTier?: "flex" | "priority" | "ultrafast";
+    expectedServiceTier?: "flex" | "priority" | "ultrafast" | null;
   }>)(
     "maps $name to app-server resume and turn service tier",
     async ({ fastMode, configuredServiceTier, expectedServiceTier }) => {
@@ -6850,6 +6868,44 @@ describe("runCodexAppServerAttempt", () => {
       });
     },
   );
+  it("keeps the configured service tier on new fast-mode threads", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.fastMode = true;
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { serviceTier: "ultrafast" } },
+    });
+    await completeStartedRun(run, harness.waitForMethod, harness.completeTurn, "thread-1");
+    for (const method of ["thread/start", "turn/start"]) {
+      expect(harness.requests.find((request) => request.method === method)?.params).toMatchObject({
+        serviceTier: "ultrafast",
+      });
+    }
+  });
+  it("restores the configured tier when fast auto activates after resume", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
+    const { requests, waitForMethod, completeTurn } = createResumeHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    let fastMode = false;
+    params.fastMode = () => fastMode;
+    params.onAgentEvent = (event) => {
+      if (event.stream === "codex_app_server.lifecycle" && event.data.phase === "thread_ready") {
+        fastMode = true;
+      }
+    };
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { serviceTier: "ultrafast" } },
+    });
+    await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
+    expect(requests.find((request) => request.method === "thread/resume")?.params).toMatchObject({
+      serviceTier: null,
+    });
+    expect(requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
+      serviceTier: "ultrafast",
+    });
+  });
   it("reuses the bound auth profile for app-server startup when params omit it", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, {

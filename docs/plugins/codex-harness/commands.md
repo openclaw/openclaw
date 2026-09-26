@@ -101,10 +101,13 @@ resolve to `on`, `off`, or `auto`.
 `/codex fast off` stores `flex` for later conversation-bound native turns; it
 is not a synonym for `/fast off`, and it does not change the shared OpenClaw
 session policy. When a shared Fast-mode run control reaches a Codex harness
-turn, it supersedes `plugins.entries.codex.config.appServer.serviceTier` and
-any binding preference that applies to that turn: Fast on sends `priority`,
-Fast off sends `null`, and auto decides for each model call. The configured or
-bound native tier is used only when no shared run control is supplied.
+turn, it supersedes any binding preference that applies to that turn. Fast on
+sends `plugins.entries.codex.config.appServer.serviceTier` when configured,
+otherwise `priority`. Fast off sends `null`, and auto decides for each model
+call. Auto activation restores the configured tier even if an earlier model
+call cleared it. Without a shared run control, the configured or bound native
+tier is used. Codex still requires the selected model to support the requested
+tier.
 
 `/codex fast status` and `/codex binding` report native preference state, not
 the upstream tier that processed a completed provider request.

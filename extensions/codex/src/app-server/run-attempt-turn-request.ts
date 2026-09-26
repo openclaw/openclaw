@@ -164,6 +164,7 @@ export async function prepareCodexAttemptTurnRequest(
     const turnAppServer = withCodexAppServerFastModeServiceTier(
       connection.mutable.pluginAppServer,
       runtimeParams,
+      connection.appServer.serviceTier,
     );
     connection.mutable.pluginAppServer = turnAppServer;
     const references = prepareWorkspaceReferences();
