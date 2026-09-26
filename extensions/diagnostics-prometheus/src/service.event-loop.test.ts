@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createMetricsHarness, untrusted, withMetricsServer } from "./service.test-helpers.js";
+import {
+  baseEvent,
+  createMetricsHarness,
+  trusted,
+  untrusted,
+  withMetricsServer,
+} from "./service.test-helpers.js";
 
 // HTTP scrapes in this file exercise an authorized operator; the exporter's scope guard is
 // covered in service.http-scope.test.ts.
