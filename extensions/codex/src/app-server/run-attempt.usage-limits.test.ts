@@ -192,7 +192,6 @@ describe("runCodexAppServerAttempt usage limits", () => {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-      const authProfileId = "openai:work";
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "turn/start") {
           throw Object.assign(new Error("You've reached your usage limit."), {
