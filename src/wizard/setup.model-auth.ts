@@ -36,7 +36,7 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  resolvePreferredProviderForAuthChoice: (typeof import("../commands/auth-choice.js"))["resolvePreferredProviderForAuthChoice"];
+  resolvePreferredProviderForAuthChoice: (typeof import("../plugins/provider-auth-choice-preference.js"))["resolvePreferredProviderForAuthChoice"];
 }): Promise<{
   preferredProvider?: string;
   promptWhenAuthChoiceProvided: boolean;
