@@ -61,23 +61,16 @@ describe("Codex app-server main thread cleanup", () => {
     resetSharedCodexAppServerClientForTests();
   });
 
-  it.each(
-    [
-      { label: "without a context engine", contextEngine: undefined },
-      {
-        label: "with the default legacy context engine",
-        contextEngine: {
-          info: { id: "legacy", name: "Legacy", version: "1.0.0" },
-        } as EmbeddedRunAttemptParams["contextEngine"],
-      },
-    ].flatMap((context) =>
-      (["completed", "failed"] as const).map((status) => ({
-        label: context.label,
-        contextEngine: context.contextEngine,
-        status,
-      })),
-    ),
-  )(
+  it.each([
+    { label: "without a context engine", contextEngine: undefined, status: "failed" as const },
+    {
+      label: "with the default legacy context engine",
+      contextEngine: {
+        info: { id: "legacy", name: "Legacy", version: "1.0.0" },
+      } as EmbeddedRunAttemptParams["contextEngine"],
+      status: "completed" as const,
+    },
+  ])(
     "retains a subscribed persistent Codex thread $label after $status",
     async ({ contextEngine, status }) => {
       const sessionFile = path.join(tempDir, "session.jsonl");

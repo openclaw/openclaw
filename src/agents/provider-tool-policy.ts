@@ -17,10 +17,6 @@ export function normalizeToolProviderPolicyKey(value: string): string {
   return modelId ? `${provider}/${modelId}` : provider;
 }
 
-function isCanonicalToolProviderPolicyKey(value: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value) === normalizeToolProviderPolicyKey(value);
-}
-
 type ProviderToolPolicyEntry = {
   key: string;
   policy: ToolPolicyConfig;
@@ -50,7 +46,7 @@ export function resolveProviderToolPolicyEntry(params: {
     if (!normalized) {
       continue;
     }
-    const canonical = isCanonicalToolProviderPolicyKey(key);
+    const canonical = normalizeLowercaseStringOrEmpty(key) === normalized;
     const existing = lookup.get(normalized);
     if (!existing || (canonical && !existing.canonical)) {
       lookup.set(normalized, {

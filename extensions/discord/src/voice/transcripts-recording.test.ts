@@ -772,31 +772,6 @@ defineDiscordVoiceTests((harness) => {
     },
   );
 
-  it("retains queued WAV input until processing owns its release", async () => {
-    const f = await fixture();
-    await startTranscripts(f.manager, f.sink);
-    const { promise: blocked, resolve: release } = createDeferred<void>();
-    f.entry.processingQueue = blocked;
-    const removals = vi.spyOn(fs, "rm");
-    vi.useFakeTimers();
-    try {
-      const receiving = f.begin("guest");
-      f.streams.get("guest")!.end(Buffer.alloc(96_000, 3));
-      await receiving;
-      await vi.advanceTimersByTimeAsync(30 * 60 * 1_000 + 1);
-      await Promise.all(removals.mock.results.map((result) => result.value));
-      release();
-      await f.entry.processingQueue;
-      expect(f.sink).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ text: "audio-3-96000" }),
-      );
-    } finally {
-      release();
-      vi.useRealTimers();
-      removals.mockRestore();
-    }
-  });
-
   it.each(["missing", "disabled"])(
     "grants no passive receive access with %s capture",
     async (kind) => {

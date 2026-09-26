@@ -11,7 +11,7 @@ import {
 } from "./session-management.test-support.ts";
 import { openSidebarSortMenu } from "./session-ownership-visuals.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+const suite = createSessionManagementE2eSuite();
 const sessionKey = "agent:main:design-review";
 const homeKey = "agent:main:my-work";
 const person = (id: string, label: string) => ({

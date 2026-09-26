@@ -38,15 +38,6 @@ struct DashboardNotificationsSnapshot: Encodable, Equatable {
     let test: TestNotificationOutcome?
 }
 
-@MainActor
-final class DashboardNotificationsMessageHandler: NSObject, WKScriptMessageHandler {
-    weak var owner: DashboardWindowController?
-
-    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
-        self.owner?.receiveNotificationsMessage(message)
-    }
-}
-
 extension DashboardWindowController {
     static let notificationsMessageHandlerName = "openclawNotifications"
 

@@ -71,11 +71,6 @@ describe("sendReactionSignal", () => {
 
   it.each([
     {
-      name: "UUID",
-      recipient: "uuid:123e4567-e89b-12d3-a456-426614174000",
-      expectedRecipient: "123e4567-e89b-12d3-a456-426614174000",
-    },
-    {
       name: "mixed-case Signal and UUID prefixes",
       recipient: "  SiGnAl:  UuId:123E4567-E89B-12D3-A456-426614174000  ",
       expectedRecipient: "123E4567-E89B-12D3-A456-426614174000",

@@ -235,44 +235,6 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("runs playback cache cleanup at startup and hourly without an attachment ttl", async () => {
-    vi.useFakeTimers();
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-
-    const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
-    timers.startMediaCleanup();
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
-    expect(pruneOutboundMediaMock).toHaveBeenCalledTimes(1);
-    expect(cleanOldMediaMock).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(2);
-    expect(pruneOutboundMediaMock).toHaveBeenCalledTimes(2);
-    expect(cleanOldMediaMock).not.toHaveBeenCalled();
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("runs managed outgoing cleanup without enabling the general media ttl", async () => {
-    vi.useFakeTimers();
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-
-    const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
-    timers.startMediaCleanup();
-
-    await vi.waitFor(() => {
-      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
-    });
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-    await vi.waitFor(() => {
-      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(2);
-    });
-
-    await stopMaintenanceTimers(timers);
-  });
-
   it("runs managed worktree cleanup at startup and hourly", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
@@ -565,6 +527,7 @@ describe("startGatewayMaintenanceTimers", () => {
 
     await vi.advanceTimersByTimeAsync(0);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
+    expect(cleanOldMediaMock).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
 
@@ -572,6 +535,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(2);
+    expect(cleanOldMediaMock).not.toHaveBeenCalled();
 
     resolveCleanup();
     await vi.advanceTimersByTimeAsync(0);

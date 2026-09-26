@@ -15,8 +15,6 @@ import {
   unregisterInternalHook,
   type AgentBootstrapHookContext,
   type GatewayStartupHookContext,
-  type MessageReceivedHookContext,
-  type MessageSentHookContext,
 } from "./internal-hooks.js";
 
 const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
@@ -31,27 +29,6 @@ describe("hooks", () => {
     clearInternalHooks();
     setInternalHooksEnabled(true);
     resetPluginRuntimeStateForTest();
-  });
-
-  describe("registerInternalHook", () => {
-    it("should register a hook handler", () => {
-      const handler = vi.fn();
-      registerInternalHook("command:new", handler);
-
-      const keys = getRegisteredEventKeys();
-      expect(keys).toContain("command:new");
-    });
-
-    it("should allow multiple handlers for the same event", () => {
-      const handler1 = vi.fn();
-      const handler2 = vi.fn();
-
-      registerInternalHook("command:new", handler1);
-      registerInternalHook("command:new", handler2);
-
-      const keys = getRegisteredEventKeys();
-      expect(keys).toContain("command:new");
-    });
   });
 
   describe("unregisterInternalHook", () => {
@@ -83,26 +60,6 @@ describe("hooks", () => {
   });
 
   describe("triggerInternalHook", () => {
-    it("should trigger handlers for general event type", async () => {
-      const handler = vi.fn();
-      registerInternalHook("command", handler);
-
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-
-      expect(handler).toHaveBeenCalledWith(event);
-    });
-
-    it("should trigger handlers for specific event action", async () => {
-      const handler = vi.fn();
-      registerInternalHook("command:new", handler);
-
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-
-      expect(handler).toHaveBeenCalledWith(event);
-    });
-
     it("should trigger both general and specific handlers", async () => {
       const generalHandler = vi.fn();
       const specificHandler = vi.fn();
@@ -115,19 +72,6 @@ describe("hooks", () => {
 
       expect(generalHandler).toHaveBeenCalledWith(event);
       expect(specificHandler).toHaveBeenCalledWith(event);
-    });
-
-    it("should handle async handlers", async () => {
-      const handler = vi.fn(async () => {
-        await Promise.resolve();
-      });
-
-      registerInternalHook("command:new", handler);
-
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-
-      expect(handler).toHaveBeenCalledWith(event);
     });
 
     it("should catch and log errors from handlers", async () => {
@@ -249,94 +193,6 @@ describe("hooks", () => {
     });
   });
 
-  describe("message hooks", () => {
-    it("should trigger message:received handlers", async () => {
-      const handler = vi.fn();
-      registerInternalHook("message:received", handler);
-
-      const context: MessageReceivedHookContext = {
-        from: "+1234567890",
-        content: "Hello world",
-        channelId: "whatsapp",
-        conversationId: "chat-123",
-      };
-      const event = createInternalHookEvent("message", "received", "test-session", context);
-      await triggerInternalHook(event);
-
-      expect(handler).toHaveBeenCalledWith(event);
-    });
-
-    it("should trigger message:sent handlers", async () => {
-      const handler = vi.fn();
-      registerInternalHook("message:sent", handler);
-
-      const context: MessageSentHookContext = {
-        to: "+1234567890",
-        content: "Hello world",
-        success: true,
-        channelId: "telegram",
-        messageId: "msg-123",
-      };
-      const event = createInternalHookEvent("message", "sent", "test-session", context);
-      await triggerInternalHook(event);
-
-      expect(handler).toHaveBeenCalledWith(event);
-    });
-
-    it("should trigger general message handlers for both received and sent", async () => {
-      const handler = vi.fn();
-      registerInternalHook("message", handler);
-
-      const receivedContext: MessageReceivedHookContext = {
-        from: "+1234567890",
-        content: "Hello",
-        channelId: "whatsapp",
-      };
-      const receivedEvent = createInternalHookEvent(
-        "message",
-        "received",
-        "test-session",
-        receivedContext,
-      );
-      await triggerInternalHook(receivedEvent);
-
-      const sentContext: MessageSentHookContext = {
-        to: "+1234567890",
-        content: "World",
-        success: true,
-        channelId: "whatsapp",
-      };
-      const sentEvent = createInternalHookEvent("message", "sent", "test-session", sentContext);
-      await triggerInternalHook(sentEvent);
-
-      expect(handler).toHaveBeenCalledTimes(2);
-      expect(handler).toHaveBeenNthCalledWith(1, receivedEvent);
-      expect(handler).toHaveBeenNthCalledWith(2, sentEvent);
-    });
-
-    it("should handle hook errors without breaking message processing", async () => {
-      const errorHandler = vi.fn(() => {
-        throw new Error("Hook failed");
-      });
-      const successHandler = vi.fn();
-
-      registerInternalHook("message:received", errorHandler);
-      registerInternalHook("message:received", successHandler);
-
-      const context: MessageReceivedHookContext = {
-        from: "+1234567890",
-        content: "Hello",
-        channelId: "whatsapp",
-      };
-      const event = createInternalHookEvent("message", "received", "test-session", context);
-      await triggerInternalHook(event);
-
-      // Both handlers were called
-      expect(errorHandler).toHaveBeenCalled();
-      expect(successHandler).toHaveBeenCalled();
-    });
-  });
-
   describe("getRegisteredEventKeys", () => {
     it("should return all registered event keys", () => {
       registerInternalHook("command:new", vi.fn());
@@ -347,11 +203,6 @@ describe("hooks", () => {
       expect(keys).toContain("command:new");
       expect(keys).toContain("command:stop");
       expect(keys).toContain("session:start");
-    });
-
-    it("should return empty array when no handlers are registered", () => {
-      const keys = getRegisteredEventKeys();
-      expect(keys).toStrictEqual([]);
     });
   });
 

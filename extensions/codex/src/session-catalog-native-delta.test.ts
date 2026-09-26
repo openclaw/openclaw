@@ -180,11 +180,15 @@ it("walks remote pages beyond the resident bound without projecting the uncached
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(pages);
     Object.defineProperty(native[20_000]!, "preview", { get: tailPreview });
     await vi.advanceTimersByTimeAsync(15 * 60_000);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(pages);
+    await control.listPage({ cwd: "/workspace/project", limit: 64 });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(pages + 1);
+    await control.listPage({ limit: 64 });
     await lastPage.promise;
     const refreshed = await control.listPage({ limit: 64 });
     await factory.stop();
     expect(refreshed).toEqual(first);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(pages * 2);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(pages * 2 + 1);
     expect(tailPreview).not.toHaveBeenCalled();
   } finally {
     try {
@@ -273,6 +277,7 @@ it("reconciles displayed native metadata and explicit Git clears without activit
       return { data: [older] };
     });
     await vi.advanceTimersByTimeAsync(15 * 60_000);
+    await control.listPage({});
     await requested.promise;
     client.send({ method: "turn/completed", params: { threadId: native.id, turn: {} } });
     const request = JSON.parse(await client.waitForWrite(0));

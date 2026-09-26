@@ -243,7 +243,7 @@ export async function fetchMcpAppView(params: {
     if (!agentId) {
       throw new Error("MCP App view requires a resolved session owner");
     }
-    if (!params.runtime.readResource || !params.uiResourceUri.startsWith("ui://")) {
+    if (!params.runtime.readResource) {
       return undefined;
     }
     const result = asRecord(

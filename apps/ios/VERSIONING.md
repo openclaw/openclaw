@@ -2,7 +2,7 @@
 
 OpenClaw iOS releases retain their gateway association while allowing multiple
 public App Store releases for one gateway version. The release planner derives
-the active release identity from the mobile gateway version and App Store Connect.
+the active release identity from the repository and App Store Connect.
 
 ## Goals
 
@@ -11,7 +11,7 @@ the active release identity from the mobile gateway version and App Store Connec
 - support multiple candidate builds per App Store version
 - make every release identity deterministic and inspectable before upload
 - keep Apple bundle fields valid for App Store Connect
-- generate version-specific App Store release notes from the iOS changelog
+- generate version-specific App Store release notes from changes since the last public build
 
 ## Version model
 
@@ -44,19 +44,33 @@ exact versions again; all future uploads use the appended single-digit format.
 
 ## Release commands
 
-Prepare the shared mobile release, inspect the live iOS plan, finalize the
-shared release notes, commit the five release artifacts, then upload:
+Run **iOS Store Release** in GitHub Actions from `main`, or use the same release entry
+point from a clean local `main` checkout that matches `origin/main`:
 
 ```bash
-node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
-pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 pnpm ios:release:upload
 ```
 
-`--version`, `--revision`, and `--build-number` remain available as checked
-overrides. Upload rejects any override that differs from the live plan. Offline
-archive validation still requires explicit values:
+GitHub releases freeze the `main` commit selected when the workflow is dispatched,
+even if `main` advances while the run is queued. Local releases freeze current
+`main`. The entry point freezes the live plan, generates and reviews release
+notes from Git history, and saves them in an immutable JSON
+artifact. It builds that source in an isolated worktree, uploads the IPA, waits
+for processing, then stages the saved notes and selects the processed build on
+the editable App Store version. The release does not edit tracked files, create
+preparation commits, or open metadata PRs. App Review submission remains manual.
+
+Notes generation requires `OPENAI_API_KEY` alongside the existing signing,
+App Store Connect, and repository credentials.
+
+Inspect the read-only plan separately:
+
+```bash
+pnpm ios:release:plan -- --json
+```
+
+The planner's `--version`, `--revision`, and `--build-number` options are checked
+overrides, never alternate release identities. No release arguments are required. Local archive validation still requires explicit values:
 
 ```bash
 pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
@@ -104,38 +118,39 @@ processing, then fails the attempt rather than polling indefinitely.
 
 ## Release notes
 
-Production release notes require an exact App Store version heading:
+The notes baseline is the exact build attached to the latest public App Store
+version. Later TestFlight candidates do not advance it. Previously public
+versions that were replaced or removed from sale remain release history. A
+missing or ambiguous attached build stops planning; an empty baseline is valid
+only when the app has never had a public version.
 
-```markdown
-## 2026.7.21
+The shared generator resolves that build's immutable source ref, examines the
+changes through the selected source SHA, and saves reviewed en-US text in
+`release-notes.json`. The artifact records its source, store identity, baseline,
+and content hashes. Both the CLI and GitHub Action upload the same saved text.
+Missing or mismatched artifacts fail before upload; the store path never falls
+back to a changelog. A changed public baseline during preparation stops the
+attempt before its first store write.
 
-- Fixed an iOS issue.
-```
+After Apple processes the IPA, the pipeline records its source ref, writes
+What's New, selects that exact build, and reads both back. For the sole first
+App Store version, Apple has no What's New field: the pipeline retains the
+notes artifact and selects the build, reporting that omission explicitly.
 
-The generated App Store text automatically starts with:
-
-```text
-Gateway version: 2026.7.2
-```
-
-Production revision builds do not fall back to the gateway heading or
-`## Unreleased`. Local version checks without `--revision` retain the existing
-gateway/`Unreleased` fallback for development.
-
-The mobile cutter moves new notes into that exact heading and is idempotent:
-
-```bash
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --check
-```
+`apps/ios/CHANGELOG.md`, `pnpm ios:release:cut`, and
+`pnpm ios:version -- --field releaseNotes` remain historical changelog tools.
+They do not supply notes or gate store uploads. Version checks and local archive
+validation do not require changelog preparation.
 
 ## Source of truth and generated files
 
 Source files:
 
-- `apps/mobile/version.json`: default gateway version for mobile builds and release planning
+- root `package.json`: default gateway version for local builds and release planning
 - App Store Connect versions and build uploads: revision/build lifecycle state
 - explicit release arguments: checked overrides only
-- `apps/ios/CHANGELOG.md`: exact App Store release notes
+- Git history and the latest public build source ref: release-note evidence
+- `apps/ios/CHANGELOG.md`: historical human-maintained notes
 - `apps/ios/VERSIONING.md`: versioning contract
 
 Generated or derived files:
@@ -143,21 +158,21 @@ Generated or derived files:
 - `apps/ios/build/Version.xcconfig`
 - `apps/ios/build/AppStoreRelease.xcconfig`
 - `apps/ios/SwiftSources.input.xcfilelist`
-- temporary Fastlane metadata rendered from `apps/ios/CHANGELOG.md`
+- `ios-plan.json` and `release-notes.json` in the printed recovery directory
+- temporary Fastlane metadata for screenshots and the App Review attachment
 
 The canonical implementation is split across:
 
-- `scripts/lib/ios-version.ts`: validation, encoding, and release-note rendering
+- `scripts/lib/ios-version.ts`: version validation, encoding, and historical changelog rendering
 - `scripts/lib/ios-release-plan.ts`: deterministic revision/build selection and
   changelog cutting
-- `scripts/lib/mobile-version.ts`: canonical mobile gateway version parsing and reading
-- `scripts/mobile-release-version.ts`: shared Android preparation and iOS finalization
 - `scripts/ios-version.ts`: JSON, shell, and single-field queries
 - `scripts/ios-release-plan.ts`: pure planner CLI used by the Fastlane adapter
-- `scripts/ios-release-plan.sh`: public read-only planning entry point
-- `scripts/ios-release-cut.{sh,ts}`: retired compatibility entry points
-- `scripts/ios-sync-versioning.ts`: release-note validation
-- `scripts/ios-release-upload.sh`: guarded upload entry point
+- `scripts/ios-release-{plan,cut}.sh`: public planning and cutting entry points
+- `scripts/ios-sync-versioning.ts`: version-input validation
+- `scripts/lib/mobile-release-notes.ts`: shared notes generation, review, and artifact validation
+- `scripts/mobile-release.mjs`: isolated preparation, upload orchestration, and staging recovery
+- `scripts/ios-release-upload.sh`: guarded Fastlane upload wrapper invoked by the release entry point
 - `apps/ios/fastlane/Fastfile`: remote preflight, build allocation, metadata,
   archive, validation, and upload
 
@@ -176,34 +191,54 @@ refs/openclaw/mobile-releases/ios/2026.7.21-3
 ```
 
 The ref is checked before archive/upload work and created only after App Store
-Connect accepts the upload. Existing refs are immutable.
+Connect finishes processing the upload, before notes and build selection are
+staged. Existing refs are immutable; their presence proves the uploaded source,
+not successful completion of later staging.
 
 ## Normal workflow
 
-1. Prepare the mobile gateway and Android release artifacts:
-
-```bash
-node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
-```
-
-2. Capture the live iOS plan, then finalize and commit the five release artifacts:
-
-```bash
-pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
-node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
-```
-
-3. Upload the planned build:
-
-```bash
-pnpm ios:release:upload
-```
-
-4. If the run fails, stop. After a human repairs App Store Connect, rerun the
-   same pipeline; it keeps the revision and advances the build automatically.
-5. Select one processed build and submit it manually in App Store Connect.
+1. Commit and land the app changes on `main`.
+2. Run **iOS Store Release** from `main`, or run `pnpm ios:release:upload` locally.
+3. The pipeline generates notes, captures screenshots, archives, uploads, and
+   stages the processed build and saved notes for manual App Review submission.
+4. If preparation or upload fails, inspect the failing step and store state
+   before retrying. Every Apple-visible attempt consumes its build number.
+5. Review and submit the selected build manually in App Store Connect.
 6. After distribution, the next run allocates the next App Store revision.
 
-Agent-driven uploads must use `pnpm ios:release:upload`. A failed upload is
-terminal for that attempt: report the failing step rather than switching to a
-lower-level archive, upload, staging, or submission command.
+## Staging recovery
+
+If upload and processing succeeded but saving notes or selecting the build
+failed, retain the printed recovery directory or download its workflow artifact.
+Retry staging from a clean checkout using that original saved state:
+
+```bash
+node scripts/mobile-release.mjs stage --platform ios --recovery-dir /path/to/recovery
+```
+
+This verifies the immutable upload ref, restores the original source if needed,
+and uses the saved notes and build identity. It does not generate new notes,
+replan a release, build, or upload another IPA. App Store Connect credentials
+are required. A locked version, invalid or expired build, newer selected build,
+or mismatched source stops recovery for human resolution. Partial staging can
+be retried with the same command after the cause is fixed.
+
+The recovery directory contains the saved plan and notes, any exported signed
+binaries under `artifacts/`, and screenshot fixture PNGs and the capture-attempt
+ledger under `screenshot-diagnostics/`. Raw Xcode logs and XCTest results are
+excluded because they can contain credentials. Failed local attempts also keep
+their source worktree; staging recovery can restore source from the immutable
+upload ref. CI retains the recovery, binary, and screenshot artifacts for 30 days.
+Binary and screenshot ZIPs can contain their recovery subdirectories or matching
+`source/apps/ios/` build paths when an interrupted command did not finish collection.
+Keep the original notes artifact for staging recovery; a source SHA alone cannot
+reconstruct the exact reviewed text.
+
+If no successful upload ref exists, inspect App Store Connect before taking
+further action. An uncertain upload must not be repeated blindly. A failed ref
+write reports its record-only recovery command; reconcile that upload before
+using staging recovery.
+
+Agent-driven uploads must use `pnpm ios:release:upload`. Report the failing step
+and use this recovery path only for an already uploaded build. App Review
+submission remains manual.

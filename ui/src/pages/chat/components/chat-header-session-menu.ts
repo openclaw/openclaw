@@ -17,6 +17,7 @@ import {
 import {
   compactSessionMenuViewForValue,
   renderCompactSessionMenuFrame,
+  renderCompactSessionMenuNavigationItem,
   type CompactSessionMenuView,
 } from "../../../components/session-menu-compact.ts";
 import type { SessionCreatedActor } from "../../../components/session-owner-chip.ts";
@@ -243,27 +244,6 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     });
   }
 
-  private renderCompactNavigationItem(
-    view: Exclude<CompactMenuView, "root">,
-    label: string,
-    icon: TemplateResult,
-    disabled = false,
-  ) {
-    return html`
-      <wa-dropdown-item
-        class="session-menu__item"
-        value=${`compact:open-${view}`}
-        ?disabled=${disabled}
-      >
-        <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
-        <span class="session-menu__text">${label}</span>
-        <span slot="details" class="session-menu__icon session-menu__chevron" aria-hidden="true"
-          >${icons.chevronRight}</span
-        >
-      </wa-dropdown-item>
-    `;
-  }
-
   private renderQuickActions(group: "panels" | "layout", actions: HeaderMenuQuickAction[]) {
     if (actions.length === 0) {
       return nothing;
@@ -271,7 +251,11 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     const label = t(group === "panels" ? "chat.sessionHeader.panels" : "chat.sessionHeader.layout");
     const icon = group === "panels" ? icons.panelRightOpen : icons.columns2;
     if (this.compact) {
-      return this.renderCompactNavigationItem(group, label, icon);
+      return renderCompactSessionMenuNavigationItem({
+        value: `compact:open-${group}`,
+        label,
+        icon,
+      });
     }
     return html`
       <wa-dropdown-item class="session-menu__item">
@@ -377,17 +361,21 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       ${this.renderQuickActions("layout", this.layoutActions)}
       ${
         this.compact && this.sharing?.session && canManageChatSessionSharing(this.sharing.session)
-          ? this.renderCompactNavigationItem(
-              "sharing",
-              t("chat.sessionSharing.menu"),
-              icons.users,
-              Boolean(this.sharing.openDisabledReason),
-            )
+          ? renderCompactSessionMenuNavigationItem({
+              value: "compact:open-sharing",
+              label: t("chat.sessionSharing.menu"),
+              icon: icons.users,
+              disabled: Boolean(this.sharing.openDisabledReason),
+            })
           : nothing
       }
       ${
         this.compact
-          ? this.renderCompactNavigationItem("view", t("chat.view.menu"), icons.eye)
+          ? renderCompactSessionMenuNavigationItem({
+              value: "compact:open-view",
+              label: t("chat.view.menu"),
+              icon: icons.eye,
+            })
           : html`<wa-dropdown-item class="session-menu__item">
               <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.eye}</span>
               <span class="session-menu__text">${t("chat.view.menu")}</span>

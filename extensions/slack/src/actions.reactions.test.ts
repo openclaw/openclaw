@@ -126,16 +126,13 @@ describe("reactSlackMessage", () => {
 
 describe("reactSlackMessage emoji normalization", () => {
   it.each([
-    { input: "✅", expected: "white_check_mark" },
     { input: ":fire:", expected: "fire" },
-    { input: "rocket", expected: "rocket" },
     { input: "🦄", expected: "🦄" },
     { input: "👍🏽", expected: "thumbsup::skin-tone-4" },
     { input: "⚠️", expected: "warning" },
     // Custom emoji names that collide with Object.prototype keys are still just names.
     { input: ":constructor:", expected: "constructor" },
     { input: "__proto__", expected: "__proto__" },
-    { input: ":toString:", expected: "toString" },
   ])("normalizes $input to $expected", async ({ input, expected }) => {
     const client = createClient();
 

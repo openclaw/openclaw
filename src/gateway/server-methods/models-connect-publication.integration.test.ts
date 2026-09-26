@@ -23,9 +23,6 @@ import {
 } from "../test-helpers.e2e.js";
 
 // Optional startup prewarming must not compete with the catalog request drain.
-vi.mock("../server-startup-context-cache-prewarm.js", () => ({
-  scheduleContextCachePrewarm: () => ({ stop() {} }),
-}));
 vi.mock("../server-startup-handler-prewarm.js", () => ({
   scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
 }));

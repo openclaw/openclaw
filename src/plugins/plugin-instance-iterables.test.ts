@@ -162,6 +162,95 @@ describe("plugin async iterable protocol", () => {
     await iterator.return();
   });
 
+  it.each(["inner", "outer"] as const)(
+    "fences nested result readers and callable chunks when the %s consumer closes",
+    async (closed) => {
+      const instance = owner();
+      const inner = instance.retainConsumer();
+      const outer = instance.retainConsumer();
+      const called = vi.fn(() => "chunk");
+      const source = instance.wrap({
+        async *[Symbol.asyncIterator]() {
+          yield { read: called };
+        },
+      });
+      const iterator = outer.wrap(inner.wrap(source))[Symbol.asyncIterator]();
+      try {
+        const next = await iterator.next();
+        if (next.done) {
+          throw new Error("Expected a callable chunk");
+        }
+        const chunk = next.value;
+        expect(chunk.read()).toBe("chunk");
+        (closed === "inner" ? inner : outer).release();
+        expect(instance.run(() => "live")).toBe("live");
+        expect(() => next.value).toThrow(/closed/);
+        expect(() => chunk.read()).toThrow(/closed/);
+        expect(called).toHaveBeenCalledOnce();
+      } finally {
+        inner.release();
+        outer.release();
+      }
+    },
+  );
+
+  it("preserves fixed result-view identity when a callable payload becomes plain data", async () => {
+    const instance = owner();
+    const consumer = instance.retainConsumer();
+    const payload = { label: "chunk", read: () => "value" };
+    const result = consumer.wrap({ done: false, value: payload });
+    const pinned = result.value;
+    Object.defineProperty(result, "value", { configurable: false, writable: false });
+    Reflect.deleteProperty(payload, "read");
+    const stream = consumer.wrap({
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => result,
+          return: async () => ({ done: true, value: undefined }),
+        };
+      },
+    });
+    const iterator = stream[Symbol.asyncIterator]();
+    try {
+      const next = await iterator.next();
+      expect(next.value).toBe(pinned);
+      expect(next.value?.label).toBe("chunk");
+      await iterator.return();
+    } finally {
+      consumer.release();
+    }
+  });
+
+  it("admits a replacement getter on an otherwise core-owned iterator result", async () => {
+    const instance = owner();
+    const original = instance.wrap(
+      (async function* () {
+        yield "first";
+      })(),
+    );
+    const result = await original.next();
+    const getter = vi.fn(() => {
+      expect(instance.hasActiveCall).toBe(true);
+      return "replacement";
+    });
+    Object.defineProperty(result, "value", { get: getter });
+    const stream = instance.wrap({
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => result,
+          return: async () => ({ done: true, value: undefined }),
+        };
+      },
+    });
+    const iterator = stream[Symbol.asyncIterator]();
+    const next = await iterator.next();
+    expect(getter).not.toHaveBeenCalled();
+    expect(next.value).toBe("replacement");
+    expect(getter).toHaveBeenCalledOnce();
+    await iterator.return();
+    await original.return();
+  });
+
   it.each(["missing", "done-false"] as const)(
     "releases an early-break admission when return is %s",
     async (kind) => {

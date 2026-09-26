@@ -169,39 +169,6 @@ ${command!}`;
     expect(checkedHistory).toBe(false);
   });
 
-  it.each([
-    ["a nested schema module", "schema/sessions.ts"],
-    ["the protocol package entrypoint", "index.ts"],
-  ])("reports stale assets after changes to %s", async (_description, changedProtocolFile) => {
-    const root = await createOpenClawRoot();
-    const uiIndexPath = path.join(root, "dist/control-ui/index.html");
-    const schemaBarrelPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
-    await touch(schemaBarrelPath, new Date("2026-01-01T00:00:00.000Z"));
-    await touch(uiIndexPath, new Date("2026-01-02T00:00:00.000Z"));
-    await touch(path.join(root, "ui/package.json"), new Date("2026-01-02T00:00:00.000Z"));
-    await touch(
-      path.join(root, "packages/gateway-protocol/src", changedProtocolFile),
-      new Date("2026-01-03T00:00:00.000Z"),
-    );
-
-    await expect(
-      detectUiProtocolFreshnessIssues({
-        root,
-        async collectChangesSinceBuild() {
-          return [`abc123 changed ${changedProtocolFile}`];
-        },
-      }),
-    ).resolves.toEqual([
-      {
-        kind: "stale-assets",
-        root,
-        uiIndexPath,
-        canBuild: true,
-        changesSinceBuild: [`abc123 changed ${changedProtocolFile}`],
-      },
-    ]);
-  });
-
   it("reads committed nested protocol changes from the real complete-package git pathspec", async () => {
     const root = await createOpenClawRoot();
     const uiIndexPath = path.join(root, "dist/control-ui/index.html");

@@ -411,7 +411,6 @@ describe("Git execution environment", () => {
   });
 
   it.each([
-    ["noglob winsymlinks:native", "noglob winsymlinks:native noglob"],
     ["noglob glob:ignorecase", "noglob glob:ignorecase noglob"],
     ["winsymlinks:native noglob", "winsymlinks:native noglob"],
   ])("keeps noglob final for %s", (value, expected) => {

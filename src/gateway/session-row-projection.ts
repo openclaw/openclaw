@@ -1,9 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import {
-  getSubagentSessionListReadSnapshotIdentity,
-  prepareSubagentSessionListReadCache,
-} from "../agents/subagents/registry/subagent-registry-state.js";
+import { createSubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
@@ -62,8 +59,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const discoveryRead = prepareAgentDatabaseDeletionSnapshotRead({ env }, "runtime");
-  while (!getSubagentSessionListReadSnapshotIdentity()) {
-    await prepareSubagentSessionListReadCache();
+  const subagents = createSubagentSessionListReadView({ env });
+  while (!subagents.snapshotIdentity()) {
+    await subagents.prepare();
   }
   let cfg = params.getConfig?.() ?? params.cfg;
   const getPolicyConfig = () => params.getPolicyConfig?.() ?? cfg;
@@ -82,8 +80,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   let topologyDirty = true,
     disposed = false;
   const prepareRegistryFacts = (): Promise<void> | undefined =>
-    !disposed && !inOwnerContext(getSubagentSessionListReadSnapshotIdentity)
-      ? inOwnerContext(prepareSubagentSessionListReadCache)
+    !disposed && !inOwnerContext(subagents.snapshotIdentity)
+      ? inOwnerContext(subagents.prepare)
       : undefined;
   const placementFacts = createSessionRowPlacementProjection(params.placementFactsReader, () =>
     !disposed && topologyDirty ? topology() : prepareRegistryFacts(),
@@ -125,7 +123,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       void ensureMaterialized().catch(() => {});
     },
   });
-  const metadata = createSessionRowProjectionContext();
+  const metadata = createSessionRowProjectionContext(subagents);
   const backfill = createSessionRowProjectionBackfill({
     ready: ensureMaterialized,
     read: (id) => rows.get(id),
@@ -315,7 +313,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     } else if (!presentationOnly) {
       const query = { ...change, key: change.sessionKey };
       const exact = matching(query);
-      const registryFactsReady = inOwnerContext(getSubagentSessionListReadSnapshotIdentity);
+      const registryFactsReady = inOwnerContext(subagents.snapshotIdentity);
       for (const previous of new Set([...exact, ...matching(query, "id")])) {
         records.invalidateDatabaseFacts(previous);
         if (previous.entry && change.scope !== "session-entry") {
@@ -366,7 +364,12 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     // Dirty keys retain failed background work for the next reader.
     void ensureMaterialized().catch(() => {});
   }
-  const { readSourceEntry, readChildLinks } = createSessionRowRelationReads({
+  const { readSourceEntry, readChildLinks, readPreparedSpawnedBy } = createSessionRowRelationReads({
+    env,
+    inOwnerContext,
+    isReady: () => !disposed && !topologyDirty,
+    preparedContext: () => metadata.readPrepared(epoch),
+    lookup,
     config: () => cfg,
     rows,
     byParent,
@@ -424,11 +427,13 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   } = createSessionRowRefresh({
     rows,
     dirty,
+    registrySnapshot: subagents.snapshotIdentity,
+    env,
     state: () => ({
       cfg,
       disposed,
       topologyDirty,
-      registryPrepared: Boolean(inOwnerContext(getSubagentSessionListReadSnapshotIdentity)),
+      registryPrepared: Boolean(inOwnerContext(subagents.snapshotIdentity)),
     }),
     runAsOwner: inOwnerContext,
     lookup,
@@ -546,6 +551,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     disposed = true;
     generations.invalidate();
     disposeRefresh();
+    metadata.dispose();
     catalog.dispose();
     membership.dispose();
     placementFacts.dispose();
@@ -615,6 +621,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     observeGeneration: generations.observeGeneration,
     readPreparedRowContext: () =>
       disposed ? undefined : inOwnerContext(() => metadata.readPrepared(epoch)),
+    readPreparedSpawnedBy,
     capture(query: records.Lookup) {
       if (disposed) {
         return undefined;

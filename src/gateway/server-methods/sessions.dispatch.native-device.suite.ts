@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createDeviceWorkerRuntime } from "../worker-environments/device-provider.js";
@@ -73,6 +74,7 @@ export function registerNativeDeviceDispatchTests({
     const ensureNodeWorkerBundle = vi.fn(async () => BOOTSTRAP_RECEIPT);
     const service = createWorkerEnvironmentService({
       store,
+      scheduler: createTestGatewayScheduler(),
       getConfig: () => config,
       resolveProvider: (id) => (id === "device" ? runtime.provider : undefined),
       prepareInstallation: async () => BUNDLE_ARTIFACT,

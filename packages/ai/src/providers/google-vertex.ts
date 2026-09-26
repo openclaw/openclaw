@@ -1,13 +1,7 @@
-import {
-  type GenerateContentParameters,
-  GoogleGenAI,
-  type HttpOptions,
-  ResourceScope,
-} from "@google/genai";
+import { GoogleGenAI, type HttpOptions, ResourceScope } from "@google/genai";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
-// Google Vertex provider wires Google shared streaming through Vertex credentials.
 import { buildManagedModelFetch } from "../transports/host-policy.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -27,7 +21,6 @@ interface GoogleVertexOptions extends GoogleProviderOptions {
 const API_VERSION = "v1";
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 
-// Counter for generating unique tool call IDs
 let toolCallCounter = 0;
 
 export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOptions> = (
@@ -43,14 +36,8 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
     model,
     output,
     options,
-    createClient: () => {
-      const apiKey = resolveApiKey(options);
-      // Create the client using either a Vertex API key, if provided, or ADC with project and location
-      return apiKey
-        ? createClientWithApiKey(model, apiKey, options?.headers)
-        : createClient(model, resolveProject(options), resolveLocation(options), options?.headers);
-    },
-    buildParams: () => buildParams(model, context, options),
+    createClient: () => createClient(model, options),
+    buildParams: () => buildGoogleGenerateContentParams(model, context, options),
     nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
   });
 
@@ -69,33 +56,17 @@ export const streamSimpleGoogleVertex: StreamFunction<"google-vertex", SimpleStr
   } satisfies GoogleVertexOptions);
 };
 
-function createClient(
-  model: Model<"google-vertex">,
-  project: string,
-  location: string,
-  optionsHeaders?: Record<string, string>,
-): GoogleGenAI {
-  return new GoogleGenAI({
-    vertexai: true,
-    project,
-    location,
-    apiVersion: API_VERSION,
-    httpOptions: buildHttpOptions(model, optionsHeaders),
-  });
-}
-
-function createClientWithApiKey(
-  model: Model<"google-vertex">,
-  apiKey: string,
-  optionsHeaders?: Record<string, string>,
-): GoogleGenAI {
+function createClient(model: Model<"google-vertex">, options?: GoogleVertexOptions): GoogleGenAI {
+  const apiKey = resolveApiKey(options);
   // Authentication is resolved before construction; the SDK also retains the host fetch policy.
-  const resolvedApiKey = getAiTransportHost().resolveSecretSentinel(apiKey);
+  const credentials = apiKey
+    ? { apiKey: getAiTransportHost().resolveSecretSentinel(apiKey) }
+    : { project: resolveProject(options), location: resolveLocation(options) };
   return new GoogleGenAI({
     vertexai: true,
-    apiKey: resolvedApiKey,
+    ...credentials,
     apiVersion: API_VERSION,
-    httpOptions: buildHttpOptions(model, optionsHeaders),
+    httpOptions: buildHttpOptions(model, options?.headers),
   });
 }
 
@@ -146,14 +117,10 @@ function baseUrlIncludesApiVersion(baseUrl: string): boolean {
 
 function resolveApiKey(options?: GoogleVertexOptions): string | undefined {
   const apiKey = options?.apiKey?.trim() || process.env.GOOGLE_CLOUD_API_KEY?.trim();
-  if (!apiKey || apiKey === GCP_VERTEX_CREDENTIALS_MARKER || isPlaceholderApiKey(apiKey)) {
+  if (!apiKey || apiKey === GCP_VERTEX_CREDENTIALS_MARKER || /^<[^>]+>$/.test(apiKey)) {
     return undefined;
   }
   return apiKey;
-}
-
-function isPlaceholderApiKey(apiKey: string): boolean {
-  return /^<[^>]+>$/.test(apiKey);
 }
 
 function resolveProject(options?: GoogleVertexOptions): string {
@@ -179,12 +146,4 @@ function resolveLocation(options?: GoogleVertexOptions): string {
     );
   }
   return location;
-}
-
-function buildParams(
-  model: Model<"google-vertex">,
-  context: Context,
-  options: GoogleVertexOptions = {},
-): GenerateContentParameters {
-  return buildGoogleGenerateContentParams(model, context, options);
 }

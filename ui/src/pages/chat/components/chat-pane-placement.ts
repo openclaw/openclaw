@@ -134,61 +134,50 @@ export function renderChatPanePlacement(props: {
               </dl>`
             : nothing
         }
-        ${
-          placementState === "active"
+        ${(
+          [
+            [
+              placementState === "active",
+              `chat-pane__placement-move ${deviceOffline ? "session-menu__item--destructive" : ""}`,
+              deviceOffline,
+              moveDisabledReason,
+              icons.monitor,
+              deviceOffline ? "sessionsView.continueOnGatewayMenu" : "sessionsView.moveSession",
+              props.onPlacementMove,
+            ],
+            [
+              dispatchRequired || restartable,
+              "chat-pane__placement-recovery",
+              false,
+              recoveryDisabledReason,
+              icons.monitor,
+              dispatchRequired ? "sessionsView.chooseWorker" : "sessionsView.restartSession",
+              props.onPlacementRecover,
+            ],
+            [
+              stopAction,
+              "session-menu__item--destructive chat-pane__placement-reclaim",
+              true,
+              reclaimDisabledReason,
+              icons.stop,
+              null,
+              props.onPlacementReclaim,
+            ],
+          ] as const
+        ).map(([visible, className, destructive, disabledReason, icon, labelKey, onClick]) =>
+          visible
             ? html`<wa-dropdown-item
-                class="session-menu__item chat-pane__placement-move ${
-                  deviceOffline ? "session-menu__item--destructive" : ""
-                }"
-                variant=${deviceOffline ? "danger" : nothing}
-                ?disabled=${Boolean(moveDisabledReason)}
-                title=${moveDisabledReason ?? nothing}
-                @click=${() => !moveDisabledReason && props.onPlacementMove?.()}
+                class=${`session-menu__item ${className}`}
+                variant=${destructive ? "danger" : nothing}
+                ?disabled=${Boolean(disabledReason)}
+                title=${disabledReason ?? nothing}
+                @click=${() => !disabledReason && onClick?.()}
               >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.monitor}</span
-                >
-                <span class="session-menu__text"
-                  >${
-                    deviceOffline
-                      ? t("sessionsView.continueOnGatewayMenu")
-                      : t("sessionsView.moveSession")
-                  }</span
-                >
+                <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
+                <span class="session-menu__text">${labelKey ? t(labelKey) : worker.stopLabel}</span>
               </wa-dropdown-item>`
-            : nothing
-        }
-        ${
-          dispatchRequired || restartable
-            ? html`<wa-dropdown-item
-                class="session-menu__item chat-pane__placement-recovery"
-                ?disabled=${Boolean(recoveryDisabledReason)}
-                title=${recoveryDisabledReason ?? nothing}
-                @click=${() => !recoveryDisabledReason && props.onPlacementRecover?.()}
-              >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.monitor}</span
-                >
-                <span class="session-menu__text"
-                  >${t(dispatchRequired ? "sessionsView.chooseWorker" : "sessionsView.restartSession")}</span
-                >
-              </wa-dropdown-item>`
-            : nothing
-        }
-        ${
-          stopAction
-            ? html`<wa-dropdown-item
-                class="session-menu__item session-menu__item--destructive chat-pane__placement-reclaim"
-                variant="danger"
-                ?disabled=${Boolean(reclaimDisabledReason)}
-                title=${reclaimDisabledReason ?? nothing}
-                @click=${() => !reclaimDisabledReason && props.onPlacementReclaim?.()}
-              >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.stop}</span>
-                <span class="session-menu__text">${worker.stopLabel}</span>
-              </wa-dropdown-item>`
-            : nothing
-        }
+            : nothing,
+        )}
       </wa-dropdown>
       ${
         deviceOffline

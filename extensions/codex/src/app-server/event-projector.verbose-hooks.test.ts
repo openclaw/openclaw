@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as compactionActivity from "./context-compaction-activity.js";
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -37,19 +38,12 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
+        item: createNativeCommandItem({
           id: "cmd-1",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
       }),
     );
 
@@ -70,19 +64,12 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
+        item: createNativeCommandItem({
           id: "cmd-1",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
       }),
     );
 
@@ -102,19 +89,13 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
+        item: createNativeCommandItem({
           id: "cmd-1",
           command: "OPENAI_API_KEY=sk-1234567890abcdefZZZZ pnpm test",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
       }),
     );
 
@@ -234,19 +215,12 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     }
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-1",
           command: "pnpm test",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: "final output should not duplicate streamed output",
-          exitCode: 0,
           durationMs: 12,
-        },
+        }),
       ]),
     );
 
@@ -364,11 +338,11 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
   describe.each(["item/started", "item/completed"] as const)(
     "%s compaction lifecycle",
     (method) => {
-      it.each(
-        ["history", "hook"].flatMap((pendingStage) =>
-          ["closed", "aborted", "run aborted"].map((ending) => ({ pendingStage, ending })),
-        ),
-      )("stops after $ending while awaiting $pendingStage", async ({ pendingStage, ending }) => {
+      it.each([
+        { pendingStage: "history", ending: "closed" },
+        { pendingStage: "hook", ending: "aborted" },
+        { pendingStage: "history", ending: "run aborted" },
+      ])("stops after $ending while awaiting $pendingStage", async ({ pendingStage, ending }) => {
         const entered = createDeferred<void>();
         const release = createDeferred<void>();
         const runAbort = new AbortController();

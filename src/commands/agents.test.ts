@@ -4,13 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AgentRouteBinding } from "../config/types.js";
 import { applyAgentBindings, removeAgentBindings } from "./agents.bindings.js";
 import { applyAgentConfig, buildAgentSummaries, pruneAgentConfig } from "./agents.config.js";
 
 function requireAgentSummary(
-  summaries: ReturnType<typeof buildAgentSummaries>,
+  summaries: Awaited<ReturnType<typeof buildAgentSummaries>>,
   id: string,
-): ReturnType<typeof buildAgentSummaries>[number] {
+): Awaited<ReturnType<typeof buildAgentSummaries>>[number] {
   const summary = summaries.find((entry) => entry.id === id);
   if (!summary) {
     throw new Error(`expected agent summary ${id}`);
@@ -19,7 +20,7 @@ function requireAgentSummary(
 }
 
 describe("agents helpers", () => {
-  it("buildAgentSummaries includes configured agents without inventing a fleet default", () => {
+  it("buildAgentSummaries includes configured agents without inventing a fleet default", async () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -45,7 +46,7 @@ describe("agents helpers", () => {
       ],
     };
 
-    const summaries = buildAgentSummaries(cfg);
+    const summaries = await buildAgentSummaries(cfg);
     const main = requireAgentSummary(summaries, "main");
     const work = requireAgentSummary(summaries, "work");
 
@@ -62,7 +63,7 @@ describe("agents helpers", () => {
     expect(work.isDefault).toBe(false);
   });
 
-  it("buildAgentSummaries renders local avatars and omits absent avatars", () => {
+  it("buildAgentSummaries renders local avatars and omits absent avatars", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-avatar-"));
     try {
       fs.writeFileSync(path.join(workspace, "avatar.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -75,7 +76,7 @@ describe("agents helpers", () => {
         },
       };
 
-      const summaries = buildAgentSummaries(cfg);
+      const summaries = await buildAgentSummaries(cfg);
       const work = requireAgentSummary(summaries, "work");
       expect(work.identityAvatarUrl).toBe("data:image/png;base64,iVBORw==");
       expect(work.identitySource).toBe("config");
@@ -106,11 +107,11 @@ describe("agents helpers", () => {
     expect(work?.model).toBe("anthropic/claude");
   });
 
-  it("applyAgentConfig leaves a first roster entry trivially sole", () => {
+  it("applyAgentConfig leaves a first roster entry trivially sole", async () => {
     const next = applyAgentConfig({}, { agentId: "work", name: "Work" });
 
     expect(next.agents?.entries).toEqual({ work: { name: "Work" } });
-    expect(requireAgentSummary(buildAgentSummaries(next), "work").isDefault).toBe(true);
+    expect(requireAgentSummary(await buildAgentSummaries(next), "work").isDefault).toBe(true);
   });
 
   it("preserves the sole agent as the ambient system owner when adding a second agent", () => {
@@ -125,7 +126,7 @@ describe("agents helpers", () => {
     });
   });
 
-  it("applyAgentConfig clears a model override", () => {
+  it("applyAgentConfig clears a model override", async () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.6-luna" } },
@@ -139,7 +140,7 @@ describe("agents helpers", () => {
     const work = next.agents?.entries?.work;
 
     expect(work).not.toHaveProperty("model");
-    expect(requireAgentSummary(buildAgentSummaries(next), "work").model).toBe(
+    expect(requireAgentSummary(await buildAgentSummaries(next), "work").model).toBe(
       "openai/gpt-5.6-luna",
     );
   });
@@ -178,165 +179,44 @@ describe("agents helpers", () => {
   });
 
   it("applyAgentBindings skips duplicates and reports conflicts", () => {
-    const cfg: OpenClawConfig = {
-      bindings: [
-        {
-          agentId: "main",
-          match: { channel: "whatsapp", accountId: "default" },
-        },
-      ],
-    };
+    const existing = { agentId: "main", match: { channel: "whatsapp", accountId: "default" } };
+    const conflict = { ...existing, agentId: "work" };
+    const added = { agentId: "work", match: { channel: "telegram" } };
+    const result = applyAgentBindings({ bindings: [existing] }, [existing, conflict, added]);
 
-    const result = applyAgentBindings(cfg, [
-      {
-        agentId: "main",
-        match: { channel: "whatsapp", accountId: "default" },
-      },
-      {
-        agentId: "work",
-        match: { channel: "whatsapp", accountId: "default" },
-      },
-      {
-        agentId: "work",
-        match: { channel: "telegram" },
-      },
-    ]);
-
-    expect(result.added).toStrictEqual([
-      {
-        agentId: "work",
-        match: { channel: "telegram" },
-      },
-    ]);
-    expect(result.skipped).toStrictEqual([
-      {
-        agentId: "main",
-        match: { channel: "whatsapp", accountId: "default" },
-      },
-    ]);
-    expect(result.conflicts).toStrictEqual([
-      {
-        binding: {
-          agentId: "work",
-          match: { channel: "whatsapp", accountId: "default" },
-        },
-        existingAgentId: "main",
-      },
-    ]);
-    expect(result.config.bindings).toStrictEqual([
-      {
-        agentId: "main",
-        match: { channel: "whatsapp", accountId: "default" },
-      },
-      {
-        agentId: "work",
-        match: { channel: "telegram" },
-      },
-    ]);
+    expect(result.added).toStrictEqual([added]);
+    expect(result.skipped).toStrictEqual([existing]);
+    expect(result.conflicts).toStrictEqual([{ binding: conflict, existingAgentId: "main" }]);
+    expect(result.config.bindings).toStrictEqual([existing, added]);
   });
 
   it("applyAgentBindings upgrades channel-only binding to account-specific binding for same agent", () => {
-    const cfg: OpenClawConfig = {
-      bindings: [
-        {
-          agentId: "main",
-          match: { channel: "telegram" },
-        },
-      ],
-    };
-
-    const result = applyAgentBindings(cfg, [
-      {
-        agentId: "main",
-        match: { channel: "telegram", accountId: "work" },
-      },
-    ]);
+    const existing = { agentId: "main", match: { channel: "telegram" } };
+    const incoming = { agentId: "main", match: { channel: "telegram", accountId: "work" } };
+    const result = applyAgentBindings({ bindings: [existing] }, [incoming]);
 
     expect(result.added).toStrictEqual([]);
-    expect(result.updated).toStrictEqual([
-      {
-        agentId: "main",
-        match: { channel: "telegram", accountId: "work" },
-      },
-    ]);
+    expect(result.updated).toStrictEqual([incoming]);
     expect(result.conflicts).toStrictEqual([]);
-    expect(result.config.bindings).toEqual([
-      {
-        agentId: "main",
-        match: { channel: "telegram", accountId: "work" },
-      },
-    ]);
+    expect(result.config.bindings).toEqual([incoming]);
   });
 
   it("applyAgentBindings treats role-based bindings as distinct routes", () => {
-    const cfg: OpenClawConfig = {
-      bindings: [
-        {
-          agentId: "main",
-          match: {
-            channel: "discord",
-            accountId: "guild-a",
-            guildId: "123",
-            roles: ["111", "222"],
-          },
-        },
-      ],
-    };
+    const match = { channel: "discord", accountId: "guild-a", guildId: "123" };
+    const existing = { agentId: "main", match: { ...match, roles: ["111", "222"] } };
+    const added = { agentId: "work", match };
+    const result = applyAgentBindings({ bindings: [existing] }, [added]);
 
-    const result = applyAgentBindings(cfg, [
-      {
-        agentId: "work",
-        match: {
-          channel: "discord",
-          accountId: "guild-a",
-          guildId: "123",
-        },
-      },
-    ]);
-
-    expect(result.added).toStrictEqual([
-      {
-        agentId: "work",
-        match: {
-          channel: "discord",
-          accountId: "guild-a",
-          guildId: "123",
-        },
-      },
-    ]);
+    expect(result.added).toStrictEqual([added]);
     expect(result.conflicts).toStrictEqual([]);
-    expect(result.config.bindings).toStrictEqual([
-      {
-        agentId: "main",
-        match: {
-          channel: "discord",
-          accountId: "guild-a",
-          guildId: "123",
-          roles: ["111", "222"],
-        },
-      },
-      {
-        agentId: "work",
-        match: {
-          channel: "discord",
-          accountId: "guild-a",
-          guildId: "123",
-        },
-      },
-    ]);
+    expect(result.config.bindings).toStrictEqual([existing, added]);
   });
 
   it("applyAgentBindings keeps distinct bindings when persisted match fields contain pipes", () => {
-    const cfg: OpenClawConfig = {};
-
-    const result = applyAgentBindings(cfg, [
+    const bindings: AgentRouteBinding[] = [
       {
         agentId: "main",
-        match: {
-          channel: "discord",
-          peer: { kind: "direct", id: "a|b" },
-          accountId: "default",
-        },
+        match: { channel: "discord", peer: { kind: "direct", id: "a|b" }, accountId: "default" },
       },
       {
         agentId: "main",
@@ -347,88 +227,24 @@ describe("agents helpers", () => {
           accountId: "|default",
         },
       },
-    ]);
+    ];
+    const result = applyAgentBindings({}, bindings);
 
-    expect(result.added).toStrictEqual([
-      {
-        agentId: "main",
-        match: {
-          channel: "discord",
-          peer: { kind: "direct", id: "a|b" },
-          accountId: "default",
-        },
-      },
-      {
-        agentId: "main",
-        match: {
-          channel: "discord",
-          peer: { kind: "direct", id: "a" },
-          guildId: "b",
-          accountId: "|default",
-        },
-      },
-    ]);
+    expect(result.added).toStrictEqual(bindings);
     expect(result.skipped).toStrictEqual([]);
     expect(result.conflicts).toStrictEqual([]);
-    expect(result.config.bindings).toStrictEqual(result.added);
+    expect(result.config.bindings).toStrictEqual(bindings);
   });
 
   it("removeAgentBindings does not remove role-based bindings when removing channel-level routes", () => {
-    const cfg: OpenClawConfig = {
-      bindings: [
-        {
-          agentId: "main",
-          match: {
-            channel: "discord",
-            accountId: "guild-a",
-            guildId: "123",
-            roles: ["111", "222"],
-          },
-        },
-        {
-          agentId: "main",
-          match: {
-            channel: "discord",
-            accountId: "guild-a",
-            guildId: "123",
-          },
-        },
-      ],
-    };
+    const match = { channel: "discord", accountId: "guild-a", guildId: "123" };
+    const kept = { agentId: "main", match: { ...match, roles: ["111", "222"] } };
+    const removed = { agentId: "main", match };
+    const result = removeAgentBindings({ bindings: [kept, removed] }, [removed]);
 
-    const result = removeAgentBindings(cfg, [
-      {
-        agentId: "main",
-        match: {
-          channel: "discord",
-          accountId: "guild-a",
-          guildId: "123",
-        },
-      },
-    ]);
-
-    expect(result.removed).toStrictEqual([
-      {
-        agentId: "main",
-        match: {
-          channel: "discord",
-          accountId: "guild-a",
-          guildId: "123",
-        },
-      },
-    ]);
+    expect(result.removed).toStrictEqual([removed]);
     expect(result.conflicts).toStrictEqual([]);
-    expect(result.config.bindings).toEqual([
-      {
-        agentId: "main",
-        match: {
-          channel: "discord",
-          accountId: "guild-a",
-          guildId: "123",
-          roles: ["111", "222"],
-        },
-      },
-    ]);
+    expect(result.config.bindings).toEqual([kept]);
   });
 
   it("pruneAgentConfig removes agent, bindings, and allowlist entries", () => {

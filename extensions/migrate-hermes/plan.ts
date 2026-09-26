@@ -1,4 +1,3 @@
-// Migrate Hermes plugin module implements plan behavior.
 import path from "node:path";
 import {
   createMigrationItem,
@@ -7,6 +6,7 @@ import {
   MIGRATION_REASON_TARGET_EXISTS,
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
+import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type {
   MigrationItem,
   MigrationPlan,
@@ -29,15 +29,12 @@ import {
 import { buildSecretItems } from "./secrets.js";
 import { buildSkillItems } from "./skills.js";
 import { discoverHermesSource, hasHermesSource } from "./source.js";
-import { resolveTargets } from "./targets.js";
 
 async function addFileItem(params: {
   items: MigrationItem[];
   id: string;
   source?: string;
   target: string;
-  kind?: MigrationItem["kind"];
-  action?: MigrationItem["action"];
   overwrite?: boolean;
 }): Promise<void> {
   if (!params.source) {
@@ -47,8 +44,8 @@ async function addFileItem(params: {
   params.items.push(
     createMigrationItem({
       id: params.id,
-      kind: params.kind ?? "file",
-      action: params.action ?? "copy",
+      kind: "workspace",
+      action: "copy",
       source: params.source,
       target: params.target,
       status: targetExists && !params.overwrite ? "conflict" : "planned",
@@ -67,7 +64,7 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
       `Hermes state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,
     );
   }
-  const targets = resolveTargets(ctx);
+  const targets = resolvePlannedMigrationTargets(ctx);
   let config: Record<string, unknown>;
   try {
     config = parseHermesConfig(await readText(source.configPath));
@@ -119,43 +116,33 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
   }
   items.push(...configItems);
 
-  await addFileItem({
-    items,
-    id: "workspace:SOUL.md",
-    kind: "workspace",
-    source: source.soulPath,
-    target: path.join(targets.workspaceDir, "SOUL.md"),
-    overwrite: ctx.overwrite,
-  });
-  await addFileItem({
-    items,
-    id: "workspace:AGENTS.md",
-    kind: "workspace",
-    source: source.agentsPath,
-    target: path.join(targets.workspaceDir, "AGENTS.md"),
-    overwrite: ctx.overwrite,
-  });
-  if (source.memoryPath) {
-    items.push(
-      createMigrationItem({
-        id: "memory:MEMORY.md",
-        kind: "memory",
-        action: "append",
-        source: source.memoryPath,
-        target: path.join(targets.workspaceDir, "MEMORY.md"),
-      }),
-    );
+  for (const [filename, sourcePath] of [
+    ["SOUL.md", source.soulPath],
+    ["AGENTS.md", source.agentsPath],
+  ] as const) {
+    await addFileItem({
+      items,
+      id: `workspace:${filename}`,
+      source: sourcePath,
+      target: path.join(targets.workspaceDir, filename),
+      overwrite: ctx.overwrite,
+    });
   }
-  if (source.userPath) {
-    items.push(
-      createMigrationItem({
-        id: "memory:USER.md",
-        kind: "memory",
-        action: "append",
-        source: source.userPath,
-        target: path.join(targets.workspaceDir, "USER.md"),
-      }),
-    );
+  for (const [filename, sourcePath] of [
+    ["MEMORY.md", source.memoryPath],
+    ["USER.md", source.userPath],
+  ] as const) {
+    if (sourcePath) {
+      items.push(
+        createMigrationItem({
+          id: `memory:${filename}`,
+          kind: "memory",
+          action: "append",
+          source: sourcePath,
+          target: path.join(targets.workspaceDir, filename),
+        }),
+      );
+    }
   }
   items.push(...(await buildSkillItems({ source, targets, overwrite: ctx.overwrite })));
   const authItems = await buildAuthItems({ ctx, source, targets });

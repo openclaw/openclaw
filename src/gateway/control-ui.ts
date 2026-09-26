@@ -17,33 +17,27 @@ import {
 } from "../agents/identity-avatar.js";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
+import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
-import {
-  probePlaybackMediaFileDescriptor,
-  toMediaProbeResult,
-  type MediaProbeResult,
-} from "../media/media-probe.js";
 import { resolveMediaReferenceLocalPathInfo } from "../media/media-reference.js";
 import {
   replacePlaybackFileExtension,
-  resolvePlaybackModeForSource,
+  resolvePlaybackMetadataForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
+import { resolveAvatarMime } from "../shared/avatar-policy.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
-import { gatewayAvatarImageRevision } from "./assistant-avatar-cache.js";
 import {
   gatewayAssistantAvatarUrl,
-  openGatewayAssistantAvatar,
+  prepareGatewayAssistantAvatar,
   resolveGatewayAssistantAvatar,
 } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
@@ -51,6 +45,10 @@ import {
   buildAssistantMediaContentDisposition,
   resolveAssistantMediaFilename,
 } from "./assistant-media-content-disposition.js";
+import {
+  classifyAssistantMediaError,
+  type AssistantMediaAvailability,
+} from "./assistant-media-errors.js";
 import {
   resolveAssistantMediaPolicy,
   type AssistantMediaSession,
@@ -225,15 +223,6 @@ function normalizeAssistantMediaSource(source: string): string | null {
   return trimmed;
 }
 
-type AssistantMediaAvailability =
-  | ({
-      available: true;
-      mimeType?: string;
-      playback?: "native" | "transcode";
-      sizeBytes?: number;
-    } & MediaProbeResult)
-  | { available: false; reason: string; code: string };
-
 type AssistantMediaTicketPayload = {
   scope: typeof CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE;
   source: string;
@@ -322,53 +311,6 @@ function verifyAssistantMediaTicket(
   }
 }
 
-function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
-  if (err instanceof FsSafeError) {
-    switch (err.code) {
-      case "not-found":
-        return { available: false, code: "file-not-found", reason: "File not found" };
-      case "not-file":
-        return { available: false, code: "not-a-file", reason: "Not a file" };
-      case "invalid-path":
-      case "path-mismatch":
-      case "symlink":
-        return { available: false, code: "invalid-file", reason: "Invalid file" };
-      default:
-        return {
-          available: false,
-          code: "attachment-unavailable",
-          reason: "Attachment unavailable",
-        };
-    }
-  }
-  if (err instanceof Error && "code" in err) {
-    const errorCode = (err as { code?: unknown }).code;
-    switch (typeof errorCode === "string" ? errorCode : "") {
-      case "unsupported-media-type":
-        return { available: false, code: "unsupported-media-type", reason: "Not an image" };
-      case "path-not-allowed":
-        return {
-          available: false,
-          code: "outside-allowed-folders",
-          reason: "Outside allowed folders",
-        };
-      case "invalid-file-url":
-      case "invalid-path":
-      case "unsafe-bypass":
-      case "network-path-not-allowed":
-      case "invalid-root":
-        return { available: false, code: "blocked-local-file", reason: "Blocked local file" };
-      case "not-found":
-        return { available: false, code: "file-not-found", reason: "File not found" };
-      case "not-file":
-        return { available: false, code: "not-a-file", reason: "Not a file" };
-      default:
-        break;
-    }
-  }
-  return { available: false, code: "attachment-unavailable", reason: "Attachment unavailable" };
-}
-
 type AssistantMediaPolicy = NonNullable<ReturnType<typeof resolveAssistantMediaPolicy>>;
 type AssistantMediaFile = NonNullable<AssistantMediaTicketPayload["file"]>;
 
@@ -446,31 +388,31 @@ async function resolveAssistantMediaAvailability(
   policy: AssistantMediaPolicy,
   allowance: true | AssistantMediaFile | undefined,
   agentId: string | undefined,
+  signal: AbortSignal,
+  assertCurrent: () => void,
 ): Promise<AssistantMediaAvailability & { mediaTicket?: string; mediaTicketExpiresAt?: string }> {
   try {
+    assertCurrent();
     const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
-    await using mediaOwner = opened;
+    // The inspection owner reopens and verifies this identity after queue admission.
+    await opened[Symbol.asyncDispose]();
     const mediaKind = kindFromMime(mimeType);
-    const playbackProbe =
-      mediaKind === "audio" || mediaKind === "video"
-        ? await probePlaybackMediaFileDescriptor(mediaOwner.handle.fd, mediaKind)
-        : null;
-    const playback =
+    const playbackMetadata =
       mimeType && (mediaKind === "audio" || mediaKind === "video")
-        ? await resolvePlaybackModeForSource({
+        ? await resolvePlaybackMetadataForSource({
             sourcePath: opened.realPath,
             sourceStat: opened.stat,
             mimeType,
             kind: mediaKind,
-            probe: playbackProbe,
+            signal,
+            assertCurrent,
           })
         : undefined;
     return {
       available: true,
       ...(mimeType ? { mimeType } : {}),
-      ...(playback ? { playback } : {}),
       sizeBytes: opened.stat.size,
-      ...toMediaProbeResult(playbackProbe),
+      ...playbackMetadata,
       ...createAssistantMediaTicket({
         source,
         agentId,
@@ -593,12 +535,19 @@ export async function handleControlUiAssistantMediaRequest(
     return current;
   };
   if (isMetaRequest) {
+    const requestAbort = createHttpRequestAbortSignal(res.req, res);
+    using _ = { [Symbol.dispose]: requestAbort.cleanup };
     const availability = await resolveAssistantMediaAvailability(
       source,
       policy,
       allowance,
       agentId,
+      requestAbort.signal,
+      assertCurrentPolicy,
     );
+    if (requestAbort.signal.aborted) {
+      return true;
+    }
     let current;
     try {
       current = assertCurrentPolicy();
@@ -640,6 +589,8 @@ export async function handleControlUiAssistantMediaRequest(
         sourceStat: opened.stat,
         mimeType: contentType,
         kind: mediaKind,
+        signal: byteStream.signal,
+        assertCurrent: assertCurrentPolicy,
       });
       if (playback.kind === "preparing") {
         await byteStream.close();
@@ -681,7 +632,9 @@ export async function handleControlUiAssistantMediaRequest(
     return true;
   } catch {
     await byteStream?.close();
-    respondControlUiNotFound(res);
+    if (!res.destroyed && !res.writableEnded) {
+      respondControlUiNotFound(res);
+    }
     return true;
   }
 }
@@ -728,9 +681,16 @@ export async function handleControlUiAvatarRequest(
   }
   requestAuth.assertCurrent();
 
-  const identity = resolveAssistantIdentity({ cfg: opts.config, agentId });
-  const projection = openGatewayAssistantAvatar({ cfg: opts.config, identity });
   try {
+    const identity = await resolveAssistantIdentity({ cfg: opts.config, agentId });
+    const projection = await prepareGatewayAssistantAvatar({
+      cfg: opts.config,
+      identity,
+      readBody:
+        url.searchParams.get("meta") !== "1" &&
+        (req.method !== "HEAD" || url.searchParams.has("v")),
+    });
+    requestAuth.assertCurrent();
     const resolved = projection.resolution;
     if (url.searchParams.get("meta") === "1") {
       const meta = controlUiAvatarResolutionMeta(resolved);
@@ -746,11 +706,10 @@ export async function handleControlUiAvatarRequest(
       return true;
     }
 
-    if (url.searchParams.has("v") && (projection.openedFile || resolved?.kind === "data")) {
-      const source = projection.openedFile
-        ? { file: projection.openedFile }
-        : { dataUrl: identity.avatar };
-      const image = await (await loadAvatarThumbnail()).readGatewayAvatarThumbnail(source);
+    if (url.searchParams.has("v") && projection.image) {
+      const image = await (
+        await loadAvatarThumbnail()
+      ).readGatewayAvatarThumbnail(projection.image);
       requestAuth.assertCurrent();
       // Browser HTTP caches must not reuse authenticated bytes after a credential switch.
       res.setHeader("vary", "Authorization, Cookie");
@@ -760,33 +719,28 @@ export async function handleControlUiAvatarRequest(
         image,
         filename: "avatar",
         cacheControl:
-          url.searchParams.get("v") === gatewayAvatarImageRevision(source)
+          url.searchParams.get("v") === projection.image.revision
             ? "private, max-age=31536000, immutable"
             : "private, no-cache",
       });
       return true;
     }
 
-    if (resolved?.kind !== "local" || !projection.openedFile) {
+    if (resolved?.kind !== "local" || !projection.file) {
       respondControlUiNotFound(res);
       return true;
     }
 
-    const body =
-      req.method === "HEAD"
-        ? undefined
-        : await readFileDescriptorBounded(projection.openedFile.fd, AVATAR_MAX_BYTES);
-    requestAuth.assertCurrent();
-    res.setHeader("Content-Type", resolveAvatarMime(projection.openedFile.path));
+    res.setHeader("Content-Type", resolveAvatarMime(projection.file.path));
     res.setHeader("Cache-Control", "no-cache");
     if (req.method === "HEAD") {
       res.statusCode = 200;
-      // The pinned descriptor exposes GET's exact byte count without reading the avatar.
-      res.setHeader("Content-Length", String(projection.openedFile.stat.size));
+      // Admission records GET's exact byte count without reading the avatar.
+      res.setHeader("Content-Length", String(projection.file.stat.size));
       res.end();
       return true;
     }
-    res.end(body);
+    res.end(projection.file.body);
     return true;
   } catch {
     if (!res.writableEnded && !res.destroyed) {
@@ -794,10 +748,6 @@ export async function handleControlUiAvatarRequest(
       respondControlUiNotFound(res);
     }
     return true;
-  } finally {
-    if (projection.openedFile) {
-      fs.closeSync(projection.openedFile.fd);
-    }
   }
 }
 
@@ -962,13 +912,13 @@ export async function handleControlUiHttpRequest(
     }
     const config = opts?.config;
     const resolvedIdentity = config
-      ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
+      ? await resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
       : undefined;
     const identity = resolvedIdentity ?? DEFAULT_ASSISTANT_IDENTITY;
     const assistantAgentId = resolvedIdentity?.agentId;
     const avatarProjection =
       config && resolvedIdentity
-        ? resolveGatewayAssistantAvatar({
+        ? await resolveGatewayAssistantAvatar({
             cfg: config,
             identity: resolvedIdentity,
             httpBasePath: basePath,

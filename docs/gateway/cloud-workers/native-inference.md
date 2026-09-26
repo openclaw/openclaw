@@ -227,8 +227,11 @@ Omitting `settings.inference`, or setting it to `gateway`, preserves the default
 ## Upgrade and downgrade
 
 The canonical profile values are `gateway` and `worker`; omission means `gateway`.
-`openclaw doctor --fix` renames the earlier device-profile spelling `runtime-local`
-to `worker`. Gateway startup uses that same shared migration when eligible;
+For operators who tried pre-release builds, `openclaw doctor --fix` renames the
+earlier device-profile spelling `runtime-local` to `worker`. This is compatibility
+for explicit pre-release opt-in state, not a migration from a published release.
+Upgrading a released installation does not enable worker inference or add native
+configuration. Gateway startup uses that same shared migration when eligible;
 [config migration safeguards](/gateway/doctor/config-migrations) still apply.
 Already allocated environments retain their original snapshots. Both recorded
 spellings mean worker inference until those environments retire; neither silently

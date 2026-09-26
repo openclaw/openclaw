@@ -1,10 +1,11 @@
-import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
+import { flushTaskActivity } from "./task-registry-activity.js";
 import {
   cloneTaskRecord,
   cloneTaskRecordForObserver,
   normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import {
+  clearTaskActivity,
   bumpTaskRegistryRevision,
   emitTaskRegistryObserverEvent,
   tasks,

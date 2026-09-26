@@ -25,13 +25,7 @@ const sharedClientMocks = vi.hoisted(() => ({
   waitForCodexAppServerClientDesktopGenerationDrain: vi.fn(),
 }));
 const managedProvisioningMocks = vi.hoisted(() => ({
-  ensureCodexComputerUseSharedPluginCache: vi.fn(async () => ({
-    status: "independent" as const,
-    changed: false,
-    message: "independent",
-    removedStaleVersions: [],
-    warnings: [],
-  })),
+  ensureCodexComputerUseSharedPluginCache: vi.fn(async () => false),
   ensureCodexManagedBundledMarketplace: vi.fn(),
   ensureCodexComputerUseServiceApp: vi.fn(),
   resolveCodexManagedBundledMarketplaceSource: vi.fn(
@@ -108,13 +102,7 @@ describe("Codex Computer Use setup", () => {
     managedProvisioningMocks.ensureCodexManagedBundledMarketplace.mockReset();
     managedProvisioningMocks.ensureCodexComputerUseServiceApp.mockReset();
     managedProvisioningMocks.ensureCodexComputerUseSharedPluginCache.mockReset();
-    managedProvisioningMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue({
-      status: "independent",
-      changed: false,
-      message: "independent",
-      removedStaleVersions: [],
-      warnings: [],
-    });
+    managedProvisioningMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue(false);
     managedProvisioningMocks.resolveCodexManagedBundledMarketplaceSource.mockReset();
     managedProvisioningMocks.resolveCodexManagedBundledMarketplaceSource.mockImplementation(
       async (params: { candidates?: readonly unknown[] }) => params.candidates?.[0],

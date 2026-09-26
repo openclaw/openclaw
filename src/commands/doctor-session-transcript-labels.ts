@@ -17,6 +17,7 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
+import { countLabel } from "./doctor-state-integrity-format.js";
 
 const NOTE_TITLE = "Session transcript labels";
 
@@ -189,10 +190,6 @@ function snapshotsMatch(
   );
 }
 
-function formatCount(count: number, singular: string): string {
-  return `${count} ${singular}${count === 1 ? "" : "s"}`;
-}
-
 /** Reports or repairs legacy inbound-context labels in canonical SQLite transcripts. */
 export async function noteSessionTranscriptLabelHealth(params: {
   cfg: OpenClawConfig;
@@ -222,7 +219,6 @@ export async function noteSessionTranscriptLabelHealth(params: {
       // store never buffers every plan at once. Enumerate from transcript_events, not sessions: the
       // latter gained its columns post-ship and is not safe to assume on old databases.
       for (const sessionId of reader.sessionIds()) {
-        // Read transcript in read-only mode (detection phase).
         const readResult = reader.repairSnapshot(
           sessionId,
           normalizeLegacyInboundContextLabels,
@@ -262,7 +258,6 @@ export async function noteSessionTranscriptLabelHealth(params: {
         foundSessions += 1;
         foundEvents += updates.length;
 
-        // REPAIR PHASE (if --fix): process immediately, don't buffer.
         if (params.shouldRepair) {
           try {
             if (hasMalformedRow) {
@@ -270,7 +265,6 @@ export async function noteSessionTranscriptLabelHealth(params: {
             }
             runOpenClawAgentWriteTransaction(
               (writeDatabase) => {
-                // Use rows-only guard (tolerant of malformed JSON in sibling rows).
                 const currentRows = readTranscriptEventRows(writeDatabase, sessionId);
                 if (!snapshotsMatch(readResult.rows, currentRows)) {
                   throw new Error(`transcript changed while preparing rewrite for ${sessionId}`);
@@ -305,13 +299,13 @@ export async function noteSessionTranscriptLabelHealth(params: {
 
   if (params.shouldRepair && repairedSessions > 0) {
     note(
-      `- Rewrote legacy inbound-context labels in ${formatCount(repairedSessions, "session")} (${formatCount(repairedEvents, "event")}).`,
+      `- Rewrote legacy inbound-context labels in ${countLabel(repairedSessions, "session")} (${countLabel(repairedEvents, "event")}).`,
       NOTE_TITLE,
     );
   } else if (!params.shouldRepair && foundEvents > 0) {
     note(
       [
-        `- Found ${formatCount(foundSessions, "session")} with legacy inbound-context labels.`,
+        `- Found ${countLabel(foundSessions, "session")} with legacy inbound-context labels.`,
         '- Run "openclaw doctor --fix" to rewrite them.',
       ].join("\n"),
       NOTE_TITLE,

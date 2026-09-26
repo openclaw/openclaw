@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   assertRecordShape,
   normalizeEpoch,
@@ -87,6 +88,7 @@ export function drainWorkerSessionPlacement(
   }
   if (input.workspaceBaseManifestRef !== undefined) {
     clearWorkerWorkspaceReconciliation(db, sessionId, input.workspaceBaseManifestRef);
+    sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
   }
   const record = getRequired(db, sessionId);
   publishPlacementTurnClaimState(db, record);

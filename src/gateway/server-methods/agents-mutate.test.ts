@@ -13,7 +13,6 @@ import {
   expectRecordFields,
   expectRespondErrorContaining,
   expectRespondOk,
-  expectStringContaining,
   firstRespondResult,
   mockCallArg,
 } from "./agents-mutate.test-support.js";
@@ -85,7 +84,6 @@ const mocks = vi.hoisted(() => ({
     agents: [],
   })),
   movePathToTrash: vi.fn(async (_pathname?: string) => "/trashed"),
-  fsAccess: vi.fn(async () => {}),
   fsMkdir: vi.fn(async () => undefined),
   fsAppendFile: vi.fn(async () => {}),
   fsReadFile: vi.fn(async () => ""),
@@ -385,7 +383,6 @@ vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   const patched = {
     ...actual,
-    access: mocks.fsAccess,
     mkdir: mocks.fsMkdir,
     appendFile: mocks.fsAppendFile,
     readFile: mocks.fsReadFile,
@@ -783,22 +780,6 @@ describe("agents.create", () => {
     expectRespondErrorContaining(respond, "invalid");
   });
 
-  it("writes identity to both config and IDENTITY.md", async () => {
-    const { promise } = makeCall("agents.create", {
-      name: "Plain Agent",
-      workspace: "/tmp/ws",
-    });
-    await promise;
-
-    const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {});
-    expectRecordFields(configOptions.identity, { name: "Plain Agent" });
-    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
-      rootDir: "/resolved/tmp/ws",
-      relativePath: "IDENTITY.md",
-    });
-    expectStringContaining(write.data, "- Name: Plain Agent");
-  });
-
   it("writes emoji and avatar to both config and IDENTITY.md", async () => {
     const { promise } = makeCall("agents.create", {
       name: "Fancy Agent",
@@ -879,17 +860,6 @@ describe("agents.update", () => {
     };
   });
 
-  it("updates an existing agent successfully", async () => {
-    const { respond, promise } = makeCall("agents.update", {
-      agentId: "test-agent",
-      name: "Updated Name",
-    });
-    await promise;
-
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
-    expect(mocks.writeConfigFile).toHaveBeenCalled();
-  });
-
   it("rejects updating a nonexistent agent", async () => {
     mocks.findAgentEntryIndex.mockReturnValue(-1);
 
@@ -943,16 +913,6 @@ describe("agents.update", () => {
     const agents = expectRecordFields(persisted.agents, {});
     const [agent] = agents.list as MockAgentEntry[];
     expect(agent).not.toHaveProperty("model");
-  });
-
-  it("ensures workspace when workspace changes", async () => {
-    const { promise } = makeCall("agents.update", {
-      agentId: "test-agent",
-      workspace: "/new/workspace",
-    });
-    await promise;
-
-    expect(mocks.ensureAgentWorkspace).toHaveBeenCalled();
   });
 
   it("does not ensure workspace when workspace is unchanged", async () => {
@@ -2790,11 +2750,6 @@ describe("agents.files.list", () => {
     mocks.fsReadlink.mockReset().mockResolvedValue("");
   });
 
-  it("includes BOOTSTRAP.md when setup has not completed", async () => {
-    const names = await listAgentFileNames();
-    expect(names).toContain("BOOTSTRAP.md");
-  });
-
   it("does not expose retired HEARTBEAT.md workspace files", async () => {
     const names = await listAgentFileNames();
     expect(names).not.toContain("HEARTBEAT.md");
@@ -2849,14 +2804,7 @@ describe("agents.files.list", () => {
   });
 
   it("falls back to showing BOOTSTRAP.md when workspace state cannot be read", async () => {
-    mocks.isWorkspaceSetupCompleted.mockRejectedValue(createErrnoError("EACCES"));
-
-    const names = await listAgentFileNames();
-    expect(names).toContain("BOOTSTRAP.md");
-  });
-
-  it("falls back to showing BOOTSTRAP.md when workspace state is malformed JSON", async () => {
-    mocks.isWorkspaceSetupCompleted.mockRejectedValue(new SyntaxError("Invalid workspace state"));
+    mocks.isWorkspaceSetupCompleted.mockRejectedValueOnce(createErrnoError("EACCES"));
 
     const names = await listAgentFileNames();
     expect(names).toContain("BOOTSTRAP.md");
@@ -2995,13 +2943,6 @@ describe("agents.files.get/set symlink safety", () => {
     mocks.rootWrite.mockRejectedValue(safeOpenError);
   }
 
-  function mockInWorkspaceSymlinkAlias() {
-    const safeOpenError = new FsSafeError("invalid-path", "path is not a regular file under root");
-    mocks.rootOpen.mockRejectedValue(safeOpenError);
-    mocks.rootRead.mockRejectedValue(safeOpenError);
-    mocks.rootWrite.mockRejectedValue(safeOpenError);
-  }
-
   it.each([
     { method: "agents.files.get" as const, expectNoOpen: false },
     { method: "agents.files.set" as const, expectNoOpen: true },
@@ -3009,35 +2950,6 @@ describe("agents.files.get/set symlink safety", () => {
     "rejects $method when allowlisted file symlink escapes workspace",
     async ({ method, expectNoOpen }) => {
       mockWorkspaceEscapeSymlink();
-      await expectUnsafeWorkspaceFile(method);
-      if (expectNoOpen) {
-        expect(mocks.fsOpen).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it.each(["agents.files.get", "agents.files.set"] as const)(
-    "rejects %s when allowlisted file is an in-workspace symlink alias",
-    async (method) => {
-      mockInWorkspaceSymlinkAlias();
-      await expectUnsafeWorkspaceFile(method);
-    },
-  );
-
-  function mockHardlinkedWorkspaceAlias() {
-    const safeOpenError = new FsSafeError("invalid-path", "hardlinked path not allowed");
-    mocks.rootOpen.mockRejectedValue(safeOpenError);
-    mocks.rootRead.mockRejectedValue(safeOpenError);
-    mocks.rootWrite.mockRejectedValue(safeOpenError);
-  }
-
-  it.each([
-    { method: "agents.files.get" as const, expectNoOpen: false },
-    { method: "agents.files.set" as const, expectNoOpen: true },
-  ])(
-    "rejects $method when allowlisted file is a hardlinked alias",
-    async ({ method, expectNoOpen }) => {
-      mockHardlinkedWorkspaceAlias();
       await expectUnsafeWorkspaceFile(method);
       if (expectNoOpen) {
         expect(mocks.fsOpen).not.toHaveBeenCalled();

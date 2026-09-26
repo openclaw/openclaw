@@ -1,8 +1,7 @@
-import { type GenerateContentParameters, GoogleGenAI, type HttpOptions } from "@google/genai";
+import { GoogleGenAI, type HttpOptions } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
-// Google provider adapts Gemini streams and tools to the agent runtime.
 import { buildManagedModelFetch } from "../transports/host-policy.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
@@ -18,7 +17,6 @@ import { buildBaseOptions } from "./simple-options.js";
 
 type GoogleOptions = GoogleProviderOptions;
 
-// Counter for generating unique tool call IDs
 let toolCallCounter = 0;
 
 export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions> = (
@@ -38,7 +36,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       return createClient(model, apiKey, resolveOpencodeSessionHeaders(model, options));
     },
-    buildParams: () => buildParams(model, context, options),
+    buildParams: () => buildGoogleGenerateContentParams(model, context, options),
     nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
   });
 
@@ -88,12 +86,4 @@ function createClient(
     apiKey: resolvedApiKey,
     httpOptions: Object.keys(httpOptions).length > 0 ? httpOptions : undefined,
   });
-}
-
-function buildParams(
-  model: Model<"google-generative-ai">,
-  context: Context,
-  options: GoogleOptions = {},
-): GenerateContentParameters {
-  return buildGoogleGenerateContentParams(model, context, options);
 }

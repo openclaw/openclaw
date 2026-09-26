@@ -114,8 +114,11 @@ const runtimePartitions = new Map<
         globSync(controlUiTestGlobs, { cwd, exclude: controlUiE2eTestGlobs })
           .map((file) => file.replaceAll("\\", "/"))
           .toSorted(),
-      // Overview identity replacement still retains its payload under Bun GC.
-      nodeRequired: new Set(["ui/src/pages/usage/usage-page-details.test.ts"]),
+      // Bun GC can retain released chat and overview payloads; keep their retention proof on Node.
+      nodeRequired: new Set([
+        "ui/src/pages/chat/chat-thread.test.ts",
+        "ui/src/pages/usage/usage-page-details.test.ts",
+      ]),
       includeAfterShard: true,
     },
   ],

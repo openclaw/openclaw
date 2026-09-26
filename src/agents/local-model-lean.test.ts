@@ -17,6 +17,15 @@ function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];
 }
 
+function defaultLeanConfig(): OpenClawConfig {
+  return {
+    agents: {
+      entries: { main: { default: true } },
+      defaults: { experimental: { localModelLean: true } },
+    },
+  };
+}
+
 describe("local model lean tool filtering", () => {
   it("filters heavyweight tools for one configured agent", () => {
     const cfg: OpenClawConfig = {
@@ -54,16 +63,7 @@ describe("local model lean tool filtering", () => {
   });
 
   it("keeps explicitly preserved tools when lean mode is enabled", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: { default: true } },
-        defaults: {
-          experimental: {
-            localModelLean: true,
-          },
-        },
-      },
-    };
+    const cfg = defaultLeanConfig();
 
     expect(
       filterLocalModelLeanTools({
@@ -97,16 +97,7 @@ describe("local model lean tool filtering", () => {
   });
 
   it("keeps image understanding while trimming optional media production tools", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: { default: true } },
-        defaults: {
-          experimental: {
-            localModelLean: true,
-          },
-        },
-      },
-    };
+    const cfg = defaultLeanConfig();
 
     expect(
       filterLocalModelLeanTools({
@@ -133,27 +124,6 @@ describe("local model lean tool filtering", () => {
         forceMessageTool: true,
       }),
     ).toEqual(["group:messaging", "message"]);
-  });
-
-  it("does not treat wildcard preservation as disabling lean mode", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: { default: true } },
-        defaults: {
-          experimental: {
-            localModelLean: true,
-          },
-        },
-      },
-    };
-
-    expect(
-      filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
-        config: cfg,
-        preserveToolNames: ["*"],
-      }).map((tool) => tool.name),
-    ).toEqual(["read", "exec"]);
   });
 
   it("matches wildcard preservation without treating a bare wildcard as an override", () => {

@@ -35,8 +35,8 @@ export function buildRequesterSettleWakeMessage(params: {
       ? `${truncateUtf16Safe(routeNotices, REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS - ROUTE_NOTICE_TRUNCATION.length)}${ROUTE_NOTICE_TRUNCATION}`
       : routeNotices;
   return [
-    "[Subagent Context] Every subagent spawned from this session has now settled — none are still running or awaiting completion delivery.",
-    "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive.",
+    "[Subagent Context] Every subagent in this batch has now settled, including its descendants.",
+    "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
     // Private completion guidance already includes the shared outcome policy.
     ...(params.parentOnly ? [] : [`[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`]),
     params.parentOnly

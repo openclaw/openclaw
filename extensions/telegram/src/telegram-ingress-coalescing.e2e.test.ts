@@ -164,8 +164,8 @@ async function awaitSingleDownstreamTurn(): Promise<MsgContext & Record<string, 
   return downstreamTurns.mock.calls[0]?.[0] as MsgContext & Record<string, unknown>;
 }
 
-async function assertSpoolTombstoned(params: { spoolDir: string; updateIds: number[] }) {
-  const queue = openTelegramIngressQueue(params.spoolDir);
+async function assertSpoolTombstoned(params: { stateDir: string; updateIds: number[] }) {
+  const queue = openTelegramIngressQueue(params);
   expect(await queue.listClaims()).toEqual([]);
   expect(await queue.listPending({ limit: "all" })).toEqual([]);
   // Every member tombstones independently, so a replayed update cannot re-enter.
@@ -177,7 +177,7 @@ async function assertSpoolTombstoned(params: { spoolDir: string; updateIds: numb
 }
 
 async function assertAlbumTurnAndTombstones(params: {
-  spoolDir: string;
+  stateDir: string;
   updateIds: number[];
   monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
 }) {
@@ -194,7 +194,6 @@ async function assertAlbumTurnAndTombstones(params: {
 describe("Telegram durable ingress coalescing", () => {
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let stateDir: string;
-  let spoolDir: string;
   let activeResources: Array<{
     monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
     telegramTransport: TelegramTransport;
@@ -204,7 +203,6 @@ describe("Telegram durable ingress coalescing", () => {
   beforeEach(async () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-album-ingress-"));
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    spoolDir = path.join(stateDir, "telegram", "ingress-spool-default");
     activeResources = [];
     runtimeErrors.length = 0;
     downstreamTurns
@@ -283,7 +281,7 @@ describe("Telegram durable ingress coalescing", () => {
       } as RuntimeEnv,
     });
     const monitor = createTelegramTransportIngressMonitor({
-      spoolDir,
+      stateDir,
       bot,
       accountId: "default",
       botInfo: telegramBotInfoForTest,
@@ -314,7 +312,7 @@ describe("Telegram durable ingress coalescing", () => {
         throw new Error("Expected the admitted album's flush timer");
       }
       flush();
-      await assertAlbumTurnAndTombstones({ spoolDir, updateIds: [101, 102], monitor });
+      await assertAlbumTurnAndTombstones({ stateDir, updateIds: [101, 102], monitor });
     } finally {
       albumTimers.mockRestore();
       await monitor.stop();
@@ -325,8 +323,8 @@ describe("Telegram durable ingress coalescing", () => {
   it("coalesces an album replayed from a durable restart backlog", async () => {
     const first = photoUpdate({ updateId: 201, messageId: 1, caption: "Two photo album" });
     const second = photoUpdate({ updateId: 202, messageId: 2 });
-    await writeTelegramSpooledUpdate({ spoolDir, update: first });
-    await writeTelegramSpooledUpdate({ spoolDir, update: second });
+    await writeTelegramSpooledUpdate({ stateDir, update: first });
+    await writeTelegramSpooledUpdate({ stateDir, update: second });
     const { monitor, telegramTransport } = await createMonitor();
     const albumTimers = holdTelegramMediaTimeouts(40);
 
@@ -334,7 +332,7 @@ describe("Telegram durable ingress coalescing", () => {
       monitor.start();
       // Real state-worker admission must finish before the controlled album deadline.
       await monitor.waitForIdle();
-      const queue = openTelegramIngressQueue(spoolDir);
+      const queue = openTelegramIngressQueue({ stateDir });
       expect((await queue.listClaims()).map((claim) => claim.id).toSorted()).toEqual([
         telegramQueueEventId(201),
         telegramQueueEventId(202),
@@ -345,7 +343,7 @@ describe("Telegram durable ingress coalescing", () => {
         throw new Error("Expected the replayed album's flush timer");
       }
       flush();
-      await assertAlbumTurnAndTombstones({ spoolDir, updateIds: [201, 202], monitor });
+      await assertAlbumTurnAndTombstones({ stateDir, updateIds: [201, 202], monitor });
     } finally {
       albumTimers.mockRestore();
       await monitor.stop();
@@ -412,11 +410,11 @@ describe("Telegram durable ingress coalescing", () => {
       let stopping: Promise<void> | undefined;
       try {
         await writeTelegramSpooledUpdate({
-          spoolDir,
+          stateDir,
           update: forwardedTextUpdate({ updateId: 901, messageId: 1, text: "First note" }),
         });
         await writeTelegramSpooledUpdate({
-          spoolDir,
+          stateDir,
           update: forwardedTextUpdate({ updateId: 902, messageId: 2, text: "Second note" }),
         });
         const { monitor } = await createMonitor({ onRuntimeError: vi.fn() });
@@ -437,10 +435,10 @@ describe("Telegram durable ingress coalescing", () => {
         commitSpy.mockRestore();
         guardSpy.mockRestore();
       }
-      const queue = openTelegramIngressQueue(spoolDir);
+      const queue = openTelegramIngressQueue({ stateDir });
       expect(await queue.listClaims()).toEqual([]);
       if (phase === "commit") {
-        await assertSpoolTombstoned({ spoolDir, updateIds: [901, 902] });
+        await assertSpoolTombstoned({ stateDir, updateIds: [901, 902] });
       } else {
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
           { id: telegramQueueEventId(901), attempts: 0 },
@@ -478,7 +476,7 @@ describe("Telegram durable ingress coalescing", () => {
       await buffered.promise;
       await monitor.stop();
       expect(downstreamTurns).not.toHaveBeenCalled();
-      const queue = openTelegramIngressQueue(spoolDir);
+      const queue = openTelegramIngressQueue({ stateDir });
       expect(await queue.listClaims()).toEqual([]);
       expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
       expect(await queue.listPending({ limit: "all" })).toMatchObject([
@@ -503,7 +501,7 @@ describe("Telegram durable ingress coalescing", () => {
     expect(turn.Body).toContain("First note");
     expect(turn.Body).toContain("Second note");
     await monitor.waitForDeferredClaims();
-    await assertSpoolTombstoned({ spoolDir, updateIds: [301, 302] });
+    await assertSpoolTombstoned({ stateDir, updateIds: [301, 302] });
 
     await monitor.stop();
     await telegramTransport.close();
@@ -557,7 +555,7 @@ describe("Telegram durable ingress coalescing", () => {
       { timeout: 5_000, interval: 5 },
     );
     await monitor.waitForDeferredClaims();
-    await assertSpoolTombstoned({ spoolDir, updateIds });
+    await assertSpoolTombstoned({ stateDir, updateIds });
 
     await monitor.stop();
     await telegramTransport.close();
@@ -565,11 +563,11 @@ describe("Telegram durable ingress coalescing", () => {
 
   it("coalesces a forwarded burst replayed from a durable restart backlog", async () => {
     await writeTelegramSpooledUpdate({
-      spoolDir,
+      stateDir,
       update: forwardedTextUpdate({ updateId: 401, messageId: 1, text: "First note" }),
     });
     await writeTelegramSpooledUpdate({
-      spoolDir,
+      stateDir,
       update: forwardedTextUpdate({ updateId: 402, messageId: 2, text: "Second note" }),
     });
     const { monitor, telegramTransport } = await createMonitor();
@@ -579,7 +577,7 @@ describe("Telegram durable ingress coalescing", () => {
     expect(turn.Body).toContain("First note");
     expect(turn.Body).toContain("Second note");
     await monitor.waitForDeferredClaims();
-    await assertSpoolTombstoned({ spoolDir, updateIds: [401, 402] });
+    await assertSpoolTombstoned({ stateDir, updateIds: [401, 402] });
 
     await monitor.stop();
     await telegramTransport.close();
@@ -592,8 +590,8 @@ describe("Telegram durable ingress coalescing", () => {
       text: "interrupted by restart",
     });
     const eventId = telegramQueueEventId(update.update_id);
-    await writeTelegramSpooledUpdate({ spoolDir, update });
-    const queue = openTelegramIngressQueue(spoolDir);
+    await writeTelegramSpooledUpdate({ stateDir, update });
+    const queue = openTelegramIngressQueue({ stateDir });
     downstreamTurns.mockImplementationOnce(async (_ctx, abortSignal) => {
       if (!abortSignal) {
         throw new Error("Expected the turn's abort signal");
@@ -636,8 +634,8 @@ describe("Telegram durable ingress coalescing", () => {
     });
     const eventId = telegramQueueEventId(update.update_id);
     const sessionError = new Error("Session changed while starting work. Retry.");
-    await writeTelegramSpooledUpdate({ spoolDir, update });
-    const queue = openTelegramIngressQueue(spoolDir);
+    await writeTelegramSpooledUpdate({ stateDir, update });
+    const queue = openTelegramIngressQueue({ stateDir });
     expect(await queue.claim(eventId, { ownerId: "999:1:dead-owner" })).not.toBeNull();
     downstreamTurns.mockRejectedValueOnce(sessionError);
     const runtimeError = vi.fn();
@@ -678,9 +676,9 @@ describe("Telegram durable ingress coalescing", () => {
       }
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
-    await writeTelegramSpooledUpdate({ spoolDir, update: poison });
-    await writeTelegramSpooledUpdate({ spoolDir, update: after });
-    const queue = openTelegramIngressQueue(spoolDir);
+    await writeTelegramSpooledUpdate({ stateDir, update: poison });
+    await writeTelegramSpooledUpdate({ stateDir, update: after });
+    const queue = openTelegramIngressQueue({ stateDir });
     for (let attempt = 1; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
       const claim = await queue.claim(poisonId, { ownerId: `proof:${attempt}` });
       if (!claim) {
