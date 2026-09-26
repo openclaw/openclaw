@@ -204,13 +204,13 @@ function runRecordAuthorityFixture({
       "const originalExec = childProcess.execFileSync;",
       "const originalSpawn = childProcess.spawnSync;",
       "const responses = new Map([",
-      `  ["actions/artifacts/10130298326", ${JSON.stringify({
+      `  ["repos/openclaw/openclaw/actions/artifacts/10130298326", ${JSON.stringify({
         expired: false,
         id: 10130298326,
         name: "mobile-release-ref-ios-34419244851-1",
         workflow_run: { head_sha: originalWorkflowSha, id: 34419244851 },
       })}],`,
-      `  ["actions/runs/34419244851", ${JSON.stringify({
+      `  ["repos/openclaw/openclaw/actions/runs/34419244851", ${JSON.stringify({
         actor: { login: "vincentkoc" },
         conclusion: "failure",
         event: "workflow_dispatch",
@@ -220,7 +220,7 @@ function runRecordAuthorityFixture({
         status: "completed",
         triggering_actor: { login: "vincentkoc" },
       })}],`,
-      `  ["actions/jobs/102691169741", ${JSON.stringify({
+      `  ["repos/openclaw/openclaw/actions/jobs/102691169741", ${JSON.stringify({
         completed_at: "2026-09-10T01:40:28Z",
         conclusion: "failure",
         head_sha: originalWorkflowSha,
@@ -230,15 +230,15 @@ function runRecordAuthorityFixture({
         started_at: "2026-09-10T00:04:43Z",
         status: "completed",
       })}],`,
-      '  ["collaborators/vincentkoc/permission", {"permission":"maintain"}],',
-      `  ["actions/artifacts/20000000000", ${JSON.stringify({
+      '  ["repos/openclaw/openclaw/collaborators/vincentkoc/permission", {"permission":"maintain"}],',
+      `  ["repos/openclaw/openclaw/actions/artifacts/20000000000", ${JSON.stringify({
         digest: `sha256:${"a".repeat(64)}`,
         expired: false,
         id: 20000000000,
         name: `ios-release-reconciliation-${currentRunId}-1`,
         workflow_run: { head_sha: workflowSha, id: Number(currentRunId) },
       })}],`,
-      `  ["actions/runs/${currentRunId}", ${JSON.stringify({
+      `  ["repos/openclaw/openclaw/actions/runs/${currentRunId}", ${JSON.stringify({
         actor: { login: "vincentkoc" },
         conclusion: null,
         event: "workflow_dispatch",
@@ -575,13 +575,13 @@ describe("iOS release same-build reconciliation", () => {
         "const originalExec = childProcess.execFileSync;",
         "const originalSpawn = childProcess.spawnSync;",
         "const responses = new Map([",
-        `  ["actions/artifacts/10130298326", ${JSON.stringify({
+        `  ["repos/openclaw/openclaw/actions/artifacts/10130298326", ${JSON.stringify({
           expired: false,
           id: 10130298326,
           name: "mobile-release-ref-ios-34419244851-1",
           workflow_run: { head_sha: originalWorkflowSha, id: 34419244851 },
         })}],`,
-        `  ["actions/runs/34419244851", ${JSON.stringify({
+        `  ["repos/openclaw/openclaw/actions/runs/34419244851", ${JSON.stringify({
           actor: { login: "vincentkoc" },
           conclusion: "failure",
           event: "workflow_dispatch",
@@ -591,7 +591,7 @@ describe("iOS release same-build reconciliation", () => {
           status: "completed",
           triggering_actor: { login: "vincentkoc" },
         })}],`,
-        `  ["actions/jobs/102691169741", ${JSON.stringify({
+        `  ["repos/openclaw/openclaw/actions/jobs/102691169741", ${JSON.stringify({
           completed_at: "2026-09-10T01:40:28Z",
           conclusion: "failure",
           head_sha: originalWorkflowSha,
@@ -601,15 +601,15 @@ describe("iOS release same-build reconciliation", () => {
           started_at: "2026-09-10T00:04:43Z",
           status: "completed",
         })}],`,
-        '  ["collaborators/vincentkoc/permission", {"permission":"maintain"}],',
-        `  ["actions/artifacts/20000000000", ${JSON.stringify({
+        '  ["repos/openclaw/openclaw/collaborators/vincentkoc/permission", {"permission":"maintain"}],',
+        `  ["repos/openclaw/openclaw/actions/artifacts/20000000000", ${JSON.stringify({
           digest: `sha256:${"a".repeat(64)}`,
           expired: false,
           id: 20000000000,
           name: `ios-release-reconciliation-${currentRunId}-1`,
           workflow_run: { head_sha: workflowSha, id: Number(currentRunId) },
         })}],`,
-        `  ["actions/runs/${currentRunId}", ${JSON.stringify({
+        `  ["repos/openclaw/openclaw/actions/runs/${currentRunId}", ${JSON.stringify({
           actor: { login: "vincentkoc" },
           conclusion: null,
           event: "workflow_dispatch",
