@@ -1,6 +1,7 @@
 // Feishu tests cover doctor contract plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+import { resolveFeishuAccount } from "./accounts.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
@@ -291,4 +292,41 @@ describe("feishu webhook route doctor migration", () => {
       "Reset invalid channels.feishu.webhookPath to /feishu/events.",
     ]);
   });
+});
+
+describe("feishu Gateway listener migration", () => {
+  it("preserves explicit root and account listeners through canonical config and is idempotent", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: feishuConfig({
+        webhookPort: 3000,
+        webhookHost: "127.0.0.1",
+        accounts: { second: { webhookPort: 3001 } },
+      }),
+    });
+    const parsed = FeishuConfigSchema.parse(result.config.channels?.feishu);
+    expect(parsed.legacyWebhook).toEqual({ port: 3000, host: "127.0.0.1" });
+    expect(parsed.accounts?.second?.legacyWebhook).toEqual({ port: 3001, host: "127.0.0.1" });
+    expect(normalizeCompatibilityConfig({ cfg: result.config }).changes).toEqual([]);
+    expect(FeishuConfigSchema.safeParse({ webhookPort: 3000 }).success).toBe(false);
+  });
+});
+
+it("preserves root and account legacyWebhook:false when migrating obsolete ports", () => {
+  const result = normalizeCompatibilityConfig({
+    cfg: feishuConfig({
+      legacyWebhook: false,
+      webhookPort: 3000,
+      accounts: {
+        inherited: { webhookPort: 3001 },
+        disabled: { webhookPort: 3002, legacyWebhook: false },
+      },
+    }),
+  });
+  expect(FeishuConfigSchema.parse(result.config.channels?.feishu).legacyWebhook).toBe(false);
+  for (const accountId of ["inherited", "disabled"]) {
+    expect(resolveFeishuAccount({ cfg: result.config, accountId }).config.legacyWebhook).toBe(
+      false,
+    );
+  }
+  expect(normalizeCompatibilityConfig({ cfg: result.config }).changes).toEqual([]);
 });
