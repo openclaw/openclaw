@@ -336,6 +336,48 @@ describe("generate-npm-package-lock", () => {
     expect(policy.missing).toContain("no runtime resolution for absent@1.0.0");
   });
 
+  it("keeps explicit workspace root policy when a runtime uses its scoped fork", () => {
+    const root = tempDirs.make("openclaw-npm-scoped-workspace-policy-");
+    writeFileSync(
+      path.join(root, "pnpm-workspace.yaml"),
+      JSON.stringify({
+        overrides: {
+          forked: "2.0.0",
+          "parent@1.0.0>forked": "1.0.0",
+        },
+      }),
+    );
+    writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      JSON.stringify({
+        packages: {
+          "parent@1.0.0": {},
+          "forked@1.0.0": {},
+          "forked@2.0.0": {},
+        },
+        snapshots: {
+          "parent@1.0.0": { dependencies: { forked: "1.0.0" } },
+          "forked@1.0.0": {},
+          "forked@2.0.0": {},
+        },
+      }),
+    );
+    const script = `import { readNpmLockOverrides } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
+      console.log(JSON.stringify(readNpmLockOverrides({ dependencies: { parent: "1.0.0" } }, ${JSON.stringify(root)})));`;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
+      { encoding: "utf8", env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root } },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      parent: { ".": "1.0.0", forked: "1.0.0" },
+      forked: "2.0.0",
+      "parent@1.0.0": { forked: "1.0.0" },
+    });
+  });
+
   it("uses scoped forks unless peer contexts conflict under one parent", () => {
     const plan = resolvePnpmLockOverridePlan({
       packages: {

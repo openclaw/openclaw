@@ -665,10 +665,16 @@ function readNpmLockOverrides(
   const plan = resolvePnpmLockOverridePlan(
     runtimePnpmLock(lockfile, packageJson, packageDir, localPackageArtifacts),
   );
-  const plannedOverrides =
-    mergeOverrides(plan.versionOverrides, plan.scopedVersionOverrides, {}) ?? {};
-  const mergedOverrides =
-    mergeOverrides(undefined, readWorkspaceOverrides(), plannedOverrides) ?? {};
+  const workspaceOverrides = readWorkspaceOverrides();
+  const versionOverrides = Object.fromEntries(
+    Object.entries(plan.versionOverrides).filter(([name]) => {
+      const spec = workspaceOverrides[name];
+      // Explicit workspace roots own the default; their scoped rules own forks.
+      return (isRecord(spec) ? spec["."] : spec) === undefined;
+    }),
+  );
+  const plannedOverrides = mergeOverrides(versionOverrides, plan.scopedVersionOverrides, {}) ?? {};
+  const mergedOverrides = mergeOverrides(undefined, workspaceOverrides, plannedOverrides) ?? {};
   return expandScopedOverrideChildren(mergedOverrides);
 }
 
@@ -1023,8 +1029,17 @@ function exactVersionFromOverrideSpec(spec: unknown) {
 }
 
 function exactOverrideRulesFromOverrides(overrides: unknown) {
+  const normalized = normalizeOverrides(overrides);
+  const scopedNames = new Set(
+    Object.values(normalized).flatMap((spec) =>
+      isRecord(spec) ? Object.keys(spec).filter((name) => name !== ".") : [],
+    ),
+  );
   return Object.fromEntries(
-    Object.entries(normalizeOverrides(overrides)).flatMap<[string, string]>(([name, spec]) => {
+    Object.entries(normalized).flatMap<[string, string]>(([name, spec]) => {
+      if (scopedNames.has(name)) {
+        return [];
+      }
       const version = exactVersionFromOverrideSpec(spec);
       return version === null ? [] : [[name, version]];
     }),
