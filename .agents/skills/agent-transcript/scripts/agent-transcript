@@ -330,12 +330,8 @@ function toolCallFamily(row) {
 }
 
 function compactToolSummary(familyCounts, dropped) {
-  const families = new Map();
-  for (const [family, count] of familyCounts.entries()) {
-    families.set(family, (families.get(family) || 0) + count);
-  }
   const ordered = ["read", "write", "execute", "network", "other"]
-    .map((family) => [family, families.get(family) || 0])
+    .map((family) => [family, familyCounts.get(family) || 0])
     .filter(([, count]) => count > 0)
     .map(([family, count]) => `${count} ${family}`);
   const calls = ordered.length ? ordered.join(", ") : "0 tool";
@@ -503,10 +499,6 @@ function recentFiles(files, maxFiles) {
     .map((entry) => entry.file);
 }
 
-function candidateFiles(roots, terms, sinceMs, options = {}) {
-  return recentFiles(roots.flatMap((root) => walkJsonl(root, sinceMs)), Number(options["max-files"] || 400));
-}
-
 function findSessions(options) {
   const sinceDays = Number(options["since-days"] || 14);
   const sinceMs = Date.now() - sinceDays * 24 * 60 * 60 * 1000;
@@ -516,14 +508,13 @@ function findSessions(options) {
     .split(/\s+/)
     .concat(query.match(/https?:\/\/\S+/g) || [])
     .filter(Boolean);
-  const files = candidateFiles(roots, terms, sinceMs, options);
+  const files = recentFiles(roots.flatMap((root) => walkJsonl(root, sinceMs)), Number(options["max-files"] || 400));
   const scanBytes = Number(options["scan-bytes"] || 60000);
-  const results = files
+  return files
     .map((file) => scoreScanRecord(sessionScanRecord(file, scanBytes), terms, options.cwd))
     .filter((result) => result.score > 0)
     .sort((a, b) => b.score - a.score || b.mtime.localeCompare(a.mtime))
     .slice(0, Number(options.limit || 10));
-  return results;
 }
 
 function sessionScanRecords(options) {
@@ -578,10 +569,6 @@ ${rows}
 `;
 }
 
-function singlePreviewDocument(record) {
-  return htmlDocument([record]);
-}
-
 function readPrs(file) {
   const raw = fs.readFileSync(file, "utf8");
   const parsed = JSON.parse(raw);
@@ -599,37 +586,26 @@ function main() {
     console.log(JSON.stringify(findSessions(args), null, 2));
     return;
   }
-  if (command === "render") {
-    if (!args.session) throw new Error("--session is required");
+  if (["render", "preview", "append-body"].includes(command)) {
+    if (command === "append-body") {
+      if (!args.body || !args.session) throw new Error("--body and --session are required");
+    } else if (!args.session) throw new Error("--session is required");
     const rendered = renderSession(args.session, args);
     if (!rendered.safe) throw new Error(`unsafe transcript after redaction: ${rendered.unsafeAfter.join(", ")}`);
-    if (args.out) fs.writeFileSync(args.out, rendered.markdown);
-    else process.stdout.write(rendered.markdown);
-    return;
-  }
-  if (command === "preview") {
-    if (!args.session) throw new Error("--session is required");
-    const rendered = renderSession(args.session, args);
-    if (!rendered.safe) throw new Error(`unsafe transcript after redaction: ${rendered.unsafeAfter.join(", ")}`);
-    const output = singlePreviewDocument({
-      title: args.title || "Agent Transcript Preview",
-      url: args.url || "",
-      session: args.session,
-      safe: rendered.safe,
-      markdown: rendered.markdown,
-    });
+    let output = rendered.markdown;
+    if (command === "preview") {
+      output = htmlDocument([{
+        title: args.title || "Agent Transcript Preview",
+        url: args.url || "",
+        session: args.session,
+        safe: rendered.safe,
+        markdown: rendered.markdown,
+      }]);
+    } else if (command === "append-body") {
+      output = replaceSection(fs.readFileSync(args.body, "utf8"), rendered.markdown);
+    }
     if (args.out) fs.writeFileSync(args.out, output);
     else process.stdout.write(output);
-    return;
-  }
-  if (command === "append-body") {
-    if (!args.body || !args.session) throw new Error("--body and --session are required");
-    const rendered = renderSession(args.session, args);
-    if (!rendered.safe) throw new Error(`unsafe transcript after redaction: ${rendered.unsafeAfter.join(", ")}`);
-    const body = fs.readFileSync(args.body, "utf8");
-    const next = replaceSection(body, rendered.markdown);
-    if (args.out) fs.writeFileSync(args.out, next);
-    else process.stdout.write(next);
     return;
   }
   if (command === "html") {
