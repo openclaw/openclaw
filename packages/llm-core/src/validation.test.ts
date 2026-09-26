@@ -30,6 +30,28 @@ const decimalTools = [
 ];
 
 describe("validateToolArguments", () => {
+  it.each([
+    { label: "a missing required field", value: {} },
+    { label: "an invalid field type", value: { leaf: "invalid" } },
+  ])("formats escaped container names for $label", ({ value }) => {
+    const tool: Tool = {
+      name: "diagnostic-path",
+      description: "test tool",
+      parameters: Type.Object({
+        "room/~1%2F": Type.Object({ leaf: Type.Number() }),
+      }),
+    };
+
+    expect(() =>
+      validateToolArguments(tool, {
+        type: "toolCall",
+        id: "diagnostic-path-call",
+        name: tool.name,
+        arguments: { "room/~1%2F": value },
+      }),
+    ).toThrow("  - room.~1%2F.leaf:");
+  });
+
   it.each(["anyOf", "oneOf", "TypeBox", "type-array integer/null", "type-array null/integer"])(
     "keeps invalid non-null values out of a nullable integer %s",
     (union) => {

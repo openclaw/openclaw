@@ -1,5 +1,6 @@
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
+import { Pointer } from "typebox/schema";
 import type { Tool, ToolCall } from "./types.js";
 
 const validatorCache = new WeakMap<object, WeakMap<object, ReturnType<typeof Compile>>>();
@@ -379,7 +380,7 @@ function getValidator(
 }
 
 function formatValidationPath(error: TLocalizedValidationError): string {
-  const path = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
+  const path = Pointer.Indices(error.instancePath).join(".").replace(/\//g, ".");
   if (error.keyword === "required") {
     const requiredProperty = (error.params as { requiredProperties?: string[] })
       .requiredProperties?.[0];

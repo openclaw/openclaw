@@ -6,7 +6,7 @@ import {
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
-import { Compile, type Validator as TypeBoxValidator } from "typebox/schema";
+import { Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -198,11 +198,8 @@ export function parseJsonSchemaIssuePath(
 }
 
 function normalizeErrorPath(instancePath: string | undefined): string {
-  // Decode ~1 before ~0 so a literal ~1 is not interpreted as a slash.
-  const path = instancePath
-    ?.replace(/~1/g, "/")
-    .replace(/~0/g, "~")
-    .replace(/^\//, "")
+  const path = Pointer.Indices(instancePath ?? "")
+    .join(".")
     .replace(/\//g, ".");
   return path && path.length > 0 ? path : "<root>";
 }
