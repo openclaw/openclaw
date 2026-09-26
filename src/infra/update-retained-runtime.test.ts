@@ -188,6 +188,17 @@ async function fixture(
       process.platform === "win32" ? "junction" : "dir",
     );
   }
+  if (layout === "git") {
+    // Pulling a workspace retirement can leave ignored modules and a pnpm hoist link.
+    const retired = path.join(root, "extensions/retired");
+    const hoisted = path.join(root, "node_modules/.pnpm/node_modules");
+    await mkdir(path.join(retired, "node_modules"), { recursive: true });
+    await mkdir(path.join(hoisted, "@fixture"), { recursive: true });
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+    await symlink(root, path.join(hoisted, "openclaw"), linkType);
+    await symlink(retired, path.join(hoisted, "@fixture/retired"), linkType);
+    await symlink(dependency, path.join(retired, "node_modules/fixture"), linkType);
+  }
   await mkdir(path.join(root, ".git"));
   await writeFile(path.join(root, ".git/private"), "unrelated checkout data");
   return root;
@@ -256,6 +267,17 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
         'export function createSqliteWorkerBackend() { throw new Error("Target generation lacks append"); }',
       );
       await rm(displaced, { recursive: true });
+
+      if (layout === "git") {
+        const retired = path.join(retainedRoot, "node_modules/.pnpm/node_modules/@fixture/retired");
+        expect(await fs.realpath(retired)).toBe(path.join(retainedRoot, "extensions/retired"));
+        await expect(stat(path.join(retired, "package.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await readFile(path.join(retired, "node_modules/fixture/index.js"), "utf8")).toBe(
+          'export const generation = "retained";\n',
+        );
+      }
 
       // Target-explicit requests keep their selected generation, even in the retained scope.
       await expect(

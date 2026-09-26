@@ -64,21 +64,26 @@ export const UpdateCandidatePluginTreePlanSchema = z.object({
 });
 export type UpdateCandidatePluginTreePlan = z.infer<typeof UpdateCandidatePluginTreePlanSchema>;
 
-async function dependencyOwner(target: string, withinRetainedHost = false): Promise<string> {
+async function dependencyOwner(target: string, retainedHostRoot?: string): Promise<string> {
   // A pnpm package resolves dependencies beside its package directory. Preserve
   // that Node lookup ancestry, including scoped packages and nested installs.
   const parts = target.split(path.sep);
   const store = parts.indexOf(".pnpm");
-  if (store >= 0 && !withinRetainedHost) {
+  if (store >= 0 && !retainedHostRoot) {
     return parts.slice(0, store + 1).join(path.sep);
   }
   const modules = parts.indexOf("node_modules");
-  if (modules >= 0 && !withinRetainedHost) {
+  if (modules >= 0 && !retainedHostRoot) {
     return parts.slice(0, modules + 1).join(path.sep);
   }
   let directory = (await fs.stat(target)).isDirectory() ? target : path.dirname(target);
   const fallback = target;
   for (;;) {
+    // Retired workspaces can retain ignored modules after their manifest disappears.
+    // Keep the reached subtree without promoting it to the complete retained host.
+    if (directory === retainedHostRoot) {
+      return fallback;
+    }
     if (
       await fs.stat(path.join(directory, "package.json")).then(
         () => true,
@@ -455,7 +460,10 @@ export async function prepareUpdateCandidatePluginTrees(params: {
       const retainedDependency = insideHost(real) && isRetainedDependency(real);
       const owner =
         (!retainedDependency ? store : undefined) ??
-        (await dependencyOwner(real, retainedDependency).catch((cause: unknown) => {
+        (await dependencyOwner(
+          real,
+          isRetainedDependency(real) ? retainedHostRoot : undefined,
+        ).catch((cause: unknown) => {
           throw new Error(`Cannot privately copy plugin dependency ${file} -> ${real}`, { cause });
         }));
       if (excludesInferredRoot(owner)) {

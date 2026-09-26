@@ -184,6 +184,9 @@ changing the installed package. Linux OverlayFS installations use private copies
 so hard-link copy-up cannot invalidate the retained files’ identity checks.
 Other supported filesystems keep the hard-link fast path and copy fallback.
 
+Source updates also retain dependency links left behind when a workspace package is removed, even if its ignored `node_modules` directory outlives its manifest.
+An older installed updater that fails at `updater-runtime-retention` needs this correction in its running code before retrying; a newer candidate cannot repair that earlier step.
+
 The installed updater reads the candidate's `package.json` before running its
 pending lifecycle scripts. `openclaw.updateAdmissionProtocol: 1` advertises the
 internal admission command. Reading this marker does not execute candidate code.
