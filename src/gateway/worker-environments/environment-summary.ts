@@ -26,7 +26,7 @@ export function summarizeWorkerEnvironment(
   return {
     id: record.environmentId,
     type: "worker",
-    status: WORKER_STATUS[record.state],
+    status: record.error ? "error" : WORKER_STATUS[record.state],
     ...(record.sharedHost === null
       ? {}
       : { trust: record.sharedHost ? "persistent" : "disposable" }),
@@ -72,9 +72,7 @@ export function summarizeWorkerEnvironment(
         : {}),
       attachedSessionIds: normalizeSortedUniqueTrimmedStringList(record.attachedSessionIds),
       tunnelStatus: record.tunnelStatus,
-      ...((record.state === "failed" || record.state === "orphaned") && record.error
-        ? { error: record.error }
-        : {}),
+      ...(record.error ? { error: record.error } : {}),
       ...(record.desktopAvailable ? { desktop: true } : {}),
       ...(record.desktopApps.length > 0 ? { desktopApps: [...record.desktopApps] } : {}),
     },
