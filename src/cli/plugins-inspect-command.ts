@@ -197,7 +197,7 @@ export async function runPluginsInspectCommand(
           customHookCount: inspect.customHooks.length,
         }),
       }));
-      return renderTable({
+      const table = renderTable({
         width: tableWidth,
         columns: [
           { key: "Name", header: "Name", minWidth: 14, flex: true },
@@ -211,6 +211,9 @@ export async function runPluginsInspectCommand(
         ],
         rows,
       }).trimEnd();
+      return runtimeInspect
+        ? `${theme.muted(`Inspection scope: cli-process — ${RUNTIME_INSPECTION_SCOPE_NOTE}`)}\n${table}`
+        : table;
     };
     const output = runtimeInspect
       ? await tracePluginLifecyclePhaseAsync(
@@ -317,6 +320,12 @@ export async function runPluginsInspectCommand(
   }
 }
 
+// `--runtime` loads a registry inside this short-lived CLI process; it never asks
+// the running Gateway. Say so in the output, so a plugin the daemon never
+// activated is not read as "loaded and running in the Gateway".
+const RUNTIME_INSPECTION_SCOPE_NOTE =
+  "Loaded in this openclaw process only. This is not a statement about a running Gateway.";
+
 function formatPluginInspection(
   inspect: PluginInspectReport,
   install: PluginInstallRecord | undefined,
@@ -326,11 +335,16 @@ function formatPluginInspection(
   const runtimeInspect = opts.runtime === true;
 
   if (opts.json) {
+    // JSON consumers rely on this exact shape; the CLI-process scope is a
+    // human-readable caveat, so it stays out of the machine contract.
     return JSON.stringify({ ...inspect, install }, null, 2);
   }
 
   const lines: string[] = [];
   lines.push(theme.heading(inspect.plugin.name || inspect.plugin.id));
+  if (runtimeInspect) {
+    lines.push(theme.muted(`Inspection scope: cli-process — ${RUNTIME_INSPECTION_SCOPE_NOTE}`));
+  }
   if (inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id) {
     lines.push(theme.muted(`id: ${inspect.plugin.id}`));
   }
