@@ -844,7 +844,9 @@ src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-start.ts
 src/infra/worker-cpu.ts
+src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
+src/infra/worker-memory.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-native-sections.ts
 src/infra/worker-task-pool-completion.ts
