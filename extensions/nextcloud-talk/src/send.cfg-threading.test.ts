@@ -449,6 +449,39 @@ describe("nextcloud-talk send bounded response reads", () => {
     });
   }
 
+  function streamingReceiptResponse(paddingChunks: number) {
+    const observed = { cancellations: 0, tailEmitted: false };
+    const encoder = new TextEncoder();
+    let nextChunk = 0;
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (nextChunk === 0) {
+            controller.enqueue(
+              encoder.encode('{"ocs":{"data":{"id":987654,"timestamp":1706000009}},"padding":"'),
+            );
+          } else if (nextChunk <= paddingChunks) {
+            controller.enqueue(new Uint8Array(1024 * 1024).fill(0x78));
+          } else {
+            observed.tailEmitted = true;
+            controller.enqueue(encoder.encode('"}'));
+            controller.close();
+          }
+          nextChunk += 1;
+        },
+        cancel() {
+          observed.cancellations += 1;
+        },
+      },
+      // No read-ahead: the tail records consumption, not an eagerly filled queue.
+      { highWaterMark: 0 },
+    );
+    return {
+      response: new Response(stream, { headers: { "content-type": "application/json" } }),
+      observed,
+    };
+  }
+
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
     hoisted.mockFetchGuard.mockImplementation(async (p: { url: string; init?: RequestInit }) => {
@@ -467,24 +500,41 @@ describe("nextcloud-talk send bounded response reads", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps the unknown receipt when a success body exceeds the JSON byte cap", async () => {
-    // 17 MiB streamed as 200-OK JSON with no content-length: over the 16 MiB cap.
-    fetchMock.mockResolvedValueOnce(
-      streamingResponse({
-        status: 200,
-        chunkBytes: 1024 * 1024,
-        chunks: 17,
-        contentType: "application/json",
-      }),
-    );
-
+  it.each([
+    {
+      name: "keeps the unknown receipt when a success body exceeds the JSON byte cap",
+      paddingChunks: 17,
+      messageId: "unknown",
+      timestamp: undefined,
+      platformMessageIds: [],
+      primaryPlatformMessageId: undefined,
+      observed: { cancellations: 1, tailEmitted: false },
+    },
+    {
+      name: "reads the receipt when a streamed success body stays below the JSON byte cap",
+      paddingChunks: 1,
+      messageId: "987654",
+      timestamp: 1706000009,
+      platformMessageIds: ["987654"],
+      primaryPlatformMessageId: "987654",
+      observed: { cancellations: 0, tailEmitted: true },
+    },
+  ])("$name", async (expected) => {
+    // Both bodies are valid JSON, so an unbounded reader would expose the literal receipt.
+    const { response, observed } = streamingReceiptResponse(expected.paddingChunks);
+    expect(response.headers.has("content-length")).toBe(false);
+    fetchMock.mockResolvedValueOnce(response);
     const result = await sendMessageNextcloudTalk("room:abc", "hello", {
       cfg: { source: "provided" },
     });
 
-    // Over-limit success body must not throw and must fall back to the unknown receipt.
-    expect(result.messageId).toBe("unknown");
-    expect(result.timestamp).toBeUndefined();
+    expect(result.messageId).toBe(expected.messageId);
+    expect(result.timestamp).toBe(expected.timestamp);
+    expect(result.receipt.platformMessageIds).toEqual(expected.platformMessageIds);
+    expect(result.receipt.primaryPlatformMessageId).toBe(expected.primaryPlatformMessageId);
+    expect(observed).toEqual(expected.observed);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.mockFetchGuard).toHaveBeenCalledTimes(1);
   });
 
   it("omits an oversized error body from the send failure", async () => {

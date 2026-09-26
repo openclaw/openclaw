@@ -1,122 +1,96 @@
 // Nextcloud Talk tests cover message actions plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CoreConfig } from "./types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   sendReactionNextcloudTalk: vi.fn(),
-  sendMessageNextcloudTalk: vi.fn(),
-  listNextcloudTalkAccountIds: vi.fn(),
-  resolveNextcloudTalkAccount: vi.fn(),
 }));
 
 vi.mock("./send.js", () => ({
   sendReactionNextcloudTalk: hoisted.sendReactionNextcloudTalk,
-  sendMessageNextcloudTalk: hoisted.sendMessageNextcloudTalk,
-}));
-
-vi.mock("./accounts.js", () => ({
-  listNextcloudTalkAccountIds: hoisted.listNextcloudTalkAccountIds,
-  resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
 }));
 
 const { nextcloudTalkMessageActions } = await import("./message-actions.js");
 
-const configuredAccount = {
-  accountId: "default",
-  enabled: true,
-  baseUrl: "https://nc.example.com",
-  secret: "bot-secret",
-} as const;
-
-const unconfiguredAccount = {
-  accountId: "default",
-  enabled: true,
-  baseUrl: "",
-  secret: null,
-} as const;
-
-const disabledAccount = {
-  accountId: "default",
-  enabled: false,
-  baseUrl: "https://nc.example.com",
-  secret: "bot-secret",
-} as const;
+function createConfig(accounts: Record<string, NextcloudTalkAccountConfig> = {}): CoreConfig {
+  return {
+    channels: {
+      "nextcloud-talk": {
+        baseUrl: "https://nc.example.com",
+        botSecret: "bot-secret",
+        accounts,
+      },
+    },
+  };
+}
 
 describe("nextcloudTalkMessageActions", () => {
+  let previousBotSecret: string | undefined;
+
   beforeEach(() => {
+    // The default account prefers this ambient credential over the supplied config.
+    previousBotSecret = process.env.NEXTCLOUD_TALK_BOT_SECRET;
+    delete process.env.NEXTCLOUD_TALK_BOT_SECRET;
     hoisted.sendReactionNextcloudTalk.mockReset();
     hoisted.sendReactionNextcloudTalk.mockResolvedValue({ ok: true });
-    hoisted.sendMessageNextcloudTalk.mockReset();
-    hoisted.listNextcloudTalkAccountIds.mockReset();
-    hoisted.resolveNextcloudTalkAccount.mockReset();
+  });
+
+  afterEach(() => {
+    if (previousBotSecret === undefined) {
+      delete process.env.NEXTCLOUD_TALK_BOT_SECRET;
+    } else {
+      process.env.NEXTCLOUD_TALK_BOT_SECRET = previousBotSecret;
+    }
   });
 
   describe("describeMessageTool", () => {
     it("returns null when no accounts are configured", () => {
-      hoisted.listNextcloudTalkAccountIds.mockReturnValue([]);
-
       const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {},
       });
 
       expect(result).toBeNull();
     });
 
-    it("returns null when configured account has no secret/baseUrl", () => {
-      hoisted.listNextcloudTalkAccountIds.mockReturnValue([unconfiguredAccount.accountId]);
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(unconfiguredAccount);
-
+    it.each([
+      ["secret", { baseUrl: "https://nc.example.com" }],
+      ["baseUrl", { botSecret: "bot-secret" }],
+    ] as const)("returns null when configured account has no %s", (_missing, config) => {
       const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
+        cfg: { channels: { "nextcloud-talk": { ...config } } },
       });
 
       expect(result).toBeNull();
     });
 
     it("returns null when the only listed account is disabled", () => {
-      hoisted.listNextcloudTalkAccountIds.mockReturnValue([disabledAccount.accountId]);
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(disabledAccount);
-
       const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
+        cfg: createConfig({ default: { enabled: false } }),
       });
 
       expect(result).toBeNull();
     });
 
     it("advertises send + react when an account is configured", () => {
-      hoisted.listNextcloudTalkAccountIds.mockReturnValue([configuredAccount.accountId]);
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(configuredAccount);
-
       const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
+        cfg: createConfig(),
       });
 
       expect(result?.actions).toEqual(["send", "react"]);
     });
 
     it("scopes discovery to a specific accountId when provided", () => {
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(configuredAccount);
-
       const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
+        cfg: createConfig({ default: { enabled: false }, work: { enabled: true } }),
         accountId: "work",
       });
 
-      expect(hoisted.resolveNextcloudTalkAccount).toHaveBeenCalledWith({
-        cfg: {},
-        accountId: "work",
-      });
-      expect(hoisted.listNextcloudTalkAccountIds).not.toHaveBeenCalled();
       expect(result?.actions).toEqual(["send", "react"]);
     });
 
     it("returns null when the targeted account is disabled", () => {
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(disabledAccount);
-
       const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
+        cfg: createConfig({ work: { enabled: false } }),
         accountId: "work",
       });
 
@@ -142,16 +116,14 @@ describe("nextcloudTalkMessageActions", () => {
   });
 
   describe("handleAction", () => {
-    const cfg = {} as CoreConfig;
+    let cfg: CoreConfig;
 
     beforeEach(() => {
-      // Dispatch now resolves the account and enforces the same enabled+configured
-      // gate as describeMessageTool, so react tests need a configured account.
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(configuredAccount);
+      cfg = createConfig();
     });
 
     it("rejects a disabled account before reaching the sender", async () => {
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(disabledAccount);
+      cfg = createConfig({ work: { enabled: false } });
 
       await expect(
         nextcloudTalkMessageActions.handleAction?.({
@@ -165,19 +137,23 @@ describe("nextcloudTalkMessageActions", () => {
       expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
     });
 
-    it("rejects an unconfigured account before reaching the sender", async () => {
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(unconfiguredAccount);
-
-      await expect(
-        nextcloudTalkMessageActions.handleAction?.({
-          channel: "nextcloud-talk",
-          action: "react",
-          params: { to: "room:abc123", messageId: "1", emoji: "👍" },
-          cfg,
-        }),
-      ).rejects.toThrow(/is disabled or not configured/);
-      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
-    });
+    it.each([
+      ["secret", { baseUrl: "https://nc.example.com" }],
+      ["baseUrl", { botSecret: "bot-secret" }],
+    ] as const)(
+      "rejects an account without %s before reaching the sender",
+      async (_missing, config) => {
+        await expect(
+          nextcloudTalkMessageActions.handleAction?.({
+            channel: "nextcloud-talk",
+            action: "react",
+            params: { to: "room:abc123", messageId: "1", emoji: "👍" },
+            cfg: { channels: { "nextcloud-talk": { ...config } } },
+          }),
+        ).rejects.toThrow(/is disabled or not configured/);
+        expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
+      },
+    );
 
     it("invokes sendReactionNextcloudTalk with normalized params for the react action", async () => {
       const result = await nextcloudTalkMessageActions.handleAction?.({
@@ -193,6 +169,7 @@ describe("nextcloudTalkMessageActions", () => {
         accountId: "work",
         cfg,
       });
+      expect(hoisted.sendReactionNextcloudTalk.mock.calls[0]?.[3].cfg).toBe(cfg);
       expect(result).toMatchObject({
         details: { ok: true, added: "👍" },
       });
