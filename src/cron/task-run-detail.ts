@@ -313,7 +313,7 @@ export function cronTaskRecordToScriptRunResult(
 /** Maps the cron outcome vocabulary onto generic task terminal states. */
 export function cronRunStatusToTaskStatus(
   entry: Pick<CronRunLogEntry, "status" | "error"> & Partial<CronRunLogEntry>,
-): Extract<TaskStatus, "succeeded" | "failed" | "timed_out"> {
+): Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled"> {
   if (entry.status === "ok") {
     const completionStatus =
       entry.completionStatus ??
@@ -324,7 +324,32 @@ export function cronRunStatusToTaskStatus(
       });
     return completionStatus === "succeeded" ? "succeeded" : "failed";
   }
+  if (entry.status === "skipped") {
+    // Only an explicit heartbeat no-op — an empty heartbeat file or a stale
+    // wake with no pending events — is an intentional non-execution and must
+    // not surface under `tasks list --status failed`. Every other skipped
+    // outcome — a failed model/cron preflight or setup, an unmet trigger
+    // condition, a released reservation, or a globally disabled heartbeat — is
+    // an unsuccessful run and stays a failed task per the established
+    // reporting contract (see openclaw/openclaw#123787). The scheduler writes
+    // these as `heartbeat skipped: <reason>` (timer-execution.ts).
+    return isIntentionalHeartbeatNoopError(entry.error) ? "cancelled" : "failed";
+  }
   return entry.status === "error" && isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
+}
+
+/**
+ * Explicit heartbeat no-op skip reasons. The scheduler prefixes these with
+ * `heartbeat skipped: ` (timer-execution.ts); a disabled heartbeat is NOT a
+ * no-op and keeps failed classification so failure monitors still see it.
+ */
+const CRON_INTENTIONAL_HEARTBEAT_SKIP_ERRORS = new Set([
+  "heartbeat skipped: empty-heartbeat-file",
+  "heartbeat skipped: no-pending-event",
+]);
+
+function isIntentionalHeartbeatNoopError(error: unknown): boolean {
+  return typeof error === "string" && CRON_INTENTIONAL_HEARTBEAT_SKIP_ERRORS.has(error);
 }
 
 /** Reconstructs the unchanged CronRunLogEntry wire shape from a cron task row. */
