@@ -5,11 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateContextEngineRegistrations } from "../context-engine/registry.js";
-import {
-  DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
-  resolveMemoryDreamingConfig,
-  resolveMemoryDreamingPluginConfig,
-} from "../memory-host-sdk/dreaming.js";
+import { resolveMemoryDreamingSidecarPluginId } from "../memory-host-sdk/dreaming.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import {
   resolveEffectiveEnableState,
@@ -70,25 +66,6 @@ export type AuthorizedDreamingSidecar = {
   selectedMemoryPluginId: string;
 };
 
-function resolveDreamingSidecarEngineId(params: {
-  cfg: OpenClawConfig;
-  memorySlot: string | null | undefined;
-}): string | null {
-  const normalizedMemorySlot = normalizeLowercaseStringOrEmpty(params.memorySlot);
-  if (
-    !normalizedMemorySlot ||
-    normalizedMemorySlot === "none" ||
-    normalizedMemorySlot === DEFAULT_MEMORY_DREAMING_PLUGIN_ID
-  ) {
-    return null;
-  }
-  const dreamingConfig = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
-    cfg: params.cfg,
-  });
-  return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
-}
-
 export function resolveAuthorizedDreamingSidecar(params: {
   cfg: OpenClawConfig;
   normalized: NormalizedPluginsConfig;
@@ -96,7 +73,7 @@ export function resolveAuthorizedDreamingSidecar(params: {
   manifestRegistry: PluginManifestRegistry;
   memorySlot: string | null | undefined;
 }): AuthorizedDreamingSidecar | null {
-  const engineId = resolveDreamingSidecarEngineId({
+  const engineId = resolveMemoryDreamingSidecarPluginId({
     cfg: params.cfg,
     memorySlot: params.memorySlot,
   });

@@ -230,12 +230,33 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     kind: "hot",
     actions: ["reconcileSystemJobs"],
   },
+  // Turning a third-party memory slot owner's dreaming off, denying or not
+  // allowing memory-core or the owner, or disabling plugins unloads the
+  // memory-core sidecar, which can then no longer remove its own cron jobs.
+  // Per-plugin enabled toggles are handled in buildGatewayReloadPlan.
+  {
+    prefixes: [
+      "plugins.enabled",
+      "plugins.allow",
+      "plugins.deny",
+      "plugins.slots.memory",
+      "plugins.entries.*.config.dreaming",
+    ],
+    kind: "hot",
+    actions: ["reloadPlugins", "disposeMcpRuntimes", "reconcileSystemJobs"],
+  },
   {
     prefixes: ["agents.defaults.decisionModel"],
     kind: "hot",
     actions: ["reloadPlugins"],
   },
-  { prefixes: ["plugins.load", "plugins.installs"], kind: "hot", actions: ["reloadPlugins"] },
+  // Removing a load path or install can drop the memory slot owner, which also
+  // unloads the memory-core sidecar; reconcile so its cron job goes with it.
+  {
+    prefixes: ["plugins.load", "plugins.installs"],
+    kind: "hot",
+    actions: ["reloadPlugins", "reconcileSystemJobs"],
+  },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
   { prefixes: ["transcripts", "cloudWorkers.profiles"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["mcp", "gateway.publicOrigin"], kind: "hot", actions: ["disposeMcpRuntimes"] },
@@ -499,6 +520,8 @@ function isInspectableChannelAccount(params: {
   }
 }
 
+const PLUGIN_ENABLED_PATH = /^plugins\.entries\.[^.]+\.enabled$/;
+
 export function buildGatewayReloadPlan(
   changedPaths: string[],
   options: GatewayReloadPlanOptions = {},
@@ -605,6 +628,14 @@ export function buildGatewayReloadPlan(
   // A wholesale restart covers its account targets and must run only once.
   for (const channel of plan.restartChannels) {
     restartChannelAccounts.delete(channel);
+  }
+
+  // Disabling a plugin can unload the memory-core dreaming sidecar: memory-core
+  // itself or the memory slot owner it runs beside. A prefix rule for
+  // plugins.entries.*.enabled would outrank per-channel plugin policies, so the
+  // system-job pass that removes its orphaned cron jobs is requested here.
+  if (plan.reloadPlugins && plan.hotReasons.some((path) => PLUGIN_ENABLED_PATH.test(path))) {
+    plan.reconcileSystemJobs = true;
   }
 
   return plan;

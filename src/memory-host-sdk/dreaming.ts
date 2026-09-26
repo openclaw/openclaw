@@ -26,6 +26,9 @@ const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
 export const MANAGED_MEMORY_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
+// Same value as MANAGED_DREAMING_DECLARATION_KEY in
+// extensions/memory-core/src/dreaming-cron-contract.ts, which core cannot import.
+export const MANAGED_MEMORY_DREAMING_CRON_DECLARATION_KEY = "memory-core:memory-dreaming-promotion";
 export const MANAGED_MEMORY_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 export const MEMORY_DREAMING_SYSTEM_EVENT_TEXT =
   "__openclaw_memory_core_short_term_promotion_dream__";
@@ -358,6 +361,31 @@ export function resolveMemoryDreamingPluginId(
     return configuredSlot;
   }
   return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
+}
+
+/**
+ * The dreaming sidecar a non-default memory slot owner loads, or null when
+ * none is due. The plugin loader activates memory-core beside another memory
+ * slot owner only while this is non-null, so it is also the only state in which
+ * memory-core can reconcile (and remove) its own managed dreaming cron jobs.
+ */
+export function resolveMemoryDreamingSidecarPluginId(params: {
+  cfg: OpenClawConfig;
+  memorySlot: string | null | undefined;
+}): string | null {
+  const normalizedMemorySlot = normalizeLowercaseStringOrEmpty(params.memorySlot);
+  if (
+    !normalizedMemorySlot ||
+    normalizedMemorySlot === "none" ||
+    normalizedMemorySlot === DEFAULT_MEMORY_DREAMING_PLUGIN_ID
+  ) {
+    return null;
+  }
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
+    cfg: params.cfg,
+  });
+  return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
 }
 
 export function resolveMemoryDreamingPluginConfig(
