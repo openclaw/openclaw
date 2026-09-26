@@ -313,7 +313,14 @@ export async function getMetadata(
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
   }
-  return metadataResponse(stat);
+  return {
+    isDirectory: stat.type === "directory",
+    isFile: stat.type === "file",
+    isSymlink: false,
+    size: stat.size,
+    createdAtMs: 0,
+    modifiedAtMs: stat.mtimeMs ?? 0,
+  };
 }
 
 export async function readDirectory(
@@ -406,10 +413,6 @@ export async function copyPath(
     "copy destination path",
   );
   const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
-  assertResolvedFsSandboxAccess(fsSandboxPolicy, [
-    { path: sourcePath, access: "read" },
-    { path: destinationPath, access: "write" },
-  ]);
   await copySandboxPath(execServer, {
     sourcePath,
     destinationPath,
@@ -530,15 +533,4 @@ function assertSandboxFileReadWithinLimit(stat: SandboxFsStat): void {
       `file is too large to read through Codex sandbox exec-server: ${stat.size} bytes`,
     );
   }
-}
-
-function metadataResponse(stat: SandboxFsStat | null): JsonObject {
-  return {
-    isDirectory: stat?.type === "directory",
-    isFile: stat?.type === "file",
-    isSymlink: false,
-    size: stat?.size ?? 0,
-    createdAtMs: 0,
-    modifiedAtMs: stat?.mtimeMs ?? 0,
-  };
 }

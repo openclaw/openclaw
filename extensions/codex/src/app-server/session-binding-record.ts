@@ -281,6 +281,23 @@ export type CodexAppServerThreadBinding = z.infer<typeof threadBindingSchema>;
 /** Persisted source snapshot and orphan-cleanup state for a supervised native branch. */
 export type CodexAppServerPendingSupervisionBranch = z.infer<typeof pendingSupervisionBranchSchema>;
 
+export function matchesPendingSupervisionBranch(
+  binding: CodexAppServerThreadBinding | undefined,
+  expected: CodexAppServerPendingSupervisionBranch,
+): boolean {
+  const pending = binding?.pendingSupervisionBranch;
+  const cleanup = pending?.cleanupThreadIds ?? [];
+  const expectedCleanup = expected.cleanupThreadIds ?? [];
+  return (
+    binding?.threadId === expected.sourceThreadId &&
+    pending?.sourceThreadId === expected.sourceThreadId &&
+    pending.connectionFingerprint === expected.connectionFingerprint &&
+    pending.lastTurnId === expected.lastTurnId &&
+    cleanup.length === expectedCleanup.length &&
+    cleanup.every((threadId, index) => threadId === expectedCleanup[index])
+  );
+}
+
 /** Context-engine state persisted with a Codex app-server thread binding. */
 export type CodexAppServerContextEngineBinding = z.infer<typeof contextEngineSchema>;
 /** Context-engine projection metadata used to guard resumed native threads. */

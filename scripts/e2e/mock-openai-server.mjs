@@ -707,16 +707,31 @@ function writeImageGeneration(res) {
   });
 }
 
-function resolveResponseText(bodyText) {
+function resolveResponseText(bodyText, body) {
+  let markerBody;
+  for (const key of ["input", "messages"]) {
+    if (!Array.isArray(body?.[key])) {
+      continue;
+    }
+    const messages = body[key].filter(
+      (message) => message?.role !== "user" || readMockUserText(message) !== undefined,
+    );
+    if (messages.length !== body[key].length) {
+      markerBody ??= { ...body };
+      markerBody[key] = messages;
+    }
+  }
+  // Runtime carriers can quote older markers after the user's current request.
+  const markerText = markerBody ? JSON.stringify(markerBody) : bodyText;
   const servingChecks = Array.from(
-    bodyText.matchAll(
+    markerText.matchAll(
       /This is an OpenClaw update serving check\. Do not use tools\. Reply with exactly: (update-verified-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gu,
     ),
   );
   if (servingChecks.length > 0) {
     return servingChecks.at(-1)[1];
   }
-  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
+  const matches = Array.from(markerText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
   return matches.at(-1)?.[0] ?? successMarker;
 }
 
@@ -984,7 +999,7 @@ const server = http.createServer((req, res) => {
         writeResponsesEvents(res, body.stream, response.events);
         return;
       }
-      const responseText = selectedResponse ? response.text : resolveResponseText(bodyText);
+      const responseText = selectedResponse ? response.text : resolveResponseText(bodyText, body);
       if (body.stream === false) {
         writeJson(res, 200, {
           id: "resp_e2e",
@@ -1038,7 +1053,7 @@ const server = http.createServer((req, res) => {
       }
       const responseText = selectedResponse
         ? selectedResponse.response.text
-        : resolveResponseText(bodyText);
+        : resolveResponseText(bodyText, body);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;
     }

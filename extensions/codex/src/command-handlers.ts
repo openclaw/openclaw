@@ -112,6 +112,15 @@ export async function handleCodexSubcommand(
   if (sandboxBlock) {
     return { text: sandboxBlock };
   }
+  const usageCommand = normalized === "unbind" ? "detach" : normalized;
+  if (
+    rest.length > 0 &&
+    ["status", "models", "detach", "binding", "stop", "mcp", "skills", "account"].includes(
+      usageCommand,
+    )
+  ) {
+    return { text: `Usage: /codex ${usageCommand}` };
+  }
   if (normalized === "plugins") {
     // Account-wide hosted refresh does not require plugin-management configuration IO.
     if (rest[0]?.toLowerCase() === "refresh") {
@@ -226,9 +235,6 @@ export async function handleCodexSubcommand(
     });
   }
   if (normalized === "status") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex status" };
-    }
     const { agentDir } = resolveCodexConversationControlScope(ctx);
     return {
       text: formatCodexStatus(
@@ -237,9 +243,6 @@ export async function handleCodexSubcommand(
     };
   }
   if (normalized === "models") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex models" };
-    }
     const { agentDir } = resolveCodexConversationControlScope(ctx);
     return {
       text: formatModels(
@@ -265,21 +268,12 @@ export async function handleCodexSubcommand(
     return await bindConversation(deps, ctx, options.pluginConfig, rest);
   }
   if (normalized === "detach" || normalized === "unbind") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex detach" };
-    }
     return { text: await detachConversation(deps, ctx) };
   }
   if (normalized === "binding") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex binding" };
-    }
     return { text: await describeConversationBinding(deps, ctx) };
   }
   if (normalized === "stop") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex stop" };
-    }
     return { text: await stopConversationTurn(deps, ctx) };
   }
   if (normalized === "steer") {
@@ -302,15 +296,8 @@ export async function handleCodexSubcommand(
     }
     return { text: await setConversationPermissions(deps, ctx, rest) };
   }
-  if (normalized === "compact") {
-    return {
-      text: await startThreadAction(deps, ctx, options.pluginConfig, "compact", rest),
-    };
-  }
-  if (normalized === "review") {
-    return {
-      text: await startThreadAction(deps, ctx, options.pluginConfig, "review", rest),
-    };
+  if (normalized === "compact" || normalized === "review") {
+    return { text: await startThreadAction(deps, ctx, options.pluginConfig, normalized, rest) };
   }
   if (normalized === "diagnostics") {
     return await handleCodexDiagnosticsFeedback(
@@ -329,43 +316,21 @@ export async function handleCodexSubcommand(
       text: await handleComputerUseCommand(deps, ctx, options.pluginConfig, rest),
     };
   }
-  if (normalized === "mcp") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex mcp" };
-    }
+  if (normalized === "mcp" || normalized === "skills") {
     const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
+    const response = await deps.codexControlRequest(
+      options.pluginConfig,
+      normalized === "mcp"
+        ? CODEX_CONTROL_METHODS.listMcpServers
+        : CODEX_CONTROL_METHODS.listSkills,
+      normalized === "mcp" ? { limit: 100 } : {},
+      { config: ctx.config, ...scope },
+    );
     return {
-      text: formatList(
-        await deps.codexControlRequest(
-          options.pluginConfig,
-          CODEX_CONTROL_METHODS.listMcpServers,
-          { limit: 100 },
-          { config: ctx.config, ...scope },
-        ),
-        "MCP servers",
-      ),
-    };
-  }
-  if (normalized === "skills") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex skills" };
-    }
-    const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
-    return {
-      text: formatSkills(
-        await deps.codexControlRequest(
-          options.pluginConfig,
-          CODEX_CONTROL_METHODS.listSkills,
-          {},
-          { config: ctx.config, ...scope },
-        ),
-      ),
+      text: normalized === "mcp" ? formatList(response, "MCP servers") : formatSkills(response),
     };
   }
   if (normalized === "account") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex account" };
-    }
     const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
     const requestScope = { config: ctx.config, ...scope };
     const [account, limits] = await Promise.all([

@@ -83,7 +83,9 @@ export function resolveCodexAppServerNetworkProxy(
   return {
     networkProxy: {
       profileName,
-      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configFingerprint: createHash("sha256")
+        .update(stringifyCodexPolicy(configPatch))
+        .digest("hex"),
       configPatch,
     },
   };
@@ -102,10 +104,6 @@ function resolveNetworkProxyPermissionProfileName(
     .digest("hex")
     .slice(0, 16);
   return `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${suffix}`;
-}
-
-function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObject): string {
-  return createHash("sha256").update(stringifyCodexPolicy(configPatch)).digest("hex");
 }
 
 function normalizeNetworkProxyPermissionMap(

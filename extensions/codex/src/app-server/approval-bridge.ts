@@ -1,7 +1,3 @@
-/**
- * Bridges Codex app-server approval requests into OpenClaw policy hooks and
- * plugin approval UX.
- */
 import {
   type AgentApprovalEventData,
   type BeforeToolCallFailureDisposition,
@@ -65,10 +61,6 @@ type SanitizedApprovalPreview = {
   omitted: boolean;
 };
 
-/**
- * Handles one app-server approval request for the active thread/turn, returning
- * the app-server response payload when the request belongs to this run.
- */
 export async function handleCodexAppServerApprovalRequest(params: {
   method: string;
   requestParams: JsonValue | undefined;
@@ -362,7 +354,6 @@ function recordNativeToolFailureDisposition(
   }
 }
 
-/** Converts an OpenClaw approval outcome into the app-server method response. */
 function buildApprovalResponse(
   method: string,
   requestParams: JsonObject | undefined,
@@ -419,7 +410,7 @@ function buildApprovalContext(params: {
       ? describeCommandApprovalDetails(params.requestParams)
       : [];
   const commandPreview = sanitizeApprovalPreview(
-    readDisplayCommandPreview(params.requestParams),
+    readCommandActionsPreview(params.requestParams) ?? readCommandPreview(params.requestParams),
     commandDetailLines.length > 0 ? COMMAND_PREVIEW_WITH_DETAILS_MAX_LENGTH : 180,
   );
   const reasonPreview = sanitizeApprovalPreview(
@@ -443,7 +434,7 @@ function buildApprovalContext(params: {
     approvalKind === "command" ? "exec" : approvalKind === "other" ? "unknown" : "plugin";
   const permissionLines =
     params.method === "item/permissions/requestApproval"
-      ? describeRequestedPermissions(params.requestParams)
+      ? describePermissionProfile(requestedPermissions(params.requestParams), "Permissions")
       : [];
   const title = networkApproval
     ? "Codex app-server network approval"
@@ -891,11 +882,6 @@ function requestedPermissions(requestParams: JsonObject | undefined): JsonObject
   return granted;
 }
 
-function describeRequestedPermissions(requestParams: JsonObject | undefined): string[] {
-  const permissions = requestedPermissions(requestParams);
-  return describePermissionProfile(permissions, "Permissions");
-}
-
 function describeCommandApprovalDetails(requestParams: JsonObject | undefined): string[] {
   const lines: string[] = [];
   const additionalPermissions = isJsonObject(requestParams?.additionalPermissions)
@@ -1139,18 +1125,9 @@ function isPrivateNetworkHostPattern(value: string): boolean {
   const wildcardStripped = normalized.replace(/^\*\./, "");
   if (
     wildcardStripped === "localhost" ||
-    wildcardStripped === "local" ||
-    wildcardStripped === "internal" ||
-    wildcardStripped === "lan" ||
-    wildcardStripped === "home" ||
-    wildcardStripped === "corp" ||
-    wildcardStripped === "private" ||
-    wildcardStripped.endsWith(".local") ||
-    wildcardStripped.endsWith(".internal") ||
-    wildcardStripped.endsWith(".lan") ||
-    wildcardStripped.endsWith(".home") ||
-    wildcardStripped.endsWith(".corp") ||
-    wildcardStripped.endsWith(".private")
+    ["local", "internal", "lan", "home", "corp", "private"].some(
+      (suffix) => wildcardStripped === suffix || wildcardStripped.endsWith(`.${suffix}`),
+    )
   ) {
     return true;
   }
@@ -1189,16 +1166,6 @@ function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApproval
     stream: "approval",
     data: { ...data },
   });
-}
-
-function readDisplayCommandPreview(
-  record: JsonObject | undefined,
-): ApprovalPreviewSource | undefined {
-  const actionCommand = readCommandActionsPreview(record);
-  if (actionCommand) {
-    return actionCommand;
-  }
-  return readCommandPreview(record);
 }
 
 function readPolicyCommand(record: JsonObject | undefined): string | undefined {
