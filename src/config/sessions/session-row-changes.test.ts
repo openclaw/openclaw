@@ -163,7 +163,12 @@ it("publishes committed registry changes while discarding a rolled-back agent re
       unregisterOpenClawAgentDatabase(target);
       registerOpenClawAgentDatabase(target);
       unregisterOpenClawAgentDatabases({ agentId: "main" });
-      expect(changes).toEqual(Array.from({ length: 3 }, () => ({ all: true, scope: "stores" })));
+      expect(changes).toEqual(
+        Array.from({ length: 3 }, () => ({
+          all: true,
+          scope: { agentId: "main", topology: true },
+        })),
+      );
     } finally {
       unsubscribe();
     }
