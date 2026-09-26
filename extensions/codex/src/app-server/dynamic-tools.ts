@@ -748,7 +748,7 @@ export function createCodexDynamicToolBridge(params: {
             (isReplaySafeToolInstance(toolEntry.tool) &&
               isReplaySafeToolCall(toolName, executedArgs));
           return {
-            contentItems: [{ type: "inputText", text: errorMessage }],
+            contentItems: [{ type: "inputText", text: sanitizeToolResult(errorMessage) }],
             success: false,
             diagnosticTerminalType: executionDisposition === "blocked" ? "blocked" : "error",
             diagnosticTerminalReason:

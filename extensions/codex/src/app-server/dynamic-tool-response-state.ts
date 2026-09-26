@@ -1,5 +1,8 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  sanitizeToolResult,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   CodexDynamicToolCallResponse,
   CodexDynamicToolDiagnosticTerminalReason,
@@ -30,7 +33,7 @@ export function createFailedDynamicToolResponse(
   },
 ): CodexDynamicToolRuntimeResponse {
   return {
-    contentItems: [{ type: "inputText", text: message }],
+    contentItems: [{ type: "inputText", text: sanitizeToolResult(message) }],
     success: false,
     diagnosticTerminalReason: options?.terminalReason ?? "failed",
     diagnosticTerminalType: "error",
