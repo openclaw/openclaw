@@ -1499,6 +1499,72 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
+  it("suppresses a steering skip warning through the production completion handler", async () => {
+    const { ctx } = createTestContext();
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-steering-skip",
+      args: { command: "echo interrupted" },
+      isError: true,
+      executionStarted: false,
+      result: {
+        content: [{ type: "text", text: "Skipped due to queued user message." }],
+        details: { status: "skipped", deniedReason: "steering" },
+      },
+    });
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+    expect(
+      buildEmbeddedRunPayloads({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        lastToolError: ctx.state.lastToolError,
+        sessionKey: "agent:unit-session",
+        toolResultFormat: "markdown",
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps a genuine admission warning when a later tool is steering-skipped", async () => {
+    const { ctx } = createTestContext();
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-admission-block",
+      args: { command: "echo denied" },
+      isError: true,
+      executionStarted: false,
+      result: {
+        content: [{ type: "text", text: "Tool execution was blocked before launch." }],
+        details: { status: "blocked", deniedReason: "tool-admission" },
+      },
+    });
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-steering-skip-after-block",
+      args: { command: "echo interrupted" },
+      isError: true,
+      executionStarted: false,
+      result: {
+        content: [{ type: "text", text: "Skipped due to queued user message." }],
+        details: { status: "skipped", deniedReason: "steering" },
+      },
+    });
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      error: "Tool execution was blocked before launch.",
+    });
+    expect(
+      buildEmbeddedRunPayloads({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        lastToolError: ctx.state.lastToolError,
+        sessionKey: "agent:unit-session",
+        toolResultFormat: "markdown",
+      }).map((payload) => payload.text),
+    ).toEqual(["⚠️ Exec blocked"]);
+  });
+
   it("marks middleware failures on the last tool error", async () => {
     const { ctx } = createTestContext();
 
