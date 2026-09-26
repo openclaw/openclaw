@@ -625,7 +625,6 @@
 
 .clawhub-skill-detail__body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: var(--space-3);
   overflow-wrap: anywhere;
@@ -1480,7 +1479,6 @@ openclaw-plugins-page
 
 .skill-library-import {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
 }
 
