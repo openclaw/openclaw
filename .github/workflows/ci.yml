@@ -6673,7 +6673,7 @@ jobs:
       - *platform_checkout_step
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
+        uses: ruby/setup-ruby@762794c140bbeda0f1224786aa33b4b46783a6c1 # v1.326.0
         with:
           ruby-version: "3.4.10"
           bundler: "4.0.21"
