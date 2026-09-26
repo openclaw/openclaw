@@ -253,10 +253,10 @@ suite.define(() => {
         result: "process complete",
         toolCallId: "callProcess",
       });
-      const workingRowKey = await page
-        .locator("[data-virtual-row-key^='agent-run:']")
-        .last()
-        .getAttribute("data-virtual-row-key");
+      // The active run frame belongs to the persisted steer send boundary.
+      const workingRowKey = `agent-run:${JSON.stringify([runId, `send:${steerRunId}`])}`;
+      const workingRow = page.locator(`[data-virtual-row-key='${workingRowKey}']`);
+      await workingRow.waitFor();
       const finalText = Array.from(
         { length: 18 },
         (_, index) =>
@@ -376,9 +376,8 @@ suite.define(() => {
           page.locator(".chat-thread-inner").getByText(finalText, { exact: true }).count(),
         )
         .toBe(1);
-      await expect
-        .poll(() => page.locator(".chat-work-group", { hasText: "used process" }).count())
-        .toBe(0);
+      // Routine process polling can be suppressed; stale work is identified by its owner, not copy.
+      await expect.poll(() => workingRow.locator(".chat-work-group").count()).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }
