@@ -414,6 +414,7 @@ suite.define(() => {
         };
         // The toolbar row sits at the top of the content column in both states.
         await expect.poll(rowCenter).toBe(24);
+        await capturePanel(page, "page-toolbar-expanded");
 
         await page.locator(".sidebar-brand__collapse").click();
         await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
@@ -428,6 +429,7 @@ suite.define(() => {
           expect(box.top + box.height / 2).toBe(24);
           expect(box.right).toBeLessThan(tabsBox.x);
         }
+        await capturePanel(page, "page-toolbar-collapsed");
       },
     );
   });
