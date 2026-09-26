@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => ({
   prepareUpdateRepairInference: vi.fn(),
   runUpdateRepairTurn: vi.fn(),
 }));
-vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
+vi.mock("./doctor-lint-runner.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
 vi.mock("../infra/update-repair-agent.js", () => ({
   runUpdateRepairLoop: mocks.runUpdateRepairLoop,
 }));
