@@ -11,34 +11,21 @@ import kotlin.math.pow
 
 class WearThemeTest {
   @Test
-  fun `wear palettes mirror the canonical phone surfaces and voice accents`() {
-    val dark = wearColorsFor(WearThemeMode.Dark)
-    assertEquals(Color(0xFF030303), dark.canvas)
-    assertEquals(Color(0xFF0A0A0A), dark.surface)
-    assertEquals(Color(0xFF111111), dark.surfaceRaised)
-    assertEquals(Color(0xFF1A1A1A), dark.surfacePressed)
-    assertEquals(Color(0xFF242424), dark.border)
-    assertEquals(Color(0xFF3A3A3A), dark.borderStrong)
-    assertEquals(Color(0xFFF8F8F8), dark.text)
-    assertEquals(Color(0xFFA8A8A8), dark.textMuted)
-    assertEquals(Color(0xFFFFFFFF), dark.primary)
-    assertEquals(Color(0xFF050505), dark.primaryText)
-    assertEquals(Color(0xFF6EA8FF), dark.voiceAccent)
-    assertEquals(Color(0xFF1A2A44), dark.voiceAccentSoft)
+  fun `watch backgrounds stay black in both appearances`() {
+    // WO-V13 requires a black app background even when the user selects light surfaces.
+    assertEquals(Color.Black, wearColorsFor(WearThemeMode.Light).canvas)
+    assertEquals(Color.Black, wearColorsFor(WearThemeMode.Dark).canvas)
+  }
 
-    val light = wearColorsFor(WearThemeMode.Light)
-    assertEquals(Color(0xFFFAFBFC), light.canvas)
-    assertEquals(Color(0xFFFFFEFB), light.surface)
-    assertEquals(Color(0xFFFFFFFF), light.surfaceRaised)
-    assertEquals(Color(0xFFE9EDF3), light.surfacePressed)
-    assertEquals(Color(0xFFDDE3EC), light.border)
-    assertEquals(Color(0xFFC7D0DC), light.borderStrong)
-    assertEquals(Color(0xFF111318), light.text)
-    assertEquals(Color(0xFF505865), light.textMuted)
-    assertEquals(Color(0xFF111827), light.primary)
-    assertEquals(Color(0xFFFFFFFF), light.primaryText)
-    assertEquals(Color(0xFF1B5ACB), light.voiceAccent)
-    assertEquals(Color(0xFFEAF2FF), light.voiceAccentSoft)
+  @Test
+  fun `canvas text and voice affordances stay readable above black`() {
+    val colors = OpenClawWearTheme.canvasColors
+    for (foreground in listOf(colors.text, colors.textMuted, colors.voiceAccent, colors.danger)) {
+      assertTrue(
+        "Canvas foreground must remain readable in either appearance",
+        contrastRatio(foreground, Color.Black) >= MIN_TEXT_CONTRAST,
+      )
+    }
   }
 
   @Test

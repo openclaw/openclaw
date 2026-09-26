@@ -1,8 +1,8 @@
-import { asPositiveFiniteNumber as normalizePairingQrExpiresAtMs } from "@openclaw/normalization-core/number-coercion";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readNonBlankString,
-  readNonBlankString as normalizeTtsSupplementSpokenText,
 } from "@openclaw/normalization-core/string-coerce";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
@@ -12,6 +12,7 @@ import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ReplyPayload, ReplyPayloadTtsSupplement } from "../shared/reply-payload.types.js";
+import type { CommandOwnerAssertion } from "./command-owner-authority.js";
 import type { BlockReplySource } from "./reply/block-reply-source.types.js";
 
 export type {
@@ -61,10 +62,10 @@ export function readAskUserQuestionId(
   payload: Pick<ReplyPayload, "channelData">,
 ): string | undefined {
   const askUser = payload.channelData?.askUser;
-  if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+  if (!isRecord(askUser)) {
     return undefined;
   }
-  const questionId = (askUser as { questionId?: unknown }).questionId;
+  const questionId = askUser.questionId;
   return typeof questionId === "string" && questionId ? questionId : undefined;
 }
 
@@ -81,12 +82,11 @@ export function readPairingQrReplyChannelData(
   payload: Pick<ReplyPayload, "channelData">,
 ): PairingQrReplyChannelData | undefined {
   const raw = payload.channelData?.[PAIRING_QR_REPLY_CHANNEL_DATA_KEY];
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+  if (!isRecord(raw)) {
     return undefined;
   }
-  const record = raw as Record<string, unknown>;
-  const setupCode = readNonBlankString(record.setupCode);
-  const expiresAtMs = normalizePairingQrExpiresAtMs(record.expiresAtMs);
+  const setupCode = readNonBlankString(raw.setupCode);
+  const expiresAtMs = asPositiveFiniteNumber(raw.expiresAtMs);
   return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
 }
 
@@ -154,7 +154,7 @@ function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrl
 export function getReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
 ): ReplyPayloadTtsSupplement | undefined {
-  const spokenText = normalizeTtsSupplementSpokenText(payload.ttsSupplement?.spokenText);
+  const spokenText = readNonBlankString(payload.ttsSupplement?.spokenText);
   if (!spokenText || !hasReplyPayloadMedia(payload)) {
     return undefined;
   }
@@ -179,7 +179,7 @@ export function markReplyPayloadAsTtsSupplement<T extends ReplyPayload>(
   spokenText: string = payload.spokenText ?? payload.text ?? "",
   options?: { visibleTextAlreadyDelivered?: boolean },
 ): T {
-  const normalizedSpokenText = normalizeTtsSupplementSpokenText(spokenText);
+  const normalizedSpokenText = readNonBlankString(spokenText);
   if (!normalizedSpokenText) {
     return payload;
   }
@@ -279,6 +279,7 @@ export type ReplyPayloadMetadata = {
   progressContinuation?: ProgressContinuationCapability;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
   pendingFinalDeliveryCompletion?: {
+    commandOwnerReference?: CommandOwnerAssertion["recoveryReference"];
     agentId?: string;
     deliveryId: string;
     intentId: string;
@@ -469,7 +470,8 @@ export function markCommandReplyForDelivery(
   reply: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload | ReplyPayload[] | undefined {
   const markPayload = (payload: ReplyPayload): ReplyPayload =>
-    setReplyPayloadMetadata(markReplyPayloadForSourceSuppressionDelivery(payload), {
+    setReplyPayloadMetadata(payload, {
+      deliverDespiteSourceReplySuppression: true,
       commandReply: true,
     });
   if (!reply) {

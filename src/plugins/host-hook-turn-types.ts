@@ -2,7 +2,7 @@
 import type { PluginJsonValue } from "./host-hook-json.js";
 
 /** Placement for context injected into the next agent turn. */
-export type PluginNextTurnInjectionPlacement = "prepend_context" | "append_context";
+type PluginNextTurnInjectionPlacement = "prepend_context" | "append_context";
 
 /** Plugin request to inject text into the next turn for a session. */
 export type PluginNextTurnInjection = {

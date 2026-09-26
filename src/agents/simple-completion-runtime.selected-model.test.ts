@@ -1,16 +1,17 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   executeWorkerInference,
   type WorkerInferenceExecutionParams,
 } from "../gateway/worker-environments/inference-runtime.js";
-import * as workerSessionTargetRuntime from "../gateway/worker-environments/session-target.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sessionAuthRuntime from "./auth-profiles/session-override.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
+import type { BoundAgentRunSessionTarget } from "./run-session-target.types.js";
 import {
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
@@ -138,14 +139,16 @@ module.exports = {
               },
             };
             await state.writeConfig(cfg);
+            const sessionTarget: BoundAgentRunSessionTarget = {
+              agentId: "main",
+              sessionId: "selected-test",
+              sessionKey: "agent:main:main",
+              storePath: state.path("unused-session-store.sqlite"),
+            };
             if (mode === "worker") {
-              vi.spyOn(workerSessionTargetRuntime, "resolveWorkerSessionTarget").mockReturnValue({
-                agentId: "main",
-                sessionEntry: { sessionId: "selected-test", updatedAt: 0 },
-                sessionId: "selected-test",
-                sessionKey: "agent:main:main",
-                sessionStore: {},
-                storePath: state.path("unused-session-store.sqlite"),
+              vi.spyOn(sessionAccessor, "loadSessionEntry").mockImplementation((target) => {
+                expect(target).toEqual(sessionTarget);
+                return { sessionId: "selected-test", updatedAt: 0 };
               });
               vi.spyOn(sessionAuthRuntime, "resolveSessionAuthSelection").mockResolvedValue(
                 undefined,
@@ -158,7 +161,9 @@ module.exports = {
               ["plain", "plain"],
             ] as const) {
               if (mode === "worker") {
-                const result = await executeWorkerInference(workerRequest(cfg, provider, raw));
+                const result = await executeWorkerInference(
+                  workerRequest(cfg, provider, raw, sessionTarget),
+                );
                 expect(result).toMatchObject({
                   type: "done",
                   message: {
@@ -213,9 +218,11 @@ function workerRequest(
   config: OpenClawConfig,
   provider: string,
   model: string,
+  sessionTarget: BoundAgentRunSessionTarget,
 ): WorkerInferenceExecutionParams {
   return {
     config,
+    sessionTarget,
     identity: {
       environmentId: "selected-test",
       credentialHash: "synthetic-fixture",

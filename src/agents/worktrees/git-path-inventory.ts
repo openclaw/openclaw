@@ -50,16 +50,19 @@ export function checkoutPathFromGitBytes(checkoutRoot: string, gitPath: Buffer):
   return Buffer.concat([Buffer.from(checkoutRoot), Buffer.from(path.sep), gitPath]);
 }
 
-export async function rawPathExists(target: string | Buffer): Promise<boolean> {
+export async function rawPathStat(target: string | Buffer) {
   try {
-    await fs.lstat(target);
-    return true;
+    return await fs.lstat(target);
   } catch (error) {
     if (isMissingPathError(error)) {
-      return false;
+      return undefined;
     }
     throw error;
   }
+}
+
+export async function rawPathExists(target: string | Buffer): Promise<boolean> {
+  return (await rawPathStat(target)) !== undefined;
 }
 
 export type GitTreePath = { path: Buffer; mode: string };

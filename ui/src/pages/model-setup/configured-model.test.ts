@@ -9,7 +9,6 @@ import type { ModelSetupVerifyState } from "./state.ts";
 
 function mount(
   result: SystemAgentSetupDetectResult,
-  onContinue?: () => void,
   verify: ModelSetupVerifyState = {
     phase: "failed",
     status: "unavailable",
@@ -26,7 +25,6 @@ function mount(
       canVerify: true,
       actionsDisabled: false,
       onVerify,
-      onContinue,
     }),
     container,
   );
@@ -64,13 +62,6 @@ describe("renderConfiguredModel", () => {
       label: "llama.cpp",
       modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
     },
-    {
-      brandId: "lmstudio",
-      detail: "qwen3-8b-instruct at http://localhost:1234/v1",
-      kind: "provider-auto:lmstudio",
-      label: "LM Studio",
-      modelRef: "lmstudio/qwen3-8b-instruct",
-    },
   ] as const)("shows a quiet recovery state for $brandId", (fixture) => {
     const result: SystemAgentSetupDetectResult = {
       candidates: [
@@ -104,26 +95,6 @@ describe("renderConfiguredModel", () => {
     expect(onVerify).toHaveBeenCalledOnce();
   });
 
-  it("renders the optional continuation action in the configured card", () => {
-    const onContinue = vi.fn();
-    const { container } = mount(
-      {
-        candidates: [],
-        manualProviders: [],
-        prepareOptions: [],
-        workspace: "/tmp/workspace",
-        configuredModel: "openai/gpt-5",
-        setupComplete: true,
-      },
-      onContinue,
-    );
-    const button = [...container.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent?.trim() === "Continue setup",
-    );
-    button?.click();
-    expect(onContinue).toHaveBeenCalledOnce();
-  });
-
   it("explains a setup timeout without claiming the provider is unreachable", () => {
     const result: SystemAgentSetupDetectResult = {
       candidates: [],
@@ -133,7 +104,7 @@ describe("renderConfiguredModel", () => {
       configuredModel: "ollama/gemma4:latest",
       setupComplete: true,
     };
-    const { container } = mount(result, undefined, {
+    const { container } = mount(result, {
       phase: "failed",
       status: "timeout",
       error: "LLM request timed out.",

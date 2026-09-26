@@ -52,6 +52,13 @@ import type { CodexCatalogPreviewCache } from "./session-catalog-native-projecti
 
 export type SafeValue<T> = { ok: true; value: T } | { ok: false; error: string };
 
+export type SafeCodexControlRequestFn = (
+  pluginConfig: unknown,
+  method: CodexControlMethod,
+  requestParams: JsonValue | undefined,
+  options?: CodexControlRequestOptions,
+) => Promise<SafeValue<JsonValue | undefined>>;
+
 type AuthProfileOrderConfig = Parameters<
   typeof resolveCodexAppServerAuthProfileIdForAgent
 >[0]["config"];
@@ -371,25 +378,13 @@ export async function safeCodexControlRequest(
   );
 }
 
-async function safeCodexModelList(
-  pluginConfig: unknown,
-  limit: number,
-  config?: AuthProfileOrderConfig,
-  agentDir?: string,
-) {
-  return await safeValue(
-    async () =>
-      await listCodexAppServerModels(requestOptions(pluginConfig, limit, config, agentDir)),
-  );
-}
-
 export async function readCodexStatusProbes(
   pluginConfig: unknown,
   config?: AuthProfileOrderConfig,
   agentDir?: string,
 ) {
   const [models, account, limits, mcps, skills] = await Promise.all([
-    safeCodexModelList(pluginConfig, 20, config, agentDir),
+    safeValue(() => listCodexAppServerModels(requestOptions(pluginConfig, 20, config, agentDir))),
     safeCodexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.account,

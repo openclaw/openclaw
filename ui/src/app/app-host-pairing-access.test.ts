@@ -189,20 +189,21 @@ afterEach(async () => {
 
 describe("application shell pairing access", () => {
   it.each([false, true])(
-    "does not rerender navigation chrome for unchanged shell state (outbox runtime: %s)",
+    "does not rerender navigation chrome for unrelated shell updates (outbox runtime: %s)",
     async (withOutboxes) => {
       vi.useFakeTimers();
-      const { shell, renderSidebar, container } = createPairingShell({
+      const { shell, renderSidebar, container, overlaySnapshot } = createPairingShell({
         auth: { role: "operator", scopes: ["operator.admin"] },
       });
       if (withOutboxes) {
         shell.outboxStoreRuntime = {
-          summarizeStoredChatOutboxes: () => ({
+          read: () => ({
             total: 1,
             attentionCountForSession: () => 1,
             hasSessionDraft: () => true,
           }),
-          subscribeStoredChatOutboxChanges: () => () => undefined,
+          subscribe: () => () => undefined,
+          invalidate: () => undefined,
         };
       }
       const sidebar = renderSidebar();
@@ -219,6 +220,7 @@ describe("application shell pairing access", () => {
       const renderSidebarChild = vi.spyOn(sidebar, "render");
       const renderTopbarChild = vi.spyOn(topbar, "render");
 
+      overlaySnapshot.approvalBusy = true;
       render(shell.render(), container);
       await settleLitElements([sidebar, topbar]);
 
@@ -293,17 +295,18 @@ describe("application shell pairing access", () => {
       navigationSidebar: PairingSidebar;
     };
     shell.outboxStoreRuntime = {
-      summarizeStoredChatOutboxes: () => ({
+      read: () => ({
         total: 0,
         attentionCountForSession: () => 0,
         hasSessionDraft: () => false,
       }),
-      subscribeStoredChatOutboxChanges: (listener) => {
+      subscribe: (listener) => {
         publish = listener;
         return () => {
           publish = undefined;
         };
       },
+      invalidate: () => undefined,
     };
     document.body.append(shell, shell.navigationSidebar);
     try {

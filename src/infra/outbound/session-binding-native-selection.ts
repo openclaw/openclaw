@@ -8,3 +8,14 @@ export type NativeSessionBindingSelection = {
     refs: readonly ConversationRef[],
   ) => Promise<ReadonlyArray<SessionBindingRecord | null>>;
 };
+
+/** Core-owned SQLite adapters enumerate through their original worker; SDK adapters keep their contract. */
+export const nativeSessionBindingListBySession = Symbol.for(
+  "openclaw.sessionBinding.nativeListBySession",
+);
+
+export type NativeSessionBindingListing = {
+  [nativeSessionBindingListBySession]?: (
+    targetSessionKey: string,
+  ) => Promise<SessionBindingRecord[]>;
+};

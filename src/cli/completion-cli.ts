@@ -33,7 +33,7 @@ import { publishOutputFileAtomically } from "./output-file.runtime.js";
 import { getCoreCliCompletionGroups } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
 import { removeCommandGroupNames } from "./program/register-command-groups.js";
-import { getSubCliCompletionGroups } from "./program/register.subclis-core.js";
+import { getSubCliCompletionGroups } from "./program/register.subclis.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
   return createCompletionScriptGenerator(program)(shell);
@@ -191,23 +191,7 @@ function generateZshCompletion(program: Command): string {
   const script = `
 #compdef ${rootCmd}
 
-_${rootCmd}_root_completion() {
-  local -a commands
-  local -a options
-  
-  _arguments -C \\
-    ${generateZshArgs(program)} \\
-    ${generateZshSubcmdList(program)} \\
-    "*::arg:->args"
-
-  case $state in
-    (args)
-      case $line[1] in
-        ${program.commands.map((cmd) => `(${commandNameVariants(cmd).join("|")}) _${rootCmd}_${cmd.name().replace(/-/g, "_")} ;;`).join("\n        ")}
-      esac
-      ;;
-  esac
-}
+${generateZshCommandGroup(program, `_${rootCmd}_root_completion`, `_${rootCmd}`)}
 
 ${generateZshSubcommands(program, rootCmd)}
 
@@ -279,6 +263,30 @@ function escapeZshDoubleQuotedDescription(description: string): string {
     .replace(/\]/g, "\\]");
 }
 
+function generateZshCommandGroup(
+  command: Command,
+  functionName: string,
+  childPrefix = functionName,
+): string {
+  return `${functionName}() {
+  local -a commands
+  local -a options
+  
+  _arguments -C \\
+    ${generateZshArgs(command)} \\
+    ${generateZshSubcmdList(command)} \\
+    "*::arg:->args"
+
+  case $state in
+    (args)
+      case $line[1] in
+        ${command.commands.map((cmd) => `(${commandNameVariants(cmd).join("|")}) ${childPrefix}_${cmd.name().replace(/-/g, "_")} ;;`).join("\n        ")}
+      esac
+      ;;
+  esac
+}`;
+}
+
 function generateZshSubcommands(program: Command, prefix: string): string {
   const segments: string[] = [];
 
@@ -292,25 +300,7 @@ function generateZshSubcommands(program: Command, prefix: string): string {
 
       const subCommands = cmd.commands;
       if (subCommands.length > 0) {
-        segments.push(`
-${funcName}() {
-  local -a commands
-  local -a options
-  
-  _arguments -C \\
-    ${generateZshArgs(cmd)} \\
-    ${generateZshSubcmdList(cmd)} \\
-    "*::arg:->args"
-
-  case $state in
-    (args)
-      case $line[1] in
-        ${subCommands.map((sub) => `(${commandNameVariants(sub).join("|")}) ${funcName}_${sub.name().replace(/-/g, "_")} ;;`).join("\n        ")}
-      esac
-      ;;
-  esac
-}
-`);
+        segments.push(`\n${generateZshCommandGroup(cmd, funcName)}\n`);
         continue;
       }
 

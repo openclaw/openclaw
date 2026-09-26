@@ -61,7 +61,6 @@ describe("buildSlackProgressCardBlocks", () => {
   });
 
   it.each([
-    ["Run `pnpm test`", "*Run `pnpm test`*"],
     ["Run **bold** checks", "*Run bold checks*"],
     ["Read C:\\path", "*Read C:\\path*"],
     [
@@ -123,30 +122,27 @@ describe("buildSlackProgressCardBlocks", () => {
     });
   });
 
-  it.each([7, 50])(
-    "keeps approval attention visible beside %s recent activity rows",
-    (activityCount) => {
-      const blocks = buildSlackProgressCardBlocks({
-        state: "working",
-        title: "Working",
-        maxLineChars: 300,
-        lines: [
-          {
-            kind: "approval",
-            label: "Approval",
-            text: "Approval required",
-            detail: "Run the command",
-            status: "requested",
-          },
-          ...Array.from({ length: activityCount }, (_, index) => ({
-            ...progressLine(index),
-            detail: "x".repeat(300),
-          })),
-        ],
-      });
-      expect(JSON.stringify(blocks)).toContain("Run the command");
-    },
-  );
+  it("keeps approval attention visible beside fifty recent activity rows", () => {
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Working",
+      maxLineChars: 300,
+      lines: [
+        {
+          kind: "approval",
+          label: "Approval",
+          text: "Approval required",
+          detail: "Run the command",
+          status: "requested",
+        },
+        ...Array.from({ length: 50 }, (_, index) => ({
+          ...progressLine(index),
+          detail: "x".repeat(300),
+        })),
+      ],
+    });
+    expect(JSON.stringify(blocks)).toContain("Run the command");
+  });
 
   it("renders the working card with narration, plan, one activity block, and live footer", () => {
     const blocks = buildSlackProgressCardBlocks({

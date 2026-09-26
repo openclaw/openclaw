@@ -60,6 +60,17 @@ export async function createTaskFlowEffectsFixture(
         | TaskInitialWorkerOperations[Key]["output"]
         | Promise<TaskInitialWorkerOperations[Key]["output"]>;
     } = {
+      "tasks.maintainCron": (input) =>
+        originalCreate(context, { type: "tasks.maintainCron", input }, assertCurrent, onGranted),
+      "tasks.applyRetention": (input) =>
+        originalCreate(context, { type: "tasks.applyRetention", input }, assertCurrent, onGranted),
+      "tasks.transitionRunRow": (input) =>
+        originalCreate(
+          context,
+          { type: "tasks.transitionRunRow", input },
+          assertCurrent,
+          onGranted,
+        ),
       "tasks.bindRunOwner": (input) =>
         originalCreate(context, { type: "tasks.bindRunOwner", input }, assertCurrent, onGranted),
       "tasks.acknowledgeStateChange": (input) =>

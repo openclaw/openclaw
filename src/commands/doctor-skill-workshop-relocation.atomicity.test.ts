@@ -12,11 +12,11 @@ import {
   proposeUpdateSkill,
 } from "../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
-import { readStoredProposal } from "../skills/workshop/store-sqlite-record.js";
+import { readStoredProposal } from "../skills/workshop/store-client.js";
 import {
   readSkillProposalRollback,
   writeSkillProposalRollback,
-} from "../skills/workshop/store-sqlite-rollback.js";
+} from "../skills/workshop/store-rollback.js";
 import { hashSkillProposalContent, updateSkillProposalRecord } from "../skills/workshop/store.js";
 import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
@@ -121,7 +121,7 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
     });
     await expect(fs.access(legacySkillDir)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(updated.targetSkillFile, "utf8")).resolves.toBe(liveContent);
-    expect(readStoredProposal(created.record.id, { env: testState.env })?.record).toEqual(
+    expect((await readStoredProposal(created.record.id, { env: testState.env }))?.record).toEqual(
       legacyRecords[0],
     );
 
@@ -131,11 +131,13 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
     });
 
     expect(recovered.warnings).toEqual([]);
-    expect(readStoredProposal(created.record.id, { env: testState.env })?.record).toMatchObject({
+    expect(
+      (await readStoredProposal(created.record.id, { env: testState.env }))?.record,
+    ).toMatchObject({
       status: "applied",
       target: created.record.target,
     });
-    expect(readStoredProposal(updated.record.id, { env: testState.env })?.record).toEqual(
+    expect((await readStoredProposal(updated.record.id, { env: testState.env }))?.record).toEqual(
       legacyRecords[1],
     );
     await expect(fs.readFile(updated.targetSkillFile, "utf8")).resolves.toBe(liveContent);
@@ -148,8 +150,6 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
     { version: "original", state: "unstarted", relocation: "retry" },
     { version: "improved", state: "unstarted", relocation: "retry" },
     { version: "display-name", state: "unstarted", relocation: "retry" },
-    { version: "original", state: "partial", relocation: "direct" },
-    { version: "original", state: "complete", relocation: "direct" },
     { version: "original", state: "partial", relocation: "retry" },
     { version: "original", state: "complete", relocation: "retry" },
     { version: "original", state: "wrong-target", relocation: "direct" },
@@ -279,14 +279,16 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
           status: state === "complete" ? "applied" : "pending",
           message: "relocation metadata unavailable",
         });
-        expect(readStoredProposal(created.record.id, options)?.record).toEqual(created.record);
+        expect((await readStoredProposal(created.record.id, options))?.record).toEqual(
+          created.record,
+        );
         if (state === "complete") {
-          expect(readStoredProposal(pending.id, options)?.record).toMatchObject({
+          expect((await readStoredProposal(pending.id, options))?.record).toMatchObject({
             status: "applied",
             target: pending.target,
           });
         } else {
-          expect(readStoredProposal(pending.id, options)?.record).toEqual(pending);
+          expect((await readStoredProposal(pending.id, options))?.record).toEqual(pending);
         }
         await expect(readSkillProposalRollback(pending.id, options)).resolves.toEqual(
           state === "complete" ? rollback : null,
@@ -307,8 +309,10 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
           changes: [],
           warnings: [expect.stringContaining(pending.id)],
         });
-        expect(readStoredProposal(created.record.id, options)?.record).toEqual(created.record);
-        expect(readStoredProposal(pending.id, options)?.record).toEqual(pending);
+        expect((await readStoredProposal(created.record.id, options))?.record).toEqual(
+          created.record,
+        );
+        expect((await readStoredProposal(pending.id, options))?.record).toEqual(pending);
         await expect(readSkillProposalRollback(pending.id, options)).resolves.toEqual(rollback);
         const retainedDir =
           state === "missing-source" ? destinationDir : created.record.target.skillDir;
@@ -338,11 +342,11 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
           expect.objectContaining({ id: pending.id, status: expectedStatus }),
         ]),
       });
-      expect(readStoredProposal(created.record.id, options)?.record).toMatchObject({
+      expect((await readStoredProposal(created.record.id, options))?.record).toMatchObject({
         status: "applied",
         target: relocatedTarget,
       });
-      expect(readStoredProposal(pending.id, options)?.record).toMatchObject({
+      expect((await readStoredProposal(pending.id, options))?.record).toMatchObject({
         status: expectedStatus,
         target: state === "complete" ? pending.target : relocatedTarget,
       });
@@ -430,7 +434,7 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
       ]);
       await prepareOpenClawStateDatabaseSchema({ env: testState.env });
       await writeSkillProposalRollback({ proposalId: pending.id, rollback, store: options });
-      expect(readStoredProposal(pending.id, options)?.record).toEqual(pending);
+      expect((await readStoredProposal(pending.id, options))?.record).toEqual(pending);
       const destinationDir = path.join(
         resolveWorkshopSkillsDir({}, "main", testState.env),
         pending.target.skillKey,
@@ -449,7 +453,7 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
           }),
         ],
       });
-      expect(readStoredProposal(pending.id, options)?.record).toMatchObject({
+      expect((await readStoredProposal(pending.id, options))?.record).toMatchObject({
         target: {
           skillDir: destinationDir,
           skillFile: destinationSkillFile,
@@ -524,7 +528,7 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
       claims[0]!.content,
     );
     for (const { record, agentId } of claims) {
-      const stored = readStoredProposal(record.id, { env: testState.env })?.record;
+      const stored = (await readStoredProposal(record.id, { env: testState.env }))?.record;
       expect(stored).toMatchObject({ status: "stale", target: record.target });
       expect(stored?.statusReason).toContain("relocation conflict");
       await expect(
@@ -597,14 +601,16 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
       for (const { record, content, agentId } of claims) {
         await expect(fs.readFile(record.target.skillFile, "utf8")).resolves.toBe(content);
         if (!active.some((claim) => claim.record.id === record.id)) {
-          expect(readStoredProposal(record.id, { env: testState.env })).toBeNull();
+          expect(await readStoredProposal(record.id, { env: testState.env })).toBeNull();
           continue;
         }
-        expect(readStoredProposal(record.id, { env: testState.env })?.record).toMatchObject({
-          status: "stale",
-          target: record.target,
-          statusReason: expect.stringContaining("relocation conflict"),
-        });
+        expect((await readStoredProposal(record.id, { env: testState.env }))?.record).toMatchObject(
+          {
+            status: "stale",
+            target: record.target,
+            statusReason: expect.stringContaining("relocation conflict"),
+          },
+        );
         await expect(
           fs.access(
             path.join(

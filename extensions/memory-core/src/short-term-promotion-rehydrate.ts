@@ -2,10 +2,12 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readWorkspaceText } from "./memory-workspace-files.js";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
-import { normalizeSnippet, SHORT_TERM_BASENAME_RE } from "./short-term-promotion-utils.js";
+import {
+  isGenericDailyHeading,
+  normalizeSnippet,
+  SHORT_TERM_BASENAME_RE,
+} from "./short-term-promotion-utils.js";
 
-const GENERIC_DAY_HEADING_RE =
-  /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
 
@@ -45,26 +47,12 @@ function normalizeDailyHeadingForPromotion(line: string): string | null {
   if (
     !normalized ||
     SHORT_TERM_BASENAME_RE.test(normalized) ||
-    isGenericDailyHeadingForPromotion(normalized)
+    MANAGED_DREAMING_HEADINGS.has(normalized.toLowerCase()) ||
+    isGenericDailyHeading(normalized)
   ) {
     return null;
   }
   return normalized;
-}
-
-function isGenericDailyHeadingForPromotion(heading: string): boolean {
-  const normalized = heading.trim().replace(/\s+/g, " ");
-  const lower = normalized.toLowerCase();
-  if (MANAGED_DREAMING_HEADINGS.has(lower)) {
-    return true;
-  }
-  if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
-    return true;
-  }
-  if (lower === "morning" || lower === "afternoon" || lower === "evening" || lower === "night") {
-    return true;
-  }
-  return GENERIC_DAY_HEADING_RE.test(normalized);
 }
 
 function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
@@ -126,23 +114,20 @@ function extractTargetHeadingBodySnippet(
   return null;
 }
 
-function compareCandidateWindow(
-  targetSnippet: string,
-  windowSnippet: string,
-): { matched: boolean; quality: number } {
+function compareCandidateWindow(targetSnippet: string, windowSnippet: string): number {
   if (!targetSnippet || !windowSnippet) {
-    return { matched: false, quality: 0 };
+    return 0;
   }
   if (windowSnippet === targetSnippet) {
-    return { matched: true, quality: 3 };
+    return 3;
   }
   if (windowSnippet.includes(targetSnippet)) {
-    return { matched: true, quality: 2 };
+    return 2;
   }
   if (targetSnippet.includes(windowSnippet)) {
-    return { matched: true, quality: 1 };
+    return 1;
   }
-  return { matched: false, quality: 0 };
+  return 0;
 }
 
 function relocateCandidateRange(
@@ -190,11 +175,11 @@ function relocateCandidateRange(
       );
       const listMarkerFreeComparison =
         listMarkerFreeSnippet === snippet
-          ? { matched: false, quality: 0 }
+          ? 0
           : compareCandidateWindow(targetSnippet, listMarkerFreeSnippet);
       const listMarkerFreeContextComparison =
         listMarkerFreeMatchSnippet === listMarkerFreeSnippet
-          ? { matched: false, quality: 0 }
+          ? 0
           : compareCandidateWindow(targetSnippet, listMarkerFreeMatchSnippet);
       const targetHeadingBodySnippet = extractTargetHeadingBodySnippet(
         targetSnippet,
@@ -203,17 +188,16 @@ function relocateCandidateRange(
       const targetHeadingBodyComparison =
         targetHeadingBodySnippet && listMarkerFreeMatchSnippet !== listMarkerFreeSnippet
           ? compareCandidateWindow(targetHeadingBodySnippet, listMarkerFreeSnippet)
-          : { matched: false, quality: 0 };
+          : 0;
       const useTargetHeadingBodyContext =
-        targetHeadingBodyComparison.matched &&
-        targetHeadingBodyComparison.quality >= comparison.quality &&
-        targetHeadingBodyComparison.quality >= listMarkerFreeComparison.quality;
+        targetHeadingBodyComparison > 0 &&
+        targetHeadingBodyComparison >= comparison &&
+        targetHeadingBodyComparison >= listMarkerFreeComparison;
       const useListMarkerFreeContext =
         !useTargetHeadingBodyContext &&
-        listMarkerFreeContextComparison.quality > comparison.quality &&
-        listMarkerFreeContextComparison.quality >= listMarkerFreeComparison.quality;
-      const useListMarkerFree =
-        !useListMarkerFreeContext && listMarkerFreeComparison.quality > comparison.quality;
+        listMarkerFreeContextComparison > comparison &&
+        listMarkerFreeContextComparison >= listMarkerFreeComparison;
+      const useListMarkerFree = !useListMarkerFreeContext && listMarkerFreeComparison > comparison;
       const bestComparison = useTargetHeadingBodyContext
         ? targetHeadingBodyComparison
         : useListMarkerFreeContext
@@ -221,7 +205,7 @@ function relocateCandidateRange(
           : useListMarkerFree
             ? listMarkerFreeComparison
             : comparison;
-      if (!bestComparison.matched) {
+      if (bestComparison === 0) {
         continue;
       }
       const matchedSnippet =
@@ -235,9 +219,9 @@ function relocateCandidateRange(
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
-        bestComparison.quality > bestMatch.quality ||
-        (bestComparison.quality === bestMatch.quality && distance < bestMatch.distance) ||
-        (bestComparison.quality === bestMatch.quality &&
+        bestComparison > bestMatch.quality ||
+        (bestComparison === bestMatch.quality && distance < bestMatch.distance) ||
+        (bestComparison === bestMatch.quality &&
           distance === bestMatch.distance &&
           Math.abs(span - preferredSpan) <
             Math.abs(bestMatch.endLine - bestMatch.startLine + 1 - preferredSpan))
@@ -246,7 +230,7 @@ function relocateCandidateRange(
           startLine,
           endLine,
           snippet: matchedSnippet,
-          quality: bestComparison.quality,
+          quality: bestComparison,
           distance,
         };
       }

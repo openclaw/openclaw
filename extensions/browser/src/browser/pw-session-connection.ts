@@ -1,8 +1,9 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Browser, BrowserContext, Page } from "playwright-core";
-import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   assertCdpEndpointAllowed,
@@ -13,6 +14,8 @@ import {
   stripCdpUrlCredentials,
 } from "./cdp.helpers.js";
 import { getChromeWebSocketEndpoint } from "./chrome.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
+import type { BrowserEngineId } from "./engines/types.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import type { RelayOperationReference } from "./extension-relay/owner-client.js";
 import {
@@ -36,7 +39,11 @@ import {
   type PendingBrowserConnection,
   type PlaywrightConnectionRetirement,
 } from "./pw-session-contracts.js";
-import { pageTargetInfo } from "./pw-session-page-target.js";
+import {
+  isConnectionScopedTargetId,
+  markConnectionScopedBrowser,
+  pageTargetInfo,
+} from "./pw-session-page-target.js";
 import {
   bindRoleRefsTarget,
   ensurePageState,
@@ -47,10 +54,6 @@ import {
 export { pageTargetInfo } from "./pw-session-page-target.js";
 
 type CdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
-
-function resolveCdpConnectRetryDelayMs(attempt: number): number {
-  return 250 + attempt * 250;
-}
 
 export function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
@@ -321,11 +324,6 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
   };
 }
 
-/** Retire a scoped adapter immediately; its CDP disconnect may settle later. */
-export function retirePlaywrightBrowserConnection(opts: { cdpUrl: string }): boolean {
-  return retirePlaywrightBrowserConnectionExact(opts).retired;
-}
-
 export function evictStalePlaywrightBrowserConnection(
   cdpUrl: string,
   expectedBrowser?: Browser,
@@ -337,6 +335,28 @@ export function evictStalePlaywrightBrowserConnection(
   const cur = takeCachedPlaywrightBrowserConnection(cdpUrl);
   if (cur) {
     void closeTrackedPlaywrightConnection(cur).catch(() => {});
+  }
+}
+
+/** Close a captured ephemeral browser without retiring a same-URL successor. */
+export async function closeConnectionScopedPageBrowser(
+  cdpUrl: string,
+  browser: Browser,
+): Promise<void> {
+  const current = cachedByCdpUrl.get(normalizeCdpUrl(cdpUrl));
+  if (current?.browser === browser) {
+    clearBlockedTargetsForCdpUrl(cdpUrl);
+    clearBlockedPageRefsForCdpUrl(cdpUrl);
+    const owned = takeCachedPlaywrightBrowserConnection(cdpUrl);
+    if (owned) {
+      await withPlaywrightCloseTimeout(closeTrackedPlaywrightConnection(owned));
+    }
+    return;
+  }
+  // The obsolete handle is already disconnected or owned by its retirement.
+  // Never look up and close the current adapter by endpoint alone here.
+  if (browser.isConnected()) {
+    await withPlaywrightCloseTimeout(browser.close());
   }
 }
 
@@ -384,6 +404,7 @@ export async function connectBrowser(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
   relayReference?: RelayOperationReference,
+  engine?: BrowserEngineId,
 ): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   const relay = getBorrowedRelayCdpAccess(normalized);
@@ -397,6 +418,9 @@ export async function connectBrowser(
   }
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
+    if (engine && (cached.engine ?? "chromium") !== engine) {
+      throw new Error("Browser engine changed; stop this profile before connecting again.");
+    }
     return cached;
   }
   // Run SSRF policy check only on cache miss so transient DNS failures
@@ -467,6 +491,7 @@ export async function connectBrowser(
                 headers,
                 lookup,
                 resolveWebSocketUrl,
+                ...(engine ? { engine } : {}),
               });
             }),
           );
@@ -497,7 +522,10 @@ export async function connectBrowser(
             cachedByCdpUrl.delete(normalized);
           }
         };
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
+        if (resolveBrowserEngine(engine).descriptor.sessionScope === "connection") {
+          markConnectionScopedBrowser(browser);
+        }
+        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected, engine };
         cachedByCdpUrl.set(normalized, connected);
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
@@ -512,9 +540,8 @@ export async function connectBrowser(
         if (errMsg.includes("rate limit")) {
           break;
         }
-        const delay = resolveCdpConnectRetryDelayMs(attempt);
         await new Promise((r) => {
-          setTimeout(r, delay);
+          setTimeout(r, 250 + attempt * 250);
         });
       }
     }
@@ -535,9 +562,7 @@ export async function connectBrowser(
 }
 
 export async function getAllPages(browser: Browser): Promise<Page[]> {
-  const contexts = browser.contexts();
-  const pages = contexts.flatMap((c) => c.pages());
-  return pages;
+  return browser.contexts().flatMap((context) => context.pages());
 }
 
 async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] }): Promise<{
@@ -627,10 +652,18 @@ export async function getPageForTargetId(opts: {
   relayReference?: RelayOperationReference;
 }): Promise<Page> {
   const cachedBrowser = cachedByCdpUrl.get(normalizeCdpUrl(opts.cdpUrl))?.browser;
+  if (isConnectionScopedTargetId(opts.targetId) && !cachedBrowser) {
+    throw new Error(
+      "Browser session was lost. Open a new page and take a new snapshot; previous targets and refs are invalid.",
+    );
+  }
   try {
     return await getPageForTargetIdOnce(opts);
   } catch (err) {
-    if (!isRecoverableStalePageSelectionError(err, Boolean(cachedBrowser))) {
+    if (
+      isConnectionScopedTargetId(opts.targetId) ||
+      !isRecoverableStalePageSelectionError(err, Boolean(cachedBrowser))
+    ) {
       throw err;
     }
     if (opts.relayReference) {

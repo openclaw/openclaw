@@ -688,25 +688,24 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     },
   );
 
-  it("rethrows non-timeout live catalog discovery failures", async () => {
+  it("records an unavailable outcome for an ordinary hook failure", async () => {
     mocks.runProviderCatalog.mockRejectedValueOnce(
       new Error("provider catalog timed out after provider-defined retry window"),
     );
     const outcomes: Array<{ provider: string; status: string }> = [];
 
-    await expect(
-      resolveImplicitProviders({
-        agentDir: state.agentDir(),
-        config: {},
-        env: state.env,
-        explicitProviders: {},
-        providerDiscoveryProviderIds: ["openai"],
-        providerDiscoveryTimeoutMs: 1_000,
-        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
-      }),
-    ).rejects.toThrow("provider catalog timed out after provider-defined retry window");
+    const providers = await resolveImplicitProviders({
+      agentDir: state.agentDir(),
+      config: {},
+      env: state.env,
+      explicitProviders: {},
+      providerDiscoveryProviderIds: ["openai"],
+      providerDiscoveryTimeoutMs: 1_000,
+      onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
 
-    expect(outcomes).toEqual([]);
+    expect(providers?.openai).toBeUndefined();
+    expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
   });
 
   it("can keep startup discovery on provider discovery entries only", async () => {

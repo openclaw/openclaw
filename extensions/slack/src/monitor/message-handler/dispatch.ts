@@ -3,7 +3,6 @@ import {
   dispatchChannelInboundTurn,
   resolveInboundReplyDispatchCounts,
   readAgentRunTerminalOutcome,
-  type InboundReplyRecordOptions,
   hasVisibleInboundReplyDispatch,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -241,15 +240,11 @@ async function dispatchSlackMessageWithSetup(
       return result.deliveryResult ?? { visibleReplySent: false };
     }
     if (progress.useNativeProgressStreaming) {
-      if (info.kind !== "final" && payload.isError !== true) {
-        if (!delivery.isStreamingEligible(payload)) {
-          return await delivery.deliverNormally({
-            payload,
-            kind: info.kind,
-            forcedThreadTs:
-              delivery.streamSession?.threadTs ?? delivery.nativeProgressStreamThreadTs,
-          });
-        }
+      if (
+        info.kind !== "final" &&
+        payload.isError !== true &&
+        delivery.isStreamingEligible(payload)
+      ) {
         return await progress.appendNativeNarration(payload, info.kind);
       }
       return await delivery.deliverNormally({
@@ -273,11 +268,10 @@ async function dispatchSlackMessageWithSetup(
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
     const replySourceText = payload.text ?? ttsSupplement?.spokenText;
     const replyRenderPlan = resolveSlackReplyRenderPlan(payload, replySourceText);
-    const plannedBlocks =
+    const slackBlocks =
       replyRenderPlan.mode === "single"
         ? replyRenderPlan.blocks
         : replyRenderPlan.blockPart?.blocks;
-    const slackBlocks = plannedBlocks;
     const requiresSeparateFallbackDelivery =
       replyRenderPlan.mode === "split" || replyRenderPlan.textIsSlackPlainText === true;
     const trimmedFinalText =
@@ -450,7 +444,7 @@ async function dispatchSlackMessageWithSetup(
           replyPipeline.typingCallbacks?.onIdle?.();
         },
       },
-      record: prepared.turn.record as InboundReplyRecordOptions,
+      record: prepared.turn.record,
       botLoopProtection: resolveSlackBotLoopProtection(prepared),
       replyOptions: {
         groupThreadReplyFormatter: formatSlackGroupThreadReply,
@@ -485,13 +479,10 @@ async function dispatchSlackMessageWithSetup(
             ? true
             : undefined,
         allowToolLifecycleWhenProgressHidden: statusReactionsEnabled ? true : undefined,
-        onPartialReply: useStreaming
-          ? undefined
-          : !previewStreamingEnabled
-            ? undefined
-            : async (payload) => {
-                return progress.updateDraftFromPartial(payload.text);
-              },
+        onPartialReply:
+          !useStreaming && previewStreamingEnabled
+            ? async (payload) => progress.updateDraftFromPartial(payload.text)
+            : undefined,
         onAssistantMessageStart: progress.onDraftBoundary
           ? async () => {
               await progress.onDraftBoundary?.();

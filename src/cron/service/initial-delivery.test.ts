@@ -5,13 +5,12 @@ import {
   createNoopLogger,
   installCronTestHooks,
 } from "../service.test-harness.js";
-import type { CronDelivery, CronJobCreate } from "../types.js";
+import type { CronJobCreate } from "../types.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 
 function createInput(params: {
   sessionTarget: CronJobCreate["sessionTarget"];
   payload: CronJobCreate["payload"];
-  delivery?: CronDelivery;
 }): CronJobCreate {
   return {
     name: "initial delivery",
@@ -21,39 +20,20 @@ function createInput(params: {
     wakeMode: "now",
     failureAlert: false,
     payload: params.payload,
-    delivery: params.delivery,
   };
 }
 
 describe("resolveInitialCronDelivery", () => {
-  it("preserves explicit delivery", () => {
-    const delivery: CronDelivery = { mode: "none" };
+  it("defaults isolated script output to announce", () => {
     expect(
       resolveInitialCronDelivery(
         createInput({
-          sessionTarget: "current",
-          payload: { kind: "agentTurn", message: "hello" },
-          delivery,
+          sessionTarget: "isolated",
+          payload: { kind: "script", script: "return { notify: 'hello' }" },
         }),
       ),
-    ).toBe(delivery);
+    ).toEqual({ mode: "announce" });
   });
-
-  it.each(["isolated", "current", "session:project-alpha"] as const)(
-    "defaults %s output jobs to announce",
-    (sessionTarget) => {
-      const payloads: CronJobCreate["payload"][] = [
-        { kind: "agentTurn", message: "hello" },
-        { kind: "command", argv: ["echo", "hello"] },
-        { kind: "script", script: "return { notify: 'hello' }" },
-      ];
-      for (const payload of payloads) {
-        expect(resolveInitialCronDelivery(createInput({ sessionTarget, payload }))).toEqual({
-          mode: "announce",
-        });
-      }
-    },
-  );
 
   it("does not default main-session output or system-event delivery", () => {
     expect(

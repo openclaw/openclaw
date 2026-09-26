@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as operatorInvocation from "../../gateway/operator-invocation-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
@@ -98,9 +99,15 @@ describe("image tool run abort", () => {
 
   it.each(
     (["admitted", "direct"] as const).flatMap((source) =>
-      (["denied override", "permitted fallback", "retired after download"] as const).map(
-        (scenario) => ({ source, scenario }),
-      ),
+      (
+        [
+          "denied override",
+          "permitted fallback",
+          "retired after download",
+          "mutated override",
+          "mutated path",
+        ] as const
+      ).map((scenario) => ({ source, scenario })),
     ),
   )("preserves $source requester model policy for $scenario", async ({ source, scenario }) => {
     const cfg: OpenClawConfig = {
@@ -164,18 +171,38 @@ describe("image tool run abort", () => {
               { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority: authority },
               run,
             );
+      const changedDuringCapture = scenario === "mutated override" || scenario === "mutated path";
+      const captureStarted = createDeferredCore();
+      const resumeCapture = createDeferredCore();
+      const capture = operatorInvocation.captureAmbientGatewayOperatorAuthority;
+      const captureSpy = changedDuringCapture
+        ? vi
+            .spyOn(operatorInvocation, "captureAmbientGatewayOperatorAuthority")
+            .mockImplementation(async (params) => {
+              const retained = await capture(params);
+              captureStarted.resolve();
+              await resumeCapture.promise;
+              return retained;
+            })
+        : undefined;
+      const args = {
+        paths: ["https://example.test/image.png"],
+        prompt: "Answer using this image.",
+        model:
+          scenario === "denied override" || scenario === "mutated override"
+            ? "blocked-alias"
+            : undefined,
+      };
       const work = new AsyncWorkScope();
       try {
-        const execution = work.track(() =>
-          runWithRequester(() =>
-            tool.execute("policy", {
-              path: "https://example.test/image.png",
-              prompt: "Answer using this image.",
-              ...(scenario === "denied override" ? { model: "blocked-alias" } : {}),
-            }),
-          ),
-        );
-        if (scenario === "permitted fallback") {
+        const execution = work.track(() => runWithRequester(() => tool.execute("policy", args)));
+        if (changedDuringCapture) {
+          await Promise.race([captureStarted.promise, execution]);
+          args.model = scenario === "mutated override" ? undefined : "blocked-alias";
+          args.paths[0] = "https://example.test/replacement.png";
+          resumeCapture.resolve();
+        }
+        if (scenario === "permitted fallback" || scenario === "mutated path") {
           await expect(execution).resolves.toMatchObject({
             content: [{ type: "text", text: "ok" }],
           });
@@ -187,12 +214,20 @@ describe("image tool run abort", () => {
           expect(spies.describeImage).not.toHaveBeenCalled();
           expect(spies.describeImages).not.toHaveBeenCalled();
         }
-        if (scenario === "denied override") {
+        if (scenario === "mutated path") {
+          expect(loadWebMedia).toHaveBeenCalledExactlyOnceWith(
+            "https://example.test/image.png",
+            expect.any(Object),
+          );
+        }
+        if (scenario === "denied override" || scenario === "mutated override") {
           expect(loadWebMedia).not.toHaveBeenCalled();
           expect(resolveModel).not.toHaveBeenCalled();
         }
       } finally {
+        resumeCapture.resolve();
         await work.drain();
+        captureSpy?.mockRestore();
       }
       expect(sourceHolds).toBe(0);
     });

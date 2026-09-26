@@ -130,11 +130,15 @@ export function createSessionRowMaterializer(owner: {
           if (owner.revision() !== revision) {
             break;
           }
+          if (row && databaseFacts) {
+            row.preparedAcpMeta = databaseFacts.acpMeta;
+          }
           if (row && isColdArchivedSessionRow(row) && !materializeArchived) {
             owner.dirty.delete(id);
             owner.forgetBackfill(id);
           } else if (row) {
             row.pendingDatabaseFacts = databaseFacts;
+            row.retainedDatabaseFacts = databaseFacts;
           }
         }
       });
@@ -174,7 +178,7 @@ export function readResidentSessionRow(
   const { inputs, presentation } = readSessionRowInputs({
     ...row,
     cfg,
-    preparedAcpMeta: params.databaseFacts?.acpMeta,
+    preparedAcpMeta: params.databaseFacts ? params.databaseFacts.acpMeta : row.preparedAcpMeta,
     configuredAgentIds: params.configuredAgentIds,
     store: source?.store ?? {},
     storePath: row.storeTarget.storePath,
@@ -225,6 +229,7 @@ export function readResidentSessionRow(
   });
   return {
     materialized,
+    preparedAcpMeta: materialized.source.thinkingProjection.acpMeta ?? null,
     fallbackModel: presentation.activeModel,
     facts,
     hasBoard: facts.hasBoard,

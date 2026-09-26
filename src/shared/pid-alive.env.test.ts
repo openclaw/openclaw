@@ -1,56 +1,78 @@
 import childProcess from "node:child_process";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createDiagnosticFixtureRouting,
   diagnosticCanaries,
   diagnosticEnvReportScript,
   withSyntheticDiagnosticEnv,
 } from "../infra/diagnostic-env.test-support.js";
-import { getFileLockProcessStartTime } from "./pid-alive.js";
+import { getFileLockProcessStartTime, readDarwinProcessIdentity } from "./pid-alive.js";
 
-afterEach(() => vi.restoreAllMocks());
+const readers = [
+  { name: "file-lock birth", read: getFileLockProcessStartTime },
+  {
+    name: "validation parent and birth",
+    read: (pid: number, env?: NodeJS.ProcessEnv, timeoutMs?: number) =>
+      readDarwinProcessIdentity(pid, env, timeoutMs)?.startedAt ?? null,
+  },
+];
 
-it("bounds the native start-time read by the supplied process allowance", () => {
+beforeEach(() => {
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  // This suite owns the subprocess environment, independent of host native inspection.
+  vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+it.each(readers)("bounds $name by the supplied process allowance", ({ read }) => {
+  vi.spyOn(performance, "now").mockReturnValue(0);
   let elapsedMs = 0;
   vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, _args, options) => {
     elapsedMs += options?.timeout ?? 0;
     throw new Error("native inspection timed out");
   });
 
-  expect(getFileLockProcessStartTime(424242, process.env, 125)).toBeNull();
+  expect(read(424242, process.env, 125)).toBeNull();
   expect(elapsedMs).toBe(125);
 });
 
-it("isolates the lock-owner ps child while retaining its stable locale and timezone", async () => {
-  const nativeExec = childProcess.execFileSync;
-  const routing = createDiagnosticFixtureRouting({
-    PATH: "/fixture/bin",
-    HOME: "/fixture/home",
-    LC_ALL: "C",
-    TZ: "UTC",
-  });
-  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-  await withSyntheticDiagnosticEnv(
-    { ...routing, LC_ALL: "fr_FR.UTF-8", TZ: "Pacific/Honolulu" },
-    async () => {
-      let report: unknown;
-      const parent = { ...process.env };
-      vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, _args, options) => {
-        const stdout = nativeExec(
-          process.execPath,
-          ["-e", `process.stdout.write(${diagnosticEnvReportScript(routing)})`],
-          { env: options?.env, encoding: "utf8", timeout: 5000 },
-        );
-        report = JSON.parse(stdout);
-        return "Thu Sep  3 00:00:00 2026\n";
-      });
-      expect(getFileLockProcessStartTime(424242)).toBe(Date.parse("2026-09-03T00:00:00Z") / 1000);
-      expect(process.env).toEqual(parent);
-      expect(report).toEqual({
-        defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
-        routingPreserved: true,
-      });
-    },
-  );
-});
+it.each(readers)(
+  "isolates $name while retaining its stable locale and timezone",
+  async ({ read }) => {
+    const nativeExec = childProcess.execFileSync;
+    const routing = createDiagnosticFixtureRouting({
+      PATH: "/fixture/bin",
+      HOME: "/fixture/home",
+      LC_ALL: "C",
+      TZ: "UTC",
+    });
+    await withSyntheticDiagnosticEnv(
+      { ...routing, LC_ALL: "fr_FR.UTF-8", TZ: "Pacific/Honolulu" },
+      async () => {
+        let report: unknown;
+        const parent = { ...process.env };
+        vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, args, options) => {
+          const stdout = nativeExec(
+            process.execPath,
+            ["-e", `process.stdout.write(${diagnosticEnvReportScript(routing)})`],
+            { env: options?.env, encoding: "utf8", timeout: 5000 },
+          );
+          report = JSON.parse(stdout);
+          return args?.[1] === "pid=,ppid=,lstart="
+            ? "424242 1 Thu Sep  3 00:00:00 2026\n"
+            : "Thu Sep  3 00:00:00 2026\n";
+        });
+        expect(read(424242)).toBe(Date.parse("2026-09-03T00:00:00Z") / 1000);
+        expect(process.env).toEqual(parent);
+        expect(report).toEqual({
+          defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
+          routingPreserved: true,
+        });
+      },
+    );
+  },
+);

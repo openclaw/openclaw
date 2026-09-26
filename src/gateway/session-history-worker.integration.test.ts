@@ -28,9 +28,21 @@ import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import { readSessionHistorySnapshotAsync } from "./session-history-state.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
-import { readSessionMessagesMatchingIdAsync } from "./session-transcript-readers.js";
+import {
+  readSessionMessageByIdAsync,
+  readSessionMessageCountAsync,
+  readSessionMessagesMatchingIdAsync,
+} from "./session-transcript-readers.js";
 
-it.each(["rpc", "http", "delta", "message-lookup", "recent"] as const)(
+it.each([
+  "rpc",
+  "http",
+  "delta",
+  "message-lookup",
+  "recent",
+  "message-by-id",
+  "message-count",
+] as const)(
   "restores %s history without reading cold metadata on the caller",
   async (transport) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -76,6 +88,14 @@ it.each(["rpc", "http", "delta", "message-lookup", "recent"] as const)(
         expect(metadataReads).toHaveLength(1);
         metadataReads.length = 0;
         const read = async () => {
+          if (transport === "message-count") {
+            return readSessionMessageCountAsync(fixture.scope);
+          }
+          if (transport === "message-by-id") {
+            const result = await readSessionMessageByIdAsync(fixture.scope, "history-assistant");
+            expect(result).toMatchObject({ found: true, oversized: false, seq: 2 });
+            return [readChatHistoryMessageId(result.message)];
+          }
           if (transport === "delta") {
             const { delta } = await readSessionHistoryPageInWorker({
               kind: "delta",
@@ -132,9 +152,11 @@ it.each(["rpc", "http", "delta", "message-lookup", "recent"] as const)(
         // The first read restores cold history; the second probes the now-hot transcript.
         for (let round = 0; round < 2; round++) {
           expect(await read()).toEqual(
-            transport === "message-lookup"
-              ? ["history-assistant"]
-              : ["history-user", "history-assistant"],
+            transport === "message-count"
+              ? 2
+              : transport === "message-lookup" || transport === "message-by-id"
+                ? ["history-assistant"]
+                : ["history-user", "history-assistant"],
           );
           expect(metadataReads).toEqual([]);
         }

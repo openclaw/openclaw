@@ -154,22 +154,22 @@ it.each(["run", "read-resource"] as const)(
           restoreSpy = () => spy.mockRestore();
           return;
         }
-        const spy = vi
-          .spyOn(WorkerTaskPool.prototype, "run")
-          .mockImplementationOnce(
-            function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-              spy.mockRestore();
-              return this.run(async () => {
-                const request = typeof input === "function" ? await input() : input;
-                const requestKind =
-                  request && typeof request === "object" && "kind" in request
-                    ? request.kind
-                    : undefined;
-                pausedKind = requestKind;
-                return request;
-              }, options).then(pauseReply);
-            },
-          );
+        const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+          this: WorkerTaskPool<unknown, unknown>,
+          input,
+          options,
+        ) {
+          spy.mockRestore();
+          return this.run(async () => {
+            const request = typeof input === "function" ? await input() : input;
+            const requestKind =
+              request && typeof request === "object" && "kind" in request
+                ? request.kind
+                : undefined;
+            pausedKind = requestKind;
+            return request;
+          }, options).then(pauseReply);
+        });
         restoreSpy = () => spy.mockRestore();
       };
       interceptNext();

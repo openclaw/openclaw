@@ -91,56 +91,75 @@ beforeEach(() => {
 });
 
 describe("channel DM pairing gateway handlers", () => {
-  it("lists only pairing-policy accounts without exposing the human code", async () => {
-    mocks.listRequests.mockResolvedValue([
-      {
-        id: "workspace:personal:user:+15551234567",
-        code: "SECRET12",
-        createdAt: "2026-07-20T10:00:00.000Z",
-        lastSeenAt: "2026-07-20T10:05:00.000Z",
-        meta: { accountId: "personal", name: "Alice", senderId: "+15551234567" },
-      },
-    ]);
-
-    const respond = await invoke("channels.pairing.list", {});
-
-    expect(mocks.listRequests).toHaveBeenCalledTimes(1);
-    expect(mocks.listRequests).toHaveBeenCalledWith("whatsapp", process.env, "personal");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        accounts: [
+  it.each(["sync", "async"] as const)(
+    "lists only pairing-policy accounts with %s hooks without exposing the human code",
+    async (hooks) => {
+      if (hooks === "async") {
+        const refuseSync = () => {
+          throw new Error("legacy operational hook used");
+        };
+        mocks.listPlugins.mockReturnValue([
           {
-            channel: "whatsapp",
-            channelLabel: "WhatsApp",
-            accountId: "personal",
-            accountLabel: "Personal",
-            notifySupported: true,
+            ...pairingPlugin,
+            config: {
+              ...pairingPlugin.config,
+              resolveAccount: refuseSync,
+              resolveAccountAsync: async (cfg: unknown, accountId: string) =>
+                pairingPlugin.config.resolveAccount(cfg, accountId),
+            },
           },
-        ],
-        requests: [
-          {
-            requestId: "opaque-request-id",
-            channel: "whatsapp",
-            channelLabel: "WhatsApp",
-            accountId: "personal",
-            accountLabel: "Personal",
-            senderId: "+15551234567",
-            senderLabel: "Phone number",
-            metadata: { name: "Alice" },
-            createdAt: "2026-07-20T10:00:00.000Z",
-            lastSeenAt: "2026-07-20T10:05:00.000Z",
-            expiresAt: "2026-07-20T11:00:00.000Z",
-            notifySupported: true,
-          },
-        ],
-        commandOwnerConfigured: false,
-        limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-      },
-      undefined,
-    );
-    expect(JSON.stringify(respond.mock.calls)).not.toContain("SECRET12");
-  });
+        ]);
+      }
+      mocks.listRequests.mockResolvedValue([
+        {
+          id: "workspace:personal:user:+15551234567",
+          code: "SECRET12",
+          createdAt: "2026-07-20T10:00:00.000Z",
+          lastSeenAt: "2026-07-20T10:05:00.000Z",
+          meta: { accountId: "personal", name: "Alice", senderId: "+15551234567" },
+        },
+      ]);
+
+      const respond = await invoke("channels.pairing.list", {});
+
+      expect(mocks.listRequests).toHaveBeenCalledTimes(1);
+      expect(mocks.listRequests).toHaveBeenCalledWith("whatsapp", process.env, "personal");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          accounts: [
+            {
+              channel: "whatsapp",
+              channelLabel: "WhatsApp",
+              accountId: "personal",
+              accountLabel: "Personal",
+              notifySupported: true,
+            },
+          ],
+          requests: [
+            {
+              requestId: "opaque-request-id",
+              channel: "whatsapp",
+              channelLabel: "WhatsApp",
+              accountId: "personal",
+              accountLabel: "Personal",
+              senderId: "+15551234567",
+              senderLabel: "Phone number",
+              metadata: { name: "Alice" },
+              createdAt: "2026-07-20T10:00:00.000Z",
+              lastSeenAt: "2026-07-20T10:05:00.000Z",
+              expiresAt: "2026-07-20T11:00:00.000Z",
+              notifySupported: true,
+            },
+          ],
+          commandOwnerConfigured: false,
+          limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+        },
+        undefined,
+      );
+      expect(JSON.stringify(respond.mock.calls)).not.toContain("SECRET12");
+    },
+  );
 
   it("approves access even when the optional notification fails", async () => {
     mocks.approve.mockResolvedValue({

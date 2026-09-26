@@ -26,6 +26,14 @@ const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getSubCliParentDefaultHelpCommands(),
 ]);
 
+export function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
+  return primary === "agent" && !argv.includes("--local");
+}
+
+export function isAgentExecInvocation(commandPath: string[]): boolean {
+  return commandPath[0] === "agent" && commandPath[1] === "exec";
+}
+
 function isBareParentDefaultHelpArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   const [primary, extra] = invocation.commandPath;

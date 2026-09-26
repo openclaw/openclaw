@@ -28,11 +28,28 @@ export type WorkerSessionPlacementChangeSnapshot = WorkerSessionPlacementIdentit
 export type WorkerPlacementExecutionMode = "worker-turn" | "remote-exec";
 export type WorkerSessionPlacementDispatchIdentity = WorkerSessionPlacementIdentity & {
   executionMode?: WorkerPlacementExecutionMode;
+  expectedPlacement?: Pick<
+    WorkerSessionPlacementRecord,
+    "state" | "generation" | "environmentId" | "activeOwnerEpoch"
+  >;
+};
+
+export type WorkerPlacementDispatchStoreOperations = {
+  "workerPlacements.startDispatch": {
+    input: { placement: WorkerSessionPlacementDispatchIdentity; nowMs: number };
+    output: WorkerSessionPlacementRecord;
+  };
 };
 
 export type WorkerSessionTurnOwner =
   | { kind: "local"; environmentId?: string; ownerEpoch?: number }
   | { kind: "worker"; environmentId: string; ownerEpoch: number };
+
+export type WorkerTurnClaimInput = WorkerSessionPlacementIdentity & {
+  owner: WorkerSessionTurnOwner;
+  claimId: string;
+  runId: string;
+};
 
 export type WorkerSessionTurnClaim = {
   sessionId: string;
@@ -131,56 +148,33 @@ type EmptyWorkerPlacementMetadata = {
   terminalAtMs: null;
 };
 
-type ProvisioningPlacementMetadata = {
+type ProvisioningPlacementMetadata = Omit<EmptyWorkerPlacementMetadata, "environmentId"> & {
   environmentId: string | null;
-  activeOwnerEpoch: null;
-  workspaceBaseManifestRef: null;
-  remoteWorkspaceDir: null;
-  workerBundleHash: null;
-  lastTranscriptAckCursor: null;
-  lastLiveEventAckCursor: null;
-  recoveryError: null;
-  terminalReason: null;
-  terminalAtMs: null;
 };
 
-type SyncingPlacementMetadata = {
+type SyncingPlacementMetadata = Omit<
+  EmptyWorkerPlacementMetadata,
+  "environmentId" | "workerBundleHash"
+> & {
   environmentId: string;
-  activeOwnerEpoch: null;
-  workspaceBaseManifestRef: null;
-  remoteWorkspaceDir: null;
   workerBundleHash: string;
-  lastTranscriptAckCursor: null;
-  lastLiveEventAckCursor: null;
-  recoveryError: null;
-  terminalReason: null;
-  terminalAtMs: null;
 };
 
-type StartingPlacementMetadata = {
-  environmentId: string;
-  activeOwnerEpoch: null;
+type StartingPlacementMetadata = Omit<
+  SyncingPlacementMetadata,
+  "workspaceBaseManifestRef" | "remoteWorkspaceDir"
+> & {
   workspaceBaseManifestRef: string;
   remoteWorkspaceDir: string;
-  workerBundleHash: string;
-  lastTranscriptAckCursor: null;
-  lastLiveEventAckCursor: null;
-  recoveryError: null;
-  terminalReason: null;
-  terminalAtMs: null;
 };
 
-type OwnedWorkerPlacementMetadata = {
-  environmentId: string;
+type OwnedWorkerPlacementMetadata = Omit<
+  StartingPlacementMetadata,
+  "activeOwnerEpoch" | "lastTranscriptAckCursor" | "lastLiveEventAckCursor"
+> & {
   activeOwnerEpoch: number;
-  workspaceBaseManifestRef: string;
-  remoteWorkspaceDir: string;
-  workerBundleHash: string;
   lastTranscriptAckCursor: number | null;
   lastLiveEventAckCursor: number | null;
-  recoveryError: null;
-  terminalReason: null;
-  terminalAtMs: null;
 };
 
 type TerminalPlacementMetadata = {
@@ -249,6 +243,18 @@ export type WorkerSessionPlacementRecord =
   | ReconcilingPlacementRecord
   | ReclaimedPlacementRecord
   | FailedPlacementRecord;
+
+export type WorkerSessionTurnClaimFacts = Pick<
+  WorkerSessionPlacementRecord,
+  | "sessionId"
+  | "agentId"
+  | "sessionKey"
+  | "state"
+  | "executionMode"
+  | "environmentId"
+  | "activeOwnerEpoch"
+  | "turnClaim"
+>;
 
 export function reportPlacementTransition(
   observer: ((placement: WorkerSessionPlacementRecord) => void) | undefined,
@@ -327,14 +333,7 @@ export function normalizeEpoch(value: number, field: string): number {
   return value;
 }
 
-export function normalizeCursor(value: number | null, field: string): number | null {
-  if (value !== null && (!Number.isSafeInteger(value) || value < 0)) {
-    throw new Error(`Worker session placement ${field} must be a non-negative safe integer`);
-  }
-  return value;
-}
-
-export function normalizeTimestamp(value: number | null, field: string): number | null {
+export function normalizeNonNegativeInteger(value: number | null, field: string): number | null {
   if (value !== null && (!Number.isSafeInteger(value) || value < 0)) {
     throw new Error(`Worker session placement ${field} must be a non-negative safe integer`);
   }
@@ -349,7 +348,7 @@ export function advanceCursor(
   if (value === undefined) {
     return current;
   }
-  const next = normalizeCursor(value, field);
+  const next = normalizeNonNegativeInteger(value, field);
   if (next === null || current === null) {
     return next ?? current;
   }
@@ -402,7 +401,7 @@ export function assertRecordShape(
 ): asserts record is ValidatedPlacementRecordShape {
   const terminal = record.state === "reclaimed" || record.state === "failed";
   if (terminal) {
-    normalizeTimestamp(record.terminalAtMs, "terminal timestamp");
+    normalizeNonNegativeInteger(record.terminalAtMs, "terminal timestamp");
     if (record.state === "reclaimed" && record.terminalReason !== null) {
       throw new Error("Reclaimed worker session placement cannot retain a terminal reason");
     }
@@ -510,7 +509,7 @@ export function assertRecordShape(
 }
 
 export function isCurrentPlacementTurnClaim(
-  record: WorkerSessionPlacementRecord,
+  record: WorkerSessionTurnClaimFacts,
   claim: WorkerSessionTurnClaim,
 ): boolean {
   const persisted = record.turnClaim;

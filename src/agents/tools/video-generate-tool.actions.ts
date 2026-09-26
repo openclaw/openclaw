@@ -47,19 +47,12 @@ function summarizeVideoGenerationCapabilities(
   // provider-capabilities level. The runtime checks both; surface the union so
   // the agent sees a single merged view of which opaque keys each provider
   // actually accepts.
-  const declaredProviderOptions: Record<string, string> = {};
-  for (const [key, type] of Object.entries(provider.capabilities.providerOptions ?? {})) {
-    declaredProviderOptions[key] = type;
-  }
-  for (const [key, type] of Object.entries(generate?.providerOptions ?? {})) {
-    declaredProviderOptions[key] = type;
-  }
-  for (const [key, type] of Object.entries(imageToVideo?.providerOptions ?? {})) {
-    declaredProviderOptions[key] = type;
-  }
-  for (const [key, type] of Object.entries(videoToVideo?.providerOptions ?? {})) {
-    declaredProviderOptions[key] = type;
-  }
+  const declaredProviderOptions = {
+    ...provider.capabilities.providerOptions,
+    ...generate?.providerOptions,
+    ...imageToVideo?.providerOptions,
+    ...videoToVideo?.providerOptions,
+  };
   const maxInputAudios =
     generate?.maxInputAudios ??
     imageToVideo?.maxInputAudios ??

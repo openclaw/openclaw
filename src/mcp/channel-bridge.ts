@@ -27,7 +27,7 @@ import type {
   SessionMessagePayload,
   WaitFilter,
 } from "./channel-shared.js";
-import { matchEventFilter, normalizeApprovalId, toConversation, toText } from "./channel-shared.js";
+import { matchEventFilter, toConversation, toText } from "./channel-shared.js";
 
 /**
  * Runtime bridge between MCP tools and the OpenClaw Gateway channel APIs.
@@ -501,7 +501,7 @@ export class OpenClawChannelBridge {
     if (this.closed) {
       return;
     }
-    const id = normalizeApprovalId(payload.id);
+    const id = toText(payload.id);
     if (!id) {
       return;
     }
@@ -557,7 +557,7 @@ export class OpenClawChannelBridge {
   }
 
   private resolveTrackedApproval(payload: Record<string, unknown>): void {
-    const id = normalizeApprovalId(payload.id);
+    const id = toText(payload.id);
     if (id) {
       this.pendingApprovals.delete(id);
     }

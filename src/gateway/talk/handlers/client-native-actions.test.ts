@@ -39,7 +39,7 @@ import {
   registerClientVoiceConsultRun,
   resolveClientVoiceRunBinding,
 } from "../../../talk/client-voice-session.js";
-import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { projectChatDisplayMessages } from "../../chat-display-projection.js";
 import { createTranscriptUpdateBroadcastHandler } from "../../server-session-events.js";
 import { createSessionRowProjection } from "../../session-row-projection.js";

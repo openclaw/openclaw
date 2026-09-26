@@ -14,6 +14,7 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
   validationClockAdvanceMs?: number;
   terminalParentExitProbe?: true;
   cancelDuringValidation?: boolean;
+  systemScope?: true;
   cancelAtActivation?: "requester" | "inspection";
   runnerFallback?: boolean;
   selectedDriver?: "2026.9.3";

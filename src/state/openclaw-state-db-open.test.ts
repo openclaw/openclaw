@@ -336,7 +336,7 @@ describe("unpublished state database acquisition", () => {
           pathname: path.join(path.dirname(params.pathname), "healthy.sqlite"),
           ensureSchema,
         });
-        openClawStateDatabaseCache.publishOpenClawStateDatabase(healthy);
+        openClawStateDatabaseCache.publishOpenClawStateDatabase(healthy, params.env);
         expect(() => openClawStateDatabaseCache.closeOpenClawStateDatabase()).toThrow(
           maintenanceFails ? AggregateError : nativeFailure,
         );
@@ -415,7 +415,7 @@ describe("unpublished state database acquisition", () => {
       }
       const db = expectDefined(opened.at(-1), "terminal failed acquisition");
       const terminalFailure = expectDefined(
-        openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(params.pathname),
+        openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(params.pathname),
         "latched terminal failure",
       );
       expect(terminalFailure.name).toBe(
@@ -453,7 +453,7 @@ describe("unpublished state database acquisition", () => {
       });
       exclusion.release();
       expect(
-        openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(params.pathname),
+        openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(params.pathname),
       ).toBe(terminalFailure);
     },
   );

@@ -1,4 +1,3 @@
-// Inworld provider module implements model/runtime integration.
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -13,6 +12,7 @@ import {
 import {
   asFiniteNumberInRange,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -62,14 +62,9 @@ function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>): Inw
 }
 
 function readInworldProviderConfig(config: SpeechProviderConfig): InworldProviderConfig {
-  const defaults = normalizeInworldProviderConfig({});
-  return {
-    apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeInworldBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
-    voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
-    modelId: trimToUndefined(config.modelId) ?? defaults.modelId,
-    temperature: normalizeInworldTemperature(config.temperature) ?? defaults.temperature,
-  };
+  return normalizeInworldProviderConfig({
+    inworld: { ...config, apiKey: trimToUndefined(config.apiKey) },
+  });
 }
 
 function resolveInworldApiKey(primary?: string, fallback?: string): string | undefined {
@@ -162,28 +157,24 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
             });
       return {
         ...base,
-        ...(resolvedApiKey === undefined ? {} : { apiKey: resolvedApiKey }),
-        ...(trimToUndefined(talkProviderConfig.baseUrl) == null
-          ? {}
-          : { baseUrl: normalizeInworldBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.modelId) == null
-          ? {}
-          : { modelId: trimToUndefined(talkProviderConfig.modelId) }),
+        ...filterStringRecord({
+          apiKey: resolvedApiKey,
+          baseUrl: trimToUndefined(talkProviderConfig.baseUrl)
+            ? normalizeInworldBaseUrl(trimToUndefined(talkProviderConfig.baseUrl))
+            : undefined,
+          voiceId: trimToUndefined(talkProviderConfig.voiceId),
+          modelId: trimToUndefined(talkProviderConfig.modelId),
+        }),
         ...(normalizeInworldTemperature(talkProviderConfig.temperature) == null
           ? {}
           : { temperature: normalizeInworldTemperature(talkProviderConfig.temperature) }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId) == null
-        ? {}
-        : { voiceId: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.modelId) == null
-        ? {}
-        : { modelId: trimToUndefined(params.modelId) }),
+      ...filterStringRecord({
+        voiceId: trimToUndefined(params.voiceId),
+        modelId: trimToUndefined(params.modelId),
+      }),
       ...(normalizeInworldTemperature(params.temperature) == null
         ? {}
         : { temperature: normalizeInworldTemperature(params.temperature) }),

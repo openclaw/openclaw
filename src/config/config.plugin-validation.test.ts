@@ -1772,7 +1772,7 @@ describe("config plugin validation", () => {
         pluginMetadataSnapshot: {
           manifestRegistry: {
             plugins: [],
-            diagnostics: [],
+            diagnostics: [{ level: "info", message: "explicit plugin source selected" }],
           },
         },
       },
@@ -1896,15 +1896,14 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it.each([true, false])("warns for removed legacy plugin ids with enabled=%s", (enabled) => {
-    const removedId = "google-antigravity-auth";
+  it.each([
+    ["google-antigravity-auth", true],
+    ["google-antigravity-auth", false],
+    ["google-gemini-cli-auth", true],
+    ["webhooks", true],
+    ["webhooks", false],
+  ] as const)("warns for removed %s plugin with enabled=%s", (removedId, enabled) => {
     const res = validateRemovedPluginConfig(removedId, enabled);
-    expectRemovedPluginWarnings(res, removedId, removedId);
-  });
-
-  it("warns for removed google gemini auth plugin ids instead of failing validation", () => {
-    const removedId = "google-gemini-cli-auth";
-    const res = validateRemovedPluginConfig(removedId);
     expectRemovedPluginWarnings(res, removedId, removedId);
   });
 

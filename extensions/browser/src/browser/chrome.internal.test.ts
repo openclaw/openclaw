@@ -44,11 +44,13 @@ const ensurePortAvailableMock = vi.hoisted(() =>
   vi.fn<(port: number, host?: string) => Promise<void>>(async () => {}),
 );
 
-vi.mock("../infra/ports.js", () => ({
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>()),
   ensurePortAvailable: ensurePortAvailableMock,
 }));
 
-vi.mock("../infra/tmp-openclaw-dir.js", () => ({
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
   resolvePreferredOpenClawTmpDir: () => "/tmp/openclaw-browser-test",
 }));
 
@@ -83,12 +85,6 @@ import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.
 import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
 
 const CHROME_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
-
-async function getChromeWebSocketUrl(
-  ...args: Parameters<typeof getChromeWebSocketEndpoint>
-): Promise<string | null> {
-  return (await getChromeWebSocketEndpoint(...args))?.url ?? null;
-}
 
 type FakeProc = EventEmitter & {
   pid?: number;
@@ -1837,7 +1833,7 @@ describe("chrome.ts internal", () => {
     });
   });
 
-  describe("getChromeWebSocketUrl missing-debugger-url", () => {
+  describe("getChromeWebSocketEndpoint missing-debugger-url", () => {
     it("returns null when /json/version omits webSocketDebuggerUrl", async () => {
       vi.stubGlobal(
         "fetch",
@@ -1846,12 +1842,12 @@ describe("chrome.ts internal", () => {
           json: async () => ({ Browser: "Chrome/Mock" }),
         } as unknown as Response),
       );
-      await expect(getChromeWebSocketUrl("http://127.0.0.1:12345", 50)).resolves.toBeNull();
+      await expect(getChromeWebSocketEndpoint("http://127.0.0.1:12345", 50)).resolves.toBeNull();
     });
   });
 
   describe("isChromeCdpReady no-ws-url branch", () => {
-    it("returns false when getChromeWebSocketUrl resolves to null", async () => {
+    it("returns false when discovery omits the WebSocket URL", async () => {
       vi.stubGlobal(
         "fetch",
         vi.fn().mockResolvedValue({
@@ -1864,10 +1860,8 @@ describe("chrome.ts internal", () => {
   });
 
   describe("canRunCdpHealthCommand branches", () => {
-    it("returns false when the ws upgrade is refused", async () => {
-      // isChromeCdpReady -> getChromeWebSocketUrl -> canRunCdpHealthCommand.
-      // Point at a port that doesn't accept ws upgrades at the /devtools path
-      // to trigger the error-event branch.
+    it("returns false when the browser does not answer its health probe", async () => {
+      // A completed handshake is insufficient if the browser never answers the health command.
       await withMockChromeCdpServer({
         wsPath: "/devtools/browser/MISMATCH",
         onConnection: (wss) => {
@@ -1981,13 +1975,15 @@ describe("chrome.ts internal", () => {
     });
   });
 
-  describe("getChromeWebSocketUrl direct-ws short-circuit", () => {
+  describe("getChromeWebSocketEndpoint direct-ws short-circuit", () => {
     it("returns the input URL as-is for handshake-ready direct ws endpoints", async () => {
-      // Covers the `return cdpUrl;` early-return on a direct ws endpoint.
       const fetchSpy = vi.fn();
       vi.stubGlobal("fetch", fetchSpy);
-      const out = await getChromeWebSocketUrl("ws://127.0.0.1:19222/devtools/browser/DIRECT", 50);
-      expect(out).toBe("ws://127.0.0.1:19222/devtools/browser/DIRECT");
+      const endpoint = await getChromeWebSocketEndpoint(
+        "ws://127.0.0.1:19222/devtools/browser/DIRECT",
+        50,
+      );
+      expect(endpoint?.url).toBe("ws://127.0.0.1:19222/devtools/browser/DIRECT");
       expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
@@ -2053,9 +2049,7 @@ describe("chrome.ts internal", () => {
   });
 
   describe("isChromeCdpReady swallowed errors", () => {
-    it("returns false when getChromeWebSocketUrl rejects (SSRF-blocked)", async () => {
-      // Covers the `.catch(() => null)` arrow on getChromeWebSocketUrl in
-      // isChromeCdpReady by pointing at a private-IP cdp url under strict SSRF.
+    it("returns false when a strict SSRF policy blocks the CDP endpoint", async () => {
       vi.stubGlobal(
         "fetch",
         vi.fn().mockResolvedValue({

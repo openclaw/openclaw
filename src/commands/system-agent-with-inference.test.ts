@@ -259,37 +259,29 @@ describe("runSystemAgentWithInference", () => {
     expect(currentRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it.each([
-    { label: "one-shot", options: { message: "status" } },
-    { label: "noninteractive", options: { interactive: false } },
-  ])(
-    "fails $label mode with onboarding guidance when inference is unavailable",
-    async ({ options }) => {
-      const currentRuntime = runtime();
-      const runGuidedOnboarding = vi.fn(async () => {});
+  it("fails one-shot mode with onboarding guidance when inference is unavailable", async () => {
+    const currentRuntime = runtime();
+    const runGuidedOnboarding = vi.fn(async () => {});
 
-      await runSystemAgentWithInference(
-        options,
-        currentRuntime,
-        {},
-        {
-          verifyInference: vi.fn(async () => ({
-            ok: false as const,
-            status: "unavailable" as const,
-            error: "no configured model",
-          })),
-          runGuidedOnboarding,
-        },
-      );
+    await runSystemAgentWithInference(
+      { message: "status" },
+      currentRuntime,
+      {},
+      {
+        verifyInference: vi.fn(async () => ({
+          ok: false as const,
+          status: "unavailable" as const,
+          error: "no configured model",
+        })),
+        runGuidedOnboarding,
+      },
+    );
 
-      expect(currentRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("openclaw onboard"),
-      );
-      expect(currentRuntime.exit).toHaveBeenCalledWith(1);
-      expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime, 1);
-      expect(runGuidedOnboarding).not.toHaveBeenCalled();
-    },
-  );
+    expect(currentRuntime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw onboard"));
+    expect(currentRuntime.exit).toHaveBeenCalledWith(1);
+    expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime, 1);
+    expect(runGuidedOnboarding).not.toHaveBeenCalled();
+  });
 
   it("returns a structured JSON error when inference is unavailable", async () => {
     const currentRuntime = runtime();

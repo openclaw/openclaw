@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -168,10 +169,12 @@ function runAssertClawhubInstalled({
   contextEngineIds = [],
   installPathRelative,
   recordOverrides = {},
+  wrongPeerTarget = false,
 }: {
   contextEngineIds?: string[];
   installPathRelative?: string;
   recordOverrides?: Record<string, unknown>;
+  wrongPeerTarget?: boolean;
 } = {}) {
   const label = `clawhub-context-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const pluginId = "openclaw-kitchen-sink-fixture";
@@ -205,8 +208,12 @@ function runAssertClawhubInstalled({
     mkdirSync(installPath, { recursive: true });
     if (record.artifactKind === "npm-pack") {
       mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
+      const peerTarget = wrongPeerTarget ? path.join(home, "other-host") : process.cwd();
+      if (wrongPeerTarget) {
+        mkdirSync(peerTarget);
+      }
       symlinkSync(
-        process.cwd(),
+        peerTarget,
         path.join(installPath, "node_modules", "openclaw"),
         process.platform === "win32" ? "junction" : "dir",
       );
@@ -240,6 +247,7 @@ function runAssertClawhubInstalled({
         },
       }),
       record,
+      wrongPeerRealPath: wrongPeerTarget ? realpathSync(path.join(home, "other-host")) : undefined,
     };
   } finally {
     rmSync(home, { force: true, recursive: true });
@@ -658,6 +666,20 @@ describe("kitchen-sink plugin assertions", () => {
       errorPrefix: null,
     },
     {
+      name: "rejects an npm peer linked to a different host",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: 0,
+        npmIntegrity: "integrity",
+        npmShasum: "shasum",
+        npmTarballName: "package.tgz",
+      },
+      wrongPeerTarget: true,
+      errorPrefix: null,
+    },
+    {
       name: "rejects metadata before an empty install path",
       recordOverrides: { artifactFormat: "tgz", installPath: "" },
       errorPrefix: "missing kitchen-sink legacy ZIP artifact metadata",
@@ -667,20 +689,29 @@ describe("kitchen-sink plugin assertions", () => {
       recordOverrides: { artifactFormat: "tgz", installPath: 42 },
       errorPrefix: "missing kitchen-sink legacy ZIP artifact metadata",
     },
-  ])("ClawHub kitchen-sink metadata: $name", ({ recordOverrides, errorPrefix }) => {
-    const result = runAssertClawhubInstalled({
-      contextEngineIds: ["openclaw-kitchen-sink-fixture"],
-      recordOverrides,
-    });
-    if (errorPrefix === null) {
-      expect(result.status, result.stderr).toBe(0);
-    } else {
-      expect(result.status).toBe(1);
-      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
-        `${errorPrefix}: ${JSON.stringify(result.record)}`,
-      );
-    }
-  });
+  ])(
+    "ClawHub kitchen-sink metadata: $name",
+    ({ recordOverrides, errorPrefix, wrongPeerTarget }) => {
+      const result = runAssertClawhubInstalled({
+        contextEngineIds: ["openclaw-kitchen-sink-fixture"],
+        recordOverrides,
+        wrongPeerTarget,
+      });
+      if (wrongPeerTarget) {
+        expect(result.status).toBe(1);
+        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+          `expected kitchen-sink openclaw peer ${result.wrongPeerRealPath} to target ${realpathSync(process.cwd())}`,
+        );
+      } else if (errorPrefix === null) {
+        expect(result.status, result.stderr).toBe(0);
+      } else {
+        expect(result.status).toBe(1);
+        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+          `${errorPrefix}: ${JSON.stringify(result.record)}`,
+        );
+      }
+    },
+  );
 
   it("rejects ClawHub kitchen-sink install paths that resolve outside managed extensions", () => {
     const result = runAssertClawhubInstalled({
@@ -1056,6 +1087,41 @@ scan_logs_for_unexpected_errors
     } finally {
       rmSync(parent, { force: true, recursive: true });
     }
+  });
+
+  it("rejects live Kitchen Sink ClawHub scenarios after the listing is retired", () => {
+    const result = runSweepShell(
+      `
+set -euo pipefail
+export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
+source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
+KITCHEN_SINK_SCENARIOS='clawhub-latest|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic'
+run_kitchen_sink_sweep_main
+`,
+      {
+        OPENCLAW_ENTRY: "/bin/false",
+        OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB: "1",
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("The OpenClaw Kitchen Sink package is delisted from ClawHub");
+    expect(result.stdout).not.toContain("Testing clawhub-latest install");
+  });
+
+  it("rejects live Kitchen Sink ClawHub E2E before launching Docker", () => {
+    const result = spawnSync(BASH_BIN, ["scripts/e2e/kitchen-sink-plugin-docker.sh"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB: "1",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("The OpenClaw Kitchen Sink package is delisted from ClawHub");
+    expect(result.stdout).not.toContain("Running kitchen-sink plugin Docker E2E");
   });
 
   it("cleans a ClawHub fixture server that times out before readiness", () => {

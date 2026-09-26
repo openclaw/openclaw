@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { tryFinishCronTaskRunWithoutHistory } from "../cron/service/task-runs.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -10,12 +11,14 @@ import {
   clearAgentRunContext,
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
+  releaseAgentRunContext,
   retainQueuedAgentRunContext,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { getTaskById } from "../tasks/runtime-internal.js";
+import { createSubagentTaskBackingDetail } from "../tasks/task-backing-authority.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import {
   createTaskFixture,
@@ -182,6 +185,73 @@ export function registerTaskEventSubscriptionTests(
       await unsubs.taskUnsub();
       clearAgentRunContext(runId);
       expect(broadcast).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "pushes subagent capacity transitions without activity (collector=%s)",
+    async (collect) => {
+      const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
+      const closeTaskSessions = vi.fn(() => 0);
+      unsubs = start({ broadcast, terminalSessions: { closeTaskSessions } });
+      await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+      const runId = "run-subagent-capacity-push";
+      const sessionKey = "agent:main:subagent:capacity-push";
+      subagentRuns.set(runId, {
+        runId,
+        childSessionKey: sessionKey,
+        requesterSessionKey: sessionTaskDefaults.requesterSessionKey,
+        requesterDisplayKey: "main",
+        task: "Show capacity changes",
+        cleanup: "keep",
+        collect,
+        createdAt: 1,
+        generation: 1,
+        execution: { status: "running", startedAt: 1 },
+      });
+      const claim = claimAgentRunContext(
+        runId,
+        { sessionKey, agentId: "main" },
+        { trackOwner: true, ownsContext: true },
+      );
+      let releaseCapacity: (() => void) | undefined;
+      try {
+        const task = createTaskFixture("subagent", {
+          ...sessionTaskDefaults,
+          childSessionKey: sessionKey,
+          runId,
+          task: "Show capacity changes",
+          detail: createSubagentTaskBackingDetail(1),
+        });
+        releaseCapacity = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+        releaseCapacity?.();
+        expect(
+          readTaskUpserts(broadcast).map(({ task: summary }) => ({
+            id: summary.id,
+            status: summary.status,
+            execution: summary.execution?.state,
+          })),
+        ).toEqual([
+          { id: task.taskId, status: "running", execution: "running" },
+          { id: task.taskId, status: "running", execution: "queued" },
+          { id: task.taskId, status: "running", execution: "running" },
+        ]);
+        for (const [event, , options] of broadcast.mock.calls) {
+          if (event === "task") {
+            expect(options).toEqual({
+              dropIfSlow: true,
+              sessionKeys: [sessionTaskDefaults.requesterSessionKey],
+              agentId: "main",
+            });
+          }
+        }
+        expect(getTaskById(task.taskId)?.status).toBe("running");
+        expect(closeTaskSessions).not.toHaveBeenCalled();
+      } finally {
+        releaseCapacity?.();
+        releaseAgentRunContext(runId, claim);
+        subagentRuns.delete(runId);
+      }
     },
   );
 

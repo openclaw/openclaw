@@ -531,7 +531,6 @@ test("sessions.patch fails closed when active worker inference has no archive dr
         workerEnvironmentService: {
           cancelInferenceForSession: vi.fn(() => []),
           hasInferenceForSession: vi.fn(() => true),
-          resolveInferenceSessionForRunId: vi.fn(),
         },
       },
     },

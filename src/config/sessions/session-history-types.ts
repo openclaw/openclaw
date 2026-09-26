@@ -1,5 +1,19 @@
+import type {
+  SessionArtifactReadQuery,
+  SessionArtifactReadResult,
+} from "../../gateway/session-artifact-read.js";
+import type {
+  ReadRecentSessionMessagesResult,
+  ReadSessionMessageByIdResult,
+  ReadSessionMessagesAroundIdResult,
+  ReadSessionMessagesResult,
+  SessionTranscriptReader,
+} from "../../gateway/session-transcript-read-kernel.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
-import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
+import type {
+  SessionTranscriptDisplayDeltaResult,
+  SessionTranscriptMessageByIdOptions,
+} from "./session-accessor.sqlite-history-query.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptReadScope,
@@ -95,9 +109,58 @@ export type SessionHistoryDelta = {
   subagentCoordination: SessionHistorySubagentFacts;
 };
 
+export type SessionHistoryTranscriptBinding = { sessionKey: string; sessionId: string };
+
 export type SessionHistoryWorkerRequest =
+  | {
+      kind: "artifacts";
+      params: { target: SessionTranscriptReadScope; query: SessionArtifactReadQuery };
+    }
+  | {
+      kind: "message-page";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: Parameters<SessionTranscriptReader["readSessionMessagesPageWithStatsAsync"]>[1];
+      };
+    }
+  | {
+      kind: "around-id";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: Parameters<
+          SessionTranscriptReader["readSessionMessagesAroundIdWithStatsAsync"]
+        >[1];
+      };
+    }
+  | {
+      kind: "source-messages";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: Parameters<SessionTranscriptReader["readSessionMessagesWithSourceAsync"]>[1];
+      };
+    }
+  | {
+      kind: "recent-page";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: Parameters<SessionTranscriptReader["readRecentSessionMessagesWithStatsAsync"]>[1];
+      };
+    }
+  | {
+      kind: "transcript-binding";
+      params: { target: SessionTranscriptReadScope; run?: { id: string; maxBytes: number } };
+    }
   | { kind: "rpc"; params: ChatHistoryPageParams & { sessionId: string; storePath: string } }
   | { kind: "message-lookup"; params: { target: SessionTranscriptReadScope; messageId: string } }
+  | {
+      kind: "message-by-id";
+      params: {
+        target: SessionTranscriptReadScope;
+        messageId: string;
+        options?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean };
+      };
+    }
+  | { kind: "message-count"; params: { target: SessionTranscriptReadScope } }
   | {
       kind: "recent";
       params: {
@@ -114,8 +177,15 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "artifacts"; result: SessionArtifactReadResult }
+  | { kind: "message-page" | "recent-page"; result: ReadRecentSessionMessagesResult }
+  | { kind: "around-id"; result: ReadSessionMessagesAroundIdResult }
+  | { kind: "source-messages"; result: ReadSessionMessagesResult }
+  | { kind: "transcript-binding"; binding: SessionHistoryTranscriptBinding | undefined }
   | { kind: "rpc"; page: ChatHistoryPage }
   | { kind: "message-lookup"; messages: unknown[] }
+  | { kind: "message-by-id"; result: ReadSessionMessageByIdResult }
+  | { kind: "message-count"; count: number }
   | { kind: "recent"; messages: unknown[] }
   | ({ kind: "delta" } & SessionHistoryDelta)
   | { kind: "http"; snapshot: SessionHistorySnapshot };

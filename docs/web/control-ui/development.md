@@ -25,6 +25,8 @@ For bundled builds, the Gateway retains manifest-verified assets so already-open
 
 Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker keeps its network-first policy for public assets, allowing the browser's HTTP cache to satisfy matching versioned requests.
 
+The Gateway shares prepared bundled asset bytes across browsers, including Brotli and gzip variants. Cold file admission and reads run in a worker so simultaneous page loads do not block chat delivery. Custom roots continue to read current files on each request.
+
 Non-index static assets use `Last-Modified` for conditional `GET` and `HEAD` requests. `If-None-Match` takes precedence over `If-Modified-Since`: `*` matches an existing asset, while other values receive the normal `200` response because static assets do not emit ETags. Date-only revalidation still returns `304` for unchanged assets. If no available content encoding is acceptable, the Gateway returns `406` before evaluating either condition.
 
 All three HTTP-date formats are interpreted as UTC. Invalid or repeated `If-Modified-Since` fields are ignored, so they cannot suppress the current asset bytes. A leap-second validator remains earlier than the following second.
@@ -113,13 +115,15 @@ between settlement and transport.
 
 ## Chat render scheduling
 
-Streaming deltas and session-roster notifications must not trigger a render for
-each event. The chat stream owns its frame queue; the shell and chat-page session
-subscriptions coalesce their presentation updates through `SubscriptionsController`.
-Their state synchronization stays immediate, while the Lit commit runs inside the
-scheduled frame so child property bindings do not escape into a later microtask.
-Disconnecting or replacing a subscription retires its queued frame. Hidden
-documents retain immediate invalidation because animation frames may be suspended.
+Streaming deltas and session-roster notifications must not trigger unrelated
+renders. The shell processes session deletion and document-title updates directly,
+without rendering for roster publications. The chat stream owns its frame queue;
+chat-page session subscriptions coalesce presentation updates through
+`SubscriptionsController`. State synchronization stays immediate, while the Lit
+commit runs inside the scheduled frame so child property bindings do not escape
+into a later microtask. Disconnecting or replacing a subscription retires its
+queued frame. Hidden documents retain immediate invalidation because animation
+frames may be suspended.
 
 The `chat-stream-runtime-budgets.e2e.test.ts` suite protects streaming with
 structural update counts; chat-page unit tests cover intervening roster publications.
@@ -135,6 +139,25 @@ observers own geometry changes. The command palette likewise retains its measure
 input layout while navigating results, and remeasures edits, width changes, and
 reconnected fields. Status clocks pause in hidden tabs and render only when their
 displayed value or properties change.
+
+Streaming Markdown retains normalized input, split progress, and rendered prefixes
+in one bounded cache. Completed independent blocks render once; replacements,
+locale or display-option changes, and document-wide Markdown dependencies invalidate
+that reuse. Lists, reference definitions, containers, raw HTML, and colliding file labels
+retain their whole-block or whole-prefix semantics and the existing parse limits.
+
+Composer edits publish transcript resize notifications only when the viewport
+height or corrected scroll offset changes. Draft growth, shrinkage, and end
+anchoring still synchronize immediately. The position rail observes column width
+and conversation-region height instead of measuring the gutter on every streamed
+render; virtualizer and sidebar geometry changes retain their explicit sync path.
+Rail labels are shared across mounted markers, so offscreen history does not add
+translation work on each stream update.
+
+Sidebar narration releases its session interests while hidden. Failed releases
+retain their original subscription handles for the next sidebar synchronization
+or disconnect cleanup, including subscriptions that finish acquiring after hiding.
+The shared connection coordinator settles each release independently of other viewers.
 
 ## Talk live smoke test
 

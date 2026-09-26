@@ -253,9 +253,3 @@ export function extractAttachmentsFromMessage(message: unknown): unknown[] {
     }));
   return [...contentAttachments, ...mediaAttachments];
 }
-
-/** Normalize approval identifiers before local tracking or resolution. */
-export function normalizeApprovalId(value: unknown): string | undefined {
-  const id = toText(value);
-  return id ? id.trim() : undefined;
-}

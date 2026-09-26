@@ -1,5 +1,6 @@
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
+import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   type SessionWorkAdmissionLease,
@@ -8,6 +9,25 @@ import { formatForLog } from "../ws-log.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestContext } from "./types.js";
+
+/** Caller and physical target custody end together when admitted work settles. */
+export function releaseChatSendCallerAuthority(params: {
+  operator: { release?: () => void };
+  request: Pick<NormalizedChatSendRequest, "providerReviewAcknowledgment">;
+  session: Pick<PreparedChatSendSession, "releaseSessionTarget">;
+}): void {
+  try {
+    params.operator.release?.();
+  } finally {
+    try {
+      if (params.request.providerReviewAcknowledgment) {
+        retireProviderReviewAcknowledgment(params.request.providerReviewAcknowledgment);
+      }
+    } finally {
+      params.session.releaseSessionTarget();
+    }
+  }
+}
 
 /** Queued and collected turns share the original session and caller admission until settlement. */
 export function createChatSendWorkAdmission(params: {

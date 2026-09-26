@@ -5,14 +5,14 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { afterEach, describe, expect, it } from "vitest";
-import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
+import * as ts from "typescript/unstable/ast";
+import { Program } from "typescript/unstable/async";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeclarationClosureRenderer } from "./api-baseline-declaration-closure.js";
 import { formatPluginSdkApiTypeAlias } from "./api-baseline-declaration-print.js";
 import {
-  listPluginSdkApiBaselineEntrypoints,
   normalizePluginSdkApiDeclarationText,
   normalizePluginSdkApiSourcePath,
   renderPluginSdkApiBaseline,
@@ -69,6 +69,7 @@ function writePluginSdkInventory(repoRoot: string, entrypoints: readonly string[
 }
 
 async function renderPrivateDeclarationFixture(params?: {
+  comments?: boolean;
   optionalOption?: boolean;
   optionalResult?: boolean;
 }) {
@@ -92,10 +93,10 @@ async function renderPrivateDeclarationFixture(params?: {
     [
       'import type { FixtureOptionLeaf } from "./fixture-option.js";',
       'import type { FixtureResultLeaf } from "./fixture-result.js";',
-      "type FixtureOptions = { nested: FixtureOptionLeaf };",
+      `${params?.comments ? "/** Options docs */ " : ""}type FixtureOptions = { nested: FixtureOptionLeaf };`,
       "type FixtureResult = { nested: FixtureResultLeaf };",
       "export declare function createFixture(options: FixtureOptions): FixtureResult;",
-      "export class FixtureError extends Error {",
+      `${params?.comments ? "/** Error docs */ " : ""}export class FixtureError extends Error {`,
       "  readonly status: number;",
       '  constructor(status: number) { super("fixture"); this.status = status; }',
       "  getStatus() { return this.status; }",
@@ -161,7 +162,9 @@ async function renderDependencyDeclarationFixture(dependencyDeclaration: string)
 }
 
 function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean) {
-  const fileName = "/plugin-sdk-tuple-fixture.ts";
+  const cwd = tempDirs.make("openclaw-plugin-sdk-tuple-");
+  const fileName = path.join(cwd, "fixture.ts");
+  const configFileName = path.join(cwd, "tsconfig.json");
   const source = [
     "interface Array<T> { [index: number]: T; readonly length: number }",
     "interface ReadonlyArray<T> { readonly [index: number]: T; readonly length: number }",
@@ -169,20 +172,32 @@ function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean
     `const VALUES = ${tuple};`,
     "type Value = (typeof VALUES)[number];",
   ].join("\n");
-  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.ESNext, true);
-  const options = { noLib: true, target: ts.ScriptTarget.ESNext };
-  const host = ts.createCompilerHost(options);
-  host.fileExists = (candidate) => candidate === fileName;
-  host.getSourceFile = (candidate) => (candidate === fileName ? sourceFile : undefined);
-  const checker = ts.createProgram([fileName], options, host).getTypeChecker();
+  const native = nativeTypeScript.createNativeTypeScriptProject({
+    cwd,
+    configFileName,
+    files: {
+      [fileName]: source,
+      [configFileName]: JSON.stringify({
+        compilerOptions: { noLib: true, target: "esnext", types: [] },
+        files: [fileName],
+      }),
+    },
+  });
+  const { checker } = native.project;
+  const sourceFile = native.project.program.getSourceFile(fileName);
+  if (!sourceFile) {
+    native.close();
+    throw new Error("Missing tuple fixture source");
+  }
   const [warmupAlias, declaration] = sourceFile.statements.filter(ts.isTypeAliasDeclaration);
   if (!warmupAlias || !declaration) {
+    native.close();
     throw new Error("Missing tuple fixture type aliases");
   }
   if (prewarm) {
     checker.getTypeAtLocation(warmupAlias);
   }
-  return { checker, declaration };
+  return { checker, declaration, [Symbol.dispose]: native.close };
 }
 
 describe("Plugin SDK API baseline", () => {
@@ -256,15 +271,8 @@ describe("Plugin SDK API baseline", () => {
       expected: "3 | 1 | 2",
     },
   ])("keeps tuple-derived unions stable across unrelated type discovery", (fixture) => {
-    const baseline = createTupleAliasFixture(fixture.tuple, fixture.warmup, false);
-    const prewarmed = createTupleAliasFixture(fixture.tuple, fixture.warmup, true);
-    const unstable = prewarmed.checker.typeToString(
-      prewarmed.checker.getTypeAtLocation(prewarmed.declaration),
-      prewarmed.declaration,
-      ts.TypeFormatFlags.NoTruncation,
-    );
-
-    expect(unstable).not.toBe(fixture.expected);
+    using baseline = createTupleAliasFixture(fixture.tuple, fixture.warmup, false);
+    using prewarmed = createTupleAliasFixture(fixture.tuple, fixture.warmup, true);
     expect(formatPluginSdkApiTypeAlias(baseline.checker, baseline.declaration)).toBe(
       fixture.expected,
     );
@@ -273,8 +281,21 @@ describe("Plugin SDK API baseline", () => {
     );
   });
 
-  it("uses the canonical public entrypoint inventory", () => {
-    expect(listPluginSdkApiBaselineEntrypoints()).toEqual(publicPluginSdkEntrypoints);
+  it("preserves empty tuple defaults in public function signatures", async () => {
+    const baseline = await renderSourceFixture({
+      "fixture.ts": 'export { emptyDefault as publicEmptyDefault } from "./functions.js";\n',
+      "functions.ts":
+        "export declare function emptyDefault<const T extends readonly string[] = []>(value?: T): T;\n",
+    });
+
+    expect(baseline.modules[0]?.exports).toEqual([
+      expect.objectContaining({
+        exportName: "publicEmptyDefault",
+        declaration: expect.stringMatching(
+          /export function publicEmptyDefault<const T extends readonly string\[\] = \[\s*\]>\(value\?: T\): T;/u,
+        ),
+      }),
+    ]);
   });
 
   it("reports same-entrypoint closure changes without a committed merge unit", async () => {
@@ -544,7 +565,7 @@ describe("Plugin SDK API baseline", () => {
 
   it("renders byte-identical surfaces deterministically", async () => {
     const firstRender = await renderPrivateDeclarationFixture();
-    const secondRender = await renderPrivateDeclarationFixture();
+    const secondRender = await renderPrivateDeclarationFixture({ comments: true });
     const fixtureError = firstRender.modules[0]?.exports.find(
       (exportSurface) => exportSurface.exportName === "FixtureError",
     )?.declaration;
@@ -556,6 +577,104 @@ describe("Plugin SDK API baseline", () => {
     expect(fixtureError).not.toContain("return this.status");
   });
 
+  it.each(["source project creation", "declaration diagnostics"])(
+    "rejects source changes after %s while accepting linked external types",
+    async (timing) => {
+      const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-mutation-");
+      const external = tempDirs.make("openclaw-plugin-sdk-api-linked-");
+      const entry = path.join(repoRoot, "src/plugin-sdk/fixture.ts");
+      fs.mkdirSync(path.dirname(entry), { recursive: true });
+      fs.mkdirSync(path.join(repoRoot, "node_modules"));
+      fs.writeFileSync(path.join(repoRoot, "package.json"), '{"type":"module"}');
+      fs.writeFileSync(
+        path.join(repoRoot, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: {
+            module: "NodeNext",
+            moduleResolution: "NodeNext",
+            target: "ESNext",
+            types: [],
+          },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(external, "package.json"),
+        '{"name":"fixture-linked","type":"module","types":"index.d.ts"}',
+      );
+      fs.writeFileSync(
+        path.join(external, "index.d.ts"),
+        'export declare const externalValue: "external";\n',
+      );
+      fs.symlinkSync(external, path.join(repoRoot, "node_modules/fixture-linked"), "junction");
+      const source = (origin: string) =>
+        [
+          'import { externalValue } from "fixture-linked";',
+          "export const linked = externalValue;",
+          `export const local = "${origin}" as const;`,
+        ].join("\n");
+      fs.writeFileSync(entry, source("checked"));
+      const render = () => renderPluginSdkApiBaseline({ repoRoot, entrypoints: ["fixture"] });
+      const stable = await render();
+      expect(stable.modules[0]?.exports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            exportName: "linked",
+            declaration: expect.stringContaining('"external"'),
+          }),
+          expect.objectContaining({
+            exportName: "local",
+            declaration: expect.stringContaining('"checked"'),
+          }),
+        ]),
+      );
+
+      let changed = false;
+      const changeSource = () => {
+        changed = true;
+        fs.writeFileSync(entry, source("changed"));
+      };
+      const sourceConfig = path
+        .join(repoRoot, ".openclaw-plugin-sdk-api.tsconfig.json")
+        .split(path.sep)
+        .join("/");
+      const createProject = nativeTypeScript.createNativeTypeScriptProject;
+      const create = vi.spyOn(nativeTypeScript, "createNativeTypeScriptProject");
+      const diagnose = vi.spyOn(Program.prototype, "getDeclarationDiagnostics");
+      if (timing === "source project creation") {
+        create.mockImplementationOnce(function intercept(options) {
+          const native = createProject(options);
+          if (options.configFileName.split(path.sep).join("/") === sourceConfig) {
+            expect(native.project.program.getSourceFile(entry)?.getText()).toContain('"checked"');
+            changeSource();
+          } else {
+            create.mockImplementationOnce(intercept);
+          }
+          return native;
+        });
+      } else {
+        diagnose.mockImplementationOnce(async function (this: Program, ...args) {
+          diagnose.mockRestore();
+          const result = await this.getDeclarationDiagnostics(...args);
+          expect(
+            (await this.getSourceFileNames()).some((file) => path.resolve(file) === entry),
+          ).toBe(true);
+          expect(result).toEqual([]);
+          changeSource();
+          return result;
+        });
+      }
+      try {
+        await expect(render()).rejects.toThrow(/Boundary .*changed during compilation/u);
+      } finally {
+        create.mockRestore();
+        diagnose.mockRestore();
+      }
+      expect(changed).toBe(true);
+      expect(fs.readFileSync(entry, "utf8")).toBe(source("changed"));
+      expect(fs.readdirSync(path.join(repoRoot, ".artifacts"))).toEqual([]);
+    },
+  );
+
   it("fails when a declaration dependency cannot be resolved", async () => {
     await expect(
       renderSourceFixture({
@@ -565,6 +684,33 @@ describe("Plugin SDK API baseline", () => {
         ].join("\n"),
       }),
     ).rejects.toThrow("missing-plugin-sdk-dependency");
+  });
+
+  it("resolves declaration import types under their explicit package conditions", async () => {
+    const render = (esmField: string) =>
+      renderSourceFixture({
+        "../../package.json": JSON.stringify({
+          type: "module",
+          imports: {
+            "#shape": { import: "./src/plugin-sdk/esm.ts", require: "./src/plugin-sdk/cjs.ts" },
+          },
+        }),
+        "fixture.ts": [
+          'export declare function importShape(value: import("#shape", { with: { "resolution-mode": "import" } }).Shape): void;',
+          'export declare function requireShape(value: import("#shape", { with: { "resolution-mode": "require" } }).Shape): void;',
+        ].join("\n"),
+        "esm.ts": `export type Shape = { ${esmField}: string };`,
+        "cjs.ts": "export type Shape = { commonjs: number };",
+      });
+    const before = await render("original");
+    const after = await render("changed");
+
+    expect(diffPluginSdkApi(before, after).exports.map(({ exportName }) => exportName)).toEqual([
+      "importShape",
+    ]);
+    expect(before.declarationSections.map(({ text }) => text).join("\n")).toContain(
+      "commonjs: number",
+    );
   });
 
   it("keeps hashes stable when reachable declarations move", async () => {
@@ -603,6 +749,9 @@ describe("Plugin SDK API baseline", () => {
     const baseline = await render(false);
     const changed = await render(true);
 
+    expect(baseline.declarationSections.find(({ name }) => name === "global")?.text).toMatch(
+      /^declare global \{/u,
+    );
     expect(changed.modules[0]?.exports[0]?.closureHash).not.toBe(
       baseline.modules[0]?.exports[0]?.closureHash,
     );
@@ -655,23 +804,27 @@ describe("Plugin SDK API baseline", () => {
         ].join("\n"),
       );
     }
-    const program = ts.createProgram(files, {
-      target: ts.ScriptTarget.ESNext,
-      module: ts.ModuleKind.NodeNext,
-      moduleResolution: ts.ModuleResolutionKind.NodeNext,
-    });
-    const printer = ts.createPrinter();
-    let printCount = 0;
-    const render = createDeclarationClosureRenderer({
-      program,
-      repoRoot,
-      printer: {
-        ...printer,
-        printNode(...args: Parameters<typeof printer.printNode>) {
-          printCount += 1;
-          return printer.printNode(...args);
-        },
+    const configFileName = path.join(repoRoot, "tsconfig.json");
+    using native = nativeTypeScript.createNativeTypeScriptProject({
+      cwd: repoRoot,
+      configFileName,
+      files: {
+        [configFileName]: JSON.stringify({
+          compilerOptions: { target: "esnext", module: "nodenext", moduleResolution: "nodenext" },
+          files,
+        }),
       },
+    });
+    const { program } = native.project;
+    const printer = native.project.emitter;
+    // Materialize the native API's instance-cached method before Vitest wraps it.
+    void printer.printNode;
+    const print = vi.spyOn(printer, "printNode");
+    const render = createDeclarationClosureRenderer({
+      project: native.project,
+      sourceProgram: program,
+      emittedSources: new Set(),
+      repoRoot,
     });
     const first = render(program.getSourceFile(files[0]!)!, "C0");
     const second = render(program.getSourceFile(files[3]!)!, "C3");
@@ -680,7 +833,7 @@ describe("Plugin SDK API baseline", () => {
     );
     expect(second).toEqual(first);
     // A dense cycle previously printed 3,914 declarations for these two roots.
-    expect(printCount).toBeLessThan(100);
+    expect(print.mock.calls.length).toBeLessThan(100);
   });
 
   it("keeps cycle members complete across cached export walks", async () => {

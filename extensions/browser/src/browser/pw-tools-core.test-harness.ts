@@ -163,6 +163,8 @@ export function getPwToolsCoreNavigationGuardMocks() {
 /** Sets the current mocked page returned by getPageForTargetId. */
 export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) {
   if (page) {
+    const context = {};
+    page.context ??= vi.fn(() => context);
     page.on ??= vi.fn();
     page.off ??= vi.fn();
     page.url ??= vi.fn(() => "about:blank");

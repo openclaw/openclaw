@@ -410,7 +410,7 @@ test.each([false, true])(
   },
 );
 
-test("a queued writer rejected by cleanup never runs after release", async () => {
+test("session cleanup joins accepted queued writes before returning", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = { agentId: "main", env: state.env };
     const release = createDeferredCore();
@@ -419,17 +419,27 @@ test("a queued writer rejected by cleanup never runs after release", async () =>
       async () => await release.promise,
       "session.history.archive-prune",
     );
-    const run = vi.fn(async () => "never");
+    const run = vi.fn(async () => "persisted");
     const second = runExclusiveSqliteSessionWrite(scope, run, "session.maintenance.plan");
-    const rejected = expect(second).rejects.toThrow("SQLite session store queue cleared for test");
-    const drained = drainSessionStoreWriterQueuesForTest();
+    const result = second.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    let joined = false;
+    const drained = drainSessionStoreWriterQueuesForTest().then(() => {
+      joined = true;
+    });
     try {
-      await rejected;
+      await Promise.resolve();
       expect(run).not.toHaveBeenCalled();
+      expect(joined).toBe(false);
+      release.resolve();
+      await drained;
+      expect(run).toHaveBeenCalledOnce();
+      expect(await result).toEqual({ value: "persisted" });
     } finally {
       release.resolve();
       await Promise.allSettled([first, second, drained]);
     }
-    expect(run).not.toHaveBeenCalled();
   });
 });

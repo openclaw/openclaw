@@ -435,7 +435,7 @@ describe("chat pane connection lifecycle", () => {
     const request = vi.fn((method: string) =>
       method === "chat.abort" ? Promise.resolve({ aborted: true }) : new Promise<never>(() => {}),
     );
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = createTestGatewayClient(request);
     const { pane, state } = createTestChatPane({ client });
     const sessionKey = "agent:main";
     pane.context = {
@@ -469,7 +469,11 @@ describe("chat pane connection lifecycle", () => {
       hello: {
         type: "hello-ok",
         protocol: 4,
-        auth: { role: "operator", scopes: ["operator.write"] },
+        auth: {
+          role: "operator",
+          scopes: ["operator.write"],
+          recoveryScope: "test-recovery-scope",
+        },
         features: { methods: ["chat.abort"] },
       },
     });

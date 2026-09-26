@@ -345,7 +345,7 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     `;
   }
 
-  private renderContent() {
+  override render() {
     switch (this.variant) {
       case "board":
         return html`
@@ -437,10 +437,6 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
           <div class="rows">${this.rows(5)}</div>
         `;
     }
-  }
-
-  override render() {
-    return html`${this.renderContent()}`;
   }
 }
 

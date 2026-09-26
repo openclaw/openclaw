@@ -1,9 +1,14 @@
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 
 export function readChatSessionActionAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> | null | undefined,
   hasLocalRun: boolean,
+  options: {
+    session?: Pick<GatewaySessionRow, "sharingRole">;
+    sessionAbortable?: boolean;
+  } = {},
 ) {
   return {
     compact: readSessionMethodAccess(snapshot, {
@@ -11,8 +16,10 @@ export function readChatSessionActionAccess(
       requiredScope: "operator.admin",
     }),
     abort: readSessionMethodAccess(snapshot, {
-      method: hasLocalRun ? "chat.abort" : "sessions.abort",
+      method: hasLocalRun && !options.sessionAbortable ? "chat.abort" : "sessions.abort",
       requiredScope: "operator.write",
+      sessionScope: true,
+      session: options.session,
     }),
     rewind: readSessionMethodAccess(snapshot, {
       method: "sessions.rewind",

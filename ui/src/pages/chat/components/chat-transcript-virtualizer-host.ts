@@ -80,7 +80,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   private implicitEndAnchorPending: boolean;
   private readonly endAnchor = new TranscriptEndAnchor();
   private readonly followEnd = () => this.scrollToEnd({ source: "auto", behavior: "auto" });
-  private endAnchorFrame: number | null = null;
   private pendingScrollFrame: number | null = null;
   private readonly scrollRestoreHost: TranscriptScrollRestoreHost;
   private readonly messageReveal = new ChatMessageReveal();
@@ -204,6 +203,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           if (instance.scrollElement !== this.scrollElement || !rect.width || !rect.height) {
             return;
           }
+          this.commitComposerResize(true);
           const previousHeight = this.observedHeight;
           const widthChanged = this.observedWidth !== null && this.observedWidth !== rect.width;
           const heightChanged = previousHeight !== null && previousHeight !== rect.height;
@@ -236,7 +236,11 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
             isProgrammaticScroll: () => this.isProgrammaticScroll,
             cancelScroll: () => this.cancelScroll(),
             requestUpdate: () => this.host.requestUpdate(),
+            onComposerInput: () => this.endAnchor.invalidateComposerResize(this.canAutoFollow()),
+            onComposerLayout: (changed) => this.commitComposerResize(changed),
+            cancelComposerResize: () => this.endAnchor.cancelComposerResize(),
             onReaderScroll: (towardEnd) => {
+              this.endAnchor.releaseCommit();
               this.callbacks.onReaderScroll?.(towardEnd);
               // Downward input at the physical end may not emit a scroll event.
               // Remember that edge before late content measurement can move it.
@@ -342,7 +346,32 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
   }
 
+  private commitComposerResize(changed: boolean): void {
+    const correction = this.endAnchor.commitComposerResize(
+      this.scrollElement,
+      changed,
+      this.canAutoFollow(),
+      this.offsetState.pendingScrollOffset !== null ||
+        this.offsetState.pendingInteractionAnchor !== null ||
+        (this.offsetState.scrollCommand !== null &&
+          this.offsetState.scrollCommand.target !== "end") ||
+        this.offsetState.touching ||
+        this.offsetState.touchScrolling,
+    );
+    if (correction?.resumeFollow) {
+      this.callbacks.onReaderScroll?.(true);
+    }
+  }
+
+  prepareUpdate(): void {
+    // Native editing can precede a structural footer commit in this task.
+    // Settle its known displacement before checking for reader departure.
+    this.commitComposerResize(true);
+    this.endAnchor.prepareUpdate(this.scrollElement, this.canAutoFollow(), this.offsetState);
+  }
+
   update(): void {
+    this.endAnchor.commitUpdate(this.scrollElement);
     this.entryAnimations.didCommit();
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
@@ -363,16 +392,12 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
     applyPendingScrollOffset(this.scrollRestoreHost);
     // Disclosure measurement owns this commit; its sizer lands on the next update.
-    if (interactionResizePending && this.endAnchorFrame !== null) {
-      cancelAnimationFrame(this.endAnchorFrame);
-      this.endAnchorFrame = null;
-    }
-    if (!interactionResizePending && this.connected && this.endAnchorFrame === null) {
-      // Nested Lit children still change layout after the pane's commit.
-      // Coalesce end-follow after those commits using the current reader's anchor.
-      this.endAnchorFrame = requestAnimationFrame(() => {
-        this.endAnchorFrame = null;
+    if (interactionResizePending) {
+      this.endAnchor.cancelReconcile();
+    } else if (this.connected) {
+      this.endAnchor.scheduleReconcile(() => {
         if (this.connected && !this.offsetState.pendingInteractionAnchor) {
+          this.commitComposerResize(true);
           this.reconcileImplicitEndAnchor();
           this.endAnchor.reconcile(
             this.scrollElement,
@@ -388,6 +413,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   disconnect(): void {
+    this.endAnchor.disconnect();
     this.entryAnimations.disconnect();
     // Clear retires bodies and pending loads; replacement invalidates guarded
     // rows when this presentation reconnects with the same source messages.
@@ -400,10 +426,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.offsetState.touchScrolling = false;
     this.renderPreviousRows = null;
     this.messageReveal.clear();
-    if (this.endAnchorFrame !== null) {
-      cancelAnimationFrame(this.endAnchorFrame);
-      this.endAnchorFrame = null;
-    }
     if (this.pendingRowMeasureFrame !== null) {
       cancelAnimationFrame(this.pendingRowMeasureFrame);
       this.pendingRowMeasureFrame = null;
@@ -561,7 +583,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   get isMaintenanceScroll(): boolean {
-    return isTranscriptMaintenanceScroll(this.offsetState, this.scrollElement);
+    return (
+      (this.endAnchor.isResizingCommit(this.scrollElement) && this.canAutoFollow()) ||
+      isTranscriptMaintenanceScroll(this.offsetState, this.scrollElement)
+    );
   }
 
   get isProgrammaticScroll(): boolean {

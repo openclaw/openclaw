@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -8,6 +9,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
@@ -25,12 +27,12 @@ const roots = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function activePlacement(database: OpenClawStateDatabase, sessionId: string) {
+async function activePlacement(database: OpenClawStateDatabase, sessionId: string) {
   const store = createWorkerSessionPlacementStore({ database, now: () => 1000 });
   const identity = { sessionId, agentId: "main", sessionKey: `agent:main:${sessionId}` };
   const environmentId = `environment-${sessionId}`;
   seedAttachedPlacementEnvironment(database, { environmentId, sessionId, ownerEpoch: 7 });
-  let placement = store.startDispatch(identity);
+  let placement = await store.startDispatch(identity);
   for (const step of [
     { to: "provisioning", patch: { environmentId } },
     { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
@@ -50,9 +52,7 @@ function activePlacement(database: OpenClawStateDatabase, sessionId: string) {
       ...step,
     });
   }
-  if (placement.state !== "active") {
-    throw new Error("Expected an active placement fixture");
-  }
+  assert(placement.state === "active", "Expected an active placement fixture");
   return { store, placement, identity };
 }
 
@@ -62,8 +62,8 @@ describe("worker placement read projection", () => {
     const otherStateDir = roots.make("placement-projection-other-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const database = openOpenClawStateDatabase();
-    const { store, placement, identity } = activePlacement(database, "pending");
-    const claim = store.claimTurn({
+    const { store, placement, identity } = await activePlacement(database, "pending");
+    const claim = await store.claimTurn({
       ...identity,
       owner: {
         kind: "worker",
@@ -78,7 +78,7 @@ describe("worker placement read projection", () => {
     store.recordStagedWorkspaceResult(claim, stagedResultRef);
     store.recordWorkspaceResultConflict(claim, { paths: ["changed.txt"], stagedResultRef });
     const draining = store.startWorkspaceResultDrain(claim);
-    const moving = activePlacement(database, "moving");
+    const moving = await activePlacement(database, "moving");
     const move = moving.store.beginPlacementMove({
       sessionId: moving.placement.sessionId,
       source: {
@@ -90,17 +90,10 @@ describe("worker placement read projection", () => {
     });
     vi.stubEnv("OPENCLAW_STATE_DIR", otherStateDir);
     const other = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
-    other.startDispatch(identity);
+    await other.startDispatch(identity);
     await closeOpenClawStateDatabaseAsync();
-    const native = requireNodeSqlite();
-    const counters = [
-      ...(["prepare", "exec", "close"] as const).map((method) =>
-        vi.spyOn(native.DatabaseSync.prototype, method),
-      ),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const counters = observeMainThreadSql({ includeClose: true });
     try {
       const snapshot = await store.readProjection([
         "pending",
@@ -123,6 +116,9 @@ describe("worker placement read projection", () => {
       expect(snapshot.workspaceResultReconcilingSessionIds).toEqual(
         new Set(["pending", " pending "]),
       );
+      expect(snapshot.workspaceRecoveryPendingSessionIds).toEqual(
+        new Set(["pending", " pending "]),
+      );
       expect(snapshot.environments.get(placement.environmentId)).toEqual({
         environmentId: placement.environmentId,
         providerId: "fake",
@@ -141,9 +137,9 @@ describe("worker placement read projection", () => {
       expect((await store.readProjection(["pending"])).placements.get("pending")?.generation).toBe(
         draining.generation,
       );
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
     } finally {
-      counters.forEach((counter) => counter.mockRestore());
+      counters.restore();
     }
   });
 });

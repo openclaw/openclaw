@@ -76,6 +76,46 @@ export function resolveLocalCheckEnv(env: Env = process.env) {
   };
 }
 
+const withinRoot = (root: string, file: string) => {
+  const relative = path.relative(root, file);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+};
+
+export function createDeclarationInputBoundary(cwd: string) {
+  const declared = path.resolve(cwd);
+  const prefixes = [declared];
+  if (fs.lstatSync(declared).isSymbolicLink()) {
+    prefixes.push(path.resolve(path.dirname(declared), fs.readlinkSync(declared)));
+  }
+  prefixes.push(fs.realpathSync(declared));
+  const root = fs.realpathSync.native(declared);
+  // Runtimes differ on whether realpath preserves a case-only symlink target.
+  // Translate only declared checkout spellings; never canonicalize outside candidates into scope.
+  const resolve = (file: string) => {
+    const absolute = path.resolve(declared, file);
+    const prefix = prefixes.find((candidate) => withinRoot(candidate, absolute));
+    return prefix ? path.resolve(root, path.relative(prefix, absolute)) : absolute;
+  };
+  return {
+    root,
+    resolve,
+    assert(file: string) {
+      const absolute = resolve(file);
+      // Generated declaration IDs do not exist yet, but their source directory does.
+      let existing = absolute;
+      while (!fs.existsSync(existing) && path.dirname(existing) !== existing) {
+        existing = path.dirname(existing);
+      }
+      const real = fs.realpathSync.native(existing);
+      if (!withinRoot(root, absolute) || !withinRoot(root, real)) {
+        const diagnosis = `Keep declaration dependencies and compiler files physically inside ${root}; shared installs and external symlinks are unsupported. Inspect the reported path and dependency links; this error alone does not establish a missing or undeclared dependency.`;
+        throw new Error(`Declaration input escapes checkout: ${absolute} -> ${real}. ${diagnosis}`);
+      }
+      return absolute;
+    },
+  };
+}
+
 /** Resolve a repo tool from this worktree or the primary checkout's installed toolchain. */
 export function resolveRepoToolBinPath(
   toolName: string,
@@ -86,17 +126,11 @@ export function resolveRepoToolBinPath(
   }: RepoToolOptions = {},
 ) {
   if (toolName === "tsgo") {
-    // TypeScript 6 owns the in-process compiler API; CLI checks use the stable
-    // native compiler explicitly, independent of either package's tsc bin link.
+    // Resolve this checkout's native compiler independently of the ambient tsc bin link.
     const require = createRequire(import.meta.url);
-    const {
-      createDeclarationInputBoundary,
-    }: typeof import("./tsdown-declaration-boundary.mts") = require("./tsdown-declaration-boundary.mts");
     const inputs = createDeclarationInputBoundary(cwd);
     const fromCheckout = createRequire(path.join(inputs.root, "package.json"));
-    const nativeRoot = path.dirname(
-      inputs.assert(fromCheckout.resolve("typescript-native/package.json")),
-    );
+    const nativeRoot = path.dirname(inputs.assert(fromCheckout.resolve("typescript/package.json")));
     const getExePath: { default: () => string } = require(
       inputs.assert(path.join(nativeRoot, "lib/getExePath.js")),
     );

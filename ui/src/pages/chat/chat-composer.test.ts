@@ -256,7 +256,7 @@ describe("renderChatComposer controls", () => {
     },
   );
 
-  it("keeps composing enabled and explains the conversation outbox while offline", () => {
+  it("keeps offline composing quiet until the conversation has queued messages", () => {
     const { container } = renderComposer({
       offline: true,
       queuedOutboxCount: 3,
@@ -277,11 +277,9 @@ describe("renderChatComposer controls", () => {
     expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
 
     const empty = renderComposer({ offline: true, queuedOutboxCount: 0 });
-    expect(
-      empty.container.querySelector(".agent-chat__composer-status-band")?.textContent?.trim(),
-    ).toBe(
-      "You can keep writing. Send when you’re ready to add a message to this conversation’s outbox.",
-    );
+    expect(empty.container.querySelector(".agent-chat__composer-status-band")).toBeNull();
+    expect(empty.container.querySelector(".chat-queue")).toBeNull();
+    expect(empty.container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
 
     const online = renderComposer({ queuedOutboxCount: 3 });
     expect(online.container.querySelector(".agent-chat__composer-status-band")).toBeNull();

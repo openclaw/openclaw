@@ -23,8 +23,10 @@ import {
 } from "./workspace-skill-sources.js";
 
 const library = vi.hoisted(() => ({ entries: [] as SkillEntry[] }));
-vi.mock("../library/selection.js", () => ({
+vi.mock("../library/selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../library/selection.js")>()),
   loadSkillLibrarySelection: () => library.entries,
+  prepareSkillLibrarySelection: async () => library.entries,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

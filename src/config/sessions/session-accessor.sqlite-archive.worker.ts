@@ -13,7 +13,9 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -26,6 +28,7 @@ import type {
   SqliteArchiveSessionRequest,
   SqliteArchiveSessionResponse,
   SessionTranscriptMaintenanceSizingInput,
+  TranscriptArchivePageResult,
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
   TranscriptArchivePublishWorkerMessage,
@@ -84,11 +87,15 @@ function parsePublishWorkerPlans(value: unknown): TranscriptArchivePublishPlan[]
       typeof plan.archiveDirectory !== "string" ||
       typeof plan.databasePath !== "string" ||
       typeof plan.generation !== "string" ||
-      typeof plan.sessionId !== "string"
+      typeof plan.sessionId !== "string" ||
+      (plan.databaseIdentity !== undefined && typeof plan.databaseIdentity !== "string")
     ) {
       return undefined;
     }
     parsed.push({
+      ...(typeof plan.databaseIdentity === "string"
+        ? { databaseIdentity: plan.databaseIdentity }
+        : {}),
       agentId: plan.agentId,
       archiveDirectory: plan.archiveDirectory,
       databasePath: plan.databasePath,
@@ -321,29 +328,21 @@ export async function materializeTranscriptArchiveInWorker(
   })}.${randomUUID()}.jsonl-stage`;
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
-      (database) => {
-        let transactionOpen = false;
-        try {
-          // sqlite-allow-raw: metadata and transcript rows must come from one read snapshot.
-          database.db.exec("BEGIN");
-          transactionOpen = true;
-          const snapshot = readSessionStateDeleteSnapshot(database.db, plan.sessionId);
-          if (!sqliteSessionStateDeleteSnapshotsEqual(snapshot, plan.snapshot)) {
-            throw new Error(
-              `SQLite session state changed before archive materialization for ${plan.sessionId}`,
-            );
-          }
-          const rowCount = stageTranscriptArchiveContent(database.db, plan.sessionId, stagedPath);
-          database.db.exec("COMMIT"); // sqlite-allow-raw: closes the consistent read snapshot.
-          transactionOpen = false;
-          return { rowCount, snapshot };
-        } catch (error) {
-          if (transactionOpen) {
-            database.db.exec("ROLLBACK"); // sqlite-allow-raw: releases a failed read snapshot.
-          }
-          throw error;
-        }
-      },
+      (database) =>
+        runSqliteDeferredTransactionSync(
+          database.db,
+          () => {
+            const snapshot = readSessionStateDeleteSnapshot(database.db, plan.sessionId);
+            if (!sqliteSessionStateDeleteSnapshotsEqual(snapshot, plan.snapshot)) {
+              throw new Error(
+                `SQLite session state changed before archive materialization for ${plan.sessionId}`,
+              );
+            }
+            const rowCount = stageTranscriptArchiveContent(database.db, plan.sessionId, stagedPath);
+            return { rowCount, snapshot };
+          },
+          { databaseLabel: database.path, operationLabel: "session.archive.materialize" },
+        ),
       { agentId: plan.agentId, path: plan.databasePath, env },
     );
     if (!opened.found) {
@@ -380,6 +379,12 @@ export function publishTranscriptArchiveInWorker(
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) => {
+        if (
+          plan.databaseIdentity !== undefined &&
+          readOpenClawAgentDatabaseIdentity(database).identity !== plan.databaseIdentity
+        ) {
+          throw new Error("SQLite archive publication database was replaced");
+        }
         const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
         return executeSqliteQuerySync(
           database.db,
@@ -489,6 +494,14 @@ async function runArchiveSession(
         settled: true,
         results: plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
       };
+    } else if (request.operation === "read-page") {
+      const { readTranscriptArchivePageInWorker } =
+        await import("./session-accessor.sqlite-archive-read.js");
+      const results: Array<TranscriptArchivePageResult | undefined> = [];
+      for (const plan of request.plans) {
+        results.push(await readTranscriptArchivePageInWorker(plan, env));
+      }
+      response = { type: "page-read", operationId, settled: true, results };
     } else if (request.operation === "read-final") {
       const { readTranscriptArchiveFinalInWorker } =
         await import("./session-accessor.sqlite-archive-read.js");

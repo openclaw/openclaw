@@ -34,6 +34,7 @@ import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-fil
 import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
+import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./list-test-files.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
@@ -179,10 +180,6 @@ function isSkippedTrackedTestFile(relativePath: string) {
 }
 
 let trackedRepoTestFiles: string[] | null | undefined;
-// Large checkouts exceed Node's 1 MiB spawnSync default. Preserve the Git inventory path;
-// ENOBUFS would otherwise trigger expensive extension-directory walks.
-export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
-
 export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
@@ -230,7 +227,7 @@ function listTrackedTestFiles(rootPath: string) {
   return trackedFiles.filter((file) => file.startsWith(rootPrefix));
 }
 
-function listFilesystemTestFiles(rootPath: string) {
+function listFilesystemTestFiles(rootPath: string, cwd = repoRoot) {
   const files = [];
   const stack = [rootPath];
 
@@ -241,7 +238,7 @@ function listFilesystemTestFiles(rootPath: string) {
     }
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
-      if (isPluginControlUiPath(normalizeRelative(path.relative(repoRoot, fullPath)))) {
+      if (isPluginControlUiPath(normalizeRelative(path.relative(cwd, fullPath)))) {
         continue;
       }
       if (entry.isDirectory()) {
@@ -252,7 +249,7 @@ function listFilesystemTestFiles(rootPath: string) {
         continue;
       }
       if (entry.isFile() && (fullPath.endsWith(".test.ts") || fullPath.endsWith(".test.tsx"))) {
-        files.push(normalizeRelative(path.relative(repoRoot, fullPath)));
+        files.push(normalizeRelative(path.relative(cwd, fullPath)));
       }
     }
   }
@@ -261,12 +258,12 @@ function listFilesystemTestFiles(rootPath: string) {
 }
 
 /** List working-tree test files for extension roots, including new untracked tests. */
-export function listExtensionTestFilesForRoots(roots: string[]) {
+export function listExtensionTestFilesForRoots(roots: string[], cwd = repoRoot) {
   const files = roots.flatMap((root) => {
-    const rootPath = path.join(repoRoot, root);
+    const rootPath = path.join(cwd, root);
     return fs.existsSync(rootPath) && fs.statSync(rootPath).isFile()
       ? [root]
-      : listFilesystemTestFiles(rootPath);
+      : listFilesystemTestFiles(rootPath, cwd);
   });
   return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
 }
@@ -395,13 +392,14 @@ export function createExtensionTestProcessTargetChunks(
   config: string,
   roots: string[],
   vitestArgs: string[] = [],
+  cwd = repoRoot,
 ) {
   if (!shouldSplitExtensionTestProcesses(config, vitestArgs)) {
     return [roots];
   }
   // Explicit file targets replace Vitest's root discovery, so inventory the working tree.
   // Otherwise a newly authored untracked test would silently disappear from a broad run.
-  const discoveredFiles = listExtensionTestFilesForRoots(roots);
+  const discoveredFiles = listExtensionTestFilesForRoots(roots, cwd);
   if (discoveredFiles.length === 0) {
     return [roots];
   }

@@ -41,6 +41,10 @@ import {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
+import type { BrowserEngineId } from "./engines/types.js";
+import type { ManagedBrowserHeadlessSource, ResolvedBrowserProfile } from "./profile.types.js";
+export type { ResolvedBrowserProfile } from "./profile.types.js";
 
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -111,24 +115,6 @@ export type ResolvedBrowserTabCleanupConfig = {
   sweepMinutes: number;
 };
 
-/** Runtime browser profile settings resolved from global and profile config. */
-export type ResolvedBrowserProfile = {
-  name: string;
-  cdpPort: number;
-  cdpUrl: string;
-  cdpHost: string;
-  cdpIsLoopback: boolean;
-  userDataDir?: string;
-  mcpCommand?: string;
-  mcpArgs?: string[];
-  color: string;
-  driver: "openclaw" | "existing-session" | "extension";
-  executablePath?: string;
-  headless: boolean;
-  headlessSource?: "profile" | "config" | "default";
-  attachOnly: boolean;
-};
-
 /** Read a named browser profile without falling through to inherited object keys. */
 export function getOwnBrowserProfile<T>(
   profiles: Record<string, T> | undefined,
@@ -149,15 +135,6 @@ const EXTENSION_RELAY_PORT_OFFSET = 8;
 const EXTENSION_RELAY_CDP_USER = "openclaw-internal";
 /** Environment variable that overrides managed Chrome headless mode. */
 const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
-
-/** Source that determined managed Chrome headless mode. */
-export type ManagedBrowserHeadlessSource =
-  | "request"
-  | "env"
-  | "profile"
-  | "config"
-  | "linux-display-fallback"
-  | "default";
 
 type ManagedBrowserHeadlessMode = {
   headless: boolean;
@@ -223,7 +200,12 @@ function hasLinuxDisplay(env: NodeJS.ProcessEnv): boolean {
 }
 
 export function isLocalManagedProfile(profile: ResolvedBrowserProfile): boolean {
-  return profile.driver === "openclaw" && profile.cdpIsLoopback && !profile.attachOnly;
+  return (
+    resolveBrowserEngine(profile.engine).descriptor.launchMode !== "attach-only" &&
+    profile.driver === "openclaw" &&
+    profile.cdpIsLoopback &&
+    !profile.attachOnly
+  );
 }
 
 function resolveBrowserTabCleanupConfig(
@@ -238,8 +220,6 @@ function resolveBrowserTabCleanupConfig(
   };
 }
 
-const normalizeStringList = normalizeOptionalTrimmedStringList;
-
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
@@ -248,7 +228,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const resolved = mergeSsrFPolicies({
     ...rawPolicy,
-    allowedHostnames: normalizeStringList(rawPolicy?.allowedHostnames),
+    allowedHostnames: normalizeOptionalTrimmedStringList(rawPolicy?.allowedHostnames),
   });
   if (resolved && hasExplicitPrivateSetting) {
     delete resolved.allowPrivateNetwork;
@@ -303,6 +283,28 @@ function resolveExtensionRelayPorts(
   return ports;
 }
 
+function assertDedicatedEngineEndpoints(profiles: Record<string, BrowserProfileConfig>): void {
+  const endpoints = new Map<string, { name: string; engine?: BrowserEngineId }>();
+  for (const [name, profile] of Object.entries(profiles)) {
+    const endpoint = profile.cdpUrl ? URL.parse(profile.cdpUrl) : null;
+    if (!endpoint) {
+      continue;
+    }
+    const key = endpoint.toString().replace(/\/$/, "");
+    const previous = endpoints.get(key);
+    const adapter = resolveBrowserEngine(profile.engine);
+    const dedicated = adapter.requiresDedicatedEndpoint
+      ? adapter
+      : previous && resolveBrowserEngine(previous.engine);
+    if (previous && dedicated?.requiresDedicatedEndpoint) {
+      throw new Error(
+        `${dedicated.descriptor.label} requires a dedicated CDP endpoint; profiles "${previous.name}" and "${name}" share one.`,
+      );
+    }
+    endpoints.set(key, { name, engine: profile.engine });
+  }
+}
+
 /** Resolve raw browser config into runtime browser defaults. */
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
@@ -312,11 +314,6 @@ export function resolveBrowserConfig(
   const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
   const gatewayPort = resolveGatewayPort(rootConfig);
   const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
-  const remoteCdpTimeoutMs = DEFAULT_BROWSER_REMOTE_CDP_TIMEOUT_MS;
-  const remoteCdpHandshakeTimeoutMs = DEFAULT_BROWSER_REMOTE_CDP_HANDSHAKE_TIMEOUT_MS;
-  const localLaunchTimeoutMs = DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS;
-  const localCdpReadyTimeoutMs = DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS;
-  const actionTimeoutMs = DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
   const cdpPortRangeStart = derivedCdpRange.start;
@@ -379,6 +376,8 @@ export function resolveBrowserConfig(
       )
     : [];
 
+  assertDedicatedEngineEndpoints(profiles);
+
   return {
     enabled,
     evaluateEnabled,
@@ -388,11 +387,11 @@ export function resolveBrowserConfig(
     cdpProtocol,
     cdpHost: cdpInfo.parsed.hostname,
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
-    remoteCdpTimeoutMs,
-    remoteCdpHandshakeTimeoutMs,
-    localLaunchTimeoutMs,
-    localCdpReadyTimeoutMs,
-    actionTimeoutMs,
+    remoteCdpTimeoutMs: DEFAULT_BROWSER_REMOTE_CDP_TIMEOUT_MS,
+    remoteCdpHandshakeTimeoutMs: DEFAULT_BROWSER_REMOTE_CDP_HANDSHAKE_TIMEOUT_MS,
+    localLaunchTimeoutMs: DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS,
+    localCdpReadyTimeoutMs: DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS,
+    actionTimeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath,
     headless,
@@ -435,6 +434,12 @@ export function resolveProfile(
     return null;
   }
 
+  const adapter = resolveBrowserEngine(profile.engine);
+  const engine = adapter.descriptor.id;
+  if (adapter.resolveExternalProfile) {
+    return adapter.resolveExternalProfile(profileName, profile);
+  }
+
   const rawProfileUrl = profile.cdpUrl?.trim() ?? "";
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
@@ -465,6 +470,7 @@ export function resolveProfile(
       : `http://127.0.0.1:${relayPort}`;
     return {
       name: profileName,
+      engine,
       cdpPort: relayPort,
       cdpUrl: relayCdpUrl,
       cdpHost: "127.0.0.1",
@@ -479,13 +485,14 @@ export function resolveProfile(
   }
 
   if (driver === "existing-session") {
-    const mcpArgs = normalizeStringList(profile.mcpArgs) ?? undefined;
+    const mcpArgs = normalizeOptionalTrimmedStringList(profile.mcpArgs) ?? undefined;
     const existingSessionCdp = normalizeExistingSessionCdpUrl(
       normalizeChromeMcpOptions({ ...profile, mcpArgs }).browserUrl,
       profileName,
     );
     return {
       name: profileName,
+      engine,
       cdpPort: 0,
       cdpUrl: existingSessionCdp?.cdpUrl ?? "",
       cdpHost: existingSessionCdp?.cdpHost ?? "",
@@ -537,6 +544,7 @@ export function resolveProfile(
 
   return {
     name: profileName,
+    engine,
     cdpPort,
     cdpUrl,
     cdpHost,

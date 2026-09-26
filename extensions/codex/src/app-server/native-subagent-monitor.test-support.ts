@@ -12,11 +12,17 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { onTestFinished, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import {
   createCodexNativeSubagentHistoryOwner,
   type CodexNativeSubagentHistoryOwner,
 } from "./native-subagent-history-owner.js";
+import type {
+  NativeModelSource,
+  NativeModelSourceCapture,
+} from "./native-subagent-monitor-types.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import { CodexNativeSubagentRecoveryCoordinator } from "./native-subagent-recovery-coordinator.js";
 import type {
   CodexAppServerRequestResult,
   CodexServerNotification,
@@ -72,6 +78,49 @@ export const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Moni
 export const registerCodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register;
 type CodexNativeSubagentMonitorInstance = InstanceType<typeof CodexNativeSubagentMonitor>;
 
+/** Join real native persistence and recovery before asserting outcomes or releasing fixture stores. */
+export function captureNativeSubagentMonitorWork() {
+  const completion = vi.spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending");
+  const recovery = vi.spyOn(
+    CodexNativeSubagentRecoveryCoordinator.prototype,
+    "reconcileTaskCandidate",
+  );
+  let completed = 0;
+  let reconciled = 0;
+  return {
+    async settle(): Promise<unknown[]> {
+      const failures: unknown[] = [];
+      while (
+        completed < completion.mock.results.length ||
+        reconciled < recovery.mock.results.length
+      ) {
+        const work = [
+          ...completion.mock.results.slice(completed),
+          ...recovery.mock.results.slice(reconciled),
+        ];
+        completed = completion.mock.results.length;
+        reconciled = recovery.mock.results.length;
+        for (const result of work) {
+          if (result.type === "throw") {
+            failures.push(result.value);
+          }
+        }
+        const results = await Promise.allSettled(
+          work.filter((result) => result.type === "return").map((result) => result.value),
+        );
+        failures.push(
+          ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        );
+      }
+      return failures;
+    },
+    [Symbol.dispose]() {
+      recovery.mockRestore();
+      completion.mockRestore();
+    },
+  };
+}
+
 export function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };
   type ThreadTurnsParams = { threadId?: string };
@@ -84,6 +133,9 @@ export function createClient() {
   const threadTurns = new Map<string, JsonValue | Error>();
   let loadedThreads: readonly string[] | undefined;
   const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
+    if (method === "thread/unsubscribe") {
+      return {};
+    }
     if (method === "thread/loaded/list") {
       if (!loadedThreads) {
         throw new Error("loaded threads not configured");
@@ -207,7 +259,7 @@ export function createRuntime() {
   return {
     ...taskRuntime,
     captureAgentHarnessCompletionCustody: vi.fn<typeof captureAgentHarnessCompletionCustody>(
-      () => undefined,
+      async () => undefined,
     ),
     createAgentHarnessTaskEventSink: vi.fn<typeof createAgentHarnessTaskEventSink>(() => vi.fn()),
     createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
@@ -329,7 +381,7 @@ export async function registerDetachedChild(
   client: ReturnType<typeof createClient>,
   monitor: CodexNativeSubagentMonitorInstance,
 ): Promise<void> {
-  const owner = registerParent(monitor);
+  const owner = await registerParent(monitor);
   await notifyChildStarted(client);
   await owner.unregister();
 }
@@ -561,4 +613,38 @@ export function taskRecord(params: {
     endedAt: params.endedAt,
     ...(params.historyOwner ? { detail: { nativeHistory: params.historyOwner } } : {}),
   };
+}
+
+export function createNativeModelSourceFixture(models: readonly string[]): NativeModelSource {
+  let released = false;
+  const assertCurrent = () => {
+    if (released) {
+      throw new Error("Test model source was released");
+    }
+  };
+  return {
+    assertCurrent,
+    sourceIdentity: {},
+    modelPolicyRequired: true,
+    bindModelExecution: (model) => {
+      assertCurrent();
+      if (model?.provider !== "test-provider" || !models.includes(model.model)) {
+        throw new Error("Test source does not admit this model");
+      }
+      return { signal: new AbortController().signal, assertCurrent, release: () => {} };
+    },
+    release: vi.fn(() => {
+      released = true;
+    }),
+  };
+}
+
+export function requireNativeModelSourceCapture(
+  capture: NativeModelSourceCapture | undefined,
+): NativeModelSourceCapture {
+  if (!capture) {
+    throw new Error("Expected admitted native model source");
+  }
+  onTestFinished(capture.release);
+  return capture;
 }

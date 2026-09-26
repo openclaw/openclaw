@@ -2839,7 +2839,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(sourceReplySchema.properties).toMatchObject({
       final: {
         type: "boolean",
-        description: expect.stringContaining("Ignored for other sends"),
+        description: expect.stringContaining("For react, set true only when"),
       },
     });
 

@@ -24,6 +24,7 @@ import {
   StateDatabaseCoordinatorContentionError,
   StateSchemaMutationConflictError,
 } from "./state-database-coordinator-errors.js";
+import { readStateDatabaseCoordinatorOwner } from "./state-database-coordinator-owner.js";
 import {
   resolveLifecycleCoordinatorBase,
   buildLifecycleCoordinatorPath,
@@ -120,18 +121,23 @@ export function resolveStateDatabaseCoordinatorPath(params: {
   return resolveLifecycleCoordinatorPath("state-lifecycle", params);
 }
 
+function resolveCoordinatorBase(
+  params: Pick<CoordinatorOptions, "databasePath" | "runtimeDirectory" | "uid">,
+) {
+  return resolveLifecycleCoordinatorBase({
+    databasePath: params.databasePath,
+    runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
+    uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
+  });
+}
+
 function acquireLifecycleCoordinator(
   family: CoordinatorFamily,
   params: CoordinatorOptions,
   { keepAlive = false, gatewayOwner = false }: { keepAlive?: boolean; gatewayOwner?: boolean } = {},
 ): StateDatabaseCoordinatorLease {
   const coordinatorPath =
-    params.coordinatorPath ??
-    resolveLifecycleCoordinatorPath(family, {
-      databasePath: params.databasePath,
-      runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
-      uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
-    });
+    params.coordinatorPath ?? buildLifecycleCoordinatorPath(family, resolveCoordinatorBase(params));
   if (family === "state-lifecycle") {
     const delegate = acquireDelegatedLifecycleCoordinator(coordinatorPath);
     if (delegate) {
@@ -154,7 +160,10 @@ function acquireLifecycleCoordinator(
       keepAlive,
     });
     if (!coordinator) {
-      throw new StateDatabaseCoordinatorContentionError(family);
+      throw new StateDatabaseCoordinatorContentionError(
+        family,
+        readStateDatabaseCoordinatorOwner(coordinatorPath, family),
+      );
     }
     held = {
       coordinator,
@@ -257,11 +266,7 @@ type GatewaySchemaFenceDelegateParams = Pick<
 function resolveGatewaySchemaFencePath(
   params: Pick<CoordinatorOptions, "databasePath" | "runtimeDirectory" | "uid">,
 ): string {
-  return resolveLifecycleCoordinatorPath("gateway-lifecycle", {
-    databasePath: params.databasePath,
-    runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
-    uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
-  });
+  return buildLifecycleCoordinatorPath("gateway-lifecycle", resolveCoordinatorBase(params));
 }
 
 /** Legacy cleanup must exclude new admission without borrowing a process-local owner. */
@@ -356,11 +361,21 @@ export function tryCreateStateLifecycleDelegate(
   if (heldCoordinators.size === 0) {
     return undefined;
   }
-  const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-    databasePath: params.databasePath,
-    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-    uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-  });
+  let hasLifecycleOwner = false;
+  for (const pathname of heldCoordinators.keys()) {
+    // Explicit coordinator paths can cross families; the derived delegate path cannot.
+    if (path.basename(pathname).startsWith("state-lifecycle.")) {
+      hasLifecycleOwner = true;
+      break;
+    }
+  }
+  if (!hasLifecycleOwner) {
+    return undefined;
+  }
+  const coordinatorPath = buildLifecycleCoordinatorPath(
+    "state-lifecycle",
+    resolveCoordinatorBase({ databasePath: params.databasePath }),
+  );
   if (!heldCoordinators.has(coordinatorPath)) {
     return undefined;
   }
@@ -382,22 +397,20 @@ export async function attachStateLifecycleDelegate(
   port: MessagePort,
   params: GatewaySchemaFenceDelegateParams,
 ) {
-  const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-    databasePath: params.databasePath,
-    runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
-    uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
-  });
+  const coordinatorPath = buildLifecycleCoordinatorPath(
+    "state-lifecycle",
+    resolveCoordinatorBase(params),
+  );
   return attachLifecycleCoordinatorDelegate(port, { actorId: params.actorId, coordinatorPath });
 }
 
 /** Borrow only a coordinator already owned by this process. The returned
  * reference must remain held until the participating worker has exited. */
 export function retainHeldStateDatabaseCoordinator(databasePath: string) {
-  const pathname = resolveStateDatabaseCoordinatorPath({
-    databasePath,
-    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-    uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-  });
+  const pathname = buildLifecycleCoordinatorPath(
+    "state-lifecycle",
+    resolveCoordinatorBase({ databasePath }),
+  );
   return heldCoordinators.has(pathname)
     ? acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 })
     : undefined;
@@ -415,11 +428,7 @@ export function acquireStateDatabaseCoordinator(params: CoordinatorOptions) {
   const keepAlive = shouldKeepStateCoordinatorAlive(params);
   // Lifecycle ownership is reentrant for nested transactions. File publication
   // is not: even this process must refuse before ownership probes touch SQLite.
-  const base = resolveLifecycleCoordinatorBase({
-    databasePath: params.databasePath,
-    runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
-    uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
-  });
+  const base = resolveCoordinatorBase(params);
   const handlesPath = buildLifecycleCoordinatorPath("state-handles", base);
   const writeScope = canonicalWriteScopes.getStore()?.get(handlesPath);
   if (writeScope) {
@@ -480,11 +489,7 @@ export function withStateSchemaFence<T>(
 function resolveStateDatabaseHandleReadContext(params: CoordinatorOptions) {
   const pathname =
     params.coordinatorPath ??
-    resolveLifecycleCoordinatorPath("state-handles", {
-      databasePath: params.databasePath,
-      runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
-      uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
-    });
+    buildLifecycleCoordinatorPath("state-handles", resolveCoordinatorBase(params));
   const writeScope = canonicalWriteScopes.getStore()?.get(pathname);
   if (writeScope) {
     if (!writeScope.active) {
@@ -522,7 +527,10 @@ export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
       keepAlive: shouldKeepStateCoordinatorAlive(params),
     });
     if (!coordinator) {
-      throw new StateDatabaseCoordinatorContentionError("state-handles");
+      throw new StateDatabaseCoordinatorContentionError(
+        "state-handles",
+        readStateDatabaseCoordinatorOwner(pathname, "state-handles"),
+      );
     }
     return coordinator;
   });
@@ -615,17 +623,13 @@ export function acquireStateDatabaseHandleExclusion(params: CoordinatorOptions) 
 }
 
 function resolveSourceScopePath(databasePath: string): string {
-  return resolveLifecycleCoordinatorPath("state-handles", {
-    databasePath,
-    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-    uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-  });
+  return buildLifecycleCoordinatorPath("state-handles", resolveCoordinatorBase({ databasePath }));
 }
 
 /** Only a live process-local exclusion owner may copy its already-drained source. */
 export function hasStateDatabaseSourceExclusion(databasePath: string): boolean {
-  const pathname = resolveSourceScopePath(databasePath);
-  const scope = sourceReadScopes.getStore()?.get(pathname);
+  const scopes = sourceReadScopes.getStore();
+  const scope = scopes?.get(resolveSourceScopePath(databasePath));
   if (!scope?.active) {
     return false;
   }
@@ -637,8 +641,12 @@ export function hasStateDatabaseSourceExclusion(databasePath: string): boolean {
 export function prepareStateDatabaseSourceExclusion(
   databasePath: string,
 ): (() => void) | undefined {
+  const scopes = sourceReadScopes.getStore();
+  if (!scopes) {
+    return undefined;
+  }
   const pathname = resolveSourceScopePath(databasePath);
-  const scope = sourceReadScopes.getStore()?.get(pathname);
+  const scope = scopes.get(pathname);
   if (!scope) {
     return undefined;
   }

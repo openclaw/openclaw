@@ -7,7 +7,6 @@ import {
 } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createPluginCliLogger,
   createPluginCliLoadSession,
   type PluginCliLoadSession,
   loadPluginCliRegistrationEntriesWithDefaults,
@@ -15,9 +14,10 @@ import {
 } from "./cli-registry-loader.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
+import { createPluginRuntimeLoaderLogger } from "./runtime/load-context.js";
 export { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
 
-type PluginCliRegistrationMode = "eager" | "lazy";
+type PluginCliRegistrationMode = "eager" | "lazy" | "metadata";
 
 type RegisterPluginCliOptions = {
   mode?: PluginCliRegistrationMode;
@@ -26,7 +26,7 @@ type RegisterPluginCliOptions = {
   session?: PluginCliLoadSession;
 };
 
-const logger = createPluginCliLogger();
+const logger = createPluginRuntimeLoaderLogger();
 
 export async function registerPluginCliCommands(
   program: Command,
@@ -40,18 +40,22 @@ export async function registerPluginCliCommands(
   // Standalone registration shares its caller's generation with later Commander actions.
   const session = options?.session ?? createPluginCliLoadSession(getPluginCache());
   try {
-    const entries = await loadPluginCliRegistrationEntriesWithDefaults({
-      cfg,
-      env,
-      loaderOptions,
-      primaryCommand: primary,
-      session,
-    });
+    const entries = await loadPluginCliRegistrationEntriesWithDefaults(
+      {
+        cfg,
+        env,
+        loaderOptions,
+        primaryCommand: primary,
+        session,
+      },
+      mode === "metadata" ? "metadata" : "runtime",
+    );
 
     const groups = entries.map((entry) => {
       if (
-        mode !== "lazy" ||
-        (primary &&
+        mode === "eager" ||
+        (mode === "lazy" &&
+          primary &&
           (entry.parentPath[0] === primary ||
             entry.names.includes(primary) ||
             entry.placeholders.some((descriptor) => descriptor.name === primary)))
@@ -70,6 +74,7 @@ export async function registerPluginCliCommands(
               cfg,
               env,
               loaderOptions,
+              primaryCommand: mode === "metadata" ? primary : undefined,
               session: deferred,
             });
             const match = fresh.find(
@@ -91,8 +96,9 @@ export async function registerPluginCliCommands(
       });
     });
     await registerPluginCliCommandGroups(program, groups, {
-      mode,
-      primary,
+      mode: mode === "metadata" ? "lazy" : mode,
+      // Parent help needs descriptors; actual expansion retains the fresh loader above.
+      primary: mode === "metadata" ? undefined : primary,
       // Include aliases: alias-only root names (cron|automations, tui|terminal)
       // are owned commands too; a plugin claiming one would crash registration.
       existingCommands: new Set(program.commands.flatMap((cmd) => [cmd.name(), ...cmd.aliases()])),

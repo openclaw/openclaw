@@ -615,7 +615,6 @@ describe("mantis before/after runtime", () => {
         publishMantisRunOutput({
           outputRoot: {
             exists: outputRoot.exists.bind(outputRoot),
-            list: outputRoot.list.bind(outputRoot),
             mkdir: outputRoot.mkdir.bind(outputRoot),
             stat: outputRoot.stat.bind(outputRoot),
             async move(from, to, options) {
@@ -627,8 +626,8 @@ describe("mantis before/after runtime", () => {
                 controller.abort(reason);
               }
             },
-            async remove(relative) {
-              await outputRoot.remove(relative);
+            async remove(relative, options) {
+              await outputRoot.remove(relative, options);
               if (abortAt === "error.txt" && relative === "error.txt") {
                 controller.abort(reason);
               }
@@ -658,6 +657,9 @@ describe("mantis before/after runtime", () => {
 
   it("rolls the complete stable artifact set back when publication fails", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "rollback");
+    const externalDir = path.join(repoRoot, "operator-artifacts");
+    await fs.mkdir(externalDir);
+    await fs.writeFile(path.join(externalDir, "keep.txt"), "external artifact");
     const staging = {
       dir: path.join(outputDir, ".mantis-staged-test"),
       relative: ".mantis-staged-test",
@@ -669,6 +671,11 @@ describe("mantis before/after runtime", () => {
       await fs.mkdir(path.join(staging.dir, lane), { recursive: true });
       await fs.writeFile(path.join(staging.dir, lane, "new.txt"), `new ${lane}`, "utf8");
     }
+    await fs.symlink(
+      externalDir,
+      path.join(staging.dir, "baseline", "external"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     for (const fileName of stableFiles) {
       await fs.writeFile(path.join(outputDir, fileName), `old ${fileName}`, "utf8");
       await fs.writeFile(path.join(staging.dir, fileName), `new ${fileName}`, "utf8");
@@ -681,7 +688,6 @@ describe("mantis before/after runtime", () => {
       publishMantisRunOutput({
         outputRoot: {
           exists: outputRoot.exists.bind(outputRoot),
-          list: outputRoot.list.bind(outputRoot),
           mkdir: outputRoot.mkdir.bind(outputRoot),
           move: vi.fn(async (from, to, options) => {
             if (from === `${staging.relative}/candidate` && to === "candidate") {
@@ -721,6 +727,9 @@ describe("mantis before/after runtime", () => {
     await expect(
       fs.readFile(path.join(outputDir, ".mantis-previous-test", "baseline", "old.txt"), "utf8"),
     ).resolves.toBe("old baseline");
+    await expect(fs.readFile(path.join(externalDir, "keep.txt"), "utf8")).resolves.toBe(
+      "external artifact",
+    );
   });
 
   it("retains the owned worktree and writes diagnostics when cleanup fails", async () => {

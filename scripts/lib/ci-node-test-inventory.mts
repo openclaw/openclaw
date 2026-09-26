@@ -10,13 +10,28 @@ import {
   gatewayDatabaseWorkerTestFiles,
   gatewayPluginTestFiles,
   gatewayServerIsolatedTestFiles,
+  gatewayCoreTestInclude,
+  gatewayCoreTestExclude,
+  gatewayClientTestInclude,
+  gatewayClientTestExclude,
+  gatewayMethodsTestInclude,
+  gatewayMethodsTestExclude,
+  gatewayMethodsIsolatedTestFiles,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
 import { filterFilesByPatterns } from "../../test/vitest/vitest.include-patterns.ts";
+import {
+  autoReplyCoreTestInclude,
+  autoReplyCoreTestExclude,
+  autoReplyTopLevelReplyTestInclude,
+} from "../../test/vitest/vitest.test-shards.mjs";
 import {
   getUnitFastTestFiles,
   getUnitFastIsolatedTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
-import { bundledPluginDependentUnitTestFiles } from "../../test/vitest/vitest.unit-paths.mjs";
+import {
+  bundledPluginDependentUnitTestFiles,
+  filterUnitConfigTestFiles,
+} from "../../test/vitest/vitest.unit-paths.mjs";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 
 export const COMPACT_EMBEDDED_BASE_GROUP_NAME = "agentic-agents-embedded-base";
@@ -39,11 +54,113 @@ export function listScopedOwnerTestFiles(owner: {
   );
 }
 
+const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTestFiles>[0]>([
+  [
+    "test/vitest/vitest.gateway-methods.config.ts",
+    {
+      root: ".",
+      include: [...gatewayMethodsTestInclude],
+      exclude: [...gatewayMethodsTestExclude],
+    },
+  ],
+  [
+    "test/vitest/vitest.gateway-methods-isolated.config.ts",
+    {
+      root: ".",
+      include: [...gatewayMethodsIsolatedTestFiles],
+      exclude: [],
+    },
+  ],
+  [
+    "test/vitest/vitest.auto-reply-core.config.ts",
+    {
+      root: "src/auto-reply",
+      include: [...autoReplyCoreTestInclude],
+      exclude: [...autoReplyCoreTestExclude, ...databaseWorkerCoreTestFiles],
+    },
+  ],
+  [
+    "test/vitest/vitest.auto-reply-top-level.config.ts",
+    {
+      root: "src/auto-reply",
+      include: [...autoReplyTopLevelReplyTestInclude],
+      exclude: [],
+    },
+  ],
+  [
+    "test/vitest/vitest.gateway-core.config.ts",
+    {
+      root: "src/gateway",
+      include: [...gatewayCoreTestInclude],
+      exclude: [...gatewayCoreTestExclude],
+    },
+  ],
+  [
+    "test/vitest/vitest.gateway-client.config.ts",
+    {
+      root: ".",
+      include: [...gatewayClientTestInclude],
+      exclude: [...gatewayClientTestExclude],
+    },
+  ],
+]);
+const EXACT_CONFIG_FILES = new Map<string, string[]>([
+  ["test/vitest/vitest.gateway-server-isolated.config.ts", gatewayServerIsolatedTestFiles],
+  ["test/vitest/vitest.gateway-database-workers.config.ts", gatewayDatabaseWorkerTestFiles],
+]);
+const configFileCache = new Map<string, string[]>();
+
+/** Disjoint project inventories retain exact ownership within shared process groups. */
+export function listNodeTestConfigFiles(config: string): string[] | undefined {
+  const exact = EXACT_CONFIG_FILES.get(config);
+  if (exact) {
+    return exact;
+  }
+  const owner = CONFIG_FILE_OWNERS.get(config);
+  if (!owner) {
+    return undefined;
+  }
+  let files = configFileCache.get(config);
+  if (!files) {
+    files = listScopedOwnerTestFiles(owner);
+    configFileCache.set(config, files);
+  }
+  return files;
+}
+
 // Filtering coverage does not make a whole-config owner safe to split.
 const WHOLE_CONFIG_FILE_OWNERS = new Map<
   string,
   { listFiles: () => string[]; splitByFile?: false }
 >([
+  [
+    "core-unit-src-security-support",
+    {
+      listFiles: () =>
+        filterUnitConfigTestFiles(
+          listScopedOwnerTestFiles({
+            root: "src/security",
+            include: ["src/security/**/*.test.ts"],
+            exclude: [],
+          }),
+        ),
+      splitByFile: false,
+    },
+  ],
+  [
+    "core-unit-support",
+    {
+      listFiles: () =>
+        filterUnitConfigTestFiles(
+          listScopedOwnerTestFiles({
+            root: "packages",
+            include: ["packages/**/*.test.ts"],
+            exclude: [],
+          }),
+        ),
+      splitByFile: false,
+    },
+  ],
   [
     "agentic-gateway-server-isolated",
     { listFiles: () => [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles] },

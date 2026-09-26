@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -18,11 +19,11 @@ suite.define(() => {
     const parentKey = "agent:main:parent";
     const childKey = "agent:worker:child";
     const unrelatedKey = "agent:main:unrelated";
-    const rootRows = () =>
+    const rootRows = (unrelatedLabel = "Unrelated active task") =>
       sessionsListResponse([
         sessionRow(mainKey, "Main", 30),
         sessionRow(parentKey, "Parent task", 20, { childSessions: [childKey] }),
-        sessionRow(unrelatedKey, "Unrelated active task", 10),
+        sessionRow(unrelatedKey, unrelatedLabel, 10),
       ]);
     const childFailure = {
       __mockError: {
@@ -84,7 +85,16 @@ suite.define(() => {
       expect(await childRequestCount()).toBe(1);
       await captureUiProof(suite, page, "child-session-load-error.png");
 
+      await page.clock.install();
+      await pauseVirtualClock(page);
       for (let revision = 1; revision <= 3; revision += 1) {
+        const unrelatedLabel = `Unrelated active task ${revision}`;
+        await gateway.setMethodResponse("sessions.list", {
+          cases: [
+            { match: { spawnedBy: parentKey }, response: childFailure },
+            { response: rootRows(unrelatedLabel) },
+          ],
+        });
         const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
         await gateway.emitGatewayEvent("sessions.changed", {
           key: unrelatedKey,
@@ -92,9 +102,15 @@ suite.define(() => {
           sessionKey: unrelatedKey,
           updatedAt: 30 + revision,
         });
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
-          .toBeGreaterThan(listRequests);
+        // Advance the automatic refresh window and its nested mock response timer.
+        await page.clock.runFor(5_001);
+        expect((await gateway.getRequests("sessions.list", rosterMatch)).length).toBeGreaterThan(
+          listRequests,
+        );
+        await page
+          .locator(`.sidebar-recent-session[data-session-key="${unrelatedKey}"]`)
+          .getByText(unrelatedLabel, { exact: true })
+          .waitFor();
         expect(await childRequestCount()).toBe(1);
         expect(await alert.count()).toBe(1);
         expect(await alert.evaluate((node, original) => node === original, mountedAlert)).toBe(
@@ -112,6 +128,7 @@ suite.define(() => {
         ),
       ).toBe(1);
 
+      await page.clock.resume();
       await gateway.setMethodResponse("sessions.list", {
         cases: [
           { match: { spawnedBy: parentKey }, response: childResponse },

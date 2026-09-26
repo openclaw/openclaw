@@ -184,6 +184,7 @@ vi.mock("./runtime.js", async () => {
     getWhatsAppChannelRuntime: () => channelRuntime,
     getOptionalWhatsAppRuntime: () => undefined,
     getWhatsAppRuntime: () => ({
+      channel: channelRuntime,
       state: {
         resolveStateDir: () => stateDir,
         openKeyedStore: () => createInMemoryKeyedStore(),

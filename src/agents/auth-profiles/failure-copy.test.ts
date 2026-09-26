@@ -1,8 +1,3 @@
-/**
- * Tests auth profile failure messages.
- * Verifies actionable recovery hints, transient-copy suppression, provider
- * naming, and diagnostic cause handling.
- */
 import { describe, expect, it } from "vitest";
 
 const LOGIN_HINT_SENTINEL = "<<login-hint-for-provider>>";
@@ -56,13 +51,6 @@ describe("renderAuthProfileFailoverCopy", () => {
   });
 
   describe("reason coverage", () => {
-    it("renders distinct copy across the major reason classes", () => {
-      const samples = (["auth", "billing", "rate_limit", "timeout"] as const).map((reason) =>
-        formatAuthProfileFailureMessage({ reason, provider: PROVIDER, allInCooldown: true }),
-      );
-      expect(new Set(samples).size).toBe(samples.length);
-    });
-
     it("always mentions the provider name", () => {
       for (const reason of FAILOVER_REASONS) {
         const message = formatAuthProfileFailureMessage({

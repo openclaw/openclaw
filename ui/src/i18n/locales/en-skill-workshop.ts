@@ -40,7 +40,7 @@ const enSkillWorkshop = {
       pickBody: "Select a skill to see its instructions or changes.",
       changes: "Instruction changes",
       savedOn: "Changes since {date}",
-      changedSince: "Changed since {date}",
+      changedSince: "Changes since {date}",
       noChanges: "No instruction changes",
       savedVersion: "Saved version → current",
       savedNote:

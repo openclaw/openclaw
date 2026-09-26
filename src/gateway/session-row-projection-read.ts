@@ -1,7 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
-import { getSubagentSessionListReadSnapshotIdentity } from "../agents/subagents/registry/subagent-registry-state.js";
-import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { captureCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
 import {
   assertSessionStoreReadCandidate,
@@ -9,7 +7,6 @@ import {
 } from "../config/sessions/session-store-read-candidates.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
-import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
@@ -28,6 +25,8 @@ export async function withSessionRowDatabaseFacts(
     rows: ReadonlyMap<string, Row>;
     dirty: ReadonlySet<string>;
     revision: () => number | undefined;
+    registrySnapshot: () => object | undefined;
+    env: NodeJS.ProcessEnv;
     cfg: OpenClawConfig;
     selected?: ReadonlySet<string>;
   },
@@ -40,7 +39,7 @@ export async function withSessionRowDatabaseFacts(
   },
 ): Promise<void> {
   const revision = owner.revision();
-  const registrySnapshot = getSubagentSessionListReadSnapshotIdentity();
+  const registrySnapshot = owner.registrySnapshot();
   const ids: string[] = [];
   for (const id of owner.selected ?? owner.dirty) {
     ids.push(id);
@@ -52,10 +51,21 @@ export async function withSessionRowDatabaseFacts(
   if (consume.refreshPending(ids)) {
     return;
   }
+  const retained = new Map<string, PreparedSessionRowDatabaseFacts>();
+  for (const id of ids) {
+    const facts = owner.rows.get(id)?.retainedDatabaseFacts;
+    if (facts) {
+      retained.set(id, facts);
+    }
+  }
+  if (retained.size > 0) {
+    // Related-row changes retain stored facts but still need current lineage.
+    consume.accept([...retained.keys()], retained);
+    return;
+  }
   const rows = ids.flatMap((id) => owner.rows.get(id) ?? []);
   const rowRevisions = new Map(rows.map((row) => [identity(row), row.databaseFactsRevision]));
-  const env = cloneEnvWithPlatformSemantics(process.env);
-  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const env = owner.env;
   const groups = new Map<
     string,
     {
@@ -166,7 +176,7 @@ export async function withSessionRowDatabaseFacts(
         if (
           revision !== undefined &&
           owner.revision() === revision &&
-          registrySnapshot === getSubagentSessionListReadSnapshotIdentity()
+          registrySnapshot === owner.registrySnapshot()
         ) {
           const currentIds = rows
             .filter(

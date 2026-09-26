@@ -148,7 +148,11 @@ async function withAcceptedSuffix(
     try {
       await projection.ensureMaterialized();
       const query = { agentId: "main", key: keys[1]! };
-      const previous = projection.describe(query)!;
+      const previous = await withReadySessionRows(
+        projection,
+        () => [query],
+        (read) => read.describe(query)!,
+      );
       const count = projection.materializedCount;
       const releases: string[] = [];
       const continuations: SharedArrayBuffer[] = [];
@@ -792,6 +796,18 @@ it("keeps accepted resident facts after their native reader is retired", async (
   });
 });
 
+it("retains accepted facts through catalog publication between presentation slices", async () => {
+  await withAcceptedSuffix(async ({ projection, suffix, query, reads, resume }) => {
+    const pending = suffix.pendingDatabaseFacts;
+    sessionChanges.emit({ all: true, scope: "catalog" });
+    expect(suffix.pendingDatabaseFacts).toBe(pending);
+    await resume();
+    expect(reads).toHaveLength(1);
+    expect(projection.snapshot(query).row?.label).toBe("accepted-1");
+    expect(projection.dirtyRowCount).toBe(0);
+  });
+});
+
 it("presents current runtime activity without reacquiring accepted database facts", async () => {
   await withAcceptedSuffix(
     async ({ projection, suffix, query, entry, reads, viewerId, resume }) => {
@@ -933,7 +949,13 @@ it("demotes an accepted suffix without rendering it during the bulk drain", asyn
     expect(isColdArchivedSessionRow(cold)).toBe(true);
     expect(cold.pendingDatabaseFacts).toBeUndefined();
     expect(projection.dirtyRowCount).toBe(0);
-    expect(projection.snapshot(query).row?.label).toBe("archived suffix");
+    await withReadySessionRows(
+      projection,
+      () => [query],
+      () => {
+        expect(projection.snapshot(query).row?.label).toBe("archived suffix");
+      },
+    );
   });
 });
 

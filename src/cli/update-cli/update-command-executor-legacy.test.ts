@@ -89,7 +89,11 @@ it.skipIf(process.platform === "win32").each([
               {input:JSON.stringify({grant,root}),beforeInput,timeoutMs:15000,killProcessTree:true,requireProcessTreeExtinction:true,onOutputChunk:chunk=>process.stdout.write(chunk)}));
           if(result.code!==0)throw new Error(result.stderr);
         },{legacyPackageParent:parent,...(${managed} ? {legacyPackageHandoff:{handoffId:'shipped-owner',root}} : {})});
-      } catch(error) {process.stderr.write(String(error));process.exitCode=1;}
+      } catch(error) {
+        if(process.env.LEGACY_SECOND_PROBE==='1')
+          fs.writeFileSync(root+'/second-error.json',JSON.stringify({name:error.name,message:error.message}));
+        process.stderr.write(String(error));process.exitCode=1;
+      }
     `;
     const wrappedContinuation = `
       import {spawn} from 'node:child_process';
@@ -123,9 +127,9 @@ it.skipIf(process.platform === "win32").each([
       const launch=probe=>spawn(process.execPath,[...${JSON.stringify(importArgs)},'--input-type=module','-e',${JSON.stringify(managed ? wrappedContinuation : continuation)}],{stdio:probe?['ignore','inherit','inherit','ipc']:'inherit',env:{...process.env,...(probe?{LEGACY_SECOND_PROBE:'1'}:{})}});
       if(${managed && lifetime === "live"}){
         const second=launch(true);
-        second.once('message',()=>process.stdout.write('SECOND_READY\\n'));
-        second.once('exit',code=>process.stdout.write('SECOND_EXIT:'+code+'\\n'));
-        process.once('message',()=>{second.send('probe');process.disconnect();});
+        second.once('message',()=>process.send('second-ready'));
+        second.once('exit',(code,signal)=>process.send({event:'second-exit',code,signal},()=>process.disconnect()));
+        process.once('message',()=>second.send('probe'));
       }
       const child=launch(false);
       child.once('exit',code=>{if(process.connected)process.disconnect();process.exitCode=code??1;});
@@ -139,18 +143,21 @@ it.skipIf(process.platform === "win32").each([
     });
     const ready = createDeferred();
     const secondReady = createDeferred();
-    const secondExited = createDeferred();
+    const secondExited = createDeferred<unknown>();
+    child.on("message", (message) => {
+      if (message === "second-ready") {
+        secondReady.resolve();
+      } else {
+        secondExited.resolve(message);
+      }
+    });
     let output = "";
+    let stdout = "";
     expectDefined(child.stdout, "Legacy fixture stdout").on("data", (chunk) => {
       output += String(chunk);
-      if (output.includes("LEAF_READY\n") || output.includes("LEAF_REFUSED\n")) {
+      stdout += String(chunk);
+      if (stdout.includes("LEAF_READY\n") || stdout.includes("LEAF_REFUSED\n")) {
         ready.resolve();
-      }
-      if (output.includes("SECOND_EXIT:")) {
-        secondExited.resolve();
-      }
-      if (output.includes("SECOND_READY\n")) {
-        secondReady.resolve();
       }
     });
     expectDefined(child.stderr, "Legacy fixture stderr").on("data", (chunk) => {
@@ -204,9 +211,15 @@ it.skipIf(process.platform === "win32").each([
       }
       if (managed && lifetime === "live") {
         child.send("probe");
-        await Promise.race([deadlineFailure.promise, secondExited.promise, closed]);
-        expect(output).toContain("SECOND_EXIT:1");
-        expect(output).toContain("Legacy finalizer lifetime could not be acquired.");
+        expect(
+          await Promise.race([deadlineFailure.promise, secondExited.promise, closed]),
+          output,
+        ).toEqual({ event: "second-exit", code: 1, signal: null });
+        // Process exit does not order delivery across stdout and stderr pipes.
+        expect(JSON.parse(fs.readFileSync(path.join(root, "second-error.json"), "utf8"))).toEqual({
+          name: "UpdateCommandRecoveryPendingError",
+          message: "Legacy finalizer lifetime could not be acquired.",
+        });
       }
       if (lifetime === "exited") {
         child.kill("SIGKILL");

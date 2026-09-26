@@ -170,13 +170,19 @@ export function createMatrixQaClient(params: {
 }) {
   const fetchImpl = params.fetchImpl ?? fetch;
   const syncObserver = params.syncObserver;
-  const sendEvent = async (opts: { body: unknown; endpoint: string; errorLabel: string }) => {
-    const result = await requestMatrixJson<{ event_id?: string }>({
+  const request = <T>(
+    options: Omit<Parameters<typeof requestMatrixJson<T>>[0], "baseUrl" | "fetchImpl">,
+  ) =>
+    requestMatrixJson<T>({
       accessToken: params.accessToken,
+      ...options,
       baseUrl: params.baseUrl,
+      fetchImpl,
+    });
+  const sendEvent = async (opts: { body: unknown; endpoint: string; errorLabel: string }) => {
+    const result = await request<{ event_id?: string }>({
       body: opts.body,
       endpoint: opts.endpoint,
-      fetchImpl,
       method: "PUT",
     });
     const eventId = result.body.event_id?.trim();
@@ -193,9 +199,7 @@ export function createMatrixQaClient(params: {
       isDirect?: boolean;
       name: string;
     }) {
-      const result = await requestMatrixJson<MatrixQaRoomCreateResponse>({
-        accessToken: params.accessToken,
-        baseUrl: params.baseUrl,
+      const result = await request<MatrixQaRoomCreateResponse>({
         body: {
           creation_content: { "m.federate": false },
           initial_state: buildMatrixQaRoomInitialState(opts.encrypted),
@@ -205,7 +209,6 @@ export function createMatrixQaClient(params: {
           preset: "private_chat",
         },
         endpoint: "/_matrix/client/v3/createRoom",
-        fetchImpl,
         method: "POST",
       });
       const roomId = result.body.room_id?.trim();
@@ -238,14 +241,13 @@ export function createMatrixQaClient(params: {
         username: opts.localpart,
       };
       for (let attempt = 0; attempt < 4; attempt += 1) {
-        const response = await requestMatrixJson<MatrixQaRegisterResponse | MatrixQaUiaaResponse>({
-          baseUrl: params.baseUrl,
+        const response = await request<MatrixQaRegisterResponse | MatrixQaUiaaResponse>({
+          accessToken: undefined,
           body: {
             ...baseBody,
             ...(auth ? { auth } : {}),
           },
           endpoint: "/_matrix/client/v3/register",
-          fetchImpl,
           method: "POST",
           okStatuses: [200, 401],
           timeoutMs: 30_000,
@@ -272,8 +274,8 @@ export function createMatrixQaClient(params: {
       password: string;
       userId?: string;
     }) {
-      const result = await requestMatrixJson<MatrixQaRegisterResponse>({
-        baseUrl: params.baseUrl,
+      const result = await request<MatrixQaRegisterResponse>({
+        accessToken: undefined,
         body: {
           type: "m.login.password",
           identifier: {
@@ -284,7 +286,6 @@ export function createMatrixQaClient(params: {
           password: opts.password,
         },
         endpoint: "/_matrix/client/v3/login",
-        fetchImpl,
         method: "POST",
         timeoutMs: 30_000,
       });
@@ -375,48 +376,36 @@ export function createMatrixQaClient(params: {
       });
     },
     async joinRoom(roomId: string) {
-      const result = await requestMatrixJson<{ room_id?: string }>({
-        accessToken: params.accessToken,
-        baseUrl: params.baseUrl,
+      const result = await request<{ room_id?: string }>({
         body: {},
         endpoint: `/_matrix/client/v3/join/${encodeURIComponent(roomId)}`,
-        fetchImpl,
         method: "POST",
       });
       return result.body.room_id?.trim() || roomId;
     },
     async inviteUserToRoom(opts: { roomId: string; userId: string }) {
-      await requestMatrixJson<Record<string, never>>({
-        accessToken: params.accessToken,
-        baseUrl: params.baseUrl,
+      await request<Record<string, never>>({
         body: {
           user_id: opts.userId,
         },
         endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/invite`,
-        fetchImpl,
         method: "POST",
       });
     },
     async kickUserFromRoom(opts: { reason?: string; roomId: string; userId: string }) {
-      await requestMatrixJson<Record<string, never>>({
-        accessToken: params.accessToken,
-        baseUrl: params.baseUrl,
+      await request<Record<string, never>>({
         body: {
           user_id: opts.userId,
           ...(opts.reason?.trim() ? { reason: opts.reason.trim() } : {}),
         },
         endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/kick`,
-        fetchImpl,
         method: "POST",
       });
     },
     async leaveRoom(roomId: string) {
-      await requestMatrixJson<Record<string, never>>({
-        accessToken: params.accessToken,
-        baseUrl: params.baseUrl,
+      await request<Record<string, never>>({
         body: {},
         endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/leave`,
-        fetchImpl,
         method: "POST",
       });
     },

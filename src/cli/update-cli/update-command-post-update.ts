@@ -30,6 +30,7 @@ import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   prepareUpdateServiceResult,
+  recordServiceReconciliationWarning,
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
   resolveAutomaticUpdateTriage,
@@ -62,8 +63,17 @@ import {
 
 export async function finishUpdate(
   params: FinishUpdateParams,
-  { candidateRuntime = false } = {},
+  {
+    candidateRuntime = false,
+    onGatewayStartAttempted: observeGatewayStartAttempted,
+  }: { candidateRuntime?: boolean; onGatewayStartAttempted?: () => void } = {},
 ): Promise<UpdateRunResult> {
+  const beganSuccessfully = params.result.status === "ok";
+  let gatewayStartAttempted = false;
+  const onGatewayStartAttempted = () => {
+    gatewayStartAttempted = true;
+    observeGatewayStartAttempted?.();
+  };
   const definitionRecovery: UpdateServiceDefinitionRecovery = {};
   const fence = createUpdateCommandFinalizationFence(params);
   const assertCurrent = params.opts.run?.requesterAuthority
@@ -148,7 +158,10 @@ export async function finishUpdate(
     initialResult: UpdateRunResult,
     initialRecoverService: boolean,
   ) => {
-    assertCurrent();
+    fence();
+    if (params.databaseBackup?.restoreRefusal) {
+      params.rollbackBlockedReason = "state-migrated-no-rollback";
+    }
     let result = initialResult;
     let recoverService = initialRecoverService;
     if (
@@ -165,6 +178,8 @@ export async function finishUpdate(
           result,
           previousRoot: params.root,
           packageTransaction: params.packageTransaction,
+          databaseBackup:
+            beganSuccessfully && !gatewayStartAttempted ? params.databaseBackup : undefined,
           rollbackBlockedReason: params.rollbackBlockedReason,
           schemaVersions: params.schemaVersions,
           candidateSchemaVersions: params.candidateSchemaVersions,
@@ -172,6 +187,7 @@ export async function finishUpdate(
           previousVerified: params.previousVerified,
           originalManagedServiceRuntime: params.originalManagedServiceRuntime,
           allowGatewayRestart: params.shouldRestart,
+          onGatewayStartAttempted,
           configSnapshot: params.configSnapshot,
           activationConfig: params.activationConfig,
           opts: params.opts,
@@ -255,6 +271,9 @@ export async function finishUpdate(
         ) {
           await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
         } else {
+          if (currentServiceStop()?.windowsTaskAutoStartRecovery) {
+            onGatewayStartAttempted();
+          }
           await resumePostUpdateWindowsAutoStart(params, finalResult, currentServiceStop());
         }
       } catch (cause) {
@@ -302,6 +321,7 @@ export async function finishUpdate(
     // before restarting; rewriting a consumed sentinel could deliver it twice.
     if (recoverService && finalResult.recovery?.serviceRestartSafe === true) {
       const service = await maybeRestartServiceAfterFailedMutableUpdate({
+        onGatewayStartAttempted,
         recovery: result.recovery,
         originalManagedServiceRuntime: params.originalManagedServiceRuntime,
         updateRun: params.opts.run,
@@ -347,6 +367,15 @@ export async function finishUpdate(
         env: currentServiceStop()?.serviceEnv ?? params.ownedManagedUpdateEnv,
         timeoutMs: params.updateStepTimeoutMs,
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
+        // An initial failure before activation cannot promise a new service startup.
+        // Keep waiting after an observed stop/rebind or any rollback handling.
+        waitForStartup:
+          params.result.status !== "error" ||
+          params.mutationStarted ||
+          params.preManagedServiceStop?.stopped === true ||
+          currentServiceStop()?.stopped === true ||
+          Boolean(params.originalManagedServiceRuntime?.definition.rebound) ||
+          rollbackAttempted,
         assertCurrent,
       });
       assertCurrent();
@@ -386,6 +415,9 @@ export async function finishUpdate(
   };
   const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
     try {
+      if (currentServiceStop()?.windowsTaskAutoStartRecovery) {
+        onGatewayStartAttempted();
+      }
       await resumePostUpdateWindowsAutoStart(params, result, currentServiceStop());
     } catch (cause) {
       // The attempted restore already failed; reporting must not attempt it again.
@@ -445,6 +477,7 @@ export async function finishUpdate(
     // A replaced core keeps convergence in its original stopped interval.
     const deferPluginConvergence =
       shouldRestart &&
+      params.preManagedServiceStop?.serviceMutationAllowed !== false &&
       params.coreAlreadyCurrent === true &&
       params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
     let resultWithPostUpdate = params.result;
@@ -452,6 +485,20 @@ export async function finishUpdate(
     if (!deferPluginConvergence) {
       ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
       if (params.coreAlreadyCurrent) {
+        if (
+          params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "absent" &&
+          params.preManagedServiceStop.serviceMutationSkipMessage
+        ) {
+          // An absent service needs no repair. Keep the explanation without
+          // reporting a service-install command as completed maintenance.
+          defaultRuntime.error(params.preManagedServiceStop.serviceMutationSkipMessage);
+        } else if (params.preManagedServiceStop?.serviceMutationSkipMessage) {
+          recordServiceReconciliationWarning(
+            resultWithPostUpdate,
+            params.preManagedServiceStop.serviceEnv ?? process.env,
+            params.preManagedServiceStop.serviceMutationSkipMessage,
+          );
+        }
         return await reportResult(resultWithPostUpdate);
       }
     }
@@ -495,6 +542,7 @@ export async function finishUpdate(
     const restart = async () => {
       const restarted = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
         maybeRestartService({
+          onGatewayStartAttempted,
           originalManagedServiceRuntime: params.originalManagedServiceRuntime,
           shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,
           result: resultWithPostUpdate,

@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as taskRuntime from "./runtime-internal.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
@@ -15,7 +19,8 @@ import {
   withReadState,
 } from "./task-registry-read.test-support.js";
 import { runTaskRegistryWorkerMutation, taskDeliveryStates, tasks } from "./task-registry-state.js";
-import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
+import { configureTaskRegistryRuntime } from "./task-registry.store.js";
+import { deleteTaskRowsWithDeliveryState } from "./task-registry.store.kernel.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import type {
   TaskRegistryMutationScope,
@@ -186,7 +191,9 @@ it.each(["current", "read failure", "retired store"] as const)(
                 deliveryState: overlapDelivery,
               });
             } else {
-              store.deleteTaskWithDeliveryState(removed.taskId);
+              runOpenClawStateWriteTransaction(() =>
+                deleteTaskRowsWithDeliveryState(openOpenClawStateDatabase().db, removed.taskId),
+              );
             }
             await releaseMutations.promise;
           },
@@ -381,7 +388,7 @@ describe("registered task list read fence", () => {
       });
       const entered = createDeferred();
       const release = createDeferred();
-      const store = getTaskRegistryStore();
+      const store = await prepareTaskFixtureRead(task);
       const mutate = store.runAgentEventMutationAsync.bind(store);
       vi.spyOn(store, "runAgentEventMutationAsync").mockImplementation(async (...args) => {
         if (args[1].taskId === later.taskId) {

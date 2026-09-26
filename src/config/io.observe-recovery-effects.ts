@@ -1,7 +1,7 @@
 import type fs from "node:fs";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { captureConfigHealthStateStore } from "./io.health-state.js";
-import type { NormalizedConfigIoDeps } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 
 export type ConfigRecoveryEffect<T> = {
   sync: () => T;

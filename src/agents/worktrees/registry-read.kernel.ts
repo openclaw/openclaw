@@ -25,6 +25,7 @@ export const WORKTREE_RECORD_COLUMNS = [
   "last_active_at",
   "removed_at",
   "run_end_cleanup_json",
+  "gc_protection_json",
 ] as const satisfies readonly (keyof WorktreeRow)[];
 type WorktreeRecordRow = Pick<WorktreeRow, (typeof WORKTREE_RECORD_COLUMNS)[number]>;
 
@@ -68,7 +69,7 @@ function parseRunEndCleanup(
 
 export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
   const runEndCleanup = parseRunEndCleanup(row.run_end_cleanup_json);
-  return {
+  const record: ManagedWorktreeRecord = {
     id: row.id,
     name: row.path.split(/[\\/]/).at(-1) ?? row.id,
     repoFingerprint: row.repo_fingerprint,
@@ -85,6 +86,49 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
     ...(row.removed_at == null ? {} : { removedAt: row.removed_at }),
     ...(runEndCleanup ? { runEndCleanup } : {}),
   };
+  try {
+    const protection: unknown = JSON.parse(row.gc_protection_json ?? "null");
+    if (
+      isRecord(protection) &&
+      protection.revision === worktreeGcRevision(record) &&
+      typeof protection.reason === "string"
+    ) {
+      record.gcProtection = protection.reason;
+    }
+  } catch {
+    /* Invalid derived state is re-inspected. */
+  }
+  return record;
+}
+
+/** Registry mutations invalidate a retained decision without rewriting its derived column. */
+export function worktreeGcRevision(record: ManagedWorktreeRecord): string {
+  return JSON.stringify([
+    record.path,
+    record.repoRoot,
+    record.repoFingerprint,
+    record.branch,
+    record.baseRef,
+    record.createdAt,
+    record.ownerKind,
+    record.ownerId,
+    record.lastActiveAt,
+    record.removedAt,
+    record.snapshotRef,
+    record.runEndCleanup,
+  ]);
+}
+
+export function getRegistryWorktreeInDatabase(
+  db: DatabaseSync,
+  id: string,
+): ManagedWorktreeRecord | undefined {
+  const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+    .selectFrom("worktrees")
+    .select(WORKTREE_RECORD_COLUMNS)
+    .where("id", "=", id);
+  const row = executeSqliteQuerySync(db, query).rows[0];
+  return row ? rowToRecord(row) : undefined;
 }
 
 export function listRegistryWorktreesInDatabase(db: DatabaseSync): ManagedWorktreeRecord[] {

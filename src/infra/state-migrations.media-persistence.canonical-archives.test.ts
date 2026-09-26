@@ -224,24 +224,23 @@ describe("media migration of canonical SQLite transcript archives", () => {
     // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted database receiver.
     const prepare = DatabaseSync.prototype.prepare;
     const plans: string[] = [];
-    const observed = vi
-      .spyOn(DatabaseSync.prototype, "prepare")
-      .mockImplementation(function (this: DatabaseSync, sql) {
-        if (
-          /^select .*archive_blob.* from "session_transcript_archives" where .* order by /i.test(
-            sql,
-          )
-        ) {
-          const bindings = Array.from({ length: (sql.match(/\?/g) ?? []).length }, () => "");
-          plans.push(
-            ...prepare
-              .call(this, `EXPLAIN QUERY PLAN ${sql}`)
-              .all(...bindings)
-              .map((row) => String(row.detail)),
-          );
-        }
-        return prepare.call(this, sql);
-      });
+    const observed = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql,
+    ) {
+      if (
+        /^select .*archive_blob.* from "session_transcript_archives" where .* order by /i.test(sql)
+      ) {
+        const bindings = Array.from({ length: (sql.match(/\?/g) ?? []).length }, () => "");
+        plans.push(
+          ...prepare
+            .call(this, `EXPLAIN QUERY PLAN ${sql}`)
+            .all(...bindings)
+            .map((row) => String(row.detail)),
+        );
+      }
+      return prepare.call(this, sql);
+    });
     const result = await migrateLegacyMediaPersistence({ env: f.env }).finally(() =>
       observed.mockRestore(),
     );

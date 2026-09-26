@@ -41,6 +41,7 @@ export type MutableUpdateExecutionParams = {
     env: NodeJS.ProcessEnv | undefined,
     activationTimeoutMs: number | undefined,
     admitExecutor: (fence: UpdateRecoveryFence) => void,
+    installTarget?: ResolvedGlobalInstallTarget,
   ) => Promise<void>;
   onActivation?: () => void;
 };

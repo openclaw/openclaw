@@ -221,10 +221,7 @@ export function shouldApplyNonVisibleTurnRetryGuard(params: {
 }): boolean {
   if (
     params.executionContract === "strict-agentic" ||
-    isIncompleteTurnRecoverySupportedProviderModel({
-      provider: params.provider,
-      modelId: params.modelId,
-    })
+    isIncompleteTurnRecoverySupportedProviderModel(params)
   ) {
     return true;
   }
@@ -239,12 +236,7 @@ function isIncompleteTurnRecoverySupportedProviderModel(params: {
   provider?: string;
   modelId?: string;
 }): boolean {
-  if (
-    isStrictAgenticSupportedProviderModel({
-      provider: params.provider,
-      modelId: params.modelId,
-    })
-  ) {
+  if (isStrictAgenticSupportedProviderModel(params)) {
     return true;
   }
   const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");

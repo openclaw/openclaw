@@ -234,23 +234,6 @@ export async function ensureGatewayServiceForOnboarding(params: {
 }): Promise<{ gateway: GatewayServiceSetupOutcome; containerWithoutUserSystemd: boolean }> {
   const { flow, opts, nextConfig, settings, prompter, runtime } = params;
 
-  const withWizardProgress = async <T>(
-    label: string,
-    optionsLocal: { doneMessage?: string | (() => string | undefined) },
-    work: (progress: { update: (message: string) => void }) => Promise<T>,
-  ): Promise<T> => {
-    const progress = prompter.progress(label);
-    try {
-      return await work(progress);
-    } finally {
-      progress.stop(
-        typeof optionsLocal.doneMessage === "function"
-          ? optionsLocal.doneMessage()
-          : optionsLocal.doneMessage,
-      );
-    }
-  };
-
   if (isGatewayExternallySupervised()) {
     await prompter.note(
       formatExternalSupervisorActionRequired("manage the gateway service"),
@@ -375,25 +358,24 @@ export async function ensureGatewayServiceForOnboarding(params: {
         }));
       if (action === "restart") {
         let restartDoneMessage = t("wizard.finalize.gatewayServiceRestarted");
-        await withWizardProgress(
-          t("wizard.finalize.gatewayService"),
-          { doneMessage: () => restartDoneMessage },
-          async (progress) => {
-            progress.update(t("wizard.finalize.gatewayServiceRestarting"));
-            const restartResult = await service.restart({
-              env: process.env,
-              stdout: process.stdout,
-            });
-            const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
-            restartDoneMessage = restartStatus.scheduled
-              ? t("wizard.finalize.gatewayServiceRestartScheduled")
-              : t("wizard.finalize.gatewayServiceRestarted");
-            gateway = {
-              status: "ready",
-              action: restartStatus.scheduled ? "restart-scheduled" : "restarted",
-            };
-          },
-        );
+        const progress = prompter.progress(t("wizard.finalize.gatewayService"));
+        try {
+          progress.update(t("wizard.finalize.gatewayServiceRestarting"));
+          const restartResult = await service.restart({
+            env: process.env,
+            stdout: process.stdout,
+          });
+          const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
+          restartDoneMessage = restartStatus.scheduled
+            ? t("wizard.finalize.gatewayServiceRestartScheduled")
+            : t("wizard.finalize.gatewayServiceRestarted");
+          gateway = {
+            status: "ready",
+            action: restartStatus.scheduled ? "restart-scheduled" : "restarted",
+          };
+        } finally {
+          progress.stop(restartDoneMessage);
+        }
       } else if (action === "reinstall") {
         // Preserve the old definition so the install owner can replace or restore it.
         shouldInstall = true;

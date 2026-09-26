@@ -26,12 +26,6 @@ import type {
 } from "./realtime-engine.js";
 import { readMeetingRealtimeToolAbortSignal } from "./realtime-tool-continuity.js";
 
-function resolveMeetingRealtimeTools(
-  policy: RealtimeVoiceAgentConsultToolPolicy,
-): RealtimeVoiceTool[] {
-  return resolveRealtimeVoiceAgentConsultTools(policy);
-}
-
 function resolveMeetingAgentConsultSurface(
   platform: MeetingPlatformRuntimeMetadata,
 ): MeetingAgentConsultSurface {
@@ -77,7 +71,7 @@ export function createMeetingRealtimeEngineBindings(params: {
         toolPolicy: params.config.realtime.toolPolicy,
         ...consult,
       }),
-    tools: resolveMeetingRealtimeTools(params.config.realtime.toolPolicy),
+    tools: resolveRealtimeVoiceAgentConsultTools(params.config.realtime.toolPolicy),
     handleToolCall: async (call) => {
       const abortSignal = readMeetingRealtimeToolAbortSignal(call.session);
       await handleMeetingRealtimeConsultToolCall({
@@ -172,30 +166,21 @@ async function handleMeetingRealtimeConsultToolCall(params: {
   if (params.abortSignal?.aborted) {
     return;
   }
-  if (params.strategy !== "bidi") {
-    const error = `Tool "${params.event.name}" is only available in bidi realtime strategy`;
-    await params.session.submitToolResult(callId, { error });
+  const unavailableToolError =
+    params.strategy !== "bidi"
+      ? `Tool "${params.event.name}" is only available in bidi realtime strategy`
+      : params.event.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+        ? `Tool "${params.event.name}" not available`
+        : undefined;
+  if (unavailableToolError) {
+    await params.session.submitToolResult(callId, { error: unavailableToolError });
     if (params.abortSignal?.aborted) {
       return;
     }
     params.onTalkEvent?.({
       type: "tool.error",
       callId,
-      payload: { name: params.event.name, error },
-      final: true,
-    });
-    return;
-  }
-  if (params.event.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-    const error = `Tool "${params.event.name}" not available`;
-    await params.session.submitToolResult(callId, { error });
-    if (params.abortSignal?.aborted) {
-      return;
-    }
-    params.onTalkEvent?.({
-      type: "tool.error",
-      callId,
-      payload: { name: params.event.name, error },
+      payload: { name: params.event.name, error: unavailableToolError },
       final: true,
     });
     return;

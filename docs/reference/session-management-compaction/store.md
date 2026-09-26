@@ -17,6 +17,16 @@ qualified identity such as `agent:main:global` can append to its existing raw
 already exist, the write refuses the ambiguous selection; exact reads keep the
 two stored addresses separate. This also applies to retained history windows.
 
+New chat turns use a qualified admission identity while retaining the selected
+stored key and database. If a raw `global` or `unknown` row and its qualified
+spelling would share that identity, chat execution refuses the ambiguous
+selection, including when the raw row has not been created yet. Choose an
+unambiguous session; the existing rows and history are not merged or renamed.
+Completed-send retries still return their recorded result. Read-only history and
+stored parent, spawn, and fork references keep their physical addresses.
+Input persistence and queued-input cleanup stay bound to the admitted database;
+replacing its path cannot transfer the run to a copied database.
+
 During guarded transcript reads and writes, fully qualified keys such as
 `agent:<agentId>:main` remain literal identities even when historical main-alias
 metadata names another suffix. A queued turn rechecks its selected session and

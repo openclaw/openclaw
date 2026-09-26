@@ -5,19 +5,20 @@ import {
 } from "./task-executor-mutation-effects.async.js";
 import type { TaskMutationContext } from "./task-executor.types.js";
 import type { TaskInitialWorkerCommand } from "./task-initial-worker.types.js";
-import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
+import { flushTaskActivity } from "./task-registry-activity.js";
 import {
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
 } from "./task-registry-delivery.js";
 import { isEquivalentTaskRecord, matchesTaskPersistenceReceipt } from "./task-registry-records.js";
 import {
+  clearTaskActivity,
   assertTaskRegistryOwnerCurrent,
   runTaskRegistryWorkerMutation,
   tasks,
 } from "./task-registry-state.js";
 import type { TaskRecordTransitionReceipt } from "./task-registry-transition.kernel.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/executor");
 
@@ -29,6 +30,8 @@ export async function settleTaskRecordTransitionAsync(
     {
       type:
         | "tasks.bindRunOwner"
+        | "tasks.maintainCron"
+        | "tasks.transitionRunRow"
         | "tasks.settleUnstarted"
         | "tasks.finalizeActive"
         | "tasks.acknowledgeStateChange"
@@ -44,7 +47,14 @@ export async function settleTaskRecordTransitionAsync(
   const { taskId } = command.input;
   assertCurrent();
   // Activity observers may reenter persistence, so flush before worker admission.
-  if (command.type === "tasks.settleUnstarted" || command.type === "tasks.finalizeActive") {
+  if (
+    command.type === "tasks.settleUnstarted" ||
+    command.type === "tasks.finalizeActive" ||
+    (command.type === "tasks.transitionRunRow" &&
+      command.input.kind === "state" &&
+      command.input.params.status !== undefined &&
+      isTerminalTaskStatus(command.input.params.status))
+  ) {
     const { expectedTask } = command.input;
     try {
       assertTaskRegistryOwnerCurrent(context, store);
@@ -119,7 +129,9 @@ export async function settleTaskRecordTransitionAsync(
           });
         });
       };
-      observePublication(maybeDeliverTaskStateChangeUpdate(settled.task, settled.nextEvent));
+      if (command.type !== "tasks.maintainCron") {
+        observePublication(maybeDeliverTaskStateChangeUpdate(settled.task, settled.nextEvent));
+      }
       observePublication(maybeDeliverTaskTerminalUpdate(taskId));
     } catch (error) {
       log.warn("Committed task transition could not admit delivery publication", { taskId, error });

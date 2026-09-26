@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { render, type ReactiveControllerHost } from "lit";
-import { expect, vi } from "vitest";
+import { nothing, render, type ReactiveControllerHost } from "lit";
+import { expect, onTestFinished, vi } from "vitest";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -147,8 +147,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     transcript,
     paneId: "single",
     sessionKey,
-    onSessionKeyChange: () => undefined,
-    thinkingLevel: null,
     showThinking: false,
     showToolCalls: true,
     loading: false,
@@ -201,11 +199,8 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
-    onClearHistory: () => undefined,
     agentsList: null,
     currentAgentId: "main",
-    onAgentChange: () => undefined,
-    onNavigateToAgent: () => undefined,
     onSessionSelect: () => undefined,
     onOpenSidebar: () => undefined,
     onChatScroll: () => undefined,
@@ -317,12 +312,20 @@ export function createReactiveDraftHarness({
 }: Partial<ChatProps> = {}) {
   let draft = "";
   let currentOverrides = overrides;
+  let active = true;
   const container = document.createElement("div");
+  onTestFinished(() => {
+    active = false;
+    render(nothing, container);
+  });
   const onDraftChange = vi.fn((next: string) => {
     draft = next;
     observeDraftChange?.(next);
   });
   const renderCurrent = (nextOverrides: Partial<ChatProps> = {}) => {
+    if (!active) {
+      return;
+    }
     currentOverrides = { ...currentOverrides, ...nextOverrides };
     renderChatInto(container, {
       draft,

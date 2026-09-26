@@ -6,7 +6,7 @@ import { z } from "zod";
 import { isMissingPathError } from "../../infra/errors.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
-import { checkoutPathFromGitBytes } from "./git-path-inventory.js";
+import { checkoutPathFromGitBytes, rawPathExists, rawPathStat } from "./git-path-inventory.js";
 import { requireGit, requireGitBuffer, runGit } from "./git.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import { exactIndexObjects } from "./snapshot-index-objects.js";
@@ -169,24 +169,12 @@ export async function captureExactState(input: {
   if (params.write) {
     let bytes = indexBytes.length;
     for (const relative of params.paths) {
-      const stat = await fs
-        .lstat(checkoutPathFromGitBytes(cwd, relative))
-        .catch((error: unknown) => {
-          if (isMissingPathError(error)) {
-            return undefined;
-          }
-          throw error;
-        });
+      const stat = await rawPathStat(checkoutPathFromGitBytes(cwd, relative));
       bytes += (stat?.size ?? 0) + 1024 + relative.length * 4;
     }
     let provisionedBytes = 0;
     for (const relative of params.provisionedPaths) {
-      const stat = await fs.lstat(path.join(cwd, relative)).catch((error: unknown) => {
-        if (isMissingPathError(error)) {
-          return undefined;
-        }
-        throw error;
-      });
+      const stat = await rawPathStat(path.join(cwd, relative));
       provisionedBytes += stat?.size ?? 0;
     }
     const common = path.resolve(
@@ -464,7 +452,6 @@ async function assertExactRestorePaths(
 /** Worktree bytes are materialized through the native source-only Git checkout; restore metadata last. */
 export async function restoreExactStateMetadata(params: {
   checkoutPath: string;
-  snapshot: string;
   metadata: ExactStateSnapshot;
   options: Parameters<typeof requireGit>[2];
   assertCurrent: () => void;
@@ -530,12 +517,7 @@ export async function restoreExactStateMetadata(params: {
       const relative = checkedPath(entry.path);
       const assertParents = await checkParents(cwd, relative);
       const target = checkoutPathFromGitBytes(cwd, relative);
-      const existing = await fs.lstat(target).catch((error: unknown) => {
-        if (isMissingPathError(error)) {
-          return undefined;
-        }
-        throw error;
-      });
+      const existing = await rawPathStat(target);
       if (existing) {
         const existingBytes =
           entry.kind === "symlink" && existing.isSymbolicLink()
@@ -578,15 +560,7 @@ export async function restoreExactStateMetadata(params: {
       // A captured deletion can include the entire parent tree. Existing ancestors
       // must remain safe directories; absent ones must stay absent through this check.
       const assertParents = await checkParents(cwd, relative, true);
-      const exists = await fs.lstat(checkoutPathFromGitBytes(cwd, relative)).then(
-        () => true,
-        (error: unknown) => {
-          if (isMissingPathError(error)) {
-            return false;
-          }
-          throw error;
-        },
-      );
+      const exists = await rawPathExists(checkoutPathFromGitBytes(cwd, relative));
       assertCurrent();
       assertParents();
       if (exists) {

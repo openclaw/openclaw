@@ -7,11 +7,13 @@ import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { type SubagentsCommandContext, RECENT_WINDOW_MINUTES } from "./shared.js";
 
-export function handleSubagentsListAction(ctx: SubagentsCommandContext): CommandHandlerResult {
+export async function handleSubagentsListAction(
+  ctx: SubagentsCommandContext,
+): Promise<CommandHandlerResult> {
   const { params, readContext } = ctx;
   const list = buildSubagentList({
     context: readContext.list,
-    sessionEntries: readSubagentListSessionEntries(params.cfg, readContext.list),
+    sessionEntries: await readSubagentListSessionEntries(params.cfg, readContext.list),
     taskMaxChars: 110,
   });
   const lines = ["active subagents:", "-----"];

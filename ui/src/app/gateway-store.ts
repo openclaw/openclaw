@@ -152,6 +152,7 @@ export function createApplicationGateway(
         ? snapshot.suspensionPhase
         : undefined;
       snapshot.pluginCapabilities = null;
+      snapshot.usagePublications = undefined;
       scheduleOfflineIndicator();
     }
     if (metadataObserver.synchronize(previous, snapshot)) {
@@ -191,6 +192,29 @@ export function createApplicationGateway(
             setSnapshot({ lastError: formatUiError(error) });
           }
         });
+    } else if (event.event === "chat.metadata.changed") {
+      const publication = asOptionalRecord(event.payload);
+      const agentId = publication?.agentId;
+      const usageUpdatedAt = publication?.usageUpdatedAt;
+      if (
+        typeof agentId === "string" &&
+        typeof usageUpdatedAt === "number" &&
+        usageUpdatedAt > (snapshot.usagePublications?.[agentId]?.usageUpdatedAt ?? 0)
+      ) {
+        setSnapshot({
+          usagePublications: {
+            ...snapshot.usagePublications,
+            [agentId]: {
+              usageUpdatedAt,
+              committedAt:
+                publication?.usageRefreshFailed === true
+                  ? (snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
+                  : usageUpdatedAt,
+              usageRefreshFailed: publication?.usageRefreshFailed === true || undefined,
+            },
+          },
+        });
+      }
     } else if (event.event === "gateway.suspension") {
       const suspensionPhase = readSuspensionPhase(event.payload);
       if (suspensionPhase) {
@@ -217,7 +241,7 @@ export function createApplicationGateway(
       }
     }
     // Snapshot observers can replace their client before this event reaches the log.
-    if (!isCurrentClient(eventClient)) {
+    if (!isCurrentClient(eventClient) || eventLogListeners.size === 0) {
       return;
     }
     const entries = eventLog.record(event);
@@ -624,7 +648,12 @@ export function createApplicationGateway(
     },
     subscribeEventLog: (listener) => {
       eventLogListeners.add(listener);
-      return () => eventLogListeners.delete(listener);
+      return () => {
+        eventLogListeners.delete(listener);
+        if (eventLogListeners.size === 0) {
+          eventLog.clear();
+        }
+      };
     },
     subscribeEvents: (listener) => {
       eventListeners.add(listener);

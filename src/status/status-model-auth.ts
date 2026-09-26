@@ -7,9 +7,12 @@ import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runt
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
+import { formatModelEndpointUrl } from "./status-model-endpoint.js";
 
-/** Native status uses the same prepared account and route as model selection. */
-export function createStatusModelAuthResolver(params: {
+type StatusModelResolution = { authLabel?: string; endpoint?: string };
+
+/** Status borrows the account and route selected by the prepared model owner. */
+export function createStatusModelResolver(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
@@ -46,29 +49,33 @@ export function createStatusModelAuthResolver(params: {
     model: string;
     runtimeId?: string;
     acceptedProviderIds: readonly string[];
-  }): Promise<string | undefined> => {
+    authLabelOverride?: string;
+  }): Promise<StatusModelResolution> => {
     const { provider, model, runtimeId } = selection;
-    // SDK renderers without a prepared owner retain host-profile diagnostics.
-    // A native observation, when present, never falls back to a different account.
-    if (
+    // Preserve SDK and built-in auth diagnostics; route display only borrows an
+    // existing prepared owner and never starts discovery or resolves credentials.
+    const usesHostAuth =
       !owner ||
       !runtimeId ||
       runtimeId === "openclaw" ||
       runtimeId === "auto" ||
-      provider === runtimeId
-    ) {
-      return resolveModelAuthLabel({
-        provider,
-        acceptedProviderIds: selection.acceptedProviderIds,
-        cfg: params.cfg,
-        sessionEntry,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        includeExternalProfiles: false,
-      });
-    }
+      provider === runtimeId;
+    const hasAuthOverride = Object.hasOwn(selection, "authLabelOverride");
+    const authLabel = hasAuthOverride
+      ? selection.authLabelOverride
+      : usesHostAuth
+        ? resolveModelAuthLabel({
+            provider,
+            acceptedProviderIds: selection.acceptedProviderIds,
+            cfg: params.cfg,
+            sessionEntry,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+            includeExternalProfiles: false,
+          })
+        : "unknown";
     if (!decisions?.isCurrent() || !authStore) {
-      return "unknown";
+      return { authLabel };
     }
     const entry = findModelInCatalog(decisions.snapshot.entries, provider, model);
     const variants = decisions.snapshot.routeVariants.filter(
@@ -81,10 +88,18 @@ export function createStatusModelAuthResolver(params: {
     );
     const evaluation = entry ? decisions.evaluateNative(entry, host, runtimeId) : host;
     if (!decisions.isCurrent() || evaluation.availability !== true) {
-      return "unknown";
+      return { authLabel };
     }
     if (evaluation.runtimeAuth && evaluation.runtimeAuth.id !== runtimeId) {
-      return "unknown";
+      return { authLabel };
+    }
+    const endpoint = evaluation.selectedRoute?.baseUrl
+      ? formatModelEndpointUrl(evaluation.selectedRoute.baseUrl)
+      : undefined;
+    // A selected route and its auth must describe the same decision. Provider-wide
+    // labels can prefer another stored credential over an explicitly configured key.
+    if (hasAuthOverride || (usesHostAuth && !evaluation.selectedRoute)) {
+      return { authLabel, endpoint };
     }
     const mode =
       evaluation.selectedAuthMode === "api_key" ? "api-key" : evaluation.selectedAuthMode;
@@ -93,10 +108,13 @@ export function createStatusModelAuthResolver(params: {
       const label = isUserModelAuthProfileId(profileId)
         ? "personal account"
         : resolveAuthProfileDisplayLabel({ cfg: params.cfg, store: authStore, profileId });
-      return mode ? mode + (label ? " (" + label + ")" : "") : "unknown";
+      return { authLabel: mode ? mode + (label ? " (" + label + ")" : "") : "unknown", endpoint };
     }
-    return evaluation.runtimeAuth
-      ? (mode ?? "native") + " (" + runtimeId + ")"
-      : (mode ?? "unknown");
+    return {
+      authLabel: evaluation.runtimeAuth
+        ? (mode ?? "native") + " (" + runtimeId + ")"
+        : (mode ?? "unknown"),
+      endpoint,
+    };
   };
 }

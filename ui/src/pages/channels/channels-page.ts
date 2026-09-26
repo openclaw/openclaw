@@ -305,14 +305,6 @@ class ChannelsPage extends OpenClawLightDomElement {
     return this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default";
   }
 
-  private resolveGatewayHttpCredentials(gateway: ApplicationContext["gateway"]): string[] {
-    return resolveControlUiAuthCandidates({
-      hello: gateway.snapshot.hello,
-      settings: { token: gateway.connection.token },
-      password: gateway.connection.password,
-    });
-  }
-
   private clearNostrForm() {
     this.nostrProfileFormState = null;
     this.nostrProfileAccountId = null;
@@ -346,7 +338,11 @@ class ChannelsPage extends OpenClawLightDomElement {
       channels,
       formAccountId: this.nostrProfileAccountId,
       accountId: this.resolveNostrAccountId(),
-      authCandidates: this.resolveGatewayHttpCredentials(gateway),
+      authCandidates: resolveControlUiAuthCandidates({
+        hello: gateway.snapshot.hello,
+        settings: { token: gateway.connection.token },
+        password: gateway.connection.password,
+      }),
     };
   }
 
@@ -369,10 +365,6 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.gateway.invalidate();
     this.nostrProfileAccountId = accountId;
     this.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
-  }
-
-  private cancelNostrProfile() {
-    this.invalidateNostrForm();
   }
 
   private changeNostrProfileField(field: keyof NostrProfile, value: string) {
@@ -699,7 +691,7 @@ class ChannelsPage extends OpenClawLightDomElement {
           onConfigSave: () => void this.saveChannelConfig(),
           onConfigReload: () => void this.reloadChannelConfig(),
           onNostrProfileEdit: (accountId, profile) => this.editNostrProfile(accountId, profile),
-          onNostrProfileCancel: () => this.cancelNostrProfile(),
+          onNostrProfileCancel: () => this.invalidateNostrForm(),
           onNostrProfileFieldChange: (field, value) => this.changeNostrProfileField(field, value),
           onNostrProfileSave: () => void this.saveNostrProfile(),
           onNostrProfileImport: () => void this.importNostrProfile(),

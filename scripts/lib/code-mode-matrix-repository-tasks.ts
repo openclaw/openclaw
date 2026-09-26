@@ -6,6 +6,7 @@ import type {
   MatrixPerformanceEvaluation,
   MatrixPerformanceFixture,
 } from "./code-mode-matrix-performance-types.ts";
+import { nativeTestRunnerArgs } from "./native-test-runner.ts";
 
 export const REPOSITORY_MATRIX_TASKS = ["repo-invoice-repair"] as const;
 export type RepositoryMatrixTask = (typeof REPOSITORY_MATRIX_TASKS)[number];
@@ -315,7 +316,7 @@ async function evaluateInvoiceRepository(
     checks.heldOutOrderIndependent = await probe("reordered", heldOut.toReversed());
     checks.emptyInput = await probe("empty", []);
     // Candidate tests cannot prepare a different implementation for the independent probes.
-    checks.testsPass = await run(["--test", ...tests]);
+    checks.testsPass = await run(nativeTestRunnerArgs(tests));
     const regressions = tests.filter((name) => !(name in original));
     if (checks.testsPass && regressions.length > 0) {
       for (const [name, content] of Object.entries(original)) {
@@ -323,7 +324,7 @@ async function evaluateInvoiceRepository(
           await fs.writeFile(path.join(gradingRepo, name), content);
         }
       }
-      checks.regressionRejectsOriginal = await run(["--test", ...regressions], 1);
+      checks.regressionRejectsOriginal = await run(nativeTestRunnerArgs(regressions), 1);
     }
     return checks;
   } finally {

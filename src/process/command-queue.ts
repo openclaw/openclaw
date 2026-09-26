@@ -43,7 +43,7 @@ import {
   resetGatewayWorkAdmission,
   runWithGatewayRootWorkReadmission,
 } from "./gateway-work-admission.js";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, SUBAGENT_LANE_PREFIX, SWARM_LANE_PREFIX } from "./lanes.js";
 export { GatewayDrainingError } from "./gateway-work-admission.js";
 export type { CommandLaneTaskMarker } from "./command-queue.state.js";
 export type { CommandLaneSnapshot } from "./command-queue.types.js";
@@ -123,6 +123,12 @@ function getLaneDepth(state: LaneState): number {
   return state.queue.length + state.activeTaskIds.size;
 }
 
+function getDefaultLaneConcurrency(lane: string): number {
+  return lane.startsWith(SUBAGENT_LANE_PREFIX) && !lane.startsWith(SWARM_LANE_PREFIX)
+    ? (getQueueState().lanes.get(CommandLane.Subagent)?.maxConcurrent ?? 1)
+    : 1;
+}
+
 function getLaneState(lane: string): LaneState {
   const queueState = getQueueState();
   const existing = queueState.lanes.get(lane);
@@ -133,7 +139,7 @@ function getLaneState(lane: string): LaneState {
     lane,
     queue: createLaneQueue(),
     activeTaskIds: new Set(),
-    maxConcurrent: 1,
+    maxConcurrent: getDefaultLaneConcurrency(lane),
     draining: false,
     generation: 0,
   };
@@ -154,10 +160,11 @@ function retireIdleScopedCommandLane(state: LaneState): void {
     state.draining ||
     state.activeTaskIds.size > 0 ||
     state.queue.length > 0 ||
-    state.maxConcurrent !== 1 ||
-    (!state.lane.startsWith("session:") &&
-      !state.lane.startsWith("nested:") &&
-      !state.lane.startsWith("context-engine-turn-maintenance:"))
+    (!state.lane.startsWith(SUBAGENT_LANE_PREFIX) &&
+      (state.maxConcurrent !== 1 ||
+        (!state.lane.startsWith("session:") &&
+          !state.lane.startsWith("nested:") &&
+          !state.lane.startsWith("context-engine-turn-maintenance:"))))
   ) {
     return;
   }
@@ -387,6 +394,7 @@ function drainLane(
         diag.warn(
           `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
             `activeAhead=${entry.activeAheadAtEnqueue} activeNow=${activeBeforeStart} queueBehind=${state.queue.length}`,
+          entry.taskIdentity,
         );
       }
       logLaneDequeue(lane, waitedMs, state.queue.length);
@@ -411,8 +419,8 @@ function drainLane(
           const isProbeLane = isQuietProbeLane(lane);
           if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
             diag.error(
-              `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${formatErrorMessage(err)}"`,
-              { errorName: readErrorName(err) || undefined },
+              `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error=${JSON.stringify(formatErrorMessage(err))}`,
+              { errorName: readErrorName(err) || undefined, ...entry.taskIdentity },
             );
           } else if (!isProbeLane) {
             diag.debug(
@@ -456,6 +464,27 @@ export function isGatewayDraining(): boolean {
   return isGatewayWorkAdmissionClosed();
 }
 
+function updateLaneConcurrency(lane: string, maxConcurrent: number): LaneState[] {
+  const state = getLaneState(lane);
+  const minConcurrent = isQuietProbeLane(lane) ? 1 : 0;
+  state.maxConcurrent = Math.max(minConcurrent, Math.floor(maxConcurrent));
+  const updated = [state];
+  if (lane === "subagent") {
+    // The named lane owns the setting; each spawning session gets its own
+    // capacity. Publish every existing queue's new width before admitting work.
+    for (const scoped of getQueueState().lanes.values()) {
+      if (
+        scoped.lane.startsWith(SUBAGENT_LANE_PREFIX) &&
+        !scoped.lane.startsWith(SWARM_LANE_PREFIX)
+      ) {
+        scoped.maxConcurrent = state.maxConcurrent;
+        updated.push(scoped);
+      }
+    }
+  }
+  return updated;
+}
+
 /**
  * Apply lane concurrencies and group definitions as ONE transaction.
  *
@@ -488,10 +517,9 @@ export function publishLaneConfiguration(config: {
   // Phase 1 — install state with dispatch suppressed. Nothing may start here.
   for (const [rawLane, maxConcurrent] of Object.entries(config.lanes ?? {})) {
     const lane = normalizeLane(rawLane);
-    const state = getLaneState(lane);
-    const minConcurrent = isQuietProbeLane(lane) ? 1 : 0;
-    state.maxConcurrent = Math.max(minConcurrent, Math.floor(maxConcurrent));
-    touched.add(lane);
+    for (const state of updateLaneConcurrency(lane, maxConcurrent)) {
+      touched.add(state.lane);
+    }
   }
   for (const group of config.clearGroups ?? []) {
     const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
@@ -533,12 +561,10 @@ export function publishLaneConfiguration(config: {
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = normalizeLane(lane);
-  const state = getLaneState(cleaned);
-  const isProbeLane = isQuietProbeLane(cleaned);
-  const minConcurrent = isProbeLane ? 1 : 0;
-  state.maxConcurrent = Math.max(minConcurrent, Math.floor(maxConcurrent));
-  if (state.maxConcurrent > 0) {
-    drainReadyCommandLane(cleaned);
+  for (const state of updateLaneConcurrency(cleaned, maxConcurrent)) {
+    if (state.maxConcurrent > 0) {
+      drainReadyCommandLane(state.lane);
+    }
   }
 }
 
@@ -558,6 +584,9 @@ export function enqueueCommandInLane<T>(
   const cleaned = normalizeLane(lane);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
+  if (opts?.maxConcurrent !== undefined) {
+    state.maxConcurrent = Math.max(0, Math.floor(opts.maxConcurrent));
+  }
   return new Promise<T>((resolve, reject) => {
     const entry: QueueEntry = {
       task: (marker) => runInAsyncContext(runWithGatewayRootWorkReadmission, () => task(marker)),
@@ -569,6 +598,7 @@ export function enqueueCommandInLane<T>(
       warnAfterMs,
       queuedAheadAtEnqueue: 0,
       activeAheadAtEnqueue: 0,
+      taskIdentity: opts?.taskIdentity ? { ...opts.taskIdentity } : undefined,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
       taskTimeoutSubscribe: opts?.taskTimeoutSubscribe,
@@ -620,10 +650,16 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
     lane: state?.lane ?? resolved,
     queuedCount: state?.queue.length ?? 0,
     activeCount: state?.activeTaskIds.size ?? 0,
-    maxConcurrent: state?.maxConcurrent ?? 1,
+    maxConcurrent: state?.maxConcurrent ?? getDefaultLaneConcurrency(resolved),
     draining: state?.draining ?? false,
     generation: state?.generation ?? 0,
     blockedBy: null,
+    ...(resolved.startsWith(SWARM_LANE_PREFIX)
+      ? {
+          concurrencyScope: "swarm" as const,
+          swarmGroupKey: resolved.slice(SWARM_LANE_PREFIX.length),
+        }
+      : {}),
   };
   // Missing or retired lanes can still be group members; never recreate them to read capacity.
   applyCommandLaneCapacity(snapshot);

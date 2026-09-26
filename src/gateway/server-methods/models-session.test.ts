@@ -20,9 +20,9 @@ import {
   listUserProfileAuthLinks,
   readUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
+import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
 import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import {
   registerGatewayModelCatalogPrivateAccess,
@@ -173,9 +173,11 @@ describe("direct session model catalogs", () => {
               : {}),
           },
         );
-        await expect(f.request({ sessionKey, view: "configured" })).rejects.toThrow(
-          `Session "${sessionKey}" was not found.`,
-        );
+        const respond = await f.request({ sessionKey, view: "configured" });
+        expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: `Session "${sessionKey}" was not found.`,
+        });
         expect(f.readPrepared).not.toHaveBeenCalled();
         expect(f.loadDeferred).not.toHaveBeenCalled();
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
@@ -261,7 +263,7 @@ describe("direct session model catalogs", () => {
     "selected patch",
     "selected reset",
     "store close",
-    "access change",
+    "profile alias change",
     "catalog owner",
   ] as const)("replies with retryable unavailability after %s", async (change) => {
     await withOpenClawTestState(isolated, async (state) => {
@@ -296,8 +298,8 @@ describe("direct session model catalogs", () => {
           });
         } else if (change === "store close") {
           closeOpenClawAgentDatabaseByPath(openOpenClawAgentDatabase(scope).path);
-        } else if (change === "access change") {
-          bumpGatewayAccessRevision();
+        } else if (change === "profile alias change") {
+          publishUserProfileAliasChange();
         } else {
           f.invalidateSnapshot();
         }

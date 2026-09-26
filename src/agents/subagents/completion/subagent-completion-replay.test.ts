@@ -125,7 +125,7 @@ describe("completed requester delivery replay fence", () => {
     driver.controller.options.runSubagentAnnounceFlow = vi.fn<
       typeof driver.controller.options.runSubagentAnnounceFlow
     >(async (params) => {
-      params.onDeliveryResult?.({
+      await params.onDeliveryResult?.({
         delivered: false,
         path: "direct",
         reason: "message_tool_delivery_missing",
@@ -226,7 +226,7 @@ describe("completed requester delivery replay fence", () => {
     driver.controller.options.runSubagentAnnounceFlow = vi.fn<
       typeof driver.controller.options.runSubagentAnnounceFlow
     >(async (params) => {
-      params.onDeliveryResult?.({
+      await params.onDeliveryResult?.({
         delivered: false,
         path: "direct",
         reason: "message_tool_delivery_missing",

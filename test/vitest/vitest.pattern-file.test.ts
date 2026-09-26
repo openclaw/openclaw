@@ -57,6 +57,68 @@ describe("native CLI selection", () => {
     expect(matchesVitestCliSelection(file, include, ["run", file], "", {})).toBe(selected);
   });
 
+  const infraFile = "src/infra/sqlite-worker-operation-attachment.test.ts";
+  const absoluteInfra = path.resolve(import.meta.dirname, "../..", infraFile);
+  it.each([
+    { include: ["src/infra/**/*.test.ts"], candidate: absoluteInfra, selected: true },
+    { include: [absoluteInfra], candidate: infraFile, selected: true },
+    { include: ["extensions/qa-lab/**/*.test.ts"], candidate: absoluteInfra, selected: false },
+    { include: [absoluteInfra], candidate: path.resolve("../outside.test.ts"), selected: false },
+  ])(
+    "intersects CLI $candidate with its actual owner $include",
+    ({ include, candidate, selected }) => {
+      expect(narrowIncludePatternsForCli(include, ["node", "vitest", "run", candidate])).toEqual(
+        selected ? [candidate.replaceAll("\\", "/")] : [],
+      );
+      expect(matchesVitestCliSelection(infraFile, include, ["run", candidate], "", {})).toBe(
+        selected,
+      );
+    },
+  );
+
+  it("keeps absolute Windows operands selected after discovery", async () => {
+    const windowsPath = {
+      ...path.win32,
+      resolve: (...parts: string[]) => path.win32.resolve("C:\\", ...parts),
+    };
+    const candidate = windowsPath
+      .resolve(import.meta.dirname, "../..", infraFile)
+      .replaceAll("\\", "/");
+    vi.resetModules();
+    vi.doMock("node:path", () => ({ default: windowsPath }));
+    try {
+      const selector = await import("./vitest.pattern-file.ts");
+      const include = ["src/infra/**/*.test.ts"];
+      expect(
+        selector.narrowIncludePatternsForCli(include, ["node", "vitest", "run", candidate]),
+      ).toEqual([candidate]);
+      expect(
+        selector.matchesVitestCliSelection(infraFile, include, ["run", candidate], "", {}),
+      ).toBe(true);
+      expect(
+        selector.matchesVitestCliSelection(
+          infraFile,
+          include,
+          ["run", candidate, "--exclude", infraFile],
+          "",
+          {},
+        ),
+      ).toBe(false);
+      expect(
+        selector.matchesVitestCliSelection(
+          infraFile,
+          ["extensions/qa-lab/**/*.test.ts"],
+          ["run", candidate],
+          "",
+          {},
+        ),
+      ).toBe(false);
+    } finally {
+      vi.doUnmock("node:path");
+      vi.resetModules();
+    }
+  });
+
   const file = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
   it.each([
     { args: ["--configLoader", "runner"], selected: true },

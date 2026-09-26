@@ -223,7 +223,7 @@ describe("createReadinessChecker", () => {
     });
   });
 
-  it("reports a terminal state database failure after the readiness cache expires", () => {
+  it("reports a terminal state database failure immediately and discards cached channel health", () => {
     withReadinessClock(() => {
       const stateDatabase = { failure: undefined as Error | undefined };
       const { manager, readiness } = createReadinessHarness({
@@ -233,9 +233,15 @@ describe("createReadinessChecker", () => {
       expect(readiness()).toEqual(readySnapshot());
 
       stateDatabase.failure = new Error("newer shared-state schema");
-      vi.advanceTimersByTime(1_000);
-      expect(readiness()).toEqual(failingSnapshot(["state-database"], FIVE_MIN_MS + 1_000));
+      expect(readiness()).toEqual({
+        ...failingSnapshot(["state-database"]),
+        stateDatabase: { reason: "newer shared-state schema" },
+      });
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+
+      stateDatabase.failure = undefined;
+      expect(readiness()).toEqual(readySnapshot());
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     });
   });
 

@@ -261,11 +261,23 @@ async function runFlowActionBody(
   if (!isPlainObject(action)) {
     throw new Error(`invalid qa flow action: ${JSON.stringify(action)}`);
   }
-  if (typeof action.call === "string") {
-    const callable = resolveCallable(action.call, api, vars);
-    const args = Array.isArray(action.args)
-      ? await Promise.all(action.args.map((entry) => resolveValue(entry, api, vars)))
-      : [];
+  const transportAction = [
+    "sendInbound",
+    "sendNativeCommand",
+    "waitForOutbound",
+    "waitForOutboundSequence",
+    "waitForNoOutbound",
+  ].find((name) => name in action);
+  const call = typeof action.call === "string" ? action.call : undefined;
+  if (call !== undefined || transportAction) {
+    const callable = resolveCallable(call ?? `transport.${transportAction}`, api, vars);
+    const inputs =
+      call === undefined
+        ? [action[transportAction!]]
+        : Array.isArray(action.args)
+          ? action.args
+          : [];
+    const args = await Promise.all(inputs.map((entry) => resolveValue(entry, api, vars)));
     // Value resolution may cross the deadline, so fence every callable at invocation time.
     throwIfFlowAborted(api, options);
     const result = await callable(...args);
@@ -273,24 +285,6 @@ async function runFlowActionBody(
       vars[action.saveAs.trim()] = result;
     }
     return;
-  }
-  for (const name of [
-    "sendInbound",
-    "sendNativeCommand",
-    "waitForOutbound",
-    "waitForOutboundSequence",
-    "waitForNoOutbound",
-  ] as const) {
-    if (name in action) {
-      const callable = resolveCallable(`transport.${name}`, api, vars);
-      const input = await resolveValue(action[name], api, vars);
-      throwIfFlowAborted(api, options);
-      const result = await callable(input);
-      if (typeof action.saveAs === "string" && action.saveAs.trim()) {
-        vars[action.saveAs.trim()] = result;
-      }
-      return;
-    }
   }
   if (action.resetTransport === true) {
     const reset = resolveCallable("transport.reset", api, vars);

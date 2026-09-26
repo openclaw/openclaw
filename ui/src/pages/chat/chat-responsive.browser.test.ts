@@ -393,42 +393,91 @@ function activityAlignmentHtml() {
   `;
 }
 
-function completedWorkSpacingHtml(activity: boolean) {
+type AvatarPlacement = "gutter" | "footer" | "none";
+
+// Mirrors every group shape the transcript renders: turn-ending own/peer user and
+// assistant groups (hidden, revealed, persistent footers, and a streaming reply
+// whose footer row is still empty), plus work, activity and live narration blocks
+// that belong to the turn of the answer after them and therefore have no footer
+// row. Each avatar
+// placement renders the same turns: gutter avatars, footer avatars in direct
+// threads, or none for subagent sessions.
+function uniformTurnSpacingHtml(placement: AvatarPlacement) {
+  const copy = `<div class="chat-group-footer-actions"><button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button></div>`;
+  const row = (group: string) => `<div class="chat-virtual-row">${group}</div>`;
+  const gutterAvatar = (role: string) =>
+    placement === "gutter" ? `<div class="chat-avatar ${role}">A</div>` : "";
+  const meta = (name: string, role: string) =>
+    `<div class="chat-group-footer__meta">${
+      placement === "footer" && role === "user" ? '<span class="chat-author-avatar"></span>' : ""
+    }<span class="chat-sender-name">${name}</span></div>`;
+  const message = (role: string, modifiers: string, text: string, footer: string) => `
+    <div class="chat-group ${role} ${modifiers} chat-group--with-footer">
+      ${gutterAvatar(role)}
+      <div class="chat-group-messages"><div class="chat-bubble"><div class="chat-text">${text}</div></div></div>
+      ${footer}
+    </div>`;
+  const persistent = (inner: string) =>
+    `<div class="chat-group-footer chat-group-footer--persistent-identity">${inner}</div>`;
+  const tool = (classes: string, summary: string) => `
+    <div class="chat-group tool chat-group--turn-block ${classes}">
+      <div class="chat-group-messages">
+        <div class="chat-activity-group chat-work-group">
+          <button class="chat-inline-disclosure chat-activity-group__summary" type="button">${summary}</button>
+          <div class="chat-work-group__separator"></div>
+        </div>
+      </div>
+    </div>`;
+  // Live narration renders as an assistant group marked as a turn block.
+  const narration = (text: string) => `
+    <div class="chat-group assistant chat-group--turn-block chat-group--with-footer">
+      <div class="chat-group-messages"><div class="chat-bubble"><div class="chat-text">${text}</div></div></div>
+    </div>`;
   return `
-    <div class="chat-thread" role="log">
+    <div class="chat-thread${placement === "footer" ? " chat-thread--direct" : ""}" role="log">
       <div class="chat-thread-inner chat-thread-inner--virtual">
-        <div class="chat-virtual-sizer" style="height: 400px;">
+        <div class="chat-virtual-sizer" style="height: 1600px;">
           <div class="chat-virtual-block">
-            <div class="chat-virtual-row" data-spacing-row="prompt">
-              <div class="chat-group user chat-group--with-footer">
-                <div class="chat-group-messages">
-                  <div class="chat-bubble"><div class="chat-text">Prompt</div></div>
-                </div>
-                <div class="chat-group-footer"><span class="chat-sender-name">You</span></div>
-              </div>
-            </div>
-            <div class="chat-virtual-row" data-spacing-row="work">
-              <div class="chat-group tool ${activity ? "chat-group--activity chat-group--with-footer" : "chat-group--work"}">
-                <div class="chat-group-messages">
-                  <div class="chat-activity-group ${activity ? "" : "chat-work-group"}">
-                    <button class="chat-inline-disclosure chat-activity-group__summary" type="button">
-                      <span class="chat-tool-disclosure__content">
-                        <span class="chat-activity-group__label">Worked for 10s</span>
-                      </span>
-                    </button>
-                    ${activity ? "" : '<div class="chat-work-group__separator"></div>'}
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="chat-virtual-row" data-spacing-row="reply">
-              <div class="chat-group assistant chat-group--with-footer">
-                <div class="chat-group-messages">
-                  <div class="chat-bubble"><div class="chat-text">Final reply</div></div>
-                </div>
-                <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
-              </div>
-            </div>
+            ${[
+              message("user", "", "Own prompt", persistent(`${copy}${meta("You", "user")}`)),
+              tool("chat-group--work", "Worked for 10s"),
+              message(
+                "assistant",
+                "",
+                "Reply after work",
+                `<div class="chat-group-footer">${meta("Assistant", "assistant")}${copy}</div>`,
+              ),
+              message(
+                "user",
+                "chat-group--peer",
+                "Peer prompt",
+                persistent(`${meta("Peer", "user")}${copy}`),
+              ),
+              tool("chat-group--activity chat-group--with-footer", "Activity: 2 tools"),
+              message(
+                "assistant",
+                "chat-group--meta-revealed",
+                "Revealed reply",
+                `<div class="chat-group-footer">${meta("Assistant", "assistant")}${copy}</div>`,
+              ),
+              message(
+                "user",
+                "chat-group--meta-revealed",
+                "Revealed own prompt",
+                persistent(`${copy}${meta("You", "user")}`),
+              ),
+              narration("Checking the footer layout first."),
+              tool("chat-group--activity chat-group--with-footer", "Activity: 1 tool"),
+              narration("Comparing the two layouts."),
+              message(
+                "assistant",
+                "",
+                "Streaming reply",
+                '<div class="chat-group-footer" aria-hidden="true"></div>',
+              ),
+            ]
+              .map(row)
+              .join("")}
           </div>
         </div>
       </div>
@@ -1281,41 +1330,77 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     );
   });
 
-  it.each([
-    { label: "desktop work", width: 1366, hasTouch: false, activity: false },
-    { label: "narrow touch work", width: 430, hasTouch: true, activity: false },
-    { label: "wide touch work", width: 1366, hasTouch: true, activity: false },
-    { label: "desktop activity", width: 1366, hasTouch: false, activity: true },
-    { label: "touch activity", width: 430, hasTouch: true, activity: true },
-  ])(
-    "keeps completed work attached to its reply on $label",
-    async ({ width, hasTouch, activity }) => {
+  it.each(
+    (["gutter", "footer", "none"] as const).flatMap((placement) => [
+      { label: `desktop ${placement}`, placement, width: 1366, hasTouch: false, turnGap: 16 },
+      { label: `narrow touch ${placement}`, placement, width: 390, hasTouch: true, turnGap: 12 },
+      { label: `wide touch ${placement}`, placement, width: 1366, hasTouch: true, turnGap: 12 },
+    ]),
+  )(
+    "separates every consecutive turn by the same space on $label",
+    async ({ placement, width, hasTouch, turnGap }) => {
       await withBrowserPage(
-        openBrowserPage(width, 720, { hasTouch, isolated: true }),
+        openBrowserPage(width, 1800, { hasTouch, isolated: true }),
         async (page) => {
           // Isolate the final-layout contract from the 200ms settle-in transform.
           await page.setContent(
-            `<!doctype html><html><head><style>${readUiCss()}</style><style>.chat-group--work { animation: none; }</style></head><body>${completedWorkSpacingHtml(activity)}</body></html>`,
+            `<!doctype html><html><head><style>${readUiCss()}</style><style>.chat-group--work { animation: none; }</style></head><body>${uniformTurnSpacingHtml(placement)}</body></html>`,
           );
-          await waitForLayoutSettled(page, "[data-spacing-row], .chat-group--work");
+          await waitForLayoutSettled(page, ".chat-virtual-row .chat-group");
 
-          const gaps = await page.evaluate(() => {
-            const prompt = document.querySelector<HTMLElement>(
-              '[data-spacing-row="prompt"] .chat-group',
-            )!;
-            const summary = document.querySelector<HTMLElement>(".chat-activity-group > button")!;
-            const work = document.querySelector<HTMLElement>(".chat-activity-group")!;
-            const reply = document.querySelector<HTMLElement>(
-              '[data-spacing-row="reply"] .chat-group',
-            )!;
-            return {
-              after: reply.getBoundingClientRect().top - work.getBoundingClientRect().bottom,
-              before: summary.getBoundingClientRect().top - prompt.getBoundingClientRect().bottom,
-            };
-          });
+          const layout = await page.evaluate(() =>
+            [...document.querySelectorAll<HTMLElement>(".chat-virtual-row > .chat-group")].map(
+              (group) => {
+                const box = group.getBoundingClientRect();
+                const content = group
+                  .querySelector<HTMLElement>(":scope > .chat-group-messages")!
+                  .getBoundingClientRect();
+                const footer = group
+                  .querySelector<HTMLElement>(":scope > .chat-group-footer")
+                  ?.getBoundingClientRect();
+                return {
+                  inTurnBlock: group.classList.contains("chat-group--turn-block"),
+                  top: box.top,
+                  bottom: box.bottom,
+                  contentTop: content.top,
+                  contentBottom: content.bottom,
+                  footer: footer
+                    ? {
+                        offset: footer.top - content.bottom,
+                        height: footer.height,
+                        toEdge: box.bottom - footer.bottom,
+                      }
+                    : null,
+                  gapAfter: Number.parseFloat(getComputedStyle(group).marginBlockEnd),
+                };
+              },
+            ),
+          );
 
-          expect(gaps.before).toBeCloseTo(0, 0);
-          expect(gaps.after).toBeCloseTo(8, 0);
+          expect(layout).toHaveLength(11);
+          for (const [index, group] of layout.entries()) {
+            const next = layout[index + 1];
+            if (group.inTurnBlock) {
+              // Work, activity and live narration blocks belong to the answer's
+              // turn: no footer row, only the inline run-frame gap to what follows.
+              expect(group.footer).toBeNull();
+              expect(group.gapAfter).toBe(8);
+              expect(next!.contentTop - group.contentBottom).toBeCloseTo(8, 1);
+              continue;
+            }
+            // Every turn ends in one footer row of the context's size; the turn
+            // gap is the only space before whatever comes next.
+            expect(group.gapAfter).toBe(turnGap);
+            expect(group.footer).toEqual({
+              offset: expect.closeTo(2, 1),
+              height: 24,
+              toEdge: expect.closeTo(0, 1),
+            });
+            if (next) {
+              expect(next.top - group.bottom).toBeCloseTo(turnGap, 1);
+              expect(next.contentTop - group.contentBottom).toBeCloseTo(2 + 24 + turnGap, 1);
+            }
+          }
         },
       );
     },
@@ -1324,6 +1409,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it.each([
     { label: "desktop", width: 1366, hasTouch: false },
     { label: "mobile", width: 430, hasTouch: true },
+    { label: "wide touch", width: 1366, hasTouch: true },
   ])("keeps transcript turn and run block spacing on $label", async ({ width, hasTouch }) => {
     await withBrowserPage(
       openBrowserPage(width, 900, { hasTouch, isolated: true }),
@@ -1373,10 +1459,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           workToReply: 8,
           expandedTextToTool: 6,
           workedForSeparator: 0,
-          turn: hasTouch ? 50 : 28,
-          persistentTurn: hasTouch ? 30 : 28,
-          revealedPersistentTurn: hasTouch ? 50 : 28,
-          simpleToPersistentTurn: hasTouch ? 30 : 28,
+          // Footer offset + 24px footer row + turn gap (16px, or 12px on touch).
+          turn: hasTouch ? 38 : 42,
+          persistentTurn: hasTouch ? 38 : 42,
+          revealedPersistentTurn: hasTouch ? 38 : 42,
+          simpleToPersistentTurn: hasTouch ? 38 : 42,
         });
       },
     );
@@ -1765,8 +1852,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const bubbleRect = bubble.getBoundingClientRect();
         const footerRect = footer.getBoundingClientRect();
         return {
-          avatarBottom: avatarRect.bottom,
-          bubbleBottom: bubbleRect.bottom,
+          avatarTop: avatarRect.top,
+          bubbleTop: bubbleRect.top,
           firstBottom: firstRect.bottom,
           footerBottom: footerRect.bottom,
           footerHeight: footerRect.height,
@@ -1775,7 +1862,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
 
       expect(layout.footerHeight).toBeGreaterThan(24);
-      expect(layout.bubbleBottom - layout.avatarBottom).toBeCloseTo(4, 0);
+      expect(layout.avatarTop - layout.bubbleTop).toBeCloseTo(0, 0);
       expect(layout.footerBottom).toBeLessThanOrEqual(layout.firstBottom + 1);
       expect(Math.abs(layout.secondTop - layout.firstBottom)).toBeLessThanOrEqual(1);
     });
@@ -2698,7 +2785,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [320, 568],
     [1366, 900],
   ] as const)(
-    "keeps short assistant footer actions below the bubble at %sx%s",
+    "keeps short assistant names and actions compact below the bubble at %sx%s",
     async (width, height) => {
       await withBrowserPage(openBrowserPage(width, height), async (page) => {
         await page.setContent(
@@ -2729,6 +2816,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const text = await getTextContentRect(page, ".chat-text p");
         const actions = await getRect(page, ".chat-group-footer-actions");
         expect(text.bottom).toBeLessThanOrEqual(actions.top - 1);
+        const bubble = await getRect(page, ".chat-bubble");
+        const name = await getRect(page, ".chat-sender-name");
+        const icon = await getRect(page, ".chat-group-footer-actions button svg");
+        // Turn spacing belongs after this whole set, not above its metadata.
+        expect(name.top - bubble.bottom).toBeLessThanOrEqual(10);
+        expect(icon.top - bubble.bottom).toBeLessThanOrEqual(10);
       });
     },
   );

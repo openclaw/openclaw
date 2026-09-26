@@ -1,9 +1,8 @@
 import { gcm } from "@noble/ciphers/aes.js";
-import { ed25519 } from "@noble/curves/ed25519.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
-import { canonicalBytes, canonicalJson } from "./canonical.js";
-import { base64, base64url, decodeUtf8, fromBase64, fromBase64url, hex, utf8 } from "./encoding.js";
+import { canonicalBytes } from "./canonical.js";
+import { base64, decodeUtf8, fromBase64, hex, utf8 } from "./encoding.js";
 
 export interface AuditEvent {
   seq: number;
@@ -26,28 +25,6 @@ export interface AuditStore {
 interface AuditHead {
   hash: string;
   seq: number;
-}
-
-export interface AuditCheckpoint {
-  head: string;
-  signature: string;
-}
-
-export function appendAudit(
-  store: AuditStore,
-  type: string,
-  payload: unknown,
-  ts?: number,
-): Promise<AuditEntry> {
-  return store.appendEvent(type, payload, ts);
-}
-
-export async function appendInboxRead(
-  store: AuditStore,
-  ids: string[],
-  ts?: number,
-): Promise<AuditEntry> {
-  return appendAudit(store, "read", { ids }, ts);
 }
 
 export function verifyChain(
@@ -81,37 +58,6 @@ export function verifyChainSegment(
     previous = entry.entryHash;
   }
   return expected.head === undefined || previous === expected.head;
-}
-
-export function signCheckpoint(
-  entries: readonly AuditEntry[],
-  signingSecretKey: string,
-): AuditCheckpoint {
-  const head = entries.at(-1)?.entryHash ?? "";
-  return {
-    head,
-    signature: base64url(ed25519.sign(checkpointBytes(head), fromBase64url(signingSecretKey))),
-  };
-}
-
-export function verifyCheckpoint(checkpoint: AuditCheckpoint, signingPublicKey: string): boolean {
-  try {
-    return ed25519.verify(
-      fromBase64url(checkpoint.signature),
-      checkpointBytes(checkpoint.head),
-      fromBase64url(signingPublicKey),
-    );
-  } catch {
-    return false;
-  }
-}
-
-function checkpointBytes(head: string): Uint8Array {
-  return utf8(`reef-checkpoint-v1:${head}`);
-}
-
-export function exportRedactedJsonl(entries: readonly AuditEntry[]): string {
-  return entries.map((entry) => canonicalJson(entry)).join("\n") + (entries.length > 0 ? "\n" : "");
 }
 
 export function decryptAuditText(entry: AuditEntry, auditKey: Uint8Array): AuditEntry {

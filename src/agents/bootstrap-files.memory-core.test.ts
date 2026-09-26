@@ -28,6 +28,7 @@ describe("personal bootstrap with the real Memory Core runtime", () => {
       registerMemoryCapability("memory-core", { runtime: memoryRuntime });
       const workspaceDir = state.statePath("workspace");
       const profile = ensureProfileForEmail("person@example.test");
+      ensureProfileForEmail("other@example.test");
       const personalDir = path.join(workspaceDir, "users", profile.id);
       const personalFile = path.join(personalDir, "USER.md");
       await fs.mkdir(personalDir, { recursive: true });

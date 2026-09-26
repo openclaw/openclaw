@@ -167,7 +167,7 @@ describe("QuickJS host lifecycle and output", () => {
       if (result.status === "waiting") {
         onTestFinished(() => result.continuation.dispose());
       }
-      expect(result.status).toBe(status);
+      expect(result.status, result.status === "failed" ? result.error : undefined).toBe(status);
 
       if (result.status === "failed") {
         expect(result.code).toBe("internal_error");

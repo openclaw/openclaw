@@ -6,12 +6,14 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import {
   stageSqliteTransactionState,
   withSqlitePostCommitPublications,
 } from "../../infra/sqlite-post-commit.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
@@ -408,7 +410,9 @@ export function canonicalSessionValidationQuery(
 
 /** Older supported maintenance readers keep their existing full-validation path. */
 export function hasCanonicalSessionValidationProjection(database: { db: DatabaseSync }): boolean {
-  if (readSqliteUserVersion(database.db) < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
+  const version =
+    getAdmittedSqliteSchemaFacts(database.db)?.userVersion ?? readSqliteUserVersion(database.db);
+  if (version < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
     return false;
   }
   assertCanonicalSessionValidationSchema(database.db);
@@ -452,6 +456,23 @@ export function assertCanonicalSqliteSessionKeysCurrent(
   collectMetadata = false,
 ): ValidatedSessionMetadata | undefined {
   return validateCanonicalSqliteSessionKeys(database, collectMetadata).metadata;
+}
+
+/** Exact reads validate their snapshot without admitting unrelated persisted rows. */
+export function assertCanonicalSqliteSessionRowsCurrent(
+  database: { agentId: string; db: DatabaseSync },
+  sessionKeys: readonly string[],
+): void {
+  for (const row of iterateSqliteQuerySync(
+    database.db,
+    canonicalSessionValidationQuery(database).where(
+      "session_nodes.session_key",
+      "in",
+      sqliteStringSet(sessionKeys),
+    ),
+  )) {
+    validateCanonicalSessionRow(row, "read");
+  }
 }
 
 /** Validate the root's database and key together within its synchronous writer transaction. */

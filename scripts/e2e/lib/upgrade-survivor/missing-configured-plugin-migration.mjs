@@ -106,7 +106,7 @@ function withDatabase(read) {
 }
 
 function isPendingWarning(text) {
-  return /Plugin "codex" (?:state )?migration is (?:pending|deferred)/iu.test(
+  return /Plugin "codex" (?:(?:state )?migration is (?:pending|deferred)|data\/settings upgrade is unfinished)/iu.test(
     text.replaceAll('\\"', '"'),
   );
 }

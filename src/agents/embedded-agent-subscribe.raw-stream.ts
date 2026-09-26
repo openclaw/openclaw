@@ -6,6 +6,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { appendRegularFile } from "../infra/fs-safe.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 
 let rawStreamReady = false;
 
@@ -20,8 +21,11 @@ function resolveRawStreamPath(): string {
   );
 }
 
-export function appendRawStream(createPayload: () => Record<string, unknown>) {
-  if (!isRawStreamEnabled()) {
+export function appendRawStream(
+  createPayload: () => Record<string, unknown>,
+  sessionKey: string | undefined,
+) {
+  if (!isRawStreamEnabled() || isIncognitoSessionKey(sessionKey)) {
     return;
   }
   const rawStreamPath = resolveRawStreamPath();

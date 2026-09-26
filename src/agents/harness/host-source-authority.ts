@@ -1,12 +1,25 @@
+import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
+  assertAdmittedRunOperatorAuthority,
   bindOperatorModelExecution,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+
+/** Acquires original-source model authority while the issuing host is active. */
+export function bindHarnessModelExecution(
+  admittedRunContext: AdmittedRunContext,
+  model: ModelRef | undefined,
+  assertActive: () => void,
+): ReturnType<NonNullable<AgentHarnessHostCapabilities["bindModelExecution"]>> {
+  assertActive();
+  return bindOperatorModelExecution(readAdmittedRunOperatorAuthority(admittedRunContext), model);
+}
 
 const retainedSources = resolveGlobalSingleton(
   Symbol.for("openclaw.harness.retainedSources"),
@@ -24,6 +37,7 @@ registerAgentEventLifecycleRotationHandler("harness-retained-sources", () => {
 export function retainHarnessSource(
   admittedRunContext: AdmittedRunContext,
   assertActive: () => void,
+  nativeModelPolicySupported = false,
 ): ReturnType<NonNullable<AgentHarnessHostCapabilities["retainSourceAuthority"]>> {
   assertActive();
   const lifecycleGeneration = getAgentRunLifecycleGeneration();
@@ -31,21 +45,32 @@ export function retainHarnessSource(
   if (!source) {
     return undefined;
   }
-  // A retained source does not attest the model used by independent native work.
-  const modelExecution = bindOperatorModelExecution(source, undefined);
+  const modelExecution = nativeModelPolicySupported
+    ? undefined
+    : bindOperatorModelExecution(source, undefined);
+  const release = nativeModelPolicySupported ? source.retain?.() : modelExecution?.release;
+  const assertSourceCurrent = () => {
+    if (nativeModelPolicySupported) {
+      source.assertCurrent();
+    } else {
+      modelExecution?.assertCurrent();
+    }
+  };
   try {
     assertActive();
-    modelExecution?.assertCurrent();
+    assertSourceCurrent();
     assertActive();
   } catch (error) {
-    modelExecution?.release();
+    release?.();
     throw error;
   }
   let released = false;
+  let modelLifetime: AbortController | undefined;
   const lifecycle = new AbortController();
   retainedSources.add(lifecycle);
-  const signal = modelExecution
-    ? AbortSignal.any([modelExecution.signal, lifecycle.signal])
+  const authoritySignal = modelExecution?.signal ?? source.signal;
+  const signal = authoritySignal
+    ? AbortSignal.any([authoritySignal, lifecycle.signal])
     : lifecycle.signal;
   const assertRetained = () => {
     if (released || getAgentRunLifecycleGeneration() !== lifecycleGeneration) {
@@ -53,19 +78,96 @@ export function retainHarnessSource(
     }
     signal.throwIfAborted();
   };
+  const assertCurrent = () => {
+    assertRetained();
+    assertSourceCurrent();
+    assertRetained();
+  };
   return Object.freeze({
     signal,
-    assertCurrent: () => {
-      assertRetained();
-      modelExecution?.assertCurrent();
-      assertRetained();
+    assertCurrent,
+    get modelPolicyRequired() {
+      assertCurrent();
+      const required = source.modelPolicy !== undefined;
+      assertCurrent();
+      return required;
+    },
+    get sourceIdentity() {
+      assertCurrent();
+      const identity = source.source;
+      assertCurrent();
+      return identity;
+    },
+    bindModelExecution: (model: ModelRef | undefined) => {
+      assertCurrent();
+      const binding = bindOperatorModelExecution(source, model);
+      if (!binding) {
+        return undefined;
+      }
+      const assertBindingCurrent = () => {
+        binding.assertCurrent();
+        assertRetained();
+      };
+      try {
+        assertBindingCurrent();
+      } catch (error) {
+        binding.release();
+        throw error;
+      }
+      modelLifetime ??= new AbortController();
+      return {
+        signal: AbortSignal.any([signal, modelLifetime.signal, binding.signal]),
+        assertCurrent: assertBindingCurrent,
+        release: binding.release,
+      };
     },
     release: () => {
       if (!released) {
         released = true;
         retainedSources.delete(lifecycle);
-        modelExecution?.release();
+        modelLifetime?.abort(new Error("agent harness retained source is no longer active"));
+        release?.();
       }
     },
   });
+}
+
+/** Host-only original source; an explicit undefined operator identifies System work. */
+export type AgentHarnessCompactionSourceAuthority = Readonly<{
+  assertActive: () => void;
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+}>;
+
+export function assertCompactionSource(
+  source: AgentHarnessCompactionSourceAuthority | undefined,
+): asserts source is AgentHarnessCompactionSourceAuthority {
+  if (!source || !Object.hasOwn(source, "operatorAuthority")) {
+    throw new Error("Compaction requires its original host source authority");
+  }
+  source.assertActive();
+  if (source.operatorAuthority !== undefined) {
+    assertAdmittedRunOperatorAuthority(source.operatorAuthority);
+    source.operatorAuthority.assertCurrent();
+  }
+}
+
+/** Retains the existing issuer through queueing; the compaction work owner releases it. */
+export function retainAgentHarnessCompactionSource(
+  source: AgentHarnessCompactionSourceAuthority | undefined,
+): () => void {
+  assertCompactionSource(source);
+  const release = source.operatorAuthority?.retain?.();
+  try {
+    assertCompactionSource(source);
+  } catch (error) {
+    release?.();
+    throw error;
+  }
+  let released = false;
+  return () => {
+    if (!released) {
+      released = true;
+      release?.();
+    }
+  };
 }

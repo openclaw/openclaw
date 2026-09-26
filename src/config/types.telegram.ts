@@ -110,9 +110,11 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
     webhookUrl?: string;
     webhookSecret?: string;
     webhookPath?: string;
-    /** Local webhook listener bind host (default: 127.0.0.1). */
+    /** Webhook forwarding endpoint (default 127.0.0.1:8787); false uses only the Gateway port. */
+    legacyWebhook?: false | { port: number; host?: string };
+    /** @deprecated Legacy input only; Doctor migrates this to legacyWebhook.host. */
     webhookHost?: string;
-    /** Local webhook listener bind port (default: 8787). */
+    /** @deprecated Legacy input only; Doctor migrates this to legacyWebhook.port. */
     webhookPort?: number;
     /** Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. */
     webhookCertPath?: string;
@@ -120,36 +122,12 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
     actions?: TelegramActionConfig;
     /** Telegram thread/conversation binding overrides. */
     threadBindings?: TelegramThreadBindingsConfig;
-    /**
-     * Controls which user reactions trigger notifications:
-     * - "off" (default): ignore all reactions
-     * - "own": notify when users react to bot messages
-     * - "all": notify agent of all reactions
-     */
-    /**
-     * Controls agent's reaction capability:
-     * - "off": agent cannot react
-     * - "ack" (default): bot sends acknowledgment reactions (👀 while processing)
-     * - "minimal": agent can react sparingly (guideline: 1 per 5-10 exchanges)
-     * - "extensive": agent can react liberally when appropriate
-     */
     /** Controls whether link previews are shown in outbound messages. Default: true. */
     linkPreview?: boolean;
     /** Send Telegram bot error replies silently (no notification sound). Default: false. */
     silentErrorReplies?: boolean;
     /** Controls outbound error reporting: always, once per cooldown window, or silent. */
     errorPolicy?: "always" | "once" | "silent";
-    /**
-     * Per-channel outbound response prefix override.
-     *
-     * Account values take precedence over the channel-level value.
-     * Use `""` to explicitly disable a global prefix for this channel.
-     * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
-     */
-    /**
-     * Per-channel ack reaction override.
-     * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
-     */
     /** Custom Telegram Bot API root URL (e.g. "https://my-proxy.example.com" or a local Bot API server), not a /bot<TOKEN> endpoint. */
     apiRoot?: string;
     /** Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. */

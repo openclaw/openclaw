@@ -9,6 +9,7 @@ export class ChatMessageEntryAnimations {
   private readonly refs = new Map<string, (element?: Element) => void>();
   private readonly seen = new Set<string>();
   private readonly pending = new Set<string>();
+  private readonly active = new Map<HTMLElement, () => void>();
   private enabled = false;
 
   get projectedKeys(): ReadonlyMap<string, string | null> {
@@ -64,15 +65,23 @@ export class ChatMessageEntryAnimations {
         this.pending.add(identity);
       }
       if (!this.refs.has(key)) {
+        let current: HTMLElement | undefined;
         this.refs.set(key, (element) => {
-          if (element && this.pending.delete(identity)) {
-            element.classList.add("chat-bubble--enter");
+          if (current !== element) {
+            if (current) {
+              this.active.get(current)?.();
+            }
+            current = element instanceof HTMLElement ? element : undefined;
+          }
+          if (current && this.pending.delete(identity)) {
+            this.enter(current);
           }
         });
       }
     }
     for (const key of this.refs.keys()) {
       if (!entries.has(key)) {
+        this.refs.get(key)?.(undefined);
         this.refs.delete(key);
       }
     }
@@ -86,6 +95,32 @@ export class ChatMessageEntryAnimations {
     this.enabled = enabled;
   }
 
+  private enter(element: HTMLElement): void {
+    this.active.get(element)?.();
+    if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      return;
+    }
+    const finish = () => {
+      if (this.active.get(element) !== finish) {
+        return;
+      }
+      this.active.delete(element);
+      element.removeEventListener("animationend", settled);
+      element.removeEventListener("animationcancel", settled);
+      // A completed class otherwise replays when the retained bubble is reparented.
+      element.classList.remove("chat-bubble--enter");
+    };
+    const settled = (event: AnimationEvent) => {
+      if (event.target === element && event.animationName === "chat-message-enter") {
+        finish();
+      }
+    };
+    this.active.set(element, finish);
+    element.addEventListener("animationend", settled);
+    element.addEventListener("animationcancel", settled);
+    element.classList.add("chat-bubble--enter");
+  }
+
   refFor = (key: string): ((element?: Element) => void) | undefined => this.refs.get(key);
   didCommit(): void {
     this.pending.clear();
@@ -93,5 +128,8 @@ export class ChatMessageEntryAnimations {
   disconnect(): void {
     this.enabled = false;
     this.pending.clear();
+    for (const finish of this.active.values()) {
+      finish();
+    }
   }
 }

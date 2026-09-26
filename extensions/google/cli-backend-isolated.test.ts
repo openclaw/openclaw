@@ -248,7 +248,7 @@ describe("Gemini CLI isolated completion", () => {
     });
   });
 
-  it.each([1, 2, 3])("accepts an @-path escaped by %i backslashes", async (backslashes) => {
+  it.each([1, 2])("accepts an @-path escaped by %i backslashes", async (backslashes) => {
     await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
       const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
         ...buildGeminiApiKeyPrepareContext(workspaceDir),

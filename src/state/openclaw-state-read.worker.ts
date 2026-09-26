@@ -1,5 +1,8 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { selectAcpSessionRowForRead } from "../acp/runtime/session-meta-keys.js";
+import {
+  selectAcpSessionRowForRead,
+  selectAcpSessionRows,
+} from "../acp/runtime/session-meta-keys.js";
 import {
   countMcpOAuthPrincipalsInDatabase,
   listMcpOAuthStoreKeysInDatabase,
@@ -8,22 +11,18 @@ import {
   readMcpOAuthStatusesInDatabase,
 } from "../agents/mcp-oauth-store.kernel.js";
 import {
-  readSandboxBrowserRegistryInDatabase,
-  readSandboxRegistryEntryInDatabase,
-  readSandboxRegistryInDatabase,
-  readSandboxRuntimeIdsInDatabase,
-} from "../agents/sandbox/registry.kernel.js";
-import {
   loadSubagentRunsByRunIdsFromSqlite,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
-import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
-import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
+import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
+import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
+import { readCronJobNamesInDatabase } from "../cron/store/job-name.js";
+import { resolveCronJobsStorePath } from "../cron/store/paths.js";
+import { readActiveCronRunReceiptOwnersInDatabase } from "../cron/store/run-receipt-read.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
-import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
 import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
@@ -43,8 +42,9 @@ import {
 } from "../gateway/worker-environments/store-row-codec.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
+import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
@@ -62,10 +62,16 @@ import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
+import { captureTaskRetentionSource } from "../tasks/task-registry-retention-source.js";
 import {
+  readTaskRecord,
   readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshot,
 } from "../tasks/task-registry.store.kernel.js";
+import {
+  readAgentDatabaseDeletionSnapshotInDatabase,
+  readAgentDeletionJournalStatusInDatabase,
+} from "./agent-deletion-journal.read.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
@@ -77,24 +83,28 @@ import {
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
+import { readStateDiagnosticCommand } from "./openclaw-state-read-diagnostics.js";
+import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.js";
 import {
   listUserChannelIdentitiesInDatabase,
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
-import { resolveCachedGitHubIdentityInDatabase } from "./user-profile-github-identity.js";
+import { selectUserPreferenceValues } from "./user-preferences.store.js";
+import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
+  readUserProfileAuthorityInDatabase,
   readUserProfileEmailBindings,
   readUserProfileIdForEmail,
 } from "./user-profile-identity.read.js";
-import { projectUserProfileDisplay } from "./user-profile-list.js";
 import {
+  readUserProfileAvatarCommand,
   selectProfileDisplayEntries,
-  selectResolvedUserProfileMetadataById,
-  userProfilesDb,
 } from "./user-profiles-internal.js";
 
 serveOwnedWorkerTasks(
@@ -124,18 +134,21 @@ serveOwnedWorkerTasks(
             if (command.type === "admit") {
               return { ok: true, type: "admit" };
             }
+            const locationArgs = [
+              input.databasePath,
+              input.location,
+              undefined,
+              input.expectedIdentity,
+              input.snapshotRoot,
+              true,
+            ] as const;
             if (command.type === "agentDatabaseRegistry.read") {
               const result = readOpenClawStateReadOnlyLocation(
                 ({ db }) => {
                   sourceAdmitted = true;
                   return readRegisteredAgentDatabaseRows(db, input.databasePath, false);
                 },
-                input.databasePath,
-                input.location,
-                undefined,
-                input.expectedIdentity,
-                input.snapshotRoot,
-                true,
+                ...locationArgs,
               );
               return {
                 ok: true,
@@ -153,12 +166,7 @@ serveOwnedWorkerTasks(
                   sourceAdmitted = true;
                   return loadSubagentSessionListRunsFromSqlite(undefined, { db });
                 },
-                input.databasePath,
-                input.location,
-                undefined,
-                input.expectedIdentity,
-                input.snapshotRoot,
-                true,
+                ...locationArgs,
               );
               if (result.status === "unavailable" && sourceAdmitted !== true) {
                 throw result.error;
@@ -180,6 +188,48 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "agentDatabaseDeletion.snapshot") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    snapshot: readAgentDatabaseDeletionSnapshotInDatabase(
+                      db,
+                      input.databasePath,
+                      command.purpose,
+                    ),
+                  };
+                }
+                if (command.type === "agentDeletionJournal.status") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
+                  };
+                }
+                if (command.type === "deliveryQueue.outbound") {
+                  // Custody reads retain queue ownership admission even on a read-only connection.
+                  assertOpenClawStateWriteAllowed({
+                    database: db,
+                    databasePath: input.databasePath,
+                    env: input.context.environment,
+                  });
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    entries: readOutboundDeliveriesInDatabase({ db }, command),
+                  };
+                }
+                if (command.type === "acpSessions.list") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    rows: selectAcpSessionRows(db),
+                  };
+                }
                 if (command.type === "acpSessions.metadata") {
                   return {
                     ok: true,
@@ -189,6 +239,9 @@ serveOwnedWorkerTasks(
                       (entry) => selectAcpSessionRowForRead(db, entry) ?? null,
                     ),
                   };
+                }
+                if (isChannelIngressReadCommand(command)) {
+                  return readChannelIngressInDatabase(db, command);
                 }
                 if (command.type === "subagents.runs") {
                   const rows =
@@ -277,6 +330,23 @@ serveOwnedWorkerTasks(
                     observation: observeCronRunRecoveryInDatabase(db, command),
                   };
                 }
+                if (command.type === "cron.jobNames") {
+                  const storePath = command.storePath ?? resolveCronJobsStorePath();
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    names: readCronJobNamesInDatabase(db, command.jobIds, storePath),
+                  };
+                }
+                if (command.type === "cron.activeReceiptOwners") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    owners: readActiveCronRunReceiptOwnersInDatabase(db, command.agentId),
+                  };
+                }
                 if (
                   command.type === "devicePairing.list" ||
                   command.type === "devicePairing.lookup" ||
@@ -294,6 +364,15 @@ serveOwnedWorkerTasks(
                       command.input === undefined
                         ? readTaskRegistrySnapshot({ db, path: input.databasePath })
                         : readTaskRegistryMutationSnapshotInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "tasks.retentionSource") {
+                  const task = readTaskRecord(db, command.taskId);
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    source: task ? captureTaskRetentionSource(task) : undefined,
                   };
                 }
                 if (command.type === "subagents.forChildSession") {
@@ -317,6 +396,12 @@ serveOwnedWorkerTasks(
                       path: input.databasePath,
                     }),
                   };
+                }
+                if (
+                  command.type === "config.snapshot.read" ||
+                  command.type === "audit.run.inspect"
+                ) {
+                  return readStateDiagnosticCommand(db, command);
                 }
                 if (command.type === "pluginBlob.entries") {
                   return {
@@ -418,35 +503,20 @@ serveOwnedWorkerTasks(
                     record: readOnboardingRecommendationsInDatabase(db, command.configKey),
                   };
                 }
-                if (command.type === "audit.run.inspect") {
-                  try {
-                    return {
-                      ok: true,
-                      type: command.type,
-                      sourceAdmitted,
-                      result: {
-                        status: "inspected",
-                        inspection: inspectExecutionIdentityRunInDatabase(db, command.input),
-                      },
-                    };
-                  } catch (error) {
-                    if (!(error instanceof ExecutionDecisionCursorError)) {
-                      throw error;
-                    }
-                    return {
-                      ok: true,
-                      type: command.type,
-                      sourceAdmitted,
-                      result: { status: "invalid-cursor", message: error.message },
-                    };
-                  }
-                }
-                if (command.type === "nodeHost.config") {
+                if (
+                  command.type === "nodeHost.config" ||
+                  command.type === "operator.channelPolicy"
+                ) {
                   return {
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    row: readConfigMachineStateRowInDatabase(db, command.type),
+                    // Activation may precede deferred publication; never issue authority before v19.
+                    row:
+                      command.type === "operator.channelPolicy" &&
+                      (getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) < 19
+                        ? undefined
+                        : readConfigMachineStateRowInDatabase(db, command.type),
                   };
                 }
                 if (command.type === "workspace.snapshot") {
@@ -502,48 +572,18 @@ serveOwnedWorkerTasks(
                   };
                 }
                 if (command.type === "userProfiles.authority.resolve") {
-                  const profile = runSqliteDeferredTransactionSync(db, () => {
-                    const current = tableExists(db, "user_profiles")
-                      ? selectResolvedUserProfileMetadataById(db, command.profileId)
-                      : undefined;
-                    if (!current) {
-                      return undefined;
-                    }
-                    const display = selectProfileDisplayEntries(db, [current.id])[0]?.[1];
-                    if (!display) {
-                      return undefined;
-                    }
-                    const aliases = executeSqliteQuerySync(
-                      db,
-                      userProfilesDb(db)
-                        .selectFrom("user_profiles")
-                        .select("id")
-                        .where("merged_into", "=", current.id)
-                        .orderBy("id", "asc"),
-                    ).rows;
-                    return {
-                      profileId: current.id,
-                      role: current.role ?? null,
-                      aliases: [current.id, ...aliases.map((alias) => alias.id)],
-                      display: projectUserProfileDisplay(display),
-                    };
-                  });
                   return {
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    profile,
+                    profile: readUserProfileAuthorityInDatabase(db, command.profileId),
                   };
                 }
-                if (command.type === "userProfiles.githubIdentity.cached") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    identity: runSqliteDeferredTransactionSync(db, () =>
-                      resolveCachedGitHubIdentityInDatabase(db, command),
-                    ),
-                  };
+                if (
+                  command.type === "userProfiles.githubIdentity.cached" ||
+                  command.type === "userProfiles.githubAttribution.resolve"
+                ) {
+                  return { ok: true, ...readUserProfileGitHubCommand(db, command), sourceAdmitted };
                 }
                 if (command.type === "userProfiles.channelIdentity.list") {
                   return {
@@ -570,6 +610,12 @@ serveOwnedWorkerTasks(
                   }));
                   return { ok: true, type: command.type, sourceAdmitted, ...facts };
                 }
+                if (
+                  command.type === "userProfiles.avatar.inspect" ||
+                  command.type === "userProfiles.avatar.read"
+                ) {
+                  return { ok: true, ...readUserProfileAvatarCommand(db, command), sourceAdmitted };
+                }
                 if (command.type === "userProfiles.catalog") {
                   const facts = runSqliteDeferredTransactionSync(db, () => ({
                     profiles: tableExists(db, "user_profiles")
@@ -578,6 +624,14 @@ serveOwnedWorkerTasks(
                     emailBindings: readUserProfileEmailBindings(db),
                   }));
                   return { ok: true, type: command.type, sourceAdmitted, ...facts };
+                }
+                if (command.type === "userPreferences.values") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    values: selectUserPreferenceValues(db, command.profileIds, command.key),
+                  };
                 }
                 if (command.type === "userProfiles.email.resolve") {
                   return {
@@ -589,36 +643,17 @@ serveOwnedWorkerTasks(
                     ),
                   };
                 }
-                if (command.type === "sandboxRegistry.list") {
+                if (command.type === "sessionRepositoryWorkspaces.find") {
                   return {
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    entries: readSandboxRegistryInDatabase(db),
-                  };
-                }
-                if (command.type === "sandboxRegistry.get") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    entry: readSandboxRegistryEntryInDatabase(db, command.containerName),
-                  };
-                }
-                if (command.type === "sandboxRegistry.runtimeIds") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    runtimeIds: readSandboxRuntimeIdsInDatabase(db, command),
-                  };
-                }
-                if (command.type === "sandboxRegistry.browsers") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    entries: readSandboxBrowserRegistryInDatabase(db),
+                    workspaces: runSqliteDeferredTransactionSync(db, () =>
+                      command.owners.flatMap((owner) => {
+                        const workspace = findSessionRepositoryWorkspaceInDatabase(db, owner);
+                        return workspace ? [workspace] : [];
+                      }),
+                    ),
                   };
                 }
                 if (command.type === "workerPlacements.changeSnapshot") {
@@ -626,7 +661,7 @@ serveOwnedWorkerTasks(
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    placements: readWorkerPlacementChangeSnapshotInDatabase(db),
+                    placements: readWorkerPlacementChangeSnapshotInDatabase(db, command.profileIds),
                   };
                 }
                 if (command.type === "workers.placementProjection") {
@@ -641,26 +676,9 @@ serveOwnedWorkerTasks(
                     ),
                   };
                 }
-                return command.type === "fleet.list"
-                  ? {
-                      ok: true,
-                      type: "fleet.list",
-                      sourceAdmitted,
-                      cells: listFleetCellsInDatabase(db),
-                    }
-                  : {
-                      ok: true,
-                      type: "fleet.get",
-                      sourceAdmitted,
-                      cell: getFleetCellInDatabase(db, command.tenantId),
-                    };
+                return readStateRegistryCommand(db, command);
               },
-              input.databasePath,
-              input.location,
-              undefined,
-              input.expectedIdentity,
-              input.snapshotRoot,
-              true,
+              ...locationArgs,
             );
           },
         ),

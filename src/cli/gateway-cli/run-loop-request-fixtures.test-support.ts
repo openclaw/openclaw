@@ -44,6 +44,7 @@ export type RequestFixtures = {
   commitManagedServiceUpdateHandoff: Mock<
     typeof import("../../infra/update-managed-service-handoff.js").commitManagedServiceUpdateHandoff
   >;
+  waitForSystemServiceUpdateHandoffs: Mock<() => Promise<void> | undefined>;
   isGatewayWorkAdmissionClosed: () => boolean;
   gatewayLog: { info: Mock; warn: Mock; error: Mock };
 };

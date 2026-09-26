@@ -108,33 +108,18 @@ function formatSlackApprover(resolvedBy?: string | null): string | null {
   return trimmed ? trimmed : null;
 }
 
-function formatSlackMetadataLine(label: string, value: string): string {
-  return `*${label}:* ${value}`;
-}
-
 function buildSlackMetadataLines(metadata: readonly SlackMetadataItem[]): string[] {
-  const lines: string[] = [];
-  for (const item of metadata) {
-    lines.push(formatSlackMetadataLine(item.label, item.value));
-  }
-  return lines;
+  return metadata.map(({ label, value }) => `*${label}:* ${value}`);
 }
 
 function buildSlackMetadataContextElements(metadata: readonly SlackMetadataItem[]) {
   const lines = buildSlackMetadataLines(metadata);
   const visibleLineCount =
     lines.length > SLACK_CONTEXT_ELEMENTS_MAX ? SLACK_CONTEXT_ELEMENTS_MAX - 1 : lines.length;
-  const elements: Array<{ type: "mrkdwn"; text: string }> = [];
-  for (let index = 0; index < visibleLineCount; index += 1) {
-    const line = lines[index];
-    if (line === undefined) {
-      continue;
-    }
-    elements.push({
-      type: "mrkdwn",
-      text: truncateSlackMrkdwn(line, SLACK_TEXT_OBJECT_MAX),
-    });
-  }
+  const elements = lines.slice(0, visibleLineCount).map((line) => ({
+    type: "mrkdwn" as const,
+    text: truncateSlackMrkdwn(line, SLACK_TEXT_OBJECT_MAX),
+  }));
   if (lines.length > SLACK_CONTEXT_ELEMENTS_MAX) {
     elements.push({
       type: "mrkdwn",
@@ -162,19 +147,6 @@ function buildSlackPluginMetadata(view: SlackPluginApprovalView): SlackMetadataI
 
 function resolveSlackPluginDescription(view: SlackPluginApprovalView): string {
   return normalizeOptionalString(view.description) ?? "A plugin action needs your approval.";
-}
-
-function buildSlackPluginRequestBlocks(view: SlackPluginApprovalView): SlackBlock[] {
-  return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*Request*\n${truncateSlackMrkdwn(view.title, 2600)}`,
-      },
-    },
-    ...buildSlackMetadataContextBlocks(buildSlackPluginMetadata(view)),
-  ];
 }
 
 type SlackApprovalRenderInput =
@@ -231,18 +203,18 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
         text: `${heading}\n${headerDescription}`,
       },
     },
-    ...(view.approvalKind === "plugin"
-      ? buildSlackPluginRequestBlocks(view)
-      : [
-          {
-            type: "section" as const,
-            text: {
-              type: "mrkdwn" as const,
-              text: `${bodyLabel}\n${buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))}`,
-            },
-          },
-          ...(phase === "pending" ? buildSlackMetadataContextBlocks(view.metadata) : []),
-        ]),
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `${bodyLabel}\n${
+          isPlugin
+            ? truncateSlackMrkdwn(view.title, 2600)
+            : buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))
+        }`,
+      },
+    },
+    ...(includeMetadata ? buildSlackMetadataContextBlocks(metadata) : []),
   ];
   if (phase === "pending") {
     blocks.push(

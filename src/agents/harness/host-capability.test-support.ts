@@ -15,6 +15,7 @@ type AdmittedHostCapabilityTestFixture = Readonly<{
 /** Creates the same admitted authority and closure-bound host used by a real harness attempt. */
 export async function createAdmittedHostCapabilityTestFixture(
   attempt: Omit<HostAttempt, "admittedRunContext">,
+  options: { nativeModelPolicySupport?: "exact" } = {},
 ): Promise<AdmittedHostCapabilityTestFixture> {
   const { createAgentHarnessTaskRuntimeScope } =
     await import("../../tasks/agent-harness-task-runtime-scope.js");
@@ -34,6 +35,7 @@ export async function createAdmittedHostCapabilityTestFixture(
   const host = createAgentHarnessHostCapabilities({
     attempt: { ...attempt, admittedRunContext },
     pluginId: "codex",
+    nativeModelPolicySupport: options.nativeModelPolicySupport,
   });
   return {
     admittedRunContext,

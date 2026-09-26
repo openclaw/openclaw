@@ -11,10 +11,13 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import "../../components/viewer-facepile.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
+
+registerProfileEnglish();
 
 type IdentitySectionProps = {
   profile: UserProfile;

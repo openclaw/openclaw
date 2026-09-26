@@ -44,6 +44,15 @@ function isToolDocBlockStart(line: string): boolean {
   );
 }
 
+function isExcludedDescriptionLine(line: string): boolean {
+  return (
+    isToolDocBlockStart(line) ||
+    line.startsWith("{") ||
+    line.startsWith("[") ||
+    line.startsWith("- ")
+  );
+}
+
 /** Build a short one-line summary from a tool description. */
 export function summarizeToolDescriptionText(params: {
   rawDescription?: string | null;
@@ -63,10 +72,7 @@ export function summarizeToolDescriptionText(params: {
   // Prefer paragraph openings before falling back to later lines.
   for (const paragraph of raw.split(/\n\s*\n/g)) {
     const first = paragraph.trim().split("\n", 1)[0]?.trim() ?? "";
-    if (!first || isToolDocBlockStart(first)) {
-      continue;
-    }
-    if (first.startsWith("{") || first.startsWith("[") || first.startsWith("- ")) {
+    if (!first || isExcludedDescriptionLine(first)) {
       continue;
     }
     return truncateSummary(normalizeSummaryWhitespace(first), params.maxLen);
@@ -74,13 +80,7 @@ export function summarizeToolDescriptionText(params: {
 
   const firstLine = raw.split("\n").find((line) => {
     const first = line.trim();
-    return (
-      first.length > 0 &&
-      !isToolDocBlockStart(first) &&
-      !first.startsWith("{") &&
-      !first.startsWith("[") &&
-      !first.startsWith("- ")
-    );
+    return first.length > 0 && !isExcludedDescriptionLine(first);
   });
   return firstLine ? truncateSummary(normalizeSummaryWhitespace(firstLine), params.maxLen) : "Tool";
 }
@@ -108,12 +108,7 @@ export function describeToolForVerbose(params: {
       }
       continue;
     }
-    if (
-      isToolDocBlockStart(trimmed) ||
-      trimmed.startsWith("{") ||
-      trimmed.startsWith("[") ||
-      trimmed.startsWith("- ")
-    ) {
+    if (isExcludedDescriptionLine(trimmed)) {
       break;
     }
     keptLength += trimmed.length + (kept.length > 0 ? 1 : 0);

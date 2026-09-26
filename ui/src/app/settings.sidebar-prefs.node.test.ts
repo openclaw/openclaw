@@ -94,7 +94,7 @@ describe("sidebar preference persistence", () => {
       }),
     );
 
-    expect(loadSettings().sidebarEntries).toEqual(["route:tasks", "route:cron"]);
+    expect(loadSettings().sidebarEntries).toEqual(["route:cron"]);
     expect(loadSettings().navWidth).toBe(258);
 
     // Corrupt the persisted list; load falls back to the default pinned set.
@@ -130,17 +130,9 @@ describe("sidebar preference persistence", () => {
     legacy.sidebarPinnedRoutes = ["workboard", "usage", "tasks", "usage", "worktrees", 7];
     localStorage.setItem(scopedKey, JSON.stringify(legacy));
 
-    expect(loadSettings().sidebarEntries).toEqual([
-      "plugin:workboard/workboard",
-      "route:usage",
-      "route:tasks",
-    ]);
+    expect(loadSettings().sidebarEntries).toEqual(["plugin:workboard/workboard", "route:usage"]);
     const migrated = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<string, unknown>;
-    expect(migrated.sidebarEntries).toEqual([
-      "plugin:workboard/workboard",
-      "route:usage",
-      "route:tasks",
-    ]);
+    expect(migrated.sidebarEntries).toEqual(["plugin:workboard/workboard", "route:usage"]);
     expect(migrated).not.toHaveProperty("sidebarPinnedRoutes");
   });
 });

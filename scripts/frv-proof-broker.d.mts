@@ -25,6 +25,7 @@ export type FixtureRunExpectation = {
 export type ProofReceipt = {
   actor: string;
   correlation: string;
+  fixtureJobId: number;
   fixtureRunAttempt: 2;
   fixtureRunId: number;
   landedSha: string;

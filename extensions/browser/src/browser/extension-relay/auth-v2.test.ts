@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import {
   createRelayProof,
   relayKeyIdFromHex,
@@ -12,7 +13,6 @@ import {
   parseExtensionRelayResource,
   parseRelayAuthHello,
   parseRelayAuthResponse,
-  parseStrictJsonObject,
 } from "./auth-v2.js";
 
 const KEY = Array.from({ length: 32 }, (_, index) => index.toString(16).padStart(2, "0")).join("");

@@ -10,18 +10,35 @@ import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+} from "../plugins/registry-lifecycle.js";
+import { withPluginRegistrationContext } from "../plugins/runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
+import {
+  finalizeTaskRunByRunIdAsync,
+  setDetachedTaskDeliveryStatusByRunIdAsync,
+  transitionTaskAssignmentAsync,
+} from "../tasks/detached-task-runtime.async.js";
 import {
   createRunningTaskRun,
   finalizeTaskRunByRunId,
   recordTaskRunProgressByRunId,
+  setDetachedTaskDeliveryStatusByRunId,
   transitionTaskAssignment,
   getDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { captureTaskExecutionOwner } from "../tasks/task-execution-owner.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
@@ -70,6 +87,24 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
 
 vi.mock("../tasks/runtime-internal.js", () => ({
   listTaskRecords: vi.fn(() => []),
+}));
+
+vi.mock("../tasks/detached-task-runtime.async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tasks/detached-task-runtime.async.js")>()),
+  finalizeTaskRunByRunIdAsync: vi.fn(async () => []),
+  setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
+  transitionTaskAssignmentAsync: vi.fn(async (params) => {
+    params.assertCurrent();
+    return [];
+  }),
+}));
+
+vi.mock("../tasks/task-registry-read.js", () => ({
+  captureTaskRegistryRunSelection: async (runId: string, matches: (task: TaskRecord) => boolean) =>
+    structuredClone(listTaskRecords().filter((task) => task.runId === runId && matches(task))),
+  prepareTaskRegistryRead: async () => ({
+    getTasksByRunId: (runId: string) => listTaskRecords().filter((task) => task.runId === runId),
+  }),
 }));
 
 vi.mock("../tasks/task-execution-owner.js", () => ({
@@ -131,6 +166,222 @@ describe("agent-harness-task-runtime", () => {
       }
     },
   );
+
+  it.each(["core", "custom", "legacy"] as const)(
+    "admits a scoped local registry with the %s task runtime before root activation",
+    (owner) => {
+      const registry = createEmptyPluginRegistry();
+      try {
+        withPluginRuntimeRegistryScope(registry, () => {
+          if (owner !== "core") {
+            setDetachedTaskLifecycleRuntime({
+              ...getDetachedTaskLifecycleRuntime(),
+              ...(owner === "custom" ? { transitionTaskAssignment: vi.fn(() => []) } : {}),
+            });
+          }
+          const runtime = createAgentHarnessTaskRuntime({
+            runtime: "subagent",
+            taskKind: "example-harness",
+            scope: createScope(),
+          });
+          if (owner === "legacy") {
+            expect(() => runtime.assertTaskAssignmentSupported()).toThrow(
+              "Upgrade the custom task runtime adapter",
+            );
+          } else {
+            expect(() => runtime.assertTaskAssignmentSupported()).not.toThrow();
+          }
+          markPluginRegistryRetired(registry);
+          expect(() => runtime.assertTaskAssignmentSupported()).toThrow(
+            AgentHarnessTaskAssignmentOwnerRetiredError,
+          );
+        });
+      } finally {
+        markPluginRegistryRetired(registry);
+      }
+    },
+  );
+
+  it("does not admit an unpublished registration-only registry as a local runtime", () => {
+    const registry = createEmptyPluginRegistry();
+    try {
+      withPluginRegistrationContext(registry, "fixture", () => {
+        const runtime = createAgentHarnessTaskRuntime({
+          runtime: "subagent",
+          taskKind: "example-harness",
+          scope: createScope(),
+        });
+        expect(() => runtime.assertTaskAssignmentSupported()).toThrow(
+          AgentHarnessTaskAssignmentOwnerRetiredError,
+        );
+      });
+    } finally {
+      markPluginRegistryRetired(registry);
+    }
+  });
+
+  it.each(["activation", "context replacement"] as const)(
+    "does not transfer a scoped core task owner through %s",
+    (change) => {
+      const registry = createEmptyPluginRegistry();
+      const replacement = createEmptyPluginRegistry();
+      try {
+        withPluginRuntimeRegistryScope(registry, () => {
+          const runtime = createAgentHarnessTaskRuntime({
+            runtime: "subagent",
+            taskKind: "example-harness",
+            scope: createScope(),
+          });
+          expect(() => runtime.assertTaskAssignmentSupported()).not.toThrow();
+          const assertRetired = () =>
+            expect(() => runtime.assertTaskAssignmentSupported()).toThrow(
+              AgentHarnessTaskAssignmentOwnerRetiredError,
+            );
+          if (change === "activation") {
+            markPluginRegistryActive(registry);
+            assertRetired();
+          } else {
+            withPluginRuntimeRegistryScope(replacement, assertRetired);
+          }
+        });
+      } finally {
+        markPluginRegistryRetired(registry);
+        markPluginRegistryRetired(replacement);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "projects private task content before every writer (private: %s)",
+    async (privateSession) => {
+      const requesterSessionKey = privateSession
+        ? "agent:main:dashboard:incognito-native"
+        : "agent:main:main";
+      const runtime = createAgentHarnessTaskRuntime({
+        runtime: "subagent",
+        taskKind: "example-harness",
+        scope: createScope(requesterSessionKey),
+      });
+      const content = "SYNTHETIC_PRIVATE_TASK_CONTENT";
+      const detail = { nativeTurnId: "turn-1", nativeHistory: { sessionId: "parent-1" } };
+      const task = runtime.createRunningTaskRun({
+        runId: "example:child",
+        task: content,
+        label: content,
+        progressSummary: content,
+        detail,
+      });
+      const expectedTask = captureAgentHarnessTaskAssignment(task);
+      const created = vi.mocked(createRunningTaskRun).mock.calls[0]?.[0];
+      expect(JSON.stringify(created).includes(content)).toBe(!privateSession);
+      expect(created).toMatchObject({ requesterSessionKey, runId: "example:child", detail });
+
+      for (const ownership of [{}, { expectedTask }]) {
+        const identity = { runId: "example:child", ...ownership };
+        runtime.recordTaskRunProgressByRunId({
+          ...identity,
+          progressSummary: content,
+          eventSummary: content,
+          detail,
+        });
+        runtime.finalizeTaskRunByRunId({
+          ...identity,
+          status: "failed",
+          endedAt: 2,
+          error: content,
+          progressSummary: content,
+          terminalSummary: content,
+          detail,
+        });
+        runtime.setDetachedTaskDeliveryStatusByRunId({
+          ...identity,
+          deliveryStatus: "pending",
+          error: content,
+        });
+        await runtime.finalizeTaskRunByRunIdAsync!({
+          ...identity,
+          status: "failed",
+          endedAt: 2,
+          error: content,
+          progressSummary: content,
+          terminalSummary: content,
+          detail,
+        });
+        await runtime.setDetachedTaskDeliveryStatusByRunIdAsync!({
+          ...identity,
+          deliveryStatus: "pending",
+          error: content,
+        });
+      }
+      for (const writer of [
+        recordTaskRunProgressByRunId,
+        finalizeTaskRunByRunId,
+        setDetachedTaskDeliveryStatusByRunId,
+        finalizeTaskRunByRunIdAsync,
+        setDetachedTaskDeliveryStatusByRunIdAsync,
+      ]) {
+        expect(JSON.stringify(vi.mocked(writer).mock.calls).includes(content)).toBe(
+          !privateSession,
+        );
+        expect(writer).toHaveBeenCalledOnce();
+      }
+      const transitions = [
+        ...vi.mocked(transitionTaskAssignment).mock.calls,
+        ...vi.mocked(transitionTaskAssignmentAsync).mock.calls,
+      ].map(([input]) => input);
+      expect(transitions).toHaveLength(5);
+      expect(JSON.stringify(transitions).includes(content)).toBe(!privateSession);
+      for (const transition of transitions) {
+        expect(transition.expectedTask).toEqual(expectedTask);
+        expect(transition.transition.params).toMatchObject({
+          runId: "example:child",
+          sessionKey: requesterSessionKey,
+        });
+      }
+      expect(transitions[1]?.transition.params).toMatchObject({
+        status: "failed",
+        endedAt: 2,
+        detail,
+      });
+      expect(transitions[3]?.transition.params).toMatchObject({
+        status: "failed",
+        endedAt: 2,
+        detail,
+      });
+    },
+  );
+
+  it("preserves the Incognito task cancellation marker", () => {
+    const runtime = createAgentHarnessTaskRuntime({
+      runtime: "subagent",
+      taskKind: "example-harness",
+      scope: createScope("agent:main:dashboard:incognito-native"),
+    });
+    runtime.finalizeTaskRunByRunId({
+      runId: "example:child",
+      status: "cancelled",
+      endedAt: 2,
+      error: SUBAGENT_KILL_TASK_ERROR,
+    });
+    expect(finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR }),
+    );
+  });
+
+  it("keeps full Incognito completion content on the live delivery path", async () => {
+    const result = "SYNTHETIC_LIVE_COMPLETION";
+    await expect(
+      deliverAgentHarnessTaskCompletion({
+        scope: createScope("agent:main:dashboard:incognito-native"),
+        childSessionKey: "harness-thread:child",
+        childSessionId: "child",
+        announceId: "harness:parent:child:succeeded",
+        status: "succeeded",
+        result,
+      }),
+    ).resolves.toMatchObject({ delivered: true, path: "steered" });
+    expect(JSON.stringify(vi.mocked(deliverSubagentAnnouncement).mock.calls)).toContain(result);
+  });
 
   it("keeps the runtime owner captured before an assignment's delayed settlement", () => {
     const runtime = createAgentHarnessTaskRuntime({
@@ -323,50 +574,6 @@ describe("agent-harness-task-runtime", () => {
         result: "child final answer",
       }),
     ).rejects.toThrow(/host-issued scope/);
-  });
-
-  it("lists only task records owned by the scoped requester session", () => {
-    const records = [
-      {
-        taskId: "task-1",
-        runtime: "subagent",
-        taskKind: "example-harness",
-        requesterSessionKey: "agent:main:channel:C123",
-        ownerKey: "agent:main:channel:C123",
-        scopeKind: "session",
-        runId: "example:child-1",
-        task: "owned",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: 1,
-      },
-      {
-        taskId: "task-2",
-        runtime: "subagent",
-        taskKind: "example-harness",
-        requesterSessionKey: "agent:other:channel:C999",
-        ownerKey: "agent:other:channel:C999",
-        scopeKind: "session",
-        runId: "example:child-2",
-        task: "other",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: 1,
-      },
-    ] satisfies ReturnType<typeof listTaskRecords>;
-    vi.mocked(listTaskRecords).mockImplementation((filter) =>
-      filter ? records.filter(filter) : records,
-    );
-    const runtime = createAgentHarnessTaskRuntime({
-      runtime: "subagent",
-      taskKind: "example-harness",
-      scope: createScope(),
-      runIdPrefix: "example:",
-    });
-
-    expect(runtime.listTaskRecords().map((task) => task.taskId)).toEqual(["task-1"]);
   });
 
   it.each(["unguarded", "retired-during-origin"] as const)(

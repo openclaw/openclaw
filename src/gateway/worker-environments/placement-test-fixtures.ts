@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
@@ -8,9 +9,72 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
 import { readWorkerEnvironmentFacts } from "./store-row-codec.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
+
+// Synchronous fault injection must remain in the transaction or callback under test.
+export function createPlacementTurnClaimFixtureOps(database: OpenClawStateDatabase) {
+  return createPlacementTurnClaimOps({
+    path: database.path,
+    instanceId: randomUUID(),
+    now: Date.now,
+    read: () => database.db,
+    write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
+  });
+}
+
+export async function advancePlacementFixtureToActive(
+  store: WorkerSessionPlacementStore,
+  database: OpenClawStateDatabase,
+  identity: WorkerSessionPlacementIdentity,
+  executionMode: "worker-turn" | "remote-exec" = "worker-turn",
+) {
+  let placement = await store.startDispatch({ ...identity, executionMode });
+  placement = store.transition({
+    sessionId: identity.sessionId,
+    from: "requested",
+    to: "provisioning",
+    expectedGeneration: placement.generation,
+    patch: { environmentId: "environment-placement-claim-close" },
+  });
+  placement = store.transition({
+    sessionId: identity.sessionId,
+    from: "provisioning",
+    to: "syncing",
+    expectedGeneration: placement.generation,
+    patch: { workerBundleHash: "a".repeat(64) },
+  });
+  placement = store.transition({
+    sessionId: identity.sessionId,
+    from: "syncing",
+    to: "starting",
+    expectedGeneration: placement.generation,
+    patch: {
+      workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+      remoteWorkspaceDir: "/workspace/placement-claim-close",
+    },
+  });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: "environment-placement-claim-close",
+    sessionId: identity.sessionId,
+    ownerEpoch: 7,
+  });
+  const active = store.transition({
+    sessionId: identity.sessionId,
+    from: "starting",
+    to: "active",
+    expectedGeneration: placement.generation,
+    patch: { activeOwnerEpoch: 7 },
+  });
+  if (active.state !== "active") {
+    throw new Error("expected active worker placement");
+  }
+  return active;
+}
 
 type PlacementEnvironmentFixture = Pick<
   WorkerEnvironmentRecord,

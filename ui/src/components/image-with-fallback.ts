@@ -2,25 +2,43 @@ import type { TemplateResult } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 
-type ImageRenderer = (url: string | null, onError: () => void) => TemplateResult;
+export type ImageLoadingState = { loading: boolean; onLoad: () => void };
+type ImageRenderer = (
+  url: string | null,
+  onError: () => void,
+  state: ImageLoadingState,
+) => TemplateResult;
 
 class ImageWithFallbackDirective extends AsyncDirective {
   private source?: string | null;
-  private failedSource?: string | null;
+  private state: "loading" | "ready" | "failed" = "loading";
 
   override render(source: string | null | undefined, renderImage: ImageRenderer): TemplateResult {
     if (source !== this.source) {
-      this.failedSource = undefined;
+      this.state = "loading";
       this.source = source;
     }
+    const renderCurrent = () => {
+      const url = source && this.state !== "failed" ? source : null;
+      return renderImage(url, onError, {
+        loading: Boolean(url && this.state === "loading"),
+        onLoad,
+      });
+    };
+    const onLoad = () => {
+      if (this.isConnected && this.source === source && this.state === "loading") {
+        this.state = "ready";
+        this.setValue(renderCurrent());
+      }
+    };
     const onError = () => {
       // An old image event must not replace a newer source or a removed view.
       if (this.isConnected && this.source === source) {
-        this.failedSource = source;
-        this.setValue(renderImage(null, onError));
+        this.state = "failed";
+        this.setValue(renderCurrent());
       }
     };
-    return renderImage(source && source !== this.failedSource ? source : null, onError);
+    return renderCurrent();
   }
 }
 

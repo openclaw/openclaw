@@ -78,8 +78,7 @@ export async function outboxChatUrl(
     await context.route(`${url.origin}/**`, async (route) => {
       const target = new URL(route.request().url());
       target.hostname = "127.0.0.1";
-      const response = await route.fetch({ url: target.href });
-      await route.fulfill({ response });
+      await route.continue({ url: target.href });
     });
   }
   return url.href;

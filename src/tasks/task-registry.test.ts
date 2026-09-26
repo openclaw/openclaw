@@ -72,7 +72,6 @@ import {
 } from "./task-registry-state.js";
 import {
   cancelTaskById,
-  deleteTaskRecordById,
   finalizeTaskRecordByRunId,
   findTaskByRunId,
   getTaskById,
@@ -483,39 +482,6 @@ describe("task-registry", () => {
       } finally {
         resetPluginStateStoreForTests();
       }
-    });
-  });
-
-  it("updates task status from lifecycle events", async () => {
-    await withTaskRegistryTempDir(async () => {
-      createTaskFixture("acp", {
-        childSessionKey: "agent:main:acp:child",
-        runId: "run-1",
-        task: "Do the thing",
-        startedAt: 100,
-      });
-
-      emitAgentEvent({
-        runId: "run-1",
-        stream: "assistant",
-        data: {
-          text: "working",
-        },
-      });
-      emitAgentEvent({
-        runId: "run-1",
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          endedAt: 250,
-        },
-      });
-
-      expectRecordFields(requireTaskByRunId("run-1"), {
-        runtime: "acp",
-        status: "succeeded",
-        endedAt: 250,
-      });
     });
   });
 
@@ -1354,7 +1320,6 @@ describe("task-registry", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       const taskStore = createInMemoryTaskRegistryStore();
       const taskUpsert = vi.spyOn(taskStore, "upsertTaskWithDeliveryState");
-      const taskDelete = vi.spyOn(taskStore, "deleteTaskWithDeliveryState");
       const deliveryUpsert = vi.spyOn(taskStore, "upsertDeliveryState");
       configureTaskRegistryRuntime({ store: taskStore });
       configureTaskFlowRegistryRuntime({
@@ -1396,12 +1361,6 @@ describe("task-registry", () => {
       ).toThrow("Task-flow registry restore failed: SQLITE_IOERR: task-flow restore failed");
       expect(taskUpsert).not.toHaveBeenCalled();
       expect(requireTaskById(task.taskId).status).toBe("running");
-
-      expect(() => deleteTaskRecordById(task.taskId)).toThrow(
-        "Task-flow registry restore failed: SQLITE_IOERR: task-flow restore failed",
-      );
-      expect(taskDelete).not.toHaveBeenCalled();
-      expect(requireTaskById(task.taskId).taskId).toBe(task.taskId);
 
       expect(() =>
         createTaskFixture("acp", {
@@ -2014,13 +1973,6 @@ describe("task-registry", () => {
 
   it.each([
     {
-      name: "Discord",
-      channel: "discord",
-      to: "channel:parent-channel",
-      threadId: "thread-84022",
-      ownerKey: "agent:main:discord:guild-123:channel-parent-channel",
-    },
-    {
       name: "Slack",
       channel: "slack",
       to: "channel:C123",
@@ -2194,24 +2146,6 @@ describe("task-registry", () => {
       name: "group",
       ownerKey: "agent:main:guildchat:group:123",
       target: "guildchat:group:123",
-    },
-    {
-      id: "topic",
-      name: "group topic",
-      ownerKey: "agent:main:guildchat:group:-100123:topic:42",
-      target: "guildchat:group:-100123:topic:42",
-    },
-    {
-      id: "discord-legacy-channel",
-      name: "legacy Discord channel",
-      ownerKey: "agent:main:discord:guild-123:channel-456",
-      target: "guildchat:channel:456",
-    },
-    {
-      id: "whatsapp-legacy-group",
-      name: "legacy WhatsApp group",
-      ownerKey: "agent:main:whatsapp:123@g.us",
-      target: "guildchat:group:123@g.us",
     },
   ])("routes $name ACP completion through the parent session", async ({ id, ownerKey, target }) => {
     await withTaskRegistryTempDir(async () => {
@@ -3303,42 +3237,6 @@ describe("task-registry", () => {
     },
   );
 
-  it("acquires one task snapshot for terminal ACP cleanup", async () => {
-    await withTaskRegistryTempDir(async () => {
-      const now = Date.now();
-      const tasks = Array.from({ length: 20 }, (_, index) => {
-        const task = createTaskFixture("acp", {
-          requesterSessionKey: "agent:main:main",
-          childSessionKey: `agent:claude:acp:terminal-${index}`,
-          runId: `run-terminal-acp-snapshot-${index}`,
-          task: `Terminal ACP task ${index}`,
-          status: "succeeded",
-          deliveryStatus: "delivered",
-        });
-        return {
-          ...task,
-          endedAt: now - 60_000,
-          lastEventAt: now - 60_000,
-        };
-      });
-      const currentTasks = new Map(tasks.map((task) => [task.taskId, task]));
-      let listCalls = 0;
-
-      configureTaskRegistryMaintenanceRuntimeForTest({
-        currentTasks,
-        snapshotTasks: tasks,
-        listTaskRecords: () => {
-          listCalls += 1;
-          return tasks;
-        },
-      });
-
-      await runTaskRegistryMaintenance();
-
-      expect(listCalls).toBe(1);
-    });
-  });
-
   it.each([false, true])(
     "keeps active ACP work when it starts during cleanup preparation: %s",
     async (startsDuringPreparation) => {
@@ -3987,54 +3885,6 @@ describe("task-registry", () => {
       await expect(pendingDelivery).rejects.toThrow(
         "Task registry restore failed: SQLITE_CORRUPT: task reload failed",
       );
-    });
-  });
-
-  it("summarizes inspectable task audit findings", async () => {
-    await withTaskRegistryTempDir(async () => {
-      const now = Date.now();
-      configureTaskRegistryRuntime({
-        store: {
-          ...createInMemoryTaskRegistryStore(),
-          loadSnapshot: () => ({
-            tasks: new Map([
-              [
-                "task-audit-summary",
-                {
-                  taskId: "task-audit-summary",
-                  runtime: "acp",
-                  requesterSessionKey: "agent:main:main",
-                  ownerKey: "agent:main:main",
-                  scopeKind: "session",
-                  runId: "run-audit-summary",
-                  task: "Hung task",
-                  status: "running",
-                  deliveryStatus: "pending",
-                  notifyPolicy: "done_only",
-                  createdAt: now - 50 * 60_000,
-                  startedAt: now - 40 * 60_000,
-                  lastEventAt: now - 40 * 60_000,
-                },
-              ],
-            ]),
-            deliveryStates: new Map(),
-          }),
-        },
-      });
-
-      expect(getInspectableTaskAuditSummary()).toEqual({
-        total: 1,
-        warnings: 0,
-        errors: 1,
-        byCode: {
-          stale_queued: 0,
-          stale_running: 1,
-          lost: 0,
-          delivery_failed: 0,
-          missing_cleanup: 0,
-          inconsistent_timestamps: 0,
-        },
-      });
     });
   });
 

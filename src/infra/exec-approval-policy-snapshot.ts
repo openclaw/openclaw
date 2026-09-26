@@ -50,7 +50,8 @@ function compareExecApprovalPolicyRules(
   );
 }
 
-function buildExecApprovalPolicyRuleKey(rule: ExecApprovalPolicyRule): string {
+export function buildExecApprovalPolicyRuleKey(rule: ExecApprovalPolicyRule): string {
+  // A JSON tuple preserves exact regex bytes without delimiter collisions.
   return JSON.stringify([rule.pattern, rule.argPattern ?? null, rule.source ?? null]);
 }
 

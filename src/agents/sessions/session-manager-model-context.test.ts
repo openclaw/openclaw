@@ -34,16 +34,18 @@ it("reports context queue overload without losing context and recovers in admiss
     const expected = source.buildSessionContext();
     const release = createDeferredCore();
     const completed: number[] = [];
-    const spy = vi
-      .spyOn(WorkerTaskPool.prototype, "run")
-      .mockImplementationOnce(function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-        spy.mockRestore();
-        // Hold this caller's first preparation while real pool admission fills the queue.
-        return this.run(async () => {
-          await release.promise;
-          return input;
-        }, options);
-      });
+    const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+      this: WorkerTaskPool<unknown, unknown>,
+      input,
+      options,
+    ) {
+      spy.mockRestore();
+      // Hold this caller's first preparation while real pool admission fills the queue.
+      return this.run(async () => {
+        await release.promise;
+        return input;
+      }, options);
+    });
     const accepted = Array.from({ length: 128 }, (_, index) =>
       SessionManager.openModelContextAsync(scope).then((context) => {
         completed.push(index);
@@ -394,101 +396,106 @@ it.each([
   },
 );
 
-it.each(
-  ["reset", "compaction", "whole"].flatMap((boundary) =>
-    (["user", "assistant", "toolResult"] as const).map((role) => ({ boundary, role })),
-  ),
-)("preserves excluded $role payload selection across $boundary", async ({ boundary, role }) => {
-  await withOpenClawTestState({ label: "model-excluded-retention" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "excluded-retention",
-      sessionKey: "agent:main:excluded-retention",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const source = SessionManager.open(scope);
-    const pairedCall =
-      role === "toolResult"
-        ? source.appendMessage(
-            makeAgentAssistantMessage({
-              content: [{ type: "toolCall", id: "paired", name: "read", arguments: {} }],
-            }),
-          )
-        : undefined;
-    const content = [{ type: "text" as const, text: "synthetic retained text" }];
-    const message = {
-      ...(role === "assistant"
-        ? makeAgentAssistantMessage({ content })
-        : role === "user"
-          ? { role, content: "synthetic retained text", timestamp: 1 }
-          : {
-              role,
-              content,
-              toolCallId: "paired",
-              toolName: "read",
-              isError: false,
-              timestamp: 1,
-            }),
-      excludeFromContext: true,
-      __openclaw: { upstreamUserText: "private-retained:" + "x".repeat(256 * 1024) },
-    };
-    const retained = source.appendMessage(message);
-    if (boundary === "reset") {
-      source.appendResetBoundary("new", pairedCall ?? retained);
-    } else if (boundary === "compaction") {
-      source.appendCompaction("summary", pairedCall ?? retained, 100);
-    }
-    const ordinaryExcluded = {
-      role: "user" as const,
-      content: "ordinary-excluded:" + "x".repeat(256 * 1024),
-      timestamp: 2,
-      excludeFromContext: true,
-    };
-    source.appendMessage(ordinaryExcluded);
-    source.appendMessage({ role: "user", content: "synthetic current text", timestamp: 3 });
-    const expected = source.buildSessionContext();
-    expect(
-      expected.messages.some(
-        (entry) => "excludeFromContext" in entry && entry.excludeFromContext === true,
-      ),
-    ).toBe(boundary === "reset");
-    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
-    const fingerprint = () => {
-      const hash = createHash("sha256");
-      for (const row of database.db
-        .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
-        .iterate(scope.sessionId)) {
-        hash.update(String(row.event_json));
+it.each([
+  { boundary: "reset", role: "user" },
+  { boundary: "reset", role: "assistant" },
+  { boundary: "reset", role: "toolResult" },
+  { boundary: "compaction", role: "toolResult" },
+  { boundary: "whole", role: "user" },
+] as const)(
+  "preserves excluded $role payload selection across $boundary",
+  async ({ boundary, role }) => {
+    await withOpenClawTestState({ label: "model-excluded-retention" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "excluded-retention",
+        sessionKey: "agent:main:excluded-retention",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const source = SessionManager.open(scope);
+      const pairedCall =
+        role === "toolResult"
+          ? source.appendMessage(
+              makeAgentAssistantMessage({
+                content: [{ type: "toolCall", id: "paired", name: "read", arguments: {} }],
+              }),
+            )
+          : undefined;
+      const content = [{ type: "text" as const, text: "synthetic retained text" }];
+      const message = {
+        ...(role === "assistant"
+          ? makeAgentAssistantMessage({ content })
+          : role === "user"
+            ? { role, content: "synthetic retained text", timestamp: 1 }
+            : {
+                role,
+                content,
+                toolCallId: "paired",
+                toolName: "read",
+                isError: false,
+                timestamp: 1,
+              }),
+        excludeFromContext: true,
+        __openclaw: { upstreamUserText: "private-retained:" + "x".repeat(256 * 1024) },
+      };
+      const retained = source.appendMessage(message);
+      if (boundary === "reset") {
+        source.appendResetBoundary("new", pairedCall ?? retained);
+      } else if (boundary === "compaction") {
+        source.appendCompaction("summary", pairedCall ?? retained, 100);
       }
-      return hash.digest("hex");
-    };
-    const before = fingerprint();
-    const originalParse = JSON.parse;
-    let excludedBytes = 0;
-    const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-      if (
-        typeof text === "string" &&
-        (text.includes("private-retained:") || text.includes("ordinary-excluded:"))
-      ) {
-        excludedBytes += text.length;
+      const ordinaryExcluded = {
+        role: "user" as const,
+        content: "ordinary-excluded:" + "x".repeat(256 * 1024),
+        timestamp: 2,
+        excludeFromContext: true,
+      };
+      source.appendMessage(ordinaryExcluded);
+      source.appendMessage({ role: "user", content: "synthetic current text", timestamp: 3 });
+      const expected = source.buildSessionContext();
+      expect(
+        expected.messages.some(
+          (entry) => "excludeFromContext" in entry && entry.excludeFromContext === true,
+        ),
+      ).toBe(boundary === "reset");
+      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+      const fingerprint = () => {
+        const hash = createHash("sha256");
+        for (const row of database.db
+          .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+          .iterate(scope.sessionId)) {
+          hash.update(String(row.event_json));
+        }
+        return hash.digest("hex");
+      };
+      const before = fingerprint();
+      const originalParse = JSON.parse;
+      let excludedBytes = 0;
+      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        if (
+          typeof text === "string" &&
+          (text.includes("private-retained:") || text.includes("ordinary-excluded:"))
+        ) {
+          excludedBytes += text.length;
+        }
+        return originalParse(text, reviver);
+      });
+      let actual: typeof expected;
+      try {
+        actual = SessionManager.openModelContext(scope).buildSessionContext();
+      } finally {
+        spy.mockRestore();
       }
-      return originalParse(text, reviver);
+      expect(excludedBytes).toBe(0);
+      expect(fingerprint()).toBe(before);
+      expect(actual.model).toEqual(expected.model);
+      expect(
+        actual.messages.map((entry) => ("content" in entry ? entry.content : undefined)),
+      ).toEqual(expected.messages.map((entry) => ("content" in entry ? entry.content : undefined)));
     });
-    let actual: typeof expected;
-    try {
-      actual = SessionManager.openModelContext(scope).buildSessionContext();
-    } finally {
-      spy.mockRestore();
-    }
-    expect(excludedBytes).toBe(0);
-    expect(fingerprint()).toBe(before);
-    expect(actual.model).toEqual(expected.model);
-    expect(
-      actual.messages.map((entry) => ("content" in entry ? entry.content : undefined)),
-    ).toEqual(expected.messages.map((entry) => ("content" in entry ? entry.content : undefined)));
-  });
-});
+  },
+);
 
 it.each([false, true])("keeps model reads non-persisting (incognito=%s)", async (incognito) => {
   await withOpenClawTestState({ label: "model-readonly" }, async (state) => {

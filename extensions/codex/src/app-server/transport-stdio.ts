@@ -70,7 +70,7 @@ export function resolveCodexAppServerSpawnEnv(
   const env = Object.create(null) as NodeJS.ProcessEnv;
   copySafeEnvironmentEntries(env, baseEnv);
   copySafeEnvironmentEntries(env, options.env ?? {});
-  const keysToClear = normalizedEnvironmentKeys(options.clearEnv ?? []);
+  const keysToClear = (options.clearEnv ?? []).map((key) => key.trim()).filter(Boolean);
   if (platform === "win32") {
     const lowerCaseKeysToClear = new Set(keysToClear.map((key) => key.toLowerCase()));
     for (const candidate of Object.keys(env)) {
@@ -96,25 +96,6 @@ export function resolveCodexAppServerSpawnEnv(
 function isCodexRuntimeInjectionEnvironmentKey(rawKey: string): boolean {
   const key = rawKey.toUpperCase();
   return RUNTIME_INJECTION_ENVIRONMENT_KEYS.has(key) || key.startsWith("DYLD_");
-}
-
-/** Keeps QA-owned app-server processes inside the gateway process-group cleanup boundary. */
-function resolveCodexAppServerDetachedMode(
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  return platform !== "win32" && !env[QA_PARENT_PID_ENV]?.trim();
-}
-
-function normalizedEnvironmentKeys(rawKeys: readonly string[]): string[] {
-  const keys: string[] = [];
-  for (const rawKey of rawKeys) {
-    const key = rawKey.trim();
-    if (key.length > 0) {
-      keys.push(key);
-    }
-  }
-  return keys;
 }
 
 function copySafeEnvironmentEntries(
@@ -171,7 +152,8 @@ export async function createStdioTransport(
       // config discovery may depend on the endpoint's process working directory.
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
       env,
-      detached: resolveCodexAppServerDetachedMode(env),
+      // QA children stay inside the Gateway's process-group cleanup boundary.
+      detached: process.platform !== "win32" && !env[QA_PARENT_PID_ENV]?.trim(),
       shell: invocation.shell,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: invocation.windowsHide,

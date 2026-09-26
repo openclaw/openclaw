@@ -2,7 +2,6 @@
 import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { assertOperatorModelAllowed } from "../../agents/admitted-run-context.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { normalizeModelRef, type ModelRef } from "../../agents/model-ref-shared.js";
 import type { UsageLike } from "../../agents/usage.js";
@@ -24,7 +23,10 @@ import {
 import { normalizePluginsConfig } from "../config-state.js";
 import { compileModelAllowlist, type CompiledModelAllowlist } from "../model-allowlist.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
-import { createLlmCompleteError as completionError } from "./runtime-llm-error.js";
+import {
+  createLlmCompleteError as completionError,
+  isLlmOperatorAuthorizationError,
+} from "./runtime-llm-error.js";
 import {
   assertSupportedExecutionMode,
   isIsolatedAgentRuntimeRequest,
@@ -522,7 +524,7 @@ export function createRuntimeLlm(
       }
       const normalizedSelection = normalizeModelRef(selection.provider, selection.modelId);
       assertCurrent();
-      assertOperatorModelAllowed(operatorAuthority, normalizedSelection);
+      source.assertModelAllowed(normalizedSelection);
       const resolvedModelRef = modelKey(normalizedSelection.provider, normalizedSelection.model);
       assertModelAllowed({ kind: "completion", resolvedModelRef, policy: authorityPolicy });
       assertModelAllowed({
@@ -614,7 +616,7 @@ export function createRuntimeLlm(
                 const resolved = await resolveModelAsync(...args);
                 if (resolved.model) {
                   preparedLogicalModel = resolved.logicalRef;
-                  assertOperatorModelAllowed(operatorAuthority, preparedLogicalModel);
+                  source.assertModelAllowed(preparedLogicalModel);
                 }
                 return resolved;
               }
@@ -716,11 +718,27 @@ export function createRuntimeLlm(
             }),
           );
         } catch (error) {
-          callerResult.reject(error);
+          try {
+            if (!isLlmOperatorAuthorizationError(error)) {
+              assertPreparedCurrent();
+            }
+            callerResult.reject(error);
+          } catch (authorizationError) {
+            callerResult.reject(authorizationError);
+          }
         } finally {
           await work.drain();
         }
-      }).catch((error: unknown) => callerResult.reject(error));
+      }).catch((error: unknown) => {
+        try {
+          if (!isLlmOperatorAuthorizationError(error)) {
+            assertCurrent();
+          }
+          callerResult.reject(error);
+        } catch (authorizationError) {
+          callerResult.reject(authorizationError);
+        }
+      });
       return await callerResult.promise;
     }),
   };

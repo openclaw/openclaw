@@ -35,7 +35,7 @@ separate implementations:
   in Codex's in-process V8 Code Mode runtime.
 - OpenClaw Code Mode runs in the generic OpenClaw agent runtime and is
   enabled through global, agent, or model activation settings. Its `exec`
-  tool takes a JSON `{ code }` payload, executed by the selected Node or
+  tool takes a JSON `{ title, code }` payload, executed by the selected Node or
   QuickJS executor.
 
 Both are JavaScript execution surfaces, not shell-command surfaces. Treat them

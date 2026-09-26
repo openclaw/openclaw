@@ -55,6 +55,9 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
     for (const row of found) {
       const id = identity(row);
       const pending = row.pendingDatabaseFacts !== undefined;
+      // Revoke reusable and in-flight watermarks even when presentation is throttled.
+      row.retainedDatabaseFacts = undefined;
+      row.databaseFactsRevision++;
       // Accepted snapshots must lose their watermark before cold-row or throttle
       // suppression; an exact read may resume before the next refresh window.
       if (pending) {

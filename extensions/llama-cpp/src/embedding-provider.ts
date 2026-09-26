@@ -102,10 +102,6 @@ function resolveModelIdentity(
   };
 }
 
-function resolveConfiguredProvider(options: EmbeddingProviderCreateOptions): ModelProviderConfig {
-  return resolveManagedLlamaCppProviderConfig(options.config);
-}
-
 function resolveProviderPort(provider: ModelProviderConfig): number {
   const port = Number(new URL(provider.baseUrl ?? "").port);
   if (!Number.isInteger(port) || port <= 0) {
@@ -119,7 +115,7 @@ async function prepareEmbeddingServer(
   embeddingSource: string,
   embeddingModelIsDefault: boolean,
 ): Promise<void> {
-  const provider = resolveConfiguredProvider(options);
+  const provider = resolveManagedLlamaCppProviderConfig(options.config);
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
   const embeddingModelPath = await ensureLlamaCppModel({
     source: embeddingSource,
@@ -217,7 +213,7 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
       provider: wrapProvider({
         provider: result.provider,
         canonicalModel: identity.model,
-        baseUrl: resolveConfiguredProvider(options).baseUrl ?? "",
+        baseUrl: resolveManagedLlamaCppProviderConfig(options.config).baseUrl ?? "",
       }),
       runtime: {
         id: "local",

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
+import { tempWorkspace, type TempWorkspace } from "@openclaw/fs-safe/temp";
+import { clean as cleanSemver } from "semver";
 import { resolveInstallWorkTimeoutMs } from "../infra/install-mode-options.js";
 import {
   installPackageDir,
@@ -46,10 +47,7 @@ import {
 } from "./install-managed-npm-state.js";
 import { verifyInstalledNpmResolution } from "./install-npm-resolution.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
-import {
-  preflightPluginNpmInstallPolicy,
-  type InstallSafetyOverrides,
-} from "./install-security-scan.js";
+import { preflightPluginNpmInstallPolicy } from "./install-security-scan.js";
 import {
   defaultLogger,
   ensureInstallTargetAvailableForMode,
@@ -65,8 +63,7 @@ import {
 } from "./install-transaction.js";
 import type {
   InstallPluginResult,
-  PluginInstallArtifactConsentHandler,
-  PluginInstallLogger,
+  PackageInstallCommonParams,
   PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { isOfficialCatalogLookupPluginIdReplacement } from "./official-external-install-records.js";
@@ -80,7 +77,10 @@ import {
 } from "./status-dependencies-core.js";
 
 export async function installPluginFromManagedNpmRoot(
-  params: InstallSafetyOverrides & {
+  params: Omit<
+    PackageInstallCommonParams,
+    "requirePluginManifest" | "allowSourceTypeScriptEntries"
+  > & {
     packageName: string;
     dependencySpec?: string;
     prepareDependencySpec?: ManagedNpmRootDependencySpecPreparation;
@@ -90,19 +90,9 @@ export async function installPluginFromManagedNpmRoot(
     policyPreflightSourcePath?: string;
     policyPreflightSourcePathKind?: "file" | "directory";
     skipPolicyPreflight?: boolean;
-    extensionsDir?: string;
-    npmDir?: string;
-    timeoutMs?: number;
-    workTimeoutMs?: number | null;
     signal?: AbortSignal;
-    logger?: PluginInstallLogger;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedPluginId?: string;
     expectedReplacementPluginId?: string;
     integrityDrift?: NpmIntegrityDrift;
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    beforePersistentApply?: () => void;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -385,20 +375,20 @@ export async function installPluginFromManagedNpmRoot(
       logger.warn?.(
         `npm left current-platform package(s) ${incompletePlatformPackageNames.join(", ")} missing or incomplete; retrying once with a fresh cache.`,
       );
-      let freshCacheDir: string | undefined;
+      let freshCache: TempWorkspace | undefined;
       try {
         await Promise.all(
           incompletePlatformPackages.map(({ packagePath }) =>
             fs.rm(packagePath, { recursive: true, force: true }),
           ),
         );
-        freshCacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-cache-"));
+        freshCache = await tempWorkspace({ rootDir: os.tmpdir(), prefix: "openclaw-npm-cache-" });
         install = await runCommandWithTimeout(npmInstallArgs, {
           ...npmInstallOptions,
           env: {
             ...npmInstallOptions.env,
-            NPM_CONFIG_CACHE: freshCacheDir,
-            npm_config_cache: freshCacheDir,
+            NPM_CONFIG_CACHE: freshCache.dir,
+            npm_config_cache: freshCache.dir,
           },
         });
       } catch (error) {
@@ -407,15 +397,11 @@ export async function installPluginFromManagedNpmRoot(
           error: `Failed to repair missing or incomplete current-platform package(s) ${incompletePlatformPackageNames.join(", ")}: ${String(error)}`,
         };
       } finally {
-        if (freshCacheDir) {
-          try {
-            await fs.rm(freshCacheDir, { recursive: true, force: true });
-          } catch (error) {
-            logger.warn?.(
-              `Failed to remove temporary npm cache ${freshCacheDir}: ${String(error)}`,
-            );
-          }
-        }
+        await freshCache?.cleanup().catch((error: unknown) => {
+          logger.warn?.(
+            `Failed to remove temporary npm cache ${freshCache?.dir}: ${String(error)}`,
+          );
+        });
       }
       if (install.code !== 0) {
         return {
@@ -565,6 +551,23 @@ export async function installPluginFromManagedNpmRoot(
     });
     if (!result.ok) {
       return result;
+    }
+    if (result.manifestName !== params.packageName) {
+      return {
+        ok: false,
+        error: `npm install produced package ${result.manifestName ?? "<missing>"}, expected ${params.packageName}`,
+      };
+    }
+    const expectedVersion = params.npmResolution.version;
+    if (expectedVersion && result.version !== expectedVersion) {
+      // npm normalizes registry versions without rewriting the packed manifest.
+      const installedVersion = result.version ? cleanSemver(result.version, { loose: true }) : null;
+      if (!installedVersion || installedVersion !== cleanSemver(expectedVersion, { loose: true })) {
+        return {
+          ok: false,
+          error: `npm install produced ${params.packageName} version ${result.version ?? "<missing>"}, expected ${expectedVersion}`,
+        };
+      }
     }
     await params.onBeforePluginArtifactCommit?.({
       pluginId: result.pluginId,

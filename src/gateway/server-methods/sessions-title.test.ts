@@ -3,6 +3,7 @@ import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
+import * as profileReader from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
@@ -149,6 +150,65 @@ describe("sessions.title.prepare", () => {
       message: "unknown catalog",
     });
   });
+
+  it.each(["params", "connection"] as const)(
+    "retains the original title request across profile preparation when %s changes",
+    async (change) => {
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const originalPrepare = profileReader.prepareUserProfileIdentity;
+      const releases: ReturnType<typeof vi.fn>[] = [];
+      const spy = vi
+        .spyOn(profileReader, "prepareUserProfileIdentity")
+        .mockImplementation(async (...args) => {
+          const prepared = await originalPrepare(...args);
+          const release = vi.fn(prepared.release);
+          prepared.release = release;
+          releases.push(release);
+          entered.resolve();
+          await resume.promise;
+          return prepared;
+        });
+      const params = {
+        agentId: "main",
+        message: "Original title request",
+        model: "title-test/primary",
+      };
+      const client = connectedClient(ownerId);
+      const running = prepare(params, cfg, client).then(
+        (respond) => ({ respond }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await entered.promise;
+        if (change === "params") {
+          params.message = "Replacement title request";
+          params.model = "title-test/blocked";
+        } else {
+          client.invalidated = true;
+        }
+        resume.resolve();
+        const result = await running;
+        if (change === "params") {
+          expect(result).toHaveProperty("respond");
+          expect(mocks.runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              prompt: "Original title request",
+            }),
+          );
+        } else {
+          expect(result).toHaveProperty("error");
+          expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
+        }
+        expect(releases).toHaveLength(1);
+        expect(releases[0]).toHaveBeenCalledOnce();
+      } finally {
+        resume.resolve();
+        await running;
+        spy.mockRestore();
+      }
+    },
+  );
 
   it("returns a normalized title from exactly one utility completion", async () => {
     const respond = await prepare({ agentId: "main", message: "Plan a new session" });

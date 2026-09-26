@@ -25,7 +25,7 @@ type ReplyRunKey = string;
 
 type ReplyBackendKind = "embedded" | "cli";
 
-type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
+export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
 export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 
@@ -197,7 +197,7 @@ export type ReplyRunInterruptTarget = {
   readonly [replyRunInterruptTargetOperation]: ReplyOperation;
 };
 
-type ReplyMessageInjectionRejectionReason =
+export type ReplyMessageInjectionRejectionReason =
   | "no_active_run"
   | "not_running"
   | "stale_run"
@@ -221,15 +221,13 @@ export type ReplyMessageInjectionAttempt = {
   outcome: Promise<ReplyMessageInjectionOutcome>;
 };
 
-type ReplyBackendQueueMessageMismatch =
+export type ReplyBackendQueueMessageMismatch =
   | "input_visibility_mismatch"
   | "tool_authority_mismatch"
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
   | "reply_expectation_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
-
-/** Prevents steering a turn into a run that cannot preserve its model-facing input. */
 
 export type ReplyOperationPhase =
   | "queued"

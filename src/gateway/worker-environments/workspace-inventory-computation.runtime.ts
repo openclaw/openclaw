@@ -47,11 +47,32 @@ async function readStagedInputDirectories(rootDir: string): Promise<string[]> {
   return directories.toSorted();
 }
 
-async function writeChunk(value: string): Promise<void> {
-  await requestGitWorkerEffect({
-    type: "workspace.inventory.write",
-    input: { bytes: Uint8Array.from(Buffer.from(value)) },
-  });
+function createInventoryPathWriter() {
+  let records: string[] = [];
+  let bytes = 0;
+  const flush = async () => {
+    if (records.length === 0) {
+      return;
+    }
+    await requestGitWorkerEffect({
+      type: "workspace.inventory.write",
+      input: { bytes: Uint8Array.from(Buffer.from(records.join(""))) },
+    });
+    records = [];
+    bytes = 0;
+  };
+  return {
+    flush,
+    append(file: string): Promise<void> | undefined {
+      const record = `${file}\0`;
+      records.push(record);
+      bytes += Buffer.byteLength(record);
+      if (bytes >= 64 * 1024) {
+        return flush();
+      }
+      return undefined;
+    },
+  };
 }
 
 type WorkerWorkspaceInventoryEntry =
@@ -213,16 +234,7 @@ async function selectTransferPaths(params: {
   const isStagedInput = createStagedInputPathMatcher(await fsRoot(canonicalRoot));
   const budget = new WorkerWorkspaceInventoryBudget();
   const transferredPaths = new Set<string>();
-  let buffered: string[] = [];
-  let bufferedBytes = 0;
-  const flush = async () => {
-    if (buffered.length === 0) {
-      return;
-    }
-    await writeChunk(buffered.join(""));
-    buffered = [];
-    bufferedBytes = 0;
-  };
+  const writer = createInventoryPathWriter();
   const inspectFile = async (
     file: string,
   ): Promise<Exclude<WorkerWorkspaceInventoryEntry, { type: "directory" }> | undefined> => {
@@ -270,11 +282,9 @@ async function selectTransferPaths(params: {
     }
     budget.addEntry(entry);
     budget.addTransferPath(file);
-    const record = `${file}\0`;
-    buffered.push(record);
-    bufferedBytes += Buffer.byteLength(record);
-    if (bufferedBytes >= 64 * 1024) {
-      await flush();
+    const pendingWrite = writer.append(file);
+    if (pendingWrite) {
+      await pendingWrite;
     }
   };
   async function* candidates() {
@@ -306,22 +316,14 @@ async function selectTransferPaths(params: {
       await append(entry);
     }
   }
-  await flush();
+  await writer.flush();
 }
 
 async function filterExistingPaths(params: {
   gitRoot: string;
   preparedListPath: string;
 }): Promise<void> {
-  let records: string[] = [];
-  let bytes = 0;
-  const flush = async () => {
-    if (records.length) {
-      await writeChunk(records.join(""));
-      records = [];
-      bytes = 0;
-    }
-  };
+  const writer = createInventoryPathWriter();
   for await (const file of readBoundedGitPathCandidates(params.preparedListPath)) {
     let stats;
     try {
@@ -332,15 +334,13 @@ async function filterExistingPaths(params: {
       }
     }
     if (stats?.isFile() || stats?.isSymbolicLink()) {
-      const record = `${file}\0`;
-      records.push(record);
-      bytes += Buffer.byteLength(record);
-      if (bytes >= 64 * 1024) {
-        await flush();
+      const pendingWrite = writer.append(file);
+      if (pendingWrite) {
+        await pendingWrite;
       }
     }
   }
-  await flush();
+  await writer.flush();
 }
 
 export async function executeWorkspaceInventoryComputation(

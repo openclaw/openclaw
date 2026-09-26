@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as census from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
@@ -102,6 +103,13 @@ it.each(["natural", "failure", "explicit", "signal"])(
         "-e",
         `${childCapture}
       import { installCliSignalExitHandlers } from ${JSON.stringify(signalModule)};
+      import { createPluginNativeCaptureRoot } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.captureDirectory).href)};
+      const retained = createPluginNativeCaptureRoot();
+      const pending = createPluginNativeCaptureRoot();
+      fs.writeFileSync(path.join(retained.directory, "native"), "published native bytes");
+      fs.writeFileSync(path.join(pending.directory, "native"), "unpublished native bytes");
+      retained.commit();
+      fs.writeSync(1, JSON.stringify([retained.directory, pending.directory]) + "\\n");
       const mode = process.argv[2];
       if (mode === "failure") throw new Error("fixture command failed");
       if (mode === "explicit") process.exit(2);
@@ -122,10 +130,15 @@ it.each(["natural", "failure", "explicit", "signal"])(
     expect(result.status, result.stderr).toBe(
       mode === "natural" ? 0 : mode === "failure" ? 1 : mode === "explicit" ? 2 : 143,
     );
-    const [directory] = result.stdout.trim().split("\n");
+    const [directory, , nativeRoots] = result.stdout.trim().split("\n");
     expect(directory).toContain(path.join(stateDir, "tmp", "plugin-captures"));
     expect(fs.existsSync(directory!)).toBe(false);
-    expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
+    const [retained, pending] = JSON.parse(nativeRoots!) as [string, string];
+    expect(fs.readFileSync(path.join(retained, "native"), "utf8")).toBe("published native bytes");
+    expect(fs.existsSync(pending)).toBe(false);
+    expect(fs.existsSync(path.join(path.dirname(path.dirname(retained)), "owner.sqlite"))).toBe(
+      true,
+    );
   },
 );
 
@@ -196,7 +209,8 @@ async function startCliCapture(stateDir: string, source: string, worker: boolean
   }
 }
 
-it("metadata boot reclaims old abandoned artifacts and preserves recent and legacy files", async () => {
+it("metadata boot preserves recent captures and legacy files with another producer", async () => {
+  vi.spyOn(census, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [12345] });
   const stateDir = temp.make("plugin-capture-boot-");
   const source = createSource();
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);

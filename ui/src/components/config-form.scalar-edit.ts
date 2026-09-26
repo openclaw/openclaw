@@ -14,16 +14,8 @@ type ScalarEditState = {
 const scalarEditState = new WeakMap<HTMLInputElement, ScalarEditState>();
 
 export function scalarValueBranch(value: unknown): ScalarValueBranch | undefined {
-  if (typeof value === "string") {
-    return "string";
-  }
-  if (typeof value === "number") {
-    return "number";
-  }
-  if (typeof value === "boolean") {
-    return "boolean";
-  }
-  return undefined;
+  const type = typeof value;
+  return type === "string" || type === "number" || type === "boolean" ? type : undefined;
 }
 
 export function syncScalarEditIdentity(
@@ -70,12 +62,6 @@ export function finishScalarEdit(target: HTMLInputElement): void {
   const state = scalarEditState.get(target);
   if (state) {
     state.edit = undefined;
-  }
-}
-
-export function finishScalarEditFromEvent(event: Event): void {
-  if (event.currentTarget instanceof HTMLInputElement) {
-    finishScalarEdit(event.currentTarget);
   }
 }
 

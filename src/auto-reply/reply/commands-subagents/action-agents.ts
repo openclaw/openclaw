@@ -8,10 +8,6 @@ import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import type { SubagentsCommandContext } from "./shared.js";
 
-function formatConversationBindingText(params: { conversationId: string }): string {
-  return `binding:${params.conversationId}`;
-}
-
 function supportsConversationBindings(channel: string): boolean {
   const channelId = normalizeChannelId(channel);
   if (!channelId) {
@@ -63,9 +59,7 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     for (const entry of visibleRuns) {
       const binding = resolveSessionBindings(entry.childSessionKey)[0];
       const bindingText = binding
-        ? formatConversationBindingText({
-            conversationId: binding.conversation.conversationId,
-          })
+        ? `binding:${binding.conversation.conversationId}`
         : currentConversationBindingsSupported
           ? "unbound"
           : "bindings unavailable";
@@ -83,9 +77,7 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     for (const binding of requesterBindings) {
       const label = normalizeOptionalString(binding.metadata?.label) ?? binding.targetSessionKey;
       lines.push(
-        `- ${label} (${formatConversationBindingText({
-          conversationId: binding.conversation.conversationId,
-        })}, session:${binding.targetSessionKey})`,
+        `- ${label} (binding:${binding.conversation.conversationId}, session:${binding.targetSessionKey})`,
       );
     }
   }

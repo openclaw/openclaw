@@ -10,11 +10,7 @@ import {
   parseSkillProposalEvaluation,
 } from "./store-record.js";
 import { parseJson } from "./store-sqlite-record.js";
-import {
-  openSkillWorkshopStore,
-  type SkillWorkshopDatabase,
-  type SkillWorkshopStoreOptions,
-} from "./store-sqlite-schema.js";
+import type { SkillWorkshopDatabase } from "./store-sqlite-schema.js";
 import type {
   SkillProposalEvent,
   SkillProposalEventActor,
@@ -81,13 +77,13 @@ export function appendSkillProposalEvent(
   return { ...event, sequence: inserted.sequence };
 }
 
-export function readStoredSkillProposalEvent(
+export function readStoredSkillProposalEventInDatabase(
+  database: DatabaseSync,
   eventId: string,
-  options: SkillWorkshopStoreOptions = {},
 ): SkillProposalEvent | null {
-  const { database, kysely } = openSkillWorkshopStore(options);
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(
-    database.db,
+    database,
     kysely.selectFrom("skill_workshop_proposal_events").selectAll().where("event_id", "=", eventId),
   );
   return row ? parseStoredSkillProposalEventRow(row) : null;

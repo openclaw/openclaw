@@ -195,7 +195,7 @@ describe("zalouser setup wizard", () => {
     );
 
     expect(beforePersistentEffect).toHaveBeenCalledTimes(2);
-    expect(logoutZaloProfileMock).toHaveBeenCalledWith("default");
+    expect(logoutZaloProfileMock).toHaveBeenCalledWith("default", { assertCurrent: undefined });
     expect(startZaloQrLoginMock).not.toHaveBeenCalled();
     expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
       logoutZaloProfileMock.mock.invocationCallOrder[0]!,

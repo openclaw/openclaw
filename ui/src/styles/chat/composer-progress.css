@@ -36,6 +36,12 @@
   }
 }
 
+.session-progress-card--composer,
+.session-progress-card__summary {
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+}
+
 .session-progress-card--composer {
   --session-progress-marker-size: var(--chat-stack-icon-size, 14px);
 
@@ -48,8 +54,6 @@
   max-width: none;
   overflow: hidden;
   border: 1px solid var(--chat-composer-hairline);
-  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
   background: var(--composer-attached-surface, var(--chat-composer-surface));
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
@@ -59,6 +63,10 @@
   display: block;
   width: 100%;
   max-width: none;
+}
+
+.agent-chat__progress-float[hidden] {
+  display: none;
 }
 
 /* Reserve the collapsed card slot without delaying the real composer or transcript. */
@@ -496,7 +504,6 @@
   min-height: 42px;
   padding: 8px var(--chat-stack-trailing-inset) 8px var(--chat-stack-leading-inset);
   border: 0;
-  border-radius: 0;
   background: transparent;
   color: var(--text);
   cursor: var(--cursor-action);

@@ -201,6 +201,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
     fetchWithTimeoutGuarded: minimaxProviderHttpMocks.fetchWithTimeoutGuardedMock,
     fetchWithTimeout: minimaxProviderHttpMocks.fetchWithTimeoutMock,
     postJsonRequest: minimaxProviderHttpMocks.postJsonRequestMock,
+    pollProviderOperation: actual.pollProviderOperation,
     readProviderJsonResponse: actual.readProviderJsonResponse,
     resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
       defaultTimeoutMs,

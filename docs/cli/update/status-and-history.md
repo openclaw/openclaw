@@ -17,6 +17,24 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+Git availability checks, including the Gateway's background check after startup,
+refresh only the selected upstream. They do not import other remote branches or
+tags, prune existing refs, or change shallow-history boundaries. A fresh detached
+Dev checkout can discover its configured `main` upstream without first fetching
+the remote's full ref inventory. Local upstreams need no fetch; an unknown upstream
+stays unknown. The selected upstream's own missing history may still be downloaded.
+Ahead/behind counts remain unavailable when shallow history has no merge base.
+
+For a clean source checkout configured with `update.channel: "stable"` or `"beta"`, `update status --json` can include `update.git.preferredTarget` with `channel`, `tag`, and the exact commit `sha`.
+This uses the updater's release selector and fetches into a temporary private Git repository, preserving the installed refs and checkout.
+The selected tag must still resolve to that commit at the release remote; retained local-only tags do not count as fresh targets.
+
+An absent field means unknown.
+Default/dev targets, explicit refs, unsupported channels, dirty checkouts, and unsuccessful inspections do not produce this fact.
+It describes the preferred selection for the observed configured channel, not candidate build success, downgrade approval, service readiness, or safe state recovery.
+An explicit update invocation can select a different target or install method.
+Older installed status commands cannot acquire this observation from candidate code.
+
 If an update hands work to a background helper, the command has not finished the
 update. Follow its final `openclaw update status` command to check progress and the
 outcome. `openclaw gateway status --deep` checks Gateway health, not update progress.
@@ -98,6 +116,11 @@ the updated Gateway; older runs cannot recover a cause that was never recorded.
 
 An admitted `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
+An automatic-update campaign stops showing as applying when its own admitted run
+finishes, including when a managed handoff fails before restarting the Gateway.
+The Gateway reconciles the exact campaign run, so newer unrelated runs do not
+keep a finished campaign busy or clear a different active campaign.
+
 Retained dry-run previews remain available through history queries but do not
 replace `lastRun`, so a preview cannot hide the last real update failure.
 If history cannot be read or classified, status still shows update availability
@@ -167,6 +190,12 @@ catalog-confirmed public check and plugin IDs are included; unknown IDs and code
 remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
 and report size limits still apply.
 
+npm failure records keep the first five sanitized error lines in order. Lines over
+200 UTF-8 bytes retain a prefix followed by a space and an explicit `…[truncated]`
+marker within that budget. A failed package baseline scan records
+`baseline-scan-failed` with the scan's original cause, including when its identity
+fallback also fails. A timeout with a successful fallback remains a warning.
+
 When a managed-service handoff cannot start or transfer ownership, the Gateway
 records the refusal on the failed `requested` step. Status includes the recorded
 diagnostic after the reason code; chat and failure reports use the same facts.
@@ -193,6 +222,13 @@ A foreground updater publishes its final result after required finalization work
 and its local executor have settled. A late ownership or release failure returns
 an error instead of publishing an earlier success. Existing terminal history is
 not overwritten.
+
+Unexpected executor admission, settlement, or report publication failures also
+record the last reached phase, the redacted error, and whether rollback was needed
+or attempted before offering an interactive failure report. If ownership is lost
+or pending recovery prevents a safe history write, the command reports recovery
+pending and preserves the existing history for its owning updater instead of
+starting interactive triage.
 
 Activation has an enclosing deadline derived from the update's existing phase
 budget. If it expires, the updater cancels owned work and waits within that budget
@@ -222,6 +258,12 @@ openclaw gateway call update.runs.get --params '{"runId":"<run-id>"}'
 fields and adds optional `activeRun` and `lastRun` records. While a run is active,
 the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 `updatedAtMs`. Reconnect and read the row to recover changes missed during restart.
+
+The Gateway's `update.status` reports current automatic-update policy and any live
+campaign independently of checkout discovery. Installation details can arrive
+later; reading status does not start scheduling or clear an active campaign. If
+the update channel cannot be resolved, `schedule` remains absent rather than
+claiming the scheduler is idle.
 
 When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source

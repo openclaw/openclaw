@@ -1,4 +1,3 @@
-// Session recovery coordinator helpers orchestrate stuck-session diagnostics.
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   getInternalDiagnosticEventSequence,
@@ -203,21 +202,14 @@ function requestStuckSessionRecoveryOutcome(
     return outcome;
   };
   const failRecovery = (err: unknown) => {
-    const outcome: StuckSessionRecoveryOutcome = {
+    return completeRecovery({
       status: "failed",
       action: "none",
       reason: "exception",
       sessionId: params.request.sessionId,
       sessionKey: params.request.sessionKey,
       error: String(err),
-    };
-    applyRecoveryOutcomeToDiagnosticState({
-      request: params.request,
-      outcome,
-      recoveryStartedAfterEmbeddedRunSequence,
-      recoveryStartedAfterDiagnosticEventSequence,
     });
-    return outcome;
   };
   try {
     const result = params.recover(params.request);

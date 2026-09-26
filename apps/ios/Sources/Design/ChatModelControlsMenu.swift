@@ -292,10 +292,12 @@ struct ChatModelControlsMenuItems: View {
             ChatActionMenuSectionHeader(
                 title: "Model",
                 detail: self.viewModel.modelSelectionTargetDescription)
-            self.modelOption(
-                title: self.defaultModelLabel,
-                providerID: self.defaultProviderID,
-                selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+            if self.viewModel.canSelectDefaultModel {
+                self.modelOption(
+                    title: self.defaultModelLabel,
+                    providerID: self.defaultProviderID,
+                    selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+            }
             if !sections.pinned.isEmpty {
                 ChatActionMenuSectionHeader(title: "Pinned")
                 self.modelOptions(sections.pinned)

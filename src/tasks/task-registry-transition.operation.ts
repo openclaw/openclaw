@@ -1,3 +1,4 @@
+import { isIncognitoTask, projectTaskContentForPersistence } from "./task-content.js";
 import {
   appendTaskEvent,
   normalizeTaskStatus,
@@ -21,9 +22,11 @@ import {
   type TaskRunTransition,
 } from "./task-registry.types.js";
 
+export class TaskRunTransitionUnsettledError extends Error {}
+
 type TaskRunOwnerTransition = {
   kind: "run-owner";
-  params: { runId: string; executionOwner?: TaskExecutionOwner };
+  params: { runId: string; executionOwner?: TaskExecutionOwner; clearLastToolName?: true };
 };
 
 type TaskRecordSelection = {
@@ -85,10 +88,13 @@ export function prepareTaskRecordUpdate(
 }
 
 function prepareStateTransition(
-  current: TaskRecord,
-  params: TaskRunStateTransitionParams,
+  currentInput: TaskRecord,
+  transitionInput: TaskRunStateTransitionParams,
   now: number,
 ) {
+  const incognito = isIncognitoTask(currentInput) || isIncognitoTask(transitionInput);
+  const current = projectTaskContentForPersistence(incognito, currentInput);
+  const params = projectTaskContentForPersistence(incognito, transitionInput);
   const patch: Partial<TaskRecord> = {};
   const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
   if (
@@ -184,10 +190,18 @@ function prepareTaskRecordTransition(
 ): TaskRecordTransitionReceipt | null {
   if (input.kind === "run-owner") {
     return {
-      ...(current.status === "running" && input.params.executionOwner
+      ...(current.status === "running" &&
+      (input.params.executionOwner || input.params.clearLastToolName)
         ? prepareTaskRecordUpdate(
             current,
-            { executionOwner: input.params.executionOwner },
+            {
+              ...(input.params.executionOwner
+                ? { executionOwner: input.params.executionOwner }
+                : {}),
+              ...(input.params.clearLastToolName
+                ? { lastToolName: undefined, lastEventAt: input.now }
+                : {}),
+            },
             input.now,
           )
         : { previous: current, task: current, persisted: false, becomesTerminal: false }),

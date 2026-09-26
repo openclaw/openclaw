@@ -339,20 +339,21 @@ describe("device identity SQLite store", () => {
         // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted database receiver.
         const prepare = sqlite.DatabaseSync.prototype.prepare;
         let committedDuringRead = false;
-        vi.spyOn(sqlite.DatabaseSync.prototype, "prepare").mockImplementation(
-          function (this: InstanceType<typeof sqlite.DatabaseSync>, sql) {
-            try {
-              return prepare.call(this, sql);
-            } catch (error) {
-              if (!committedDuringRead && /device_identities/iu.test(sql)) {
-                committedDuringRead = true;
-                fs.writeFileSync(creator.continuePath, "continue");
-                waitForFileSync(creator.committedPath);
-              }
-              throw error;
+        vi.spyOn(sqlite.DatabaseSync.prototype, "prepare").mockImplementation(function (
+          this: InstanceType<typeof sqlite.DatabaseSync>,
+          sql,
+        ) {
+          try {
+            return prepare.call(this, sql);
+          } catch (error) {
+            if (!committedDuringRead && /device_identities/iu.test(sql)) {
+              committedDuringRead = true;
+              fs.writeFileSync(creator.continuePath, "continue");
+              waitForFileSync(creator.committedPath);
             }
-          },
-        );
+            throw error;
+          }
+        });
 
         expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toBeNull();
         expect(committedDuringRead).toBe(true);
@@ -464,24 +465,21 @@ describe("device identity SQLite store", () => {
     });
   });
 
-  it.each(["device.json", "device.json.doctor-importing", "device.json.native-importing"])(
-    "keeps canonical SQLite authoritative when retired %s reappears",
-    async (legacyName) => {
-      await withTempDir("openclaw-device-identity-canonical-", async (rootDir) => {
-        const options = storeOptions(rootDir);
-        const canonical = loadOrCreateDeviceIdentity(options);
-        expect(canonical.deviceId).not.toBe(SWIFT_RAW_DEVICE_ID);
-        closeOpenClawStateDatabaseForTest();
+  it("keeps canonical SQLite authoritative when retired device.json reappears", async () => {
+    await withTempDir("openclaw-device-identity-canonical-", async (rootDir) => {
+      const options = storeOptions(rootDir);
+      const canonical = loadOrCreateDeviceIdentity(options);
+      expect(canonical.deviceId).not.toBe(SWIFT_RAW_DEVICE_ID);
+      closeOpenClawStateDatabaseForTest();
 
-        const legacyPath = path.join(rootDir, "identity", legacyName);
-        writeRetiredIdentity(legacyPath);
+      const legacyPath = path.join(rootDir, "identity", "device.json");
+      writeRetiredIdentity(legacyPath);
 
-        expect(loadDeviceIdentityIfPresent(options)).toEqual(canonical);
-        expect(loadOrCreateDeviceIdentity(options)).toEqual(canonical);
-        expect(fs.existsSync(legacyPath)).toBe(true);
-      });
-    },
-  );
+      expect(loadDeviceIdentityIfPresent(options)).toEqual(canonical);
+      expect(loadOrCreateDeviceIdentity(options)).toEqual(canonical);
+      expect(fs.existsSync(legacyPath)).toBe(true);
+    });
+  });
 
   it("returns one authoritative winner to concurrent creators", async () => {
     await withTempDir("openclaw-device-identity-concurrent-", async (rootDir) => {

@@ -41,13 +41,9 @@ function resolveModeVar(
   key: string,
   fallback?: string,
 ) {
-  const themeValue = normalizeOptionalString(theme[key]);
-  if (themeValue) {
-    return requireSafeExternalModeValue(themeValue, key);
-  }
-  const sharedValue = normalizeOptionalString(shared?.[key]);
-  if (sharedValue) {
-    return requireSafeExternalModeValue(sharedValue, key);
+  const value = normalizeOptionalString(theme[key]) ?? normalizeOptionalString(shared?.[key]);
+  if (value) {
+    return requireSafeExternalModeValue(value, key);
   }
   if (fallback != null) {
     return key === "font-sans" || key === "font-mono"

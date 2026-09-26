@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withContainerEnvFile } from "../../infra/container-env-file.js";
 import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
 /**
@@ -88,11 +89,9 @@ export {
 } from "./container-inspect.js";
 export { resolveDockerEnvPolicyEpoch } from "./sanitize-env-vars.js";
 
-type ExecDockerRawOptions = ExecContainerRawOptions;
-
 export async function execDockerRaw(
   args: string[],
-  opts?: ExecDockerRawOptions,
+  opts?: ExecContainerRawOptions,
 ): Promise<ExecDockerRawResult> {
   return await execContainerRaw(DOCKER_SANDBOX_ENGINE, args, opts);
 }
@@ -101,15 +100,8 @@ const log = createSubsystemLogger("docker");
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
-type ExecDockerOptions = ExecDockerRawOptions;
-
-export async function execDocker(args: string[], opts?: ExecDockerOptions) {
-  const result = await execDockerRaw(args, opts);
-  return {
-    stdout: result.stdout.toString("utf8"),
-    stderr: result.stderr.toString("utf8"),
-    code: result.code,
-  };
+export async function execDocker(args: string[], opts?: ExecContainerRawOptions) {
+  return await execContainer(DOCKER_SANDBOX_ENGINE, args, opts);
 }
 
 const DOCKER_DAEMON_UNAVAILABLE_MARKERS = [
@@ -166,33 +158,27 @@ export async function ensureContainerImage(engine: SandboxContainerEngine, image
   if (imageState === "exists") {
     return;
   }
+  const missingImage =
+    engine.id === "docker"
+      ? `Sandbox image not found: ${image}.`
+      : `Sandbox image not found in ${engine.displayName}: ${image}.`;
   if (image === DEFAULT_SANDBOX_IMAGE) {
-    if (engine.id === "docker") {
-      throw new Error(
-        `Sandbox image not found: ${image}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim.`,
-      );
-    }
+    const setup =
+      engine.id === "docker"
+        ? "scripts/sandbox-setup.sh before enabling Docker sandboxing"
+        : `podman build -t ${image} -f scripts/docker/sandbox/Dockerfile . before enabling container sandboxing`;
     throw new Error(
-      `Sandbox image not found in ${engine.displayName}: ${image}. Build it with podman build -t ${image} -f scripts/docker/sandbox/Dockerfile . before enabling container sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim.`,
+      `${missingImage} Build it with ${setup}. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim.`,
     );
   }
-  if (engine.id === "docker") {
-    throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
-  }
-  throw new Error(
-    `Sandbox image not found in ${engine.displayName}: ${image}. Build or pull it first.`,
-  );
+  throw new Error(`${missingImage} Build or pull it first.`);
 }
 
 function normalizeDockerLimit(value?: string | number) {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
   if (typeof value === "number") {
     return Number.isFinite(value) ? String(value) : undefined;
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function normalizeFiniteDockerNumber(value: unknown, min: number): number | undefined {
@@ -216,16 +202,8 @@ function formatUlimitValue(
   }
   const soft = normalizeFiniteDockerNumber(value.soft, 0);
   const hard = normalizeFiniteDockerNumber(value.hard, 0);
-  if (soft === undefined && hard === undefined) {
-    return null;
-  }
-  if (soft === undefined) {
-    return `${name}=${hard}`;
-  }
-  if (hard === undefined) {
-    return `${name}=${soft}`;
-  }
-  return `${name}=${soft}:${hard}`;
+  const limits = [soft, hard].filter((limit) => limit !== undefined);
+  return limits.length ? `${name}=${limits.join(":")}` : null;
 }
 
 export function buildSandboxCreateArgs(params: {
@@ -344,19 +322,14 @@ export function buildSandboxCreateArgs(params: {
       args.push("--ulimit", formatted);
     }
   }
-  if (params.includeBinds !== false && params.cfg.binds?.length) {
-    for (const bind of params.cfg.binds) {
-      args.push("-v", bind);
-    }
+  if (params.includeBinds !== false) {
+    appendCustomBinds(args, params.cfg.binds);
   }
   return { argv: args, env };
 }
 
-function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
-  if (!cfg.binds?.length) {
-    return;
-  }
-  for (const bind of cfg.binds) {
+function appendCustomBinds(args: string[], binds: readonly string[] | undefined): void {
+  for (const bind of binds ?? []) {
     args.push("-v", bind);
   }
 }
@@ -411,7 +384,7 @@ async function createSandboxContainer(params: {
       `sandbox: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
     );
   }
-  appendCustomBinds(args, { ...cfg, binds: params.mountPlan.binds });
+  appendCustomBinds(args, params.mountPlan.binds);
   const created = await withContainerEnvFile(env, async (envFile) => {
     args.push("--env-file", envFile, cfg.image, "sleep", "infinity");
     params.assertCurrent?.();
@@ -433,13 +406,6 @@ async function createSandboxContainer(params: {
   }
   params.assertCurrent?.();
   return containerId;
-}
-
-async function readContainerConfigHash(
-  engine: SandboxContainerEngine,
-  containerName: string,
-): Promise<string | null> {
-  return await readContainerLabel(engine, containerName, "openclaw.configHash");
 }
 
 type EnsureSandboxContainerParams = {
@@ -591,7 +557,7 @@ async function ensureSandboxContainerLifecycle(
         `Sandbox ${containerName} setup did not complete. Inspect the retained container and preserve needed data before explicitly recreating it.`,
       );
     }
-    currentHash = await readContainerConfigHash(engine, containerName);
+    currentHash = await readContainerLabel(engine, containerName, "openclaw.configHash");
     if (!currentHash) {
       currentHash = registryEntry?.configHash ?? null;
     }

@@ -1,6 +1,3 @@
-// Sidebar footer identity menu, split out of app-sidebar-agent-menu.ts to
-// keep that module inside the TS LOC ratchet. Shares the sidebar menu focus
-// helpers and help submenu with the agent menu.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
@@ -25,6 +22,7 @@ import {
   moveSidebarMenuFocus,
   renderSidebarHelpMenu,
 } from "./app-sidebar-agent-menu.ts";
+import { renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
 import { icons } from "./icons.ts";
 import "./sidebar-build-chip.ts";
 import "./viewer-facepile.ts";
@@ -215,14 +213,11 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       }}
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
-      <button
-        slot="trigger"
-        type="button"
-        tabindex="-1"
-        aria-hidden="true"
-        aria-label=${t("profilePage.identity.menuLabel")}
-        style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-      ></button>
+      ${renderSidebarMenuTrigger(
+        { x: position.x, y: position.bottom },
+        t("profilePage.identity.menuLabel"),
+        "bottom",
+      )}
       <wa-dropdown-item
         class="sidebar-customize-menu__item sidebar-identity-menu__header"
         value="command:profile"

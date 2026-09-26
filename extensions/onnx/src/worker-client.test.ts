@@ -45,12 +45,10 @@ process.on('message', async (request) => {
   record({ kind: 'classify', text });
   if (text === 'block') Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
   if (text === 'wait') {
-    await new Promise((resolve) => {
-      const releasePath = path.join(dir, 'release');
-      const check = () => { if (fs.existsSync(releasePath)) { watcher.close(); resolve(); } };
-      const watcher = fs.watch(dir, check);
-      check();
-    });
+    const releasePath = path.join(dir, 'release');
+    while (!fs.existsSync(releasePath)) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
   if (text === 'missing') { process.send({ kind: 'error', id: request.id, code: 'model-missing' }); return; }
   if (text === 'exit') process.exit(7);
@@ -73,22 +71,16 @@ process.on('message', async (request) => {
       .filter(Boolean)
       .map((line: string) => JSON.parse(line));
   const waitFor = (match: (event: FixtureEvent) => boolean): Promise<FixtureEvent> =>
-    new Promise((resolve, reject) => {
-      const watcher = fs.watch(dir, check);
-      const timer = setTimeout(() => {
-        watcher.close();
-        reject(new Error("Fixture did not reach the requested IPC boundary"));
-      }, 10_000);
-      function check() {
+    vi.waitFor(
+      () => {
         const found = events().find(match);
-        if (found) {
-          clearTimeout(timer);
-          watcher.close();
-          resolve(found);
+        if (!found) {
+          throw new Error("Fixture did not reach the requested IPC boundary");
         }
-      }
-      check();
-    });
+        return found;
+      },
+      { timeout: 10_000 },
+    );
   return {
     client,
     events,

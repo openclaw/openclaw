@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
@@ -15,41 +16,29 @@ export type ConfigFormStructuredDraftProps = {
   renderNode: ConfigNodeRenderer;
 };
 
-function cloneDraftValue(value: Record<string, unknown> | unknown[]) {
-  return structuredClone(value);
-}
-
-export function structuredDraftInitialValue(
+export function resolveStructuredDraftInitialValue(
   params: ConfigNodeRenderParams,
 ): Record<string, unknown> | unknown[] | undefined {
+  if (
+    params.value !== undefined ||
+    params.isRequired === true ||
+    params.structuredDraftOwner === true
+  ) {
+    return undefined;
+  }
   const type = schemaType(params.schema);
   if (type !== "object" && type !== "array") {
     return undefined;
   }
   const schemaDefault = params.schema.default;
+  let initialValue: Record<string, unknown> | unknown[] = type === "object" ? {} : [];
   if (
-    (type === "object" &&
-      schemaDefault &&
-      typeof schemaDefault === "object" &&
-      !Array.isArray(schemaDefault)) ||
+    (type === "object" && isRecord(schemaDefault)) ||
     (type === "array" && Array.isArray(schemaDefault))
   ) {
-    return cloneDraftValue(schemaDefault as Record<string, unknown> | unknown[]);
+    initialValue = structuredClone(schemaDefault);
   }
-  return type === "object" ? {} : [];
-}
-
-export function shouldStageStructuredDraft(
-  params: ConfigNodeRenderParams,
-  initialValue: Record<string, unknown> | unknown[] | undefined,
-): initialValue is Record<string, unknown> | unknown[] {
-  return (
-    initialValue !== undefined &&
-    params.value === undefined &&
-    params.isRequired !== true &&
-    params.structuredDraftOwner !== true &&
-    !isSupportedConfigValueValid(params.schema, initialValue)
-  );
+  return isSupportedConfigValueValid(params.schema, initialValue) ? undefined : initialValue;
 }
 
 class ConfigFormStructuredDraft extends OpenClawLightDomElement {
@@ -70,7 +59,7 @@ class ConfigFormStructuredDraft extends OpenClawLightDomElement {
         previous.identity !== next.identity ||
         !Object.is(previous.sourceIdentity, next.sourceIdentity))
     ) {
-      this.draftValue = cloneDraftValue(next.initialValue);
+      this.draftValue = structuredClone(next.initialValue);
       this.error = "";
     }
   }
@@ -99,8 +88,7 @@ class ConfigFormStructuredDraft extends OpenClawLightDomElement {
     const candidate = patched.value;
     const type = schemaType(props.params.schema);
     if (
-      (type === "object" &&
-        (!candidate || typeof candidate !== "object" || Array.isArray(candidate))) ||
+      (type === "object" && !isRecord(candidate)) ||
       (type === "array" && !Array.isArray(candidate))
     ) {
       return false;

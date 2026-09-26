@@ -4,6 +4,12 @@ import {
 } from "./workspace-inventory-limits.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
+export type PreparedProjectVerification = {
+  baseCommit: string;
+  sourceManifestRef: string;
+  preparedManifestRef: string;
+};
+
 export const PREPARE_PROJECT_WORKSPACE_JS = `async (input, inspectOnly = false) => {
 const startedAt = performance.now();
 const fs = require("node:fs");
@@ -134,11 +140,14 @@ const runSetup = (script, workspaceDir, homeDir) => {
   });
 };
   const workerRoot = ownedDirectory(machineHome, ".openclaw-worker");
-  // Inspection cannot create a workspace or execute repository code before the Gateway rechecks its owner.
-  if (inspectOnly && !fs.existsSync(path.join(workerRoot, "prepared", input.namespace, input.cacheKey))) return;
   const existing = path.join(workerRoot, "prepared", input.namespace, input.cacheKey);
+  const exists = fs.existsSync(existing);
+  const verified = input.verifiedRetained;
+  if (verified !== undefined && (verified !== null) !== exists) throw new Error("Prepared project changed during preparation");
+  // Inspection cannot create a workspace or execute repository code before the Gateway rechecks its owner.
+  if (inspectOnly && !exists) return;
   let previous;
-  if (fs.existsSync(existing)) {
+  if (exists) {
     const parent = ownedDirectory(ownedDirectory(workerRoot, "prepared"), input.namespace);
     const directory = ownedDirectory(parent, input.cacheKey);
     const workspaceDir = ownedDirectory(directory, "workspace");
@@ -147,7 +156,7 @@ const runSetup = (script, workspaceDir, homeDir) => {
     if (fs.existsSync(path.join(admin, "objects", "info", "alternates")) || fs.existsSync(path.join(admin, "info", "grafts"))) throw new Error("Prepared project Git base is not standalone");
     const baseCommit = git(workspaceDir, ["rev-parse", "--verify", "HEAD^{commit}"]);
     if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(baseCommit)) throw new Error("Prepared project Git base is invalid");
-    git(workspaceDir, ["fsck", "--full", "--strict", "--no-reflogs", baseCommit]);
+    if (verified === undefined) git(workspaceDir, ["fsck", "--full", "--strict", "--no-reflogs", baseCommit]);
     const manifestRoot = ownedDirectory(ownedDirectory(homeDir, ".openclaw-worker"), "manifests");
     const completionRoot = ownedDirectory(manifestRoot, "prepared");
     const sourceDigest = singleArtifact(completionRoot, /^[a-f0-9]{64}$/);
@@ -155,12 +164,13 @@ const runSetup = (script, workspaceDir, homeDir) => {
     const preparedFile = singleArtifact(completionDirectory, /^[a-f0-9]{64}[.]json$/);
     const sourceManifestRef = "sha256:" + sourceDigest;
     const preparedManifestRef = "sha256:" + preparedFile.slice(0, -5);
+    if (verified && (baseCommit !== verified.baseCommit || sourceManifestRef !== verified.sourceManifestRef || preparedManifestRef !== verified.preparedManifestRef)) throw new Error("Prepared project changed during preparation");
     const completedManifest = path.join(completionDirectory, preparedFile);
     const sourceBytes = readManifest(path.join(manifestRoot, sourceDigest + ".json"), sourceManifestRef);
     const preparedBytes = readManifest(completedManifest, preparedManifestRef);
     readManifest(path.join(manifestRoot, preparedFile), preparedManifestRef);
     manifestEntries(sourceBytes, baseCommit);
-    if (manifest(workspaceDir, baseCommit, [preparedManifestRef, sourceManifestRef], homeDir) !== preparedManifestRef) throw new Error("Prepared project completed workspace changed");
+    if (verified === undefined && manifest(workspaceDir, baseCommit, [preparedManifestRef, sourceManifestRef], homeDir) !== preparedManifestRef) throw new Error("Prepared project completed workspace changed");
     previous = { workspaceDir, homeDir, sourceManifestRef, preparedManifestRef, baseCommit, sourceBytes, preparedBytes, completedManifest, completionDirectory, manifestRoot };
     if (inspectOnly) return { workspaceDir, homeDir, sourceManifestRef, preparedManifestRef, baseCommit };
   }
@@ -240,6 +250,7 @@ export function createProjectSetupScript(
     setupRecipe?: string;
     runSetupScript?: boolean;
     timeoutMs?: number;
+    verifiedRetained?: PreparedProjectVerification | null;
   },
   inspectOnly = false,
 ): string {

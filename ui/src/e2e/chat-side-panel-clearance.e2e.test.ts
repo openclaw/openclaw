@@ -413,11 +413,11 @@ suite.define(() => {
           return box ? box.y + box.height / 2 : -1;
         };
         // The toolbar row sits at the top of the content column in both states.
-        await expect.poll(rowCenter).toBe(26);
+        await expect.poll(rowCenter).toBe(24);
 
         await page.locator(".sidebar-brand__collapse").click();
         await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
-        await expect.poll(rowCenter).toBe(26);
+        await expect.poll(rowCenter).toBe(24);
         const controls = page.locator(".shell-chrome-controls button:visible");
         const controlBoxes = await controls.evaluateAll((buttons) =>
           buttons.map((button) => button.getBoundingClientRect()),
@@ -425,7 +425,7 @@ suite.define(() => {
         expect(controlBoxes.length).toBeGreaterThan(0);
         const tabsBox = (await tabs.boundingBox())!;
         for (const box of controlBoxes) {
-          expect(box.top + box.height / 2).toBe(26);
+          expect(box.top + box.height / 2).toBe(24);
           expect(box.right).toBeLessThan(tabsBox.x);
         }
       },

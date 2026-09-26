@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -216,7 +217,7 @@ export function createAsyncRegistryRestore<Snapshot, Store extends SnapshotStore
         if (secondary.length > 0) {
           throw createSqliteLifecycleAggregateError(
             [failure, ...secondary],
-            "Registry restore failed with additional lifecycle errors",
+            `Registry restore failed with additional lifecycle errors: ${formatErrorMessage(failure)}`,
             failure,
           );
         }

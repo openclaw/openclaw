@@ -41,9 +41,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
   it.each(["selected", "bot-reply", "older-source", "external", "off"] as const)(
     "selects the native reply target from %s context",
     async (selection) => {
-      if (selection === "older-source") {
-        vi.useFakeTimers({ shouldAdvanceTime: true });
-      }
       const context = createContext();
       const inboundId = context.msg.message_id;
       Object.assign(context.ctxPayload, {

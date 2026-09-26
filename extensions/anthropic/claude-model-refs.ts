@@ -1,11 +1,9 @@
-/**
- * Claude CLI model-ref normalization. It maps family aliases and retired model
- * ids to current Anthropic runtime refs while preserving auth-profile suffixes.
- */
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_MODEL_ID_ALIASES } from "./cli-constants.js";
 
-/** Normalized Claude CLI selection plus runtime refs used by setup migrations. */
 type ClaudeCliAnthropicModelRefs = {
   selectedRef: string;
   runtimeRefs: string[];
@@ -179,7 +177,6 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
   return null;
 }
 
-/** Resolve a Claude CLI model ref into selected and Anthropic-compatible runtime refs. */
 export function resolveClaudeCliAnthropicModelRefs(
   raw: string,
 ): ClaudeCliAnthropicModelRefs | null {
@@ -212,7 +209,6 @@ export function resolveClaudeCliAnthropicModelRefs(
   };
 }
 
-/** Resolve a known Anthropic/Claude CLI model ref to its current Anthropic model ref. */
 export function resolveKnownAnthropicModelRef(raw?: string): string | null {
   if (!raw) {
     return null;
@@ -222,4 +218,18 @@ export function resolveKnownAnthropicModelRef(raw?: string): string | null {
     return null;
   }
   return resolveClaudeCliAnthropicModelRefs(trimmed)?.rewriteRef ?? trimmed;
+}
+
+export function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown> {
+  const base = isRecord(entry) ? { ...entry } : {};
+  const currentRuntimeId = isRecord(base.agentRuntime) ? base.agentRuntime.id : undefined;
+  const currentRuntime = normalizeLowercaseStringOrEmpty(currentRuntimeId);
+  if (currentRuntime && currentRuntime !== "auto") {
+    return base;
+  }
+  base.agentRuntime = {
+    ...(isRecord(base.agentRuntime) ? base.agentRuntime : {}),
+    id: CLAUDE_CLI_BACKEND_ID,
+  };
+  return base;
 }

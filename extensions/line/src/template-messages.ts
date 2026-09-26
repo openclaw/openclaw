@@ -36,6 +36,14 @@ function buildTemplatePayloadAction(action: TemplatePayloadAction): Action {
   return messageAction(action.label, action.data ?? action.label);
 }
 
+function buildInferredTemplateAction(label: string, data: string): Action {
+  return data.startsWith("http")
+    ? uriAction(label, data)
+    : data.includes("=")
+      ? postbackAction(label, data, label)
+      : messageAction(label, data);
+}
+
 function resolveTemplateTextLimit(params: {
   title?: string;
   thumbnailImageUrl?: string;
@@ -294,19 +302,12 @@ export function buildTemplateMessageFromPayload(
 ): TemplateMessage | TextMessage | null {
   switch (payload.type) {
     case "confirm": {
-      const confirmAction = payload.confirmData.startsWith("http")
-        ? uriAction(payload.confirmLabel, payload.confirmData)
-        : payload.confirmData.includes("=")
-          ? postbackAction(payload.confirmLabel, payload.confirmData, payload.confirmLabel)
-          : messageAction(payload.confirmLabel, payload.confirmData);
-
-      const cancelAction = payload.cancelData.startsWith("http")
-        ? uriAction(payload.cancelLabel, payload.cancelData)
-        : payload.cancelData.includes("=")
-          ? postbackAction(payload.cancelLabel, payload.cancelData, payload.cancelLabel)
-          : messageAction(payload.cancelLabel, payload.cancelData);
-
-      return createConfirmTemplate(payload.text, confirmAction, cancelAction, payload.altText);
+      return createConfirmTemplate(
+        payload.text,
+        buildInferredTemplateAction(payload.confirmLabel, payload.confirmData),
+        buildInferredTemplateAction(payload.cancelLabel, payload.cancelData),
+        payload.altText,
+      );
     }
 
     case "buttons": {

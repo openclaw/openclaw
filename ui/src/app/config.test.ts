@@ -33,6 +33,18 @@ afterEach(() => {
 });
 
 describe("createApplicationConfigCapability", () => {
+  it.each([undefined, "configured", "last-used"] as const)(
+    "loads fresh-session model defaults %s",
+    async (policy) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(Response.json({ newSessionModelDefaults: policy })),
+      );
+      const config = createApplicationConfigCapability({ resourceBasePath: "" });
+      await config.refresh();
+      expect(config.current.newSessionModelDefaults).toBe(policy ?? "last-used");
+    },
+  );
   it("keeps capabilities available when development plugin grants contain invalid URLs", async () => {
     vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
       gatewayUrl: "ws://gateway.example/mount",

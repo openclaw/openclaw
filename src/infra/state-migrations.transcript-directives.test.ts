@@ -2,6 +2,7 @@ import { AsyncResource } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readSqliteTranscriptPayload,
@@ -167,8 +168,8 @@ function readMigrationCursor(databasePath: string): unknown {
       .prepare(
         "SELECT app_version FROM schema_meta WHERE meta_key = 'historical-transcript-directives-v1'",
       )
-      .get() as { app_version: string };
-    return JSON.parse(row.app_version);
+      .get() as { app_version: string } | undefined;
+    return row ? JSON.parse(row.app_version) : undefined;
   } finally {
     database.close();
   }
@@ -1008,19 +1009,22 @@ describe("historical transcript directive migration", () => {
     let competingLeaseId: string | undefined;
     let cursorAtCompetition: unknown;
     let competedAt = 0;
+    const batchCursor = { phase: "transcripts", sessionId: sessionIdAt(batchSize - 1) };
     const scheduleImmediate = globalThis.setImmediate;
-    vi.spyOn(globalThis, "setImmediate").mockImplementationOnce((callback, ...args) =>
+    vi.spyOn(globalThis, "setImmediate").mockImplementation((callback, ...args) =>
       scheduleImmediate(() => {
-        cursorAtCompetition = readMigrationCursor(opened.path);
-        competedAt = Date.now();
-        try {
-          competingLeaseId = claimCompetingLease({
-            agentId: "competitor",
-            path: path.join(stateDir, "competitor.sqlite"),
-            env,
-          });
-        } catch (error) {
-          competingWriterError = error;
+        if (!competedAt && isDeepStrictEqual(readMigrationCursor(opened.path), batchCursor)) {
+          cursorAtCompetition = readMigrationCursor(opened.path);
+          competedAt = Date.now();
+          try {
+            competingLeaseId = claimCompetingLease({
+              agentId: "competitor",
+              path: path.join(stateDir, "competitor.sqlite"),
+              env,
+            });
+          } catch (error) {
+            competingWriterError = error;
+          }
         }
         callback(...args);
       }),
@@ -1032,10 +1036,7 @@ describe("historical transcript directive migration", () => {
 
     expect(originalExpiresAt).toBeGreaterThan(0);
     expect(competedAt).toBeGreaterThan(originalExpiresAt);
-    expect(cursorAtCompetition).toEqual({
-      phase: "transcripts",
-      sessionId: sessionIdAt(batchSize - 1),
-    });
+    expect(cursorAtCompetition).toEqual(batchCursor);
     expect(competingWriterError).toEqual(
       expect.objectContaining({ message: expect.stringContaining("maintenance is in progress") }),
     );

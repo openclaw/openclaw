@@ -100,14 +100,7 @@ function resolveAgentDeliveryPlan(params: {
     if (requestedChannel === INTERNAL_MESSAGE_CHANNEL) {
       return INTERNAL_MESSAGE_CHANNEL;
     }
-    if (requestedChannel === "last") {
-      if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
-        return baseDelivery.channel;
-      }
-      return INTERNAL_MESSAGE_CHANNEL;
-    }
-
-    if (isGatewayMessageChannel(requestedChannel)) {
+    if (requestedChannel !== "last" && isGatewayMessageChannel(requestedChannel)) {
       return requestedChannel;
     }
 
@@ -390,14 +383,10 @@ export function resolveAgentOutboundTarget(params: {
       targetMode,
     };
   }
-  if (!isDeliverableMessageChannel(params.plan.resolvedChannel)) {
-    return {
-      resolvedTarget: null,
-      resolvedTo: params.plan.resolvedTo,
-      targetMode,
-    };
-  }
-  if (params.validateExplicitTarget !== true && params.plan.resolvedTo) {
+  if (
+    !isDeliverableMessageChannel(params.plan.resolvedChannel) ||
+    (params.validateExplicitTarget !== true && params.plan.resolvedTo)
+  ) {
     return {
       resolvedTarget: null,
       resolvedTo: params.plan.resolvedTo,

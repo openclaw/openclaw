@@ -35,13 +35,13 @@ export function installMarkdownTables(markdownParser: MarkdownIt): void {
     if (!tableInteractionsEnabled(env)) {
       return defaultTableOpen?.(tokens, index, options, env, renderer) ?? "<table>\n";
     }
-    return '<div class="markdown-table" data-table-interactions><div class="markdown-table__viewport"><table>';
+    return `<div class="markdown-table" data-table-interactions><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeMarkdownHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeMarkdownHtml(t("common.copyTable"))}"></button></div><div class="markdown-table__viewport"><table>`;
   };
   markdownParser.renderer.rules.table_close = (tokens, index, options, env, renderer) => {
     if (!tableInteractionsEnabled(env)) {
       return defaultTableClose?.(tokens, index, options, env, renderer) ?? "</table>\n";
     }
-    return `</table></div><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeMarkdownHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeMarkdownHtml(t("common.copyTable"))}"></button></div></div>`;
+    return "</table></div></div>";
   };
 }
 
@@ -76,7 +76,7 @@ function enhanceTableShell(shell: HTMLElement): void {
     return;
   }
   enhancedTableShells.add(shell);
-  render(toolIcons.maximize, expand);
+  render(html`${toolIcons.maximize}<span>${t("common.expandTable")}</span>`, expand);
   render(icons.copy, copy);
   viewport.addEventListener("scroll", () => syncTableOverflow(shell), { passive: true });
 }
@@ -104,7 +104,11 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           continue;
         }
         enhanceTableShell(shell);
-        syncTableOverflow(shell);
+        // Both boxes are observed after layout; mutation-time reads would force
+        // layout again after each table's chrome is installed.
+        if (!resizeObserver) {
+          syncTableOverflow(shell);
+        }
         for (const node of shell.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`)) {
           if (!observedNodes.has(node)) {
             observedNodes.add(node);
@@ -223,6 +227,7 @@ async function showTableDialog(
       html`
         <div
           class="markdown-table-dialog chat-text"
+          dir=${getComputedStyle(table).direction}
           @click=${dismissLink}
           @auxclick=${dismissLink}
           @keydown=${dismissLink}

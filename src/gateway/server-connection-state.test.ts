@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket } from "ws";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
@@ -10,10 +11,17 @@ import {
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listSystemPresence, upsertPresence } from "../infra/system-presence.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { systemHandlers } from "./server-methods/system.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
+import { buildGatewaySnapshot } from "./server/health-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
@@ -54,9 +62,148 @@ function makeClient(
 }
 
 describe("gateway connection state", () => {
+  it("uses committed policy for projected and plain session events through tentative activation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const reader = ensureProfileForEmail("event-policy-reader@example.test");
+      const other = ensureProfileForEmail("event-policy-other@example.test");
+      const config = (others: "none" | "view"): OpenClawConfig => ({
+        agents: { entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: {
+                sessions: { others },
+                agents: ["main"],
+                scopes: ["operator.sessions.read"],
+              },
+            },
+          },
+        },
+      });
+      const restricted = config("none");
+      const relaxed = config("view");
+      let runtimeConfig = restricted;
+      let committedConfig = restricted;
+      setRuntimeConfigSnapshot(runtimeConfig);
+      const ownKey = "agent:main:policy-own";
+      const foreignKey = "agent:main:policy-foreign";
+      for (const [sessionKey, profileId] of [
+        [ownKey, reader.id],
+        [foreignKey, other.id],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            visibility: "shared",
+            createdActor: { type: "human", source: "profile", id: profileId },
+          },
+        );
+      }
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "committed-event-policy",
+        cfg: restricted,
+        getRuntimeConfig: () => runtimeConfig,
+      });
+      try {
+        const projection = await createSessionRowProjection({
+          cfg: runtimeConfig,
+          getConfig: () => runtimeConfig,
+          getPolicyConfig: () => committedConfig,
+        });
+        const detach = state.attachSessionRowProjection(projection);
+        try {
+          const peer = makeClient("policy-reader", { count: 0 });
+          peer.client.connect.scopes = ["operator.sessions.read"];
+          peer.client.connect.client = {
+            id: "openclaw-control-ui",
+            version: "test",
+            platform: "web",
+            mode: "webchat",
+          };
+          peer.client.authenticatedUserProfile = {
+            profileId: reader.id,
+            displayName: "Reader",
+            avatarRevision: "test",
+            hasAvatar: false,
+            updatedAt: reader.updatedAt,
+          };
+          prepareGatewayRecipientProfile(peer.client);
+          state.clients.add(peer.client);
+          const publish = (stage: string, visibleKeys: string[]) => {
+            peer.send.mockClear();
+            for (const sessionKey of [ownKey, foreignKey]) {
+              const scope = { sessionKeys: [sessionKey], agentId: "main" };
+              state.broadcast("sessions.changed", { sessionKey, reason: "metadata" }, scope);
+              state.broadcast(
+                "chat",
+                {
+                  sessionKey,
+                  runId: "policy-run",
+                  seq: 1,
+                  state: "delta",
+                  message: { role: "assistant", content: [{ type: "text", text: sessionKey }] },
+                },
+                scope,
+              );
+            }
+            const frames = peer.send.mock.calls.map(([frame]): unknown => {
+              if (typeof frame !== "string") {
+                throw new Error("expected a serialized Gateway event");
+              }
+              return JSON.parse(frame);
+            });
+            expect.soft(frames, stage).toEqual(
+              visibleKeys.flatMap((sessionKey) => [
+                expect.objectContaining({
+                  event: "sessions.changed",
+                  payload: expect.objectContaining({
+                    sessionKey,
+                    session: expect.objectContaining({ key: sessionKey }),
+                  }),
+                }),
+                expect.objectContaining({
+                  event: "chat",
+                  payload: expect.objectContaining({
+                    sessionKey,
+                    message: { role: "assistant", content: [{ type: "text", text: sessionKey }] },
+                  }),
+                }),
+              ]),
+            );
+          };
+          await projection.ensureMaterialized();
+          publish("serving policy", [ownKey]);
+          runtimeConfig = relaxed;
+          setRuntimeConfigSnapshot(runtimeConfig);
+          await projection.ensureMaterialized();
+          publish("tentative relaxation", [ownKey]);
+          runtimeConfig = restricted;
+          setRuntimeConfigSnapshot(runtimeConfig);
+          await projection.ensureMaterialized();
+          publish("rollback", [ownKey]);
+          runtimeConfig = relaxed;
+          setRuntimeConfigSnapshot(runtimeConfig);
+          await projection.ensureMaterialized();
+          committedConfig = relaxed;
+          publish("committed relaxation without a projection mark", [ownKey, foreignKey]);
+        } finally {
+          detach();
+          projection.dispose();
+        }
+      } finally {
+        state.mentionInbox.dispose();
+      }
+    });
+  });
+
   it("advertises online people only through live operator connections", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
         bootId: "online-recipients",
         cfg: { agents: { entries: { main: {} } } },
       });
@@ -129,7 +276,11 @@ describe("gateway connection state", () => {
         }
       });
       const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-      const state = createGatewayConnectionState({ bootId: "members", cfg: {} });
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "members",
+        cfg: {},
+      });
       state.attachSessionRowProjection(projection);
       const peers = Array.from({ length: 50 }, (_, index) => {
         const peer = makeClient(`viewer-${index}`, { count: 0 });
@@ -246,8 +397,151 @@ describe("gateway connection state", () => {
     });
   });
 
+  it("serves current presence through broadcasts, RPCs, and hello without SQL while display rows are dirty", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const reader = ensureProfileForEmail("presence-reader@example.test");
+      const sharedKey = "agent:main:presence-shared";
+      const draftKey = "agent:main:presence-draft";
+      const incognitoKey = "agent:main:dashboard:incognito-presence";
+      const missingKey = "agent:main:presence-missing";
+      for (const [sessionKey, visibility] of [
+        [sharedKey, "shared"],
+        [draftKey, "draft"],
+        [incognitoKey, "shared"],
+        ["global", "shared"],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            visibility,
+            createdActor: { type: "human", source: "profile", id: "other-owner" },
+            ...(sessionKey === incognitoKey ? { incognito: true } : {}),
+          },
+        );
+      }
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "presence-boundaries",
+        cfg,
+      });
+      const detach = state.attachSessionRowProjection(projection);
+      const peers = ["reader", "admin", "trailing-reader"].map((name) => {
+        const peer = makeClient(`presence-${name}`, { count: 0 });
+        peer.client.connect.scopes = [name === "admin" ? "operator.admin" : "operator.read"];
+        peer.client.authenticatedUserProfile = {
+          profileId: reader.id,
+          displayName: null,
+          avatarRevision: "test",
+          hasAvatar: false,
+          updatedAt: reader.updatedAt,
+        };
+        prepareGatewayRecipientProfile(peer.client);
+        state.clients.add(peer.client);
+        return peer;
+      });
+      const context = createGatewayRequestContext(
+        makeContextParams({
+          clients: state.clients,
+          getSessionRowProjection: state.getSessionRowProjection,
+        }),
+      );
+      const presenceKey = "presence-boundary-watcher";
+      upsertPresence(presenceKey, {
+        text: presenceKey,
+        watchedSessions: [sharedKey, draftKey, incognitoKey, missingKey, "agent:main:global"],
+      });
+      try {
+        await projection.ensureMaterialized();
+        const scope = { agentId: "main", sessionKey: sharedKey };
+        sessionChanges.emit(scope);
+        const verify = (sharedVisible: boolean) => {
+          expect(projection.dirtyRowCount).toBeGreaterThan(0);
+          const sql = observeHostDataSql();
+          try {
+            peers.forEach(({ send }) => send.mockClear());
+            state.broadcast("presence", { presence: listSystemPresence() });
+            for (const [index, peer] of peers.entries()) {
+              const watchedSessions =
+                index === 1
+                  ? [sharedKey, draftKey, incognitoKey, "agent:main:global"]
+                  : [...(sharedVisible ? [sharedKey] : []), "agent:main:global"];
+              const expected = expect.arrayContaining([
+                expect.objectContaining({ text: presenceKey, watchedSessions }),
+              ]);
+              expect(peer.send).toHaveBeenCalledOnce();
+              const frame = peer.send.mock.calls[0]?.[0];
+              expect(typeof frame).toBe("string");
+              expect(JSON.parse(String(frame))).toMatchObject({
+                event: "presence",
+                payload: { presence: expected },
+              });
+              const respond = vi.fn();
+              void systemHandlers["system-presence"]!({
+                req: { type: "req", id: "presence", method: "system-presence" },
+                params: {},
+                client: peer.client,
+                respond,
+                context,
+                isWebchatConnect: () => true,
+              });
+              expect(respond).toHaveBeenCalledExactlyOnceWith(true, expected, undefined);
+              expect(
+                buildGatewaySnapshot({
+                  client: peer.client,
+                  sessionRowProjection: projection,
+                  revisionProjector: context.configRevisionProjector,
+                }).presence,
+              ).toEqual(expected);
+            }
+            expect(sql.queries).toEqual([]);
+          } finally {
+            sql.restore();
+          }
+        };
+        verify(true);
+        replaceSessionEntrySync(scope, {
+          sessionId: sharedKey,
+          updatedAt: 2,
+          visibility: "draft",
+          createdActor: { type: "human", source: "profile", id: "other-owner" },
+        });
+        verify(false);
+        replaceSessionEntrySync(scope, {
+          sessionId: sharedKey,
+          updatedAt: 3,
+          visibility: "shared",
+        });
+        peers[0]!.send.mockImplementationOnce(() => {
+          replaceSessionEntrySync(scope, {
+            sessionId: sharedKey,
+            updatedAt: 4,
+            visibility: "draft",
+          });
+        });
+        state.broadcast("presence", { presence: listSystemPresence() });
+        const trailing = JSON.parse(String(peers[2]!.send.mock.lastCall?.[0]));
+        expect(trailing.payload.presence).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ text: presenceKey, watchedSessions: ["agent:main:global"] }),
+          ]),
+        );
+      } finally {
+        upsertPresence(presenceKey, { watchedSessions: undefined });
+        detach();
+        projection.dispose();
+        state.mentionInbox.dispose();
+      }
+    });
+  });
+
   it("bounds targeted delivery and connection lookups to the requested connection", () => {
     const state = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
       bootId: "targeted-delivery",
       cfg: {} as OpenClawConfig,
     });
@@ -306,6 +600,7 @@ describe("gateway connection state", () => {
 
   it("preserves connection insertion order for targeted fanout", () => {
     const state = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
       bootId: "ordered-delivery",
       cfg: {} as OpenClawConfig,
     });

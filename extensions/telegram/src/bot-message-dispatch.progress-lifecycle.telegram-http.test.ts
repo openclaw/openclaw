@@ -7,11 +7,11 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
+import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { ReplyResolverOptions } from "./bot-message-dispatch.telegram-http.test-support.js";
 import { createTelegramDispatchHttpFixture } from "./bot-message-dispatch.telegram-http.test-support.js";
 import { deliverReplies, deliverStructuredReplies } from "./bot/delivery.replies.js";
-import * as sendRuntime from "./send.runtime.js";
 import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
 
 const DELIVERY_WARNING =
@@ -80,7 +80,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     async (content) => {
       let adopted = false;
       if (content === "media") {
-        vi.spyOn(sendRuntime, "loadWebMedia").mockResolvedValue({
+        vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
           buffer: Buffer.from("delegated report bytes"),
           contentType: "application/pdf",
           kind: undefined,
@@ -243,10 +243,50 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     },
   );
 
+  it("delivers the final answer through repeated Telegram flood waits", async () => {
+    const floodedAt: number[] = [];
+    let flooded = Promise.withResolvers<void>();
+    http.respondToCall = (call) => {
+      if (
+        call.method !== "sendMessage" ||
+        call.fields.text !== "The command failed." ||
+        floodedAt.length >= 3
+      ) {
+        return undefined;
+      }
+      floodedAt.push(Date.now());
+      flooded.resolve();
+      return {
+        error_code: 429,
+        description: "Too Many Requests: retry after 5",
+        parameters: { retry_after: 5 },
+      };
+    };
+    const turn = dispatchProgressTurn(
+      async (options) => {
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "flood" });
+        await waitForBotApiCall((call) => call.method === "sendMessage");
+      },
+      { mode: "progress", toolProgress: true, allowErrors: true },
+    );
+    for (let flood = 0; flood < 3; flood += 1) {
+      await flooded.promise;
+      flooded = Promise.withResolvers<void>();
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    await turn;
+
+    expect(floodedAt).toHaveLength(3);
+    expect(floodedAt[2]! - floodedAt[0]!).toBeGreaterThanOrEqual(10_000);
+    expect([...visibleMessages.values()]).toEqual(["The command failed."]);
+    expect(calls.some((call) => String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX))).toBe(
+      false,
+    );
+  });
+
   it.each([false, true])(
     "preserves the post-progress final when Telegram rejects cleanup (error: %s)",
     async (isError) => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
       http.respondToCall = (call) =>
         call.method === "deleteMessage"
           ? { error_code: 400, description: "Bad Request: progress cleanup rejected" }
@@ -273,7 +313,6 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   );
 
   it("flushes a pending parent progress surface before adopting a fast yield", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const commentary = "The delegated check is still running.";
     let receipt: unknown;
     const waitingPayload = setReplyPayloadMetadata(
@@ -314,7 +353,6 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   it.each([true, false])(
     "retains the existing progress card only when continuation custody is accepted (%s)",
     async (accept) => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
       const waitingText = "Waiting for delegated work.";
       const commentary = "Parent commentary remains visible.";
       const plan = [

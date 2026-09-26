@@ -91,7 +91,7 @@ export async function inspectStaleDoctorGateway(params: {
     legacy ||
     health?.buildIdMismatch?.actual != null ||
     health?.versionMismatch ||
-    health?.probeError?.startsWith("gateway closed (1011): gateway message handler unavailable");
+    health?.staleConnection !== undefined;
   if (!stale) {
     return undefined;
   }

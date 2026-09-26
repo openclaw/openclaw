@@ -4,10 +4,10 @@ import {
   type TalkCatalogResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../../i18n/index.ts";
+import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { RealtimeTalkAudioInputBudget } from "./audio-input-budget.ts";
 import {
-  bytesToBase64,
   floatToPcm16,
   measureRealtimeTalkAudioFrame,
   RealtimeTalkMediaStreamMeter,
@@ -459,9 +459,19 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (!callId || !name) {
       return;
     }
-    if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
-      const abortController = this.startToolExecution(callId);
-      try {
+    if (
+      name !== REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME &&
+      name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+    ) {
+      await this.submitToolResult(callId, {
+        error: `Tool "${name}" not available in browser Talk`,
+      });
+      return;
+    }
+    const abortController = new AbortController();
+    this.toolAbortControllers.set(callId, abortController);
+    try {
+      if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
         await submitRealtimeTalkAgentControl({
           ctx: this.ctx,
           callId,
@@ -470,19 +480,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           signal: abortController.signal,
           submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
         });
-      } finally {
-        this.finishToolExecution(callId, abortController);
+        return;
       }
-      return;
-    }
-    if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      await this.submitToolResult(callId, {
-        error: `Tool "${name}" not available in browser Talk`,
-      });
-      return;
-    }
-    const abortController = this.startToolExecution(callId);
-    try {
       if (event.forced) {
         await this.submitToolResult(
           callId,
@@ -511,7 +510,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
       });
     } finally {
-      this.finishToolExecution(callId, abortController);
+      if (this.toolAbortControllers.get(callId) === abortController) {
+        this.toolAbortControllers.delete(callId);
+      }
     }
   }
 
@@ -530,7 +531,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       shouldAllowProviderResponse &&
       (this.pendingOutputCancellations > 0 || this.outputPlaybackDelayMs() > 0)
     ) {
-      this.scheduleDelayedToolResult({ callId, result, ...(options ? { options } : {}) });
+      const pending = { callId, result, ...(options ? { options } : {}) };
+      this.delayedToolResults.add(pending);
+      this.rescheduleDelayedToolResult(pending);
       return;
     }
     await this.sendToolResultNow(callId, result, options);
@@ -565,11 +568,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       0,
       Math.ceil((this.outputQueue.queuedUntil - this.outputContext.currentTime) * 1000),
     );
-  }
-
-  private scheduleDelayedToolResult(pending: DelayedToolResult): void {
-    this.delayedToolResults.add(pending);
-    this.rescheduleDelayedToolResult(pending);
   }
 
   private rescheduleDelayedToolResult(pending: DelayedToolResult): void {
@@ -661,18 +659,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       if (pending.callId === callId) {
         this.discardDelayedToolResult(pending);
       }
-    }
-  }
-
-  private startToolExecution(callId: string): AbortController {
-    const abortController = new AbortController();
-    this.toolAbortControllers.set(callId, abortController);
-    return abortController;
-  }
-
-  private finishToolExecution(callId: string, abortController: AbortController): void {
-    if (this.toolAbortControllers.get(callId) === abortController) {
-      this.toolAbortControllers.delete(callId);
     }
   }
 

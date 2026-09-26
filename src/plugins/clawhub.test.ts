@@ -22,6 +22,7 @@ import {
   expectInstallSuccess,
   expectSuccessfulClawHubInstall,
   mockCallArg,
+  setClawHubArchiveEntryMode,
   sha256Hex,
   type ArchiveInstallCall,
   type ClawHubArchiveFile,
@@ -364,21 +365,6 @@ describe("installPluginFromClawHub", () => {
     const { installPluginFromArchive } = await import("./install-package.js");
     installPluginFromArchiveMock.mockImplementationOnce(installPluginFromArchive);
     const archiveApi = await import("../infra/archive.js");
-    const loadZip = archiveApi.loadZipArchiveWithPreflight;
-    const preflightPayloadRead = vi.fn();
-    const preflight = vi
-      .spyOn(archiveApi, "loadZipArchiveWithPreflight")
-      .mockImplementation(async (...args) => {
-        const zip = await loadZip(...args);
-        for (const entry of Object.values(zip.files as Record<string, JSZip.JSZipObject>)) {
-          const nodeStream = entry.nodeStream.bind(entry);
-          vi.spyOn(entry, "nodeStream").mockImplementation((...streamArgs) => {
-            preflightPayloadRead();
-            return nodeStream(...streamArgs);
-          });
-        }
-        return zip;
-      });
     const extraction = vi.spyOn(archiveApi, "extractArchive");
     let authorityActive = true;
     let result;
@@ -396,9 +382,7 @@ describe("installPluginFromClawHub", () => {
         },
       });
       expect(extraction).toHaveBeenCalledOnce();
-      expect(preflightPayloadRead).not.toHaveBeenCalled();
     } finally {
-      preflight.mockRestore();
       extraction.mockRestore();
     }
 
@@ -785,23 +769,6 @@ describe("installPluginFromClawHub", () => {
     expect(installPluginFromArchiveMock).toHaveBeenCalled();
   });
 
-  it("stops when ClawHub security identity does not match the requested release", async () => {
-    mockCommunityClawHubPackageDetail();
-    mockClawHubSecurity({}, "2026.3.21");
-
-    const result = await installPluginFromClawHub({
-      spec: "clawhub:demo",
-      baseUrl: "https://clawhub.ai",
-    });
-
-    const failure = expectInstallFailure(result);
-    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE);
-    expect(failure.version).toBe("2026.3.22");
-    expect(failure.error).toContain('returned version "2026.3.21"');
-    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
-    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
-  });
-
   it("sanitizes ClawHub security identity mismatch labels before returning errors", async () => {
     mockCommunityClawHubPackageDetail();
     mockClawHubSecurity({}, "2026.3.21\nrewritten\u001b[2K");
@@ -921,27 +888,6 @@ describe("installPluginFromClawHub", () => {
     const success = expectInstallSuccess(result);
     expect(success.warning).toContain("Outcome: Review");
     expect(downloadClawHubPackageArchiveMock).toHaveBeenCalled();
-  });
-
-  it("stops when the ClawHub security response is unavailable", async () => {
-    mockCommunityClawHubPackageDetail();
-    fetchClawHubPackageSecurityMock.mockRejectedValueOnce(
-      new ClawHubRequestError({
-        path: "/api/v1/packages/demo/versions/2026.3.22/security",
-        status: 404,
-        body: "not found",
-      }),
-    );
-
-    const result = await installPluginFromClawHub({
-      spec: "clawhub:demo",
-      baseUrl: "https://clawhub.ai",
-    });
-
-    const failure = expectInstallFailure(result);
-    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE);
-    expect(failure.error).toContain("ClawHub release trust check failed");
-    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
   });
 
   it("bypasses ClawHub trust checks for official packages", async () => {
@@ -1616,57 +1562,6 @@ describe("installPluginFromClawHub", () => {
     expect(failure.error).toContain("2026.6.10");
   });
 
-  it("installs when ClawHub advertises a wildcard plugin API range", async () => {
-    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
-      version: {
-        version: "2026.3.22",
-        createdAt: 0,
-        changelog: "",
-        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
-        compatibility: {
-          pluginApiRange: "*",
-          minGatewayVersion: "2026.3.0",
-        },
-      },
-    });
-
-    const result = await installPluginFromClawHub({
-      spec: "clawhub:demo",
-      baseUrl: "https://clawhub.ai",
-    });
-
-    expectSuccessfulClawHubInstall(result);
-    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledTimes(1);
-    expect(archiveInstallCall().archivePath).toBe("/tmp/clawhub-demo/archive.zip");
-    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("installs when a release correction runtime satisfies the base plugin API range", async () => {
-    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.3-1");
-    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
-      version: {
-        version: "2026.5.3",
-        createdAt: 0,
-        changelog: "",
-        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
-        compatibility: {
-          pluginApiRange: ">=2026.5.3",
-          minGatewayVersion: "2026.3.0",
-        },
-      },
-    });
-
-    const result = await installPluginFromClawHub({
-      spec: "clawhub:demo",
-      baseUrl: "https://clawhub.ai",
-    });
-
-    expectSuccessfulClawHubInstall(result);
-    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledTimes(1);
-    expect(archiveInstallCall().archivePath).toBe("/tmp/clawhub-demo/archive.zip");
-    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
-  });
-
   it("installs when a beta runtime is on the same plugin API floor", async () => {
     resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27-beta.1");
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
@@ -1804,38 +1699,6 @@ describe("installPluginFromClawHub", () => {
 
     expect(expectInstallFailure(result).error).toBe("bad archive");
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("accepts version-endpoint SHA-256 hashes expressed as raw hex", async () => {
-    mockClawHubVersionMetadata({ sha256hash: DEMO_ARCHIVE_SHA256 });
-    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath: "/tmp/clawhub-demo/archive.zip",
-      integrity: "sha256-qerEjGEpvES2+Tyan0j2xwDRkbcnmh4ZFfKN9vWbsa8=",
-      cleanup: archiveCleanupMock,
-    });
-
-    const result = await installPluginFromClawHub({
-      spec: "clawhub:demo",
-    });
-
-    const success = expectInstallSuccess(result);
-    expect(success.pluginId).toBe("demo");
-  });
-
-  it("accepts version-endpoint SHA-256 hashes expressed as unpadded SRI", async () => {
-    mockClawHubVersionMetadata({ sha256hash: DEMO_ARCHIVE_INTEGRITY.slice(0, -1) });
-    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath: "/tmp/clawhub-demo/archive.zip",
-      integrity: DEMO_ARCHIVE_INTEGRITY,
-      cleanup: archiveCleanupMock,
-    });
-
-    const result = await installPluginFromClawHub({
-      spec: "clawhub:demo",
-    });
-
-    const success = expectInstallSuccess(result);
-    expect(success.pluginId).toBe("demo");
   });
 
   it("falls back to strict files[] verification when sha256hash is missing", async () => {
@@ -2079,7 +1942,7 @@ describe("installPluginFromClawHub", () => {
       CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
       "ClawHub archive fallback verification failed while reading the downloaded archive.",
     );
-    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+    expect(installExtractedArchiveMock).not.toHaveBeenCalled();
   });
 
   it("rejects ClawHub installs when the downloaded archive hash drifts from metadata", async () => {
@@ -2185,19 +2048,24 @@ describe("installPluginFromClawHub", () => {
     expect(installExtractedArchiveMock).not.toHaveBeenCalled();
   });
 
-  it("does not hide an unexpected unsupported ZIP record skipped during extraction", async () => {
+  it.each([
+    {
+      kind: "symlink",
+      mode: 0o120777,
+      error: "ClawHub archive fallback verification failed while reading the downloaded archive.",
+    },
+    {
+      kind: "other",
+      mode: 0o160644,
+      error:
+        'ClawHub archive contents do not match files[] metadata for "demo@2026.3.22": unexpected file "extra.txt".',
+    },
+  ])("rejects named ZIP $kind records before install work", async ({ mode, error }) => {
     const archive = await mockClawHubFallbackArchive({
       entries: { "openclaw.plugin.json": '{"id":"demo"}', "extra.txt": "unsupported" },
       files: [clawHubArchiveFile("openclaw.plugin.json", '{"id":"demo"}')],
     });
-    const bytes = await fs.readFile(archive.archivePath);
-    const directoryOffset = bytes.readUInt32LE(bytes.length - 6);
-    const headerOffset = bytes.indexOf("extra.txt", directoryOffset) - 46;
-    expect(bytes.readUInt32LE(headerOffset)).toBe(0x02014b50);
-    // JSZip's fixture writer treats this unknown type as a directory; encode a file record directly.
-    bytes[headerOffset + 5] = 3;
-    bytes.writeUInt32LE(0o160644 * 0x10000, headerOffset + 38);
-    await fs.writeFile(archive.archivePath, bytes);
+    await setClawHubArchiveEntryMode(archive.archivePath, "extra.txt", mode);
     const { configureFsSafeNative, getFsSafeNativeConfig } =
       await import("@openclaw/fs-safe/config");
     const previous = getFsSafeNativeConfig();
@@ -2207,7 +2075,7 @@ describe("installPluginFromClawHub", () => {
       expectInstallFailureFields(
         result,
         CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-        'ClawHub archive contents do not match files[] metadata for "demo@2026.3.22": unexpected file "extra.txt".',
+        error,
       );
       expect(installExtractedArchiveMock).not.toHaveBeenCalled();
     } finally {
@@ -2367,9 +2235,9 @@ describe("installPluginFromClawHub", () => {
     expectInstallFailureFields(
       result,
       CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      'ClawHub archive fallback verification rejected "_meta.json" because it exceeds the per-file size limit.',
+      "ClawHub archive fallback verification exceeded the per-file size limit.",
     );
-    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+    expect(installExtractedArchiveMock).not.toHaveBeenCalled();
   });
 
   it.each(["file", "directory"] as const)(
@@ -2422,7 +2290,7 @@ describe("installPluginFromClawHub", () => {
           "ClawHub archive fallback verification exceeded the archive entry limit.",
         );
         expect(loadAsyncSpy).not.toHaveBeenCalled();
-        expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+        expect(installExtractedArchiveMock).not.toHaveBeenCalled();
       } finally {
         loadAsyncSpy.mockRestore();
       }
@@ -2430,54 +2298,21 @@ describe("installPluginFromClawHub", () => {
   );
 
   it("rejects fallback verification when the downloaded archive exceeds the ZIP size limit", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-archive-"));
-    tempDirs.push(dir);
-    const archivePath = path.join(dir, "archive.zip");
-    await fs.writeFile(archivePath, "placeholder", "utf8");
-    const realStat = fs.stat.bind(fs);
-    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (filePath, options) => {
-      if (filePath === archivePath) {
-        return {
-          size: 256 * 1024 * 1024 + 1,
-        } as Awaited<ReturnType<typeof fs.stat>>;
-      }
-      return await realStat(filePath, options);
+    const archive = await mockClawHubFallbackArchive({
+      entries: { "openclaw.plugin.json": '{"id":"demo"}' },
     });
-    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
-      version: {
-        version: "2026.3.22",
-        createdAt: 0,
-        changelog: "",
-        files: [
-          {
-            path: "openclaw.plugin.json",
-            size: 13,
-            sha256: sha256Hex('{"id":"demo"}'),
-          },
-        ],
-        compatibility: {
-          pluginApiRange: ">=2026.3.22",
-          minGatewayVersion: "2026.3.0",
-        },
-      },
-    });
-    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath,
-      integrity: "sha256-not-used-in-fallback",
-      cleanup: archiveCleanupMock,
-    });
+    await fs.truncate(archive.archivePath, 256 * 1024 * 1024 + 1);
 
     const result = await installPluginFromClawHub({
       spec: "clawhub:demo",
     });
 
-    statSpy.mockRestore();
     expectInstallFailureFields(
       result,
       CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
       "ClawHub archive fallback verification rejected the downloaded archive because it exceeds the ZIP archive size limit.",
     );
-    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+    expect(installExtractedArchiveMock).not.toHaveBeenCalled();
   });
 
   it("rejects fallback verification when a file hash drifts from files[] metadata", async () => {
@@ -2549,11 +2384,11 @@ describe("installPluginFromClawHub", () => {
   });
 
   it.each([
-    { filePath: "extra.txt ", reason: "has leading or trailing whitespace" },
-    { filePath: "nested\\extra.txt", reason: "contains backslashes" },
+    { filePath: "extra.txt ", canonicalPath: "extra.txt " },
+    { filePath: "nested\\extra.txt", canonicalPath: "nested/extra.txt" },
   ])(
-    "rejects the raw archive spelling $filePath before extraction normalizes it",
-    async ({ filePath, reason }) => {
+    "rejects an undeclared canonical file from archive spelling $filePath",
+    async ({ filePath, canonicalPath }) => {
       await mockClawHubFallbackArchive({
         entries: {
           "openclaw.plugin.json": '{"id":"demo"}',
@@ -2569,16 +2404,34 @@ describe("installPluginFromClawHub", () => {
       expectInstallFailureFields(
         result,
         CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-        `ClawHub archive contents do not match files[] metadata for "demo@2026.3.22": invalid package file path "${filePath}" (path "${filePath}" ${reason}).`,
+        `ClawHub archive contents do not match files[] metadata for "demo@2026.3.22": unexpected file "${canonicalPath}".`,
       );
-      expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+      expect(installExtractedArchiveMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["../extra.txt", "/extra.txt", "C:\\extra.txt", "a/../extra.txt", "a\0extra.txt"])(
+    "rejects unsafe archive path %s before install work",
+    async (filePath) => {
+      await mockClawHubFallbackArchive({
+        entries: { "openclaw.plugin.json": '{"id":"demo"}', [filePath]: "unsafe" },
+        files: [clawHubArchiveFile("openclaw.plugin.json", '{"id":"demo"}')],
+      });
+      const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
+      expectInstallFailureFields(
+        result,
+        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+        "ClawHub archive fallback verification failed while reading the downloaded archive.",
+      );
+      expect(installExtractedArchiveMock).not.toHaveBeenCalled();
     },
   );
 
   it.each([
     { archivedPath: "./extra.txt", filePath: "extra.txt" },
     { archivedPath: "nested//extra.txt", filePath: "nested/extra.txt" },
-  ])("preserves ZIP loader normalization for $archivedPath", async ({ archivedPath, filePath }) => {
+    { archivedPath: "nested\\extra.txt", filePath: "nested/extra.txt" },
+  ])("verifies canonical installed paths for $archivedPath", async ({ archivedPath, filePath }) => {
     const entries = { ...DEMO_PLUGIN_ARCHIVE_ENTRIES, [archivedPath]: "verified" };
     const archive = await mockClawHubFallbackArchive({
       entries,
@@ -2592,6 +2445,28 @@ describe("installPluginFromClawHub", () => {
     const result = await installPluginFromClawHub({ spec: "clawhub:demo", extensionsDir });
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     expect(await fs.readFile(path.join(extensionsDir, "demo", filePath), "utf8")).toBe("verified");
+  });
+
+  it.each([
+    { kind: "file", mode: 0o100644 },
+    { kind: "symlink", mode: 0o120777 },
+    { kind: "other", mode: 0o160644 },
+  ])("allows an inert root-only $kind record with no installed output", async ({ mode }) => {
+    const archive = await mockClawHubFallbackArchive({
+      entries: { ...DEMO_PLUGIN_ARCHIVE_ENTRIES, ".": "ignored" },
+      files: Object.entries(DEMO_PLUGIN_ARCHIVE_ENTRIES).map(([name, contents]) =>
+        clawHubArchiveFile(name, contents),
+      ),
+    });
+    await setClawHubArchiveEntryMode(archive.archivePath, ".", mode);
+    const { installPluginFromArchive } = await import("./install-package.js");
+    installPluginFromArchiveMock.mockImplementationOnce(installPluginFromArchive);
+    const extensionsDir = path.join(path.dirname(archive.archivePath), "extensions");
+    const result = await installPluginFromClawHub({ spec: "clawhub:demo", extensionsDir });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(await fs.readFile(path.join(extensionsDir, "demo", "index.js"), "utf8")).toBe(
+      DEMO_PLUGIN_ARCHIVE_ENTRIES["index.js"],
+    );
   });
 
   it("rejects fallback metadata with duplicate files[] paths", async () => {

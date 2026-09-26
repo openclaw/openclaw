@@ -1,6 +1,7 @@
 // Builds and validates the canonical OpenClaw configuration schema.
 import crypto from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
@@ -292,17 +293,11 @@ function applyMetadataHints(
 }
 
 function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
-  const seen = new Set<string>();
-  const ordered: string[] = [];
-  for (const id of [...CHANNEL_IDS, ...channels.map((channel) => channel.id)]) {
-    const normalized = normalizeLowercaseStringOrEmpty(id);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    ordered.push(normalized);
-  }
-  return ordered;
+  return uniqueStrings(
+    [...CHANNEL_IDS, ...channels.map((channel) => channel.id)]
+      .map(normalizeLowercaseStringOrEmpty)
+      .filter(Boolean),
+  );
 }
 
 /** Mutate a caller-owned schema; cached inputs must be cloned before merging. */

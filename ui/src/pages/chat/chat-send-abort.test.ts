@@ -188,6 +188,7 @@ describe("handleAbortChat", () => {
 
     expect(host.pendingAbort).toEqual({
       sourceClient: client,
+      recoveryScope: client.recoveryScope,
       runId: "run-main",
       sessionKey: "agent:main",
       conversation: { sessionKey: "agent:main" },
@@ -210,6 +211,7 @@ describe("handleAbortChat", () => {
 
     expect(host.pendingAbort).toEqual({
       sourceClient: client,
+      recoveryScope: client.recoveryScope,
       runId: "run-main",
       sessionKey: "agent:main",
       conversation: { sessionKey: "agent:main" },

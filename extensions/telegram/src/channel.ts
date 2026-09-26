@@ -96,11 +96,7 @@ import { createTelegramPluginBase } from "./shared.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
-import {
-  createTelegramThreadBindingManager,
-  setTelegramThreadBindingIdleTimeoutBySessionKey,
-  setTelegramThreadBindingMaxAgeBySessionKey,
-} from "./thread-bindings.js";
+import { telegramThreadBindingLifecycle } from "./thread-bindings-channel.js";
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 import { resolveTelegramToken } from "./token.js";
 import {
@@ -162,6 +158,14 @@ async function deleteStartupBotInfoCache(accountId: string): Promise<void> {
   await deleteCachedTelegramBotInfo({ accountId }).catch(() => undefined);
 }
 
+async function clearTelegramAccountRuntimeCache(accountId: string): Promise<void> {
+  const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
+  await Promise.all([
+    deleteTelegramUpdateOffset({ accountId }),
+    deleteStartupBotInfoCache(accountId),
+  ]);
+}
+
 function resolveTelegramAuditCollector() {
   return (
     getOptionalTelegramRuntime()?.channel?.telegram?.collectTelegramUnmentionedGroupIds ??
@@ -213,12 +217,7 @@ function resolveTelegramTokenHelper() {
 const telegramChannelOutbound = createTelegramOutboundAdapter({
   resolveSend: resolveTelegramSend,
   loadSendModule: loadTelegramSendModule,
-  shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
-    shouldSuppressLocalTelegramExecApprovalPrompt({
-      cfg,
-      accountId,
-      payload,
-    }),
+  shouldSuppressLocalPayloadPrompt: shouldSuppressLocalTelegramExecApprovalPrompt,
   beforeDeliverPayload: async ({ cfg, target, hint }) => {
     if (hint?.kind !== "approval-pending" || hint.approvalKind !== "exec") {
       return;
@@ -304,9 +303,7 @@ function matchTelegramAcpConversation(params: {
 
 function shouldTreatTelegramDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
-  text?: string;
 }): boolean {
-  void params.text;
   return params.kind !== "final";
 }
 
@@ -729,13 +726,7 @@ export const telegramPlugin = createChatChannelPlugin({
           conversationId,
           parentConversationId,
         }),
-      resolveCommandConversation: ({ threadId, originatingTo, commandTo, fallbackTo }) =>
-        resolveTelegramCommandConversation({
-          threadId,
-          originatingTo,
-          commandTo,
-          fallbackTo,
-        }),
+      resolveCommandConversation: resolveTelegramCommandConversation,
     },
     conversationBindings: {
       supportsCurrentConversationBinding: true,
@@ -762,25 +753,7 @@ export const telegramPlugin = createChatChannelPlugin({
           : null;
       },
       shouldStripThreadFromAnnounceOrigin: shouldStripTelegramThreadFromAnnounceOrigin,
-      createManager: ({ cfg, accountId }) =>
-        createTelegramThreadBindingManager({
-          cfg,
-          accountId: accountId ?? undefined,
-          persist: false,
-          enableSweeper: false,
-        }),
-      setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
-        setTelegramThreadBindingIdleTimeoutBySessionKey({
-          targetSessionKey,
-          accountId: accountId ?? undefined,
-          idleTimeoutMs,
-        }),
-      setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
-        setTelegramThreadBindingMaxAgeBySessionKey({
-          targetSessionKey,
-          accountId: accountId ?? undefined,
-          maxAgeMs,
-        }),
+      ...telegramThreadBindingLifecycle,
     },
     groups: {
       resolveRequireMention: resolveTelegramGroupRequireMention,
@@ -795,13 +768,11 @@ export const telegramPlugin = createChatChannelPlugin({
       normalizeTarget: normalizeTelegramMessagingTarget,
       resolveInboundConversation: ({ to, conversationId, threadId }) =>
         resolveTelegramInboundConversation({ to, conversationId, threadId }),
-      resolveDeliveryTarget: ({ conversationId, parentConversationId }) =>
-        resolveTelegramDeliveryTarget({ conversationId, parentConversationId }),
+      resolveDeliveryTarget: resolveTelegramDeliveryTarget,
       // Same function as the public session-key artifact so the pre-registry
       // fast path cannot drift from plugin behavior (pinned by contract test).
       resolveSessionConversation: resolveTelegramSessionConversation,
-      resolveSessionTarget: ({ kind, id, threadId }) =>
-        resolveTelegramSessionTarget({ kind, id, threadId }),
+      resolveSessionTarget: resolveTelegramSessionTarget,
       inferTargetChatType: ({ to }) => resolveTelegramRouteTarget(to).chatType,
       preserveHeartbeatThreadIdForGroupRoute: true,
       formatTargetDisplay: ({ target, display, kind }) => {
@@ -822,7 +793,7 @@ export const telegramPlugin = createChatChannelPlugin({
         }
         return withoutProvider;
       },
-      resolveOutboundSessionRoute: (params) => resolveTelegramOutboundSessionRoute(params),
+      resolveOutboundSessionRoute: resolveTelegramOutboundSessionRoute,
       targetResolver: {
         looksLikeId: looksLikeTelegramTargetId,
         hint: "<chatId>",
@@ -830,27 +801,18 @@ export const telegramPlugin = createChatChannelPlugin({
       },
     },
     resolver: {
-      resolveTargets: async ({ cfg, accountId, inputs, kind }) =>
-        await resolveTelegramTargets({ cfg, accountId, inputs, kind }),
+      resolveTargets: resolveTelegramTargets,
     },
     lifecycle: {
       onAccountConfigChanged: async ({ prevCfg, nextCfg, accountId }) => {
         const previousToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
         const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
         if (previousToken !== nextToken) {
-          const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
-          await Promise.all([
-            deleteTelegramUpdateOffset({ accountId }),
-            deleteStartupBotInfoCache(accountId),
-          ]);
+          await clearTelegramAccountRuntimeCache(accountId);
         }
       },
       onAccountRemoved: async ({ accountId }) => {
-        const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
-        await Promise.all([
-          deleteTelegramUpdateOffset({ accountId }),
-          deleteStartupBotInfoCache(accountId),
-        ]);
+        await clearTelegramAccountRuntimeCache(accountId);
       },
     },
     heartbeat: {
@@ -884,8 +846,7 @@ export const telegramPlugin = createChatChannelPlugin({
       ...telegramApprovalCapability,
       render: {
         exec: {
-          buildPendingPayload: ({ request, nowMs }) =>
-            buildTelegramExecApprovalPendingPayload({ request, nowMs }),
+          buildPendingPayload: buildTelegramExecApprovalPendingPayload,
         },
       },
     },
@@ -1078,8 +1039,7 @@ export const telegramPlugin = createChatChannelPlugin({
           webhookUrl: account.config.webhookUrl,
           webhookSecret: account.config.webhookSecret,
           webhookPath: account.config.webhookPath,
-          webhookHost: account.config.webhookHost,
-          webhookPort: account.config.webhookPort,
+          legacyWebhook: account.config.legacyWebhook,
           webhookCertPath: account.config.webhookCertPath,
           botInfo,
           setStatus,
@@ -1149,8 +1109,8 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     resolveReplyToMode: ({ cfg, accountId }) =>
       resolveTelegramConfigAccessorAccount({ cfg, accountId }).config.replyToMode ?? "off",
-    buildToolContext: (params) => buildTelegramThreadingToolContext(params),
-    resolveAutoThreadId: ({ to, toolContext }) => resolveTelegramAutoThreadId({ to, toolContext }),
+    buildToolContext: buildTelegramThreadingToolContext,
+    resolveAutoThreadId: resolveTelegramAutoThreadId,
     resolveCurrentChannelId: ({ to, threadId }) => {
       if (threadId == null) {
         return to;

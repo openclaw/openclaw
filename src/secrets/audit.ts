@@ -99,18 +99,13 @@ type RefAssignment = {
   provider?: string;
 };
 
-type ProviderAuthState = {
-  hasUsableStaticOrOAuth: boolean;
-  modes: Set<"api_key" | "token" | "oauth">;
-};
-
 type SecretDefaults = { env?: string; file?: string; exec?: string };
 
 type AuditCollector = {
   findings: SecretsAuditFinding[];
   refAssignments: RefAssignment[];
   configProviderRefPaths: Map<string, string[]>;
-  authProviderState: Map<string, ProviderAuthState>;
+  authProviderModes: Map<string, Set<"api_key" | "token" | "oauth">>;
   configPlaintextAssignments: PlaintextAssignment[];
   filesScanned: Set<string>;
 };
@@ -141,16 +136,12 @@ function trackAuthProviderState(
   mode: "api_key" | "token" | "oauth",
 ): void {
   const key = normalizeProviderId(provider);
-  const existing = collector.authProviderState.get(key);
+  const existing = collector.authProviderModes.get(key);
   if (existing) {
-    existing.hasUsableStaticOrOAuth = true;
-    existing.modes.add(mode);
+    existing.add(mode);
     return;
   }
-  collector.authProviderState.set(key, {
-    hasUsableStaticOrOAuth: true,
-    modes: new Set([mode]),
-  });
+  collector.authProviderModes.set(key, new Set([mode]));
 }
 
 function collectConfigSecrets(params: {
@@ -512,47 +503,31 @@ async function collectUnresolvedRefFindings(params: {
       continue;
     }
     const resolveErr = errorsByRefKey.get(key);
+    let code: SecretsAuditCode = "REF_UNRESOLVED";
+    let detail: string;
     if (resolveErr) {
-      addFinding(params.collector, {
-        code:
-          isSecretResolutionError(resolveErr) && resolveErr.code === "SECRET_REF_REDACTED_VALUE"
-            ? "PLACEHOLDER_VALUE"
-            : "REF_UNRESOLVED",
-        severity: "error",
-        file: assignment.file,
-        jsonPath: assignment.path,
-        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (${formatErrorMessage(resolveErr)}).`,
-        provider: assignment.provider,
-      });
+      if (isSecretResolutionError(resolveErr) && resolveErr.code === "SECRET_REF_REDACTED_VALUE") {
+        code = "PLACEHOLDER_VALUE";
+      }
+      detail = formatErrorMessage(resolveErr);
+    } else if (!resolvedByRefKey.has(key)) {
+      detail = "resolved value is missing";
+    } else if (!isExpectedResolvedSecretValue(resolvedByRefKey.get(key), assignment.expected)) {
+      detail =
+        assignment.expected === "string"
+          ? "resolved value is not a non-empty string"
+          : "resolved value is not a string/object";
+    } else {
       continue;
     }
-
-    if (!resolvedByRefKey.has(key)) {
-      addFinding(params.collector, {
-        code: "REF_UNRESOLVED",
-        severity: "error",
-        file: assignment.file,
-        jsonPath: assignment.path,
-        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (resolved value is missing).`,
-        provider: assignment.provider,
-      });
-      continue;
-    }
-
-    const resolved = resolvedByRefKey.get(key);
-    if (!isExpectedResolvedSecretValue(resolved, assignment.expected)) {
-      addFinding(params.collector, {
-        code: "REF_UNRESOLVED",
-        severity: "error",
-        file: assignment.file,
-        jsonPath: assignment.path,
-        message:
-          assignment.expected === "string"
-            ? `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (resolved value is not a non-empty string).`
-            : `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (resolved value is not a string/object).`,
-        provider: assignment.provider,
-      });
-    }
+    addFinding(params.collector, {
+      code,
+      severity: "error",
+      file: assignment.file,
+      jsonPath: assignment.path,
+      message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (${detail}).`,
+      provider: assignment.provider,
+    });
   }
   return {
     refsChecked,
@@ -562,11 +537,11 @@ async function collectUnresolvedRefFindings(params: {
 
 function collectShadowingFindings(collector: AuditCollector): void {
   for (const [provider, paths] of collector.configProviderRefPaths.entries()) {
-    const authState = collector.authProviderState.get(provider);
-    if (!authState?.hasUsableStaticOrOAuth) {
+    const modes = collector.authProviderModes.get(provider);
+    if (!modes) {
       continue;
     }
-    const modeText = [...authState.modes].join("/");
+    const modeText = [...modes].join("/");
     for (const configPath of paths) {
       addFinding(collector, {
         code: "REF_SHADOWED",
@@ -608,7 +583,7 @@ export async function runSecretsAudit(
     findings: [],
     refAssignments: [],
     configProviderRefPaths: new Map(),
-    authProviderState: new Map(),
+    authProviderModes: new Map(),
     configPlaintextAssignments: [],
     filesScanned: new Set([configPath]),
   };

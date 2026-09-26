@@ -6,12 +6,22 @@ import {
   type AgentHarnessTaskAssignment,
   type AgentHarnessTaskRecord,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import {
+  MAX_PENDING_CHILD_ADMISSION_EVIDENCE,
+  admitNativeChildModelExecution,
+  consumeNativeChildModelAdmission,
+  retainNativeModelSource,
+  retainNativeModelExecution,
+} from "./native-subagent-model-source.js";
 import type {
   ChildState,
+  DirectSpawnEvidence,
   KnownChild,
   NativeChildAdmissionEvidence,
   NativeSubagentMonitorRuntime,
   ParentState,
+  ParentOwner,
+  TaskRecoveryCandidate,
 } from "./native-subagent-monitor-types.js";
 import {
   CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX,
@@ -19,8 +29,6 @@ import {
   CODEX_NATIVE_SUBAGENT_TASK_KIND,
 } from "./native-subagent-task-ids.js";
 import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
-
-const MAX_PENDING_CHILD_ADMISSION_EVIDENCE = 32;
 
 export function releaseCompletionCustody(holder: {
   completionCustody?: AgentHarnessCompletionCustody;
@@ -67,6 +75,20 @@ export class CodexNativeSubagentAdmissionCustody {
         setDetachedTaskDeliveryStatusByRunId: this.followAssignmentTransition(
           runtime.setDetachedTaskDeliveryStatusByRunId.bind(runtime),
         ),
+        ...(runtime.finalizeTaskRunByRunIdAsync
+          ? {
+              finalizeTaskRunByRunIdAsync: this.followAssignmentTransitionAsync(
+                runtime.finalizeTaskRunByRunIdAsync.bind(runtime),
+              ),
+            }
+          : {}),
+        ...(runtime.setDetachedTaskDeliveryStatusByRunIdAsync
+          ? {
+              setDetachedTaskDeliveryStatusByRunIdAsync: this.followAssignmentTransitionAsync(
+                runtime.setDetachedTaskDeliveryStatusByRunIdAsync.bind(runtime),
+              ),
+            }
+          : {}),
       };
     }
     // Cached parents retain their original adapter; a new registration must not
@@ -91,37 +113,44 @@ export class CodexNativeSubagentAdmissionCustody {
   ): (params: T) => AgentHarnessTaskRecord[] {
     return (params) => {
       const records = transition(params);
-      const previous = params.expectedTask;
-      const committed = records.length === 1 ? records[0] : undefined;
-      if (
-        !previous ||
-        !committed ||
-        committed.createdAt >= previous.createdAt ||
-        !matchesAgentHarnessTaskAssignment(
-          { ...committed, createdAt: previous.createdAt },
-          previous,
-        )
-      ) {
-        return records;
-      }
-      const child = this.dependencies.childState(previous.runId);
-      const mirror = child && this.dependencies.parentState(child.parentThreadId)?.mirror;
-      if (
-        !child?.expectedTask ||
-        !matchesAgentHarnessTaskAssignment(child.expectedTask, previous)
-      ) {
-        return records;
-      }
-      // An exact commit can lower the lifecycle floor. Advance from its own returned
-      // record only; a publication-time replacement still fails the next exact check.
-      const next = captureAgentHarnessTaskAssignment(committed);
-      if (mirror?.advanceTaskAssignment(previous, next)) {
-        child.expectedTask = next;
-        child.emitTaskEvent = undefined;
-        this.bindTaskEventSink(child, next);
-      }
-      return records;
+      return this.advanceAssignmentTransition(records, params.expectedTask);
     };
+  }
+
+  private followAssignmentTransitionAsync<T extends { expectedTask?: AgentHarnessTaskAssignment }>(
+    transition: (params: T) => Promise<AgentHarnessTaskRecord[]>,
+  ): (params: T) => Promise<AgentHarnessTaskRecord[]> {
+    return async (params) =>
+      this.advanceAssignmentTransition(await transition(params), params.expectedTask);
+  }
+
+  private advanceAssignmentTransition(
+    records: AgentHarnessTaskRecord[],
+    previous: AgentHarnessTaskAssignment | undefined,
+  ): AgentHarnessTaskRecord[] {
+    const committed = records.length === 1 ? records[0] : undefined;
+    if (
+      !previous ||
+      !committed ||
+      committed.createdAt >= previous.createdAt ||
+      !matchesAgentHarnessTaskAssignment({ ...committed, createdAt: previous.createdAt }, previous)
+    ) {
+      return records;
+    }
+    const child = this.dependencies.childState(previous.runId);
+    const mirror = child && this.dependencies.parentState(child.parentThreadId)?.mirror;
+    if (!child?.expectedTask || !matchesAgentHarnessTaskAssignment(child.expectedTask, previous)) {
+      return records;
+    }
+    // An exact commit can lower the lifecycle floor. Advance from its own returned
+    // record only; a publication-time replacement still fails the next exact check.
+    const next = captureAgentHarnessTaskAssignment(committed);
+    if (mirror?.advanceTaskAssignment(previous, next)) {
+      child.expectedTask = next;
+      child.emitTaskEvent = undefined;
+      this.bindTaskEventSink(child, next);
+    }
+    return records;
   }
 
   get entries(): ReadonlyMap<string, NativeChildAdmissionEvidence[]> {
@@ -130,12 +159,13 @@ export class CodexNativeSubagentAdmissionCustody {
 
   buffer(turnIdInput: string | undefined, evidence: NativeChildAdmissionEvidence): void {
     const turnId = turnIdInput?.trim();
-    const requiresUnboundOwner = evidence.kind !== "interaction" || !evidence.owner;
+    const requiresUnboundOwner =
+      evidence.kind !== "interaction" || (!evidence.owner && !evidence.modelOwner);
     if (!turnId || (requiresUnboundOwner && !this.hasUnboundParentOwner(evidence.parentThreadId))) {
       return;
     }
     const pending = this.pending.get(turnId) ?? [];
-    if (evidence.kind === "interaction") {
+    if (evidence.kind === "interaction" && !evidence.nativeTurnId) {
       // Interrupted continuations leave the receipt queue before their
       // interaction can arrive. Keep pairing against the observed starts.
       const nativeTurn = [
@@ -166,9 +196,10 @@ export class CodexNativeSubagentAdmissionCustody {
           candidate.agentPath === evidence.agentPath &&
           (candidate.kind === "spawn" ||
             evidence.kind === "spawn" ||
-            (candidate.nativeTurnId !== undefined &&
-              candidate.nativeTurnId === evidence.nativeTurnId) ||
-            (evidence.itemId !== undefined && candidate.itemId === evidence.itemId)),
+            (candidate.modelSourceTurnId === evidence.modelSourceTurnId &&
+              ((candidate.nativeTurnId !== undefined &&
+                candidate.nativeTurnId === evidence.nativeTurnId) ||
+                (evidence.itemId !== undefined && candidate.itemId === evidence.itemId)))),
       ) ||
       (requiresUnboundOwner &&
         [...this.pending.values()].reduce((count, entries) => count + entries.length, 0) >=
@@ -176,10 +207,34 @@ export class CodexNativeSubagentAdmissionCustody {
     ) {
       return;
     }
-    pending.push(evidence);
-    if (evidence.kind === "interaction") {
-      evidence.completionCustody ??= evidence.owner?.completionCustody?.retain();
+    try {
+      if (evidence.kind === "interaction") {
+        evidence.completionCustody ??= (
+          evidence.owner ?? evidence.modelOwner
+        )?.completionCustody?.retain();
+      }
+      if (evidence.kind === "interaction" && !evidence.modelSourceConsumed) {
+        const owner = evidence.modelOwner ?? evidence.owner;
+        if (owner?.unqualifiedModelExecution && !owner.nativeInputConfiguration) {
+          evidence.modelSourceRequiresInference = evidence.modelSourceTurnId ? undefined : true;
+          evidence.modelSource = retainNativeModelExecution(
+            owner,
+            undefined,
+            evidence.childThreadId,
+            evidence.completionCustody,
+          );
+        } else {
+          evidence.modelSource = retainNativeModelSource(owner);
+        }
+      }
+    } catch (error) {
+      if (evidence.kind === "interaction") {
+        releaseCompletionCustody(evidence);
+        consumeNativeChildModelAdmission(evidence);
+      }
+      throw error;
     }
+    pending.push(evidence);
     this.pending.set(turnId, pending);
   }
 
@@ -189,7 +244,8 @@ export class CodexNativeSubagentAdmissionCustody {
   }
 
   replace(turnId: string, remaining: NativeChildAdmissionEvidence[]): void {
-    for (const evidence of this.pending.get(turnId) ?? []) {
+    const previous = this.pending.get(turnId) ?? [];
+    for (const evidence of previous) {
       if (evidence.kind === "interaction" && !remaining.includes(evidence)) {
         releaseCompletionCustody(evidence);
       }
@@ -199,12 +255,112 @@ export class CodexNativeSubagentAdmissionCustody {
     } else {
       this.pending.delete(turnId);
     }
+    for (const evidence of previous) {
+      if (evidence.kind === "interaction" && !remaining.includes(evidence)) {
+        consumeNativeChildModelAdmission(evidence);
+      }
+    }
   }
 
   retainOnly(keep: (evidence: NativeChildAdmissionEvidence) => boolean): void {
     for (const [turnId, pending] of this.pending) {
       this.replace(turnId, pending.filter(keep));
     }
+  }
+
+  prune(
+    isRetired: (state: ParentState) => boolean,
+    hasRecovery: (state: ParentState, threadId: string) => boolean,
+  ): void {
+    this.retainOnly((evidence) => {
+      const known = this.dependencies.knownChild(evidence.childThreadId);
+      if (known && known.parent.parentThreadId !== evidence.parentThreadId) {
+        return false;
+      }
+      const state = this.dependencies.parentState(evidence.parentThreadId);
+      if (evidence.kind === "interaction" && (evidence.owner || evidence.modelSource)) {
+        if (evidence.modelSource && state && !isRetired(state)) {
+          return true;
+        }
+        if (state && evidence.owner && [...state.owners.values()].includes(evidence.owner)) {
+          return true;
+        }
+        return Boolean(
+          evidence.admittedOwner && state && hasRecovery(state, evidence.childThreadId),
+        );
+      }
+      return this.hasUnboundParentOwner(evidence.parentThreadId);
+    });
+  }
+
+  associateUnregisteredChildInteractions(
+    state: ParentState,
+    threadId: string,
+    readRecoveryCandidate: () => TaskRecoveryCandidate | undefined,
+  ): void {
+    const known = this.dependencies.knownChild(threadId);
+    if (known && (known.assignment.terminal || known.assignment.nativeTurnId)) {
+      return;
+    }
+    const candidate = readRecoveryCandidate();
+    if (!candidate) {
+      return;
+    }
+    const currentTurnId =
+      candidate.nativeTurnId ??
+      (!candidate.terminal ? candidate.observedTurns[0]?.turnId : undefined);
+    const interactions = [...this.pending.values()]
+      .flat()
+      .filter(
+        (evidence) =>
+          evidence.kind === "interaction" &&
+          evidence.parentThreadId === state.parentThreadId &&
+          evidence.childThreadId === threadId,
+      );
+    for (const turn of candidate.observedTurns) {
+      if (turn.turnId === currentTurnId) {
+        continue;
+      }
+      const interaction =
+        interactions.find(
+          (entry) => entry.kind === "interaction" && entry.nativeTurnId === turn.turnId,
+        ) ?? interactions.find((entry) => entry.kind === "interaction" && !entry.nativeTurnId);
+      if (interaction?.kind !== "interaction") {
+        continue;
+      }
+      interaction.nativeTurnId = turn.turnId;
+      if (interaction.owner && [...state.owners.values()].includes(interaction.owner)) {
+        interaction.admittedOwner = interaction.owner;
+        interaction.completionCustody ??= interaction.owner.completionCustody?.retain();
+      }
+    }
+  }
+
+  registerDirectSpawnChild(
+    turnIdInput: string | undefined,
+    evidence: DirectSpawnEvidence,
+    owner: ParentOwner | undefined,
+    registerChild: (
+      options: Pick<DirectSpawnEvidence, "agentPath" | "nativeParentThreadId"> & {
+        directOwner?: ParentOwner;
+      },
+    ) => ChildState | undefined,
+  ): ChildState | undefined {
+    const childState = registerChild({
+      ...(evidence.agentPath === undefined ? {} : { agentPath: evidence.agentPath }),
+      nativeParentThreadId: evidence.nativeParentThreadId,
+      ...(owner ? { directOwner: owner } : {}),
+    });
+    if (!owner) {
+      this.buffer(turnIdInput, { ...evidence, kind: "spawn" });
+    } else if (childState) {
+      admitNativeChildModelExecution(
+        childState,
+        owner,
+        this.dependencies.knownChild(childState.childThreadId),
+      );
+    }
+    return childState;
   }
 
   bindTaskEventSink(

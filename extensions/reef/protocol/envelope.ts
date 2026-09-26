@@ -266,10 +266,6 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
   }
 }
 
-export function envelopeHash(envelope: Envelope): string {
-  return hex(sha256(canonicalBytes(envelope)));
-}
-
 export function bodyHash(body: MessageBody): string {
   return hex(sha256(canonicalBytes(body)));
 }

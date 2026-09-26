@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import * as sqliteRuntime from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  AGENT_MEDIA_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "./openclaw-agent-db-contract.js";
 import * as agentDatabaseIdentity from "./openclaw-agent-db-identity.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
@@ -12,6 +15,7 @@ import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db.js";
 
@@ -123,6 +127,62 @@ describe("committed agent database reads", () => {
 
   it.each([
     {
+      version: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+      expectedError: {
+        name: "SqliteSchemaVersionError",
+        message: expect.stringContaining(
+          `newer schema version ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
+        ),
+      },
+    },
+    {
+      version: AGENT_MEDIA_SCHEMA_VERSION - 1,
+      expectedError: {
+        name: "OpenClawAgentDatabaseMediaMigrationRequiredError",
+        message: expect.stringContaining("run openclaw doctor --fix to migrate persisted media"),
+      },
+    },
+    {
+      version: OPENCLAW_AGENT_SCHEMA_VERSION - 1,
+      expectedError: {
+        name: "Error",
+        message: expect.stringContaining(
+          "stop active agents and run openclaw doctor --fix to migrate session identities",
+        ),
+      },
+    },
+  ])(
+    "rejects a committed version change to $version on the next read before borrowed and fresh reads",
+    async ({ version, expectedError }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+        const options = { agentId: "main", env };
+        closeOpenClawAgentDatabaseByPath(resolveOpenClawAgentSqlitePath(options));
+        const { path: databasePath } = openOpenClawAgentDatabase(options);
+        let admitted: boolean;
+        const read = () =>
+          withOpenClawAgentDatabaseReadOnly(({ db }) => {
+            admitted = true;
+            return db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get();
+          }, options);
+        expect(read()).toEqual({ found: true, value: { agent_id: "main" } });
+        admitted = false;
+        const writer = new DatabaseSync(databasePath);
+        try {
+          writer.exec(`BEGIN IMMEDIATE; PRAGMA user_version = ${version}; COMMIT;`);
+        } finally {
+          writer.close();
+        }
+        expect(read).toThrow(expect.objectContaining(expectedError));
+        expect(admitted).toBe(false);
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(read).toThrow(expect.objectContaining(expectedError));
+        expect(admitted).toBe(false);
+      });
+    },
+  );
+
+  it.each([
+    {
       name: "schema version",
       sql: `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
       error: /newer schema version/,
@@ -137,23 +197,26 @@ describe("committed agent database reads", () => {
       sql: "UPDATE schema_meta SET agent_id = 'other' WHERE meta_key = 'primary'",
       error: /belongs to agent other.*requested agent main/,
     },
-  ])("rechecks committed $name before invoking a retained reader", async ({ sql, error }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const options = { agentId: "main", env };
-      const owner = openOpenClawAgentDatabase(options);
-      inWriterTransaction(owner.db, () => expect(readStamp(options).db.isOpen).toBe(true));
-      owner.db.exec(sql);
-      let invoked = false;
-      inWriterTransaction(owner.db, () => {
-        expect(() =>
-          withOpenClawAgentDatabaseReadOnly(() => {
-            invoked = true;
-          }, options),
-        ).toThrow(error);
+  ])(
+    "rechecks committed $name on the next read before invoking a retained reader",
+    async ({ sql, error }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+        const options = { agentId: "main", env };
+        const owner = openOpenClawAgentDatabase(options);
+        inWriterTransaction(owner.db, () => expect(readStamp(options).db.isOpen).toBe(true));
+        owner.db.exec(sql);
+        let invoked = false;
+        inWriterTransaction(owner.db, () => {
+          expect(() =>
+            withOpenClawAgentDatabaseReadOnly(() => {
+              invoked = true;
+            }, options),
+          ).toThrow(error);
+        });
+        expect(invoked).toBe(false);
       });
-      expect(invoked).toBe(false);
-    });
-  });
+    },
+  );
 
   it("preserves missing-schema adaptation after the reader was retained", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

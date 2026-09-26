@@ -1,10 +1,8 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -36,7 +34,7 @@ const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHan
 
 afterEach(async () => {
   await disposeSessionReadContexts();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
 });
 
 function placementRecord(
@@ -197,8 +195,8 @@ async function beginClaimedTurn(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
-}): Promise<() => void> {
-  const claim = params.placementStore.claimTurn({
+}): Promise<() => Promise<void>> {
+  const claim = await params.placementStore.claimTurn({
     sessionId: params.sessionId,
     agentId: "main",
     sessionKey: loadSessionEntry(params.sessionKey).canonicalKey ?? params.sessionKey,
@@ -206,8 +204,17 @@ async function beginClaimedTurn(params: {
     claimId: `${params.sessionId}-claim`,
     runId: `${params.sessionId}-run`,
   });
-  let claimReleased = false;
+  let releasing: Promise<void> | undefined;
   let releaseAdmission = () => {};
+  const releaseClaim = () => {
+    releasing ??= params.placementStore
+      .releaseTurn(claim)
+      .then(() => {
+        params.events.push("claim:released");
+      })
+      .finally(() => releaseAdmission());
+    return releasing;
+  };
   const admission = await beginSessionWorkAdmission({
     scope: params.storePath,
     identities: [params.sessionKey, params.sessionId],
@@ -215,18 +222,16 @@ async function beginClaimedTurn(params: {
     onInterrupt: () => {
       params.events.push("admission:interrupt");
       params.onInterrupt?.();
-      params.placementStore.releaseTurn(claim);
-      claimReleased = true;
-      params.events.push("claim:released");
-      releaseAdmission();
+      void releaseClaim().catch(() => {});
     },
   });
   releaseAdmission = admission.release;
-  return () => {
-    if (!claimReleased) {
-      params.placementStore.releaseTurn(claim);
+  return async () => {
+    try {
+      await releaseClaim();
+    } finally {
+      admission.release();
     }
-    admission.release();
   };
 }
 
@@ -334,6 +339,9 @@ test.each([
         context: {
           workerSessionPlacementService: {
             getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
+            waitForTurnClaimRelease: (
+              ...args: Parameters<WorkerSessionPlacementStore["waitForTurnClaimRelease"]>
+            ) => placementStore.waitForTurnClaimRelease(...args),
             retireSessionPlacement: (retirement: WorkerSessionPlacementRetirement) => {
               expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
               events.push("placement:retire");
@@ -352,7 +360,7 @@ test.each([
       expect(loadSessionEntry(placementKey).entry?.sessionId).toBe(sessionId);
     }
   } finally {
-    cleanupAdmission();
+    await cleanupAdmission();
   }
 });
 
@@ -374,7 +382,6 @@ test("sessions.delete retains failed placement when worker cleanup is unavailabl
           get: () => ({ state: "failed", leaseId: "lease-1" }),
           hasInferenceForSession: () => false,
           cancelInferenceForSession: () => [],
-          resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementService,
       },
@@ -442,7 +449,6 @@ test.each([
         workerEnvironmentService: {
           get: getWorkerEnvironment,
           hasInferenceForSession: () => false,
-          resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementService,
       },
@@ -531,7 +537,7 @@ test.each([
       expect(placementStore.get(sessionId)).toBeUndefined();
       expect(loadSessionEntry(testCase.sessionKey).entry === undefined).toBe(testCase.incognito);
     } finally {
-      cleanupAdmission();
+      await cleanupAdmission();
     }
   },
 );
@@ -587,7 +593,7 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
     expect(embeddedRunMock.abortCalls).toEqual([]);
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).not.toHaveBeenCalled();
   } finally {
-    cleanupAdmission();
+    await cleanupAdmission();
   }
 });
 
@@ -776,7 +782,7 @@ test.each(["generation", "claim"] as const)(
     });
     embeddedRunMock.activeIds.add(sessionId);
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-    const initialClaim = placementStore.claimTurn({
+    const initialClaim = await placementStore.claimTurn({
       sessionId,
       agentId: "main",
       sessionKey: loadSessionEntry(sessionKey).canonicalKey ?? sessionKey,
@@ -784,13 +790,17 @@ test.each(["generation", "claim"] as const)(
       claimId: `initial-${change}-claim`,
       runId: `initial-${change}-run`,
     });
-    placementStore.releaseTurn(initialClaim);
+    await placementStore.releaseTurn(initialClaim);
     bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockImplementationOnce(async () => {
       const canonicalKey = loadSessionEntry(sessionKey).canonicalKey ?? sessionKey;
       if (change === "generation") {
-        placementStore.startDispatch({ sessionId, agentId: "main", sessionKey: canonicalKey });
+        await placementStore.startDispatch({
+          sessionId,
+          agentId: "main",
+          sessionKey: canonicalKey,
+        });
       } else {
-        placementStore.claimTurn({
+        await placementStore.claimTurn({
           sessionId,
           agentId: "main",
           sessionKey: canonicalKey,
@@ -867,7 +877,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
         },
       },
     );
-    releaseTurn();
+    await releaseTurn();
     expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
     expect(events).toEqual(["admission:interrupt", "claim:released"]);
     expect(harness.log.indexOf("workspace:reconcile")).toBeLessThan(
@@ -903,7 +913,6 @@ test.each(["worker-turn", "remote-exec"] as const)(
             ...harness.environments,
             hasInferenceForSession: () => false,
             cancelInferenceForSession: () => [],
-            resolveInferenceSessionForRunId: () => undefined,
           },
           workerPlacementDispatchService: harness.service,
           workerSessionPlacementService: placementStore,

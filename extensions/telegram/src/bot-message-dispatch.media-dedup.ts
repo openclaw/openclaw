@@ -32,3 +32,16 @@ export function deduplicateBlockSentMedia<
       : {}),
   });
 }
+
+export function trackBlockMedia(
+  sentBlockMediaUrls: Set<string>,
+  payload: ReplyPayload,
+  acceptedMediaUrls: readonly string[],
+): void {
+  for (const { url, sourceUrls } of collectReplyMediaEntries(payload, acceptedMediaUrls)) {
+    sentBlockMediaUrls.add(url);
+    for (const source of sourceUrls ?? []) {
+      sentBlockMediaUrls.add(source);
+    }
+  }
+}

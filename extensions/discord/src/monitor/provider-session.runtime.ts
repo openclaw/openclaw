@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 export { getAcpSessionManager, isAcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
 export {
   resolveThreadBindingIdleTimeoutMs,
@@ -10,4 +9,4 @@ export {
   createNoopThreadBindingManager,
   reconcileAcpThreadBindingsOnStartup,
 } from "./thread-bindings.js";
-export { createThreadBindingManagerAsync as createThreadBindingManager } from "./thread-bindings.manager.js";
+export { createThreadBindingManager } from "./thread-bindings.manager.js";

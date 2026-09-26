@@ -21,8 +21,7 @@ OpenClaw:
 - Has the agent follow a short birth sequence: it asks what you want
   to call it, shares one short soul/vibe line, generates four avatar options
   when `image_generate` is available, asks whether you want the
-  minimal recommended plugin set or maximum convenience, and closes with one
-  short safety note about the access it runs with.
+  minimal recommended plugin set or maximum convenience.
 - Persists the agreed identity twice: into `IDENTITY.md` and `SOUL.md` (what the
   agent reads about itself) and via `openclaw agents set-identity` (what channels
   and the UI display).

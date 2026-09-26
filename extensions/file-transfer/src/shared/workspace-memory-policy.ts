@@ -5,15 +5,9 @@ import { evaluateFilePolicy, snapshotNodeFileReadPolicy } from "./policy.js";
 import { readWorkspaceMemoryRequest } from "./workspace-memory-request.js";
 import { readWorkspaceSkillsRequest } from "./workspace-skills-request.js";
 
-export function createWorkspaceMemoryPolicy(): OpenClawPluginNodeInvokePolicy {
-  return createWorkspaceWorkerPolicy("memory");
-}
-
-export function createWorkspaceSkillsPolicy(): OpenClawPluginNodeInvokePolicy {
-  return createWorkspaceWorkerPolicy("skills");
-}
-
-function createWorkspaceWorkerPolicy(kind: "memory" | "skills"): OpenClawPluginNodeInvokePolicy {
+export function createWorkspaceWorkerPolicy(
+  kind: "memory" | "skills",
+): OpenClawPluginNodeInvokePolicy {
   return {
     commands: [`workspace.${kind}`],
     dangerous: true,

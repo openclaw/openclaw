@@ -277,22 +277,40 @@ export function buildSlackDataTableBlock(
   };
 }
 
-/** Extract a deterministic accessible summary from a native Slack table block. */
-export function renderSlackDataTableFallbackText(value: unknown): string | undefined {
+function renderSlackDataTable(
+  value: unknown,
+  render: (table: ParsedSlackDataTable & { type: "table" }) => string,
+  mrkdwnSafe = false,
+): string | undefined {
   const block = asOptionalRecord(value);
   if (block?.type !== "data_table") {
     return undefined;
   }
   const parsed = parseSlackDataTable(block);
   if (parsed) {
-    return renderMessagePresentationTableFallbackText({
+    return render({
       type: "table",
       caption: parsed.caption,
       headers: parsed.headers,
       rows: parsed.rows,
     });
   }
-  return readNonEmptyString(block.caption)?.trim();
+  const caption = readNonEmptyString(block.caption)?.trim();
+  return caption && mrkdwnSafe ? escapeSlackMrkdwn(caption) : caption;
+}
+
+/** Extract a deterministic accessible summary from a native Slack table block. */
+export function renderSlackDataTableFallbackText(
+  value: unknown,
+  mrkdwnSafe = false,
+): string | undefined {
+  return renderSlackDataTable(
+    value,
+    mrkdwnSafe
+      ? renderSlackMessagePresentationTableFallbackText
+      : renderMessagePresentationTableFallbackText,
+    mrkdwnSafe,
+  );
 }
 
 function escapeCompactFallbackCell(value: string): string {
@@ -303,59 +321,28 @@ function escapeCompactFallbackCell(value: string): string {
     .replaceAll("\n", "\\n");
 }
 
-function escapeSlackBasicTableCell(value: string, mrkdwnSafe: boolean): string {
-  return escapeCompactFallbackCell(mrkdwnSafe ? escapeSlackMrkdwn(value) : value);
-}
-
-function renderSlackBasicTableRows(value: unknown, mrkdwnSafe: boolean): string | undefined {
+/** Render Slack's inbound `table` block as ordered, delimiter-safe TSV. */
+export function renderSlackTableFallbackText(
+  value: unknown,
+  mrkdwnSafe = false,
+): string | undefined {
   const rows = parseSlackBasicTableRows(value);
   return rows
-    ?.map((row) => row.map((cell) => escapeSlackBasicTableCell(cell, mrkdwnSafe)).join("\t"))
+    ?.map((row) =>
+      row
+        .map((cell) => escapeCompactFallbackCell(mrkdwnSafe ? escapeSlackMrkdwn(cell) : cell))
+        .join("\t"),
+    )
     .join("\n");
-}
-
-/** Render Slack's inbound `table` block as ordered, delimiter-safe TSV. */
-export function renderSlackTableFallbackText(value: unknown): string | undefined {
-  return renderSlackBasicTableRows(value, false);
-}
-
-/** Render Slack's inbound `table` block without activating mrkdwn control tokens. */
-export function renderSlackTableMrkdwnFallbackText(value: unknown): string | undefined {
-  return renderSlackBasicTableRows(value, true);
 }
 
 /** Render each native table cell once for bounded, formatting-disabled delivery. */
 export function renderSlackDataTableCompactPlainTextFallback(value: unknown): string | undefined {
-  const block = asOptionalRecord(value);
-  if (block?.type !== "data_table") {
-    return undefined;
-  }
-  const parsed = parseSlackDataTable(block);
-  if (!parsed) {
-    return readNonEmptyString(block.caption)?.trim();
-  }
-  return [
-    `${escapeCompactFallbackCell(parsed.caption)} (table)`,
-    parsed.headers.map(escapeCompactFallbackCell).join("\t"),
-    ...parsed.rows.map((row) => row.map(escapeCompactFallbackCell).join("\t")),
-  ].join("\n");
-}
-
-/** Render a native table as mrkdwn without activating raw cell control tokens. */
-export function renderSlackDataTableMrkdwnFallbackText(value: unknown): string | undefined {
-  const block = asOptionalRecord(value);
-  if (block?.type !== "data_table") {
-    return undefined;
-  }
-  const parsed = parseSlackDataTable(block);
-  if (parsed) {
-    return renderSlackMessagePresentationTableFallbackText({
-      type: "table",
-      caption: parsed.caption,
-      headers: parsed.headers,
-      rows: parsed.rows,
-    });
-  }
-  const caption = readNonEmptyString(block.caption)?.trim();
-  return caption ? escapeSlackMrkdwn(caption) : undefined;
+  return renderSlackDataTable(value, (table) =>
+    [
+      `${escapeCompactFallbackCell(table.caption)} (table)`,
+      table.headers.map(escapeCompactFallbackCell).join("\t"),
+      ...table.rows.map((row) => row.map(escapeCompactFallbackCell).join("\t")),
+    ].join("\n"),
+  );
 }

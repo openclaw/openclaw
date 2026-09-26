@@ -134,6 +134,25 @@ async function rawConnect(params: {
   return { response, socket };
 }
 
+// Raw upstream bytes: Node's own server cannot emit a Content-Length before a
+// UTF-8 Content-Disposition, which is the order real upstreams commonly send.
+const RAW_UPSTREAM_RESPONSES = new Map<string, Buffer>([
+  [
+    "/cjk-attachment",
+    Buffer.concat([
+      Buffer.from("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nContent-Disposition: attachment; "),
+      Buffer.from('filename="附件_2026-09-21.log"', "utf8"),
+      Buffer.from("\r\nConnection: close\r\n\r\nfile"),
+    ]),
+  ],
+  [
+    "/invalid-trailer",
+    Buffer.from(
+      "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nTrailer: Expires\r\nConnection: close\r\n\r\nfile",
+    ),
+  ],
+]);
+
 async function requestThroughTunnel(params: {
   path?: string;
   headers?: Record<string, string>;
@@ -141,7 +160,7 @@ async function requestThroughTunnel(params: {
   contentLength?: number;
   caPath?: string;
   proxyEnv?: Record<string, string>;
-}): Promise<{ body: string; status: number }> {
+}): Promise<{ body: string; head: string; status: number }> {
   const env = params.proxyEnv ?? proxyEnv;
   const configuredProxy = env.HTTPS_PROXY;
   if (!configuredProxy) {
@@ -214,7 +233,7 @@ async function requestThroughTunnel(params: {
   const raw = (await received).replace(/^(?:HTTP\/1\.1 100 Continue\r\n\r\n)+/u, "");
   const [head = "", body = ""] = raw.split("\r\n\r\n", 2);
   const status = Number(/^HTTP\/1\.1 (\d{3})/u.exec(head)?.[1]);
-  return { body, status };
+  return { body, head, status };
 }
 
 async function forwardedRequest(
@@ -283,6 +302,11 @@ beforeEach(async () => {
           headers: { ...request.headers },
           url: request.url ?? "",
         });
+        const rawResponse = RAW_UPSTREAM_RESPONSES.get(request.url ?? "");
+        if (rawResponse) {
+          request.socket.end(rawResponse);
+          return;
+        }
         if (request.url?.startsWith("/git/")) {
           response.writeHead(200, { "Content-Type": "text/plain", Connection: "close" });
           response.end(
@@ -338,6 +362,32 @@ afterEach(async () => {
 });
 
 describe("secret egress proxy", () => {
+  it("forwards a CJK attachment filename from a real upstream and keeps serving", async () => {
+    const uncaught: unknown[] = [];
+    const onUncaught = (error: unknown) => uncaught.push(error);
+    process.on("uncaughtException", onUncaught);
+    try {
+      const attachment = await requestThroughTunnel({ path: "/cjk-attachment" });
+      expect(attachment.status).toBe(200);
+      expect(attachment.body).toBe("file");
+      expect(attachment.head.toLowerCase()).toContain(
+        "content-disposition: attachment; filename=\"___2026-09-21.log\"; filename*=utf-8''%e9%99%84%e4%bb%b6_2026-09-21.log",
+      );
+
+      const rejected = await requestThroughTunnel({ path: "/invalid-trailer" });
+      expect(rejected.status).toBe(502);
+      expect(rejected.body).toBe("Secret egress proxy could not forward the upstream response.\n");
+
+      await expect(requestThroughTunnel({ path: "/after" })).resolves.toMatchObject({
+        body: "ok",
+        status: 200,
+      });
+      expect(uncaught).toEqual([]);
+    } finally {
+      process.off("uncaughtException", onUncaught);
+    }
+  });
+
   // Real local HTTPS contract, not a GitHub upload or a reconstruction of one.
   it.each([
     {

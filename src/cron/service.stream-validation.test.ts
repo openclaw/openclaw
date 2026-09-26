@@ -1,10 +1,10 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-stream-validation-" });
@@ -173,7 +173,7 @@ describe("cron stream schedule validation", () => {
     const historyAtAlert: unknown[][] = [];
     const enqueueSystemEvent = vi.fn(() => {
       historyAtAlert.push(
-        readCronTaskRunHistoryPage({
+        readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(storePath),
           jobId,
         }).entries,

@@ -5,14 +5,15 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveStateDir } from "../../config/paths.js";
 import * as diskSpace from "../../infra/disk-space.js";
+import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { readSystemDisks } from "../../infra/system-disks.js";
+import { readGatewayProcessVitals } from "../server/process-vitals.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 vi.mock("../../infra/advertised-lan-host.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/advertised-lan-host.js")>()),
   resolveAdvertisedLanHostCore: async () => "192.0.2.1",
 }));
-vi.mock("../../infra/system-disks.js", () => ({ readSystemDisks: async () => [] }));
-vi.mock("../../infra/machine-name.js", () => ({ getMachineDisplayName: async () => "benchmark" }));
 
 import { systemHandlers } from "./system.js";
 
@@ -41,54 +42,61 @@ it.runIf(process.env.OPENCLAW_SYSTEM_INFO_BENCH === "1")(
     } as unknown as GatewayRequestHandlerOptions;
     let clock = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => clock);
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 10; i++) {
       await handler(request);
     }
-    for (const intervalMs of [1667, 20]) {
+    for (const intervalMs of [2400, 10_000]) {
       const samples: number[] = [];
       const cpuSamples: number[] = [];
-      for (let round = 0; round < 7; round++) {
+      for (let round = 0; round < 5; round++) {
         const cpuStart = process.cpuUsage();
         const start = performance.now();
-        for (let i = 0; i < 1000; i++) {
+        for (let i = 0; i < 200; i++) {
           clock += intervalMs;
           await handler(request);
         }
         const cpu = process.cpuUsage(cpuStart);
-        samples.push(((performance.now() - start) * 1000) / 1000);
-        cpuSamples.push((cpu.user + cpu.system) / 1000);
+        samples.push(((performance.now() - start) * 1000) / 200);
+        cpuSamples.push((cpu.user + cpu.system) / 200);
       }
       console.log(
         JSON.stringify({
           kind: "handler",
           intervalMs,
-          medianUs: samples.toSorted((a, b) => a - b)[3],
-          medianCpuUs: cpuSamples.toSorted((a, b) => a - b)[3],
+          medianUs: samples.toSorted((a, b) => a - b)[2],
+          medianCpuUs: cpuSamples.toSorted((a, b) => a - b)[2],
           samplesUs: samples,
         }),
       );
     }
     const stateDir = resolveStateDir();
     for (const [name, read] of Object.entries({
+      stateDir: () => resolveStateDir(),
       cpus: () => os.cpus(),
       disk: () => diskSpace.tryReadDiskSpace(stateDir),
-      memoryUsage: () => process.memoryUsage(),
+      processVitals: () => readGatewayProcessVitals(undefined),
       loadavg: () => os.loadavg(),
       freemem: () => os.freemem(),
+      machineName: () => getMachineDisplayName(),
+      mountedDisksWarm: () => readSystemDisks(),
+      mountedDisksCold: () => {
+        clock += 60_001;
+        return readSystemDisks();
+      },
     })) {
       const start = performance.now();
-      for (let i = 0; i < 1000; i++) {
-        read();
+      for (let i = 0; i < 200; i++) {
+        await read();
       }
       console.log(
         JSON.stringify({
           kind: "primitive",
           name,
-          meanUs: ((performance.now() - start) * 1000) / 1000,
+          meanUs: ((performance.now() - start) * 1000) / 200,
         }),
       );
     }
-    expect(responses).toBe(15000);
+    expect(responses).toBe(2010);
   },
   30_000,
 );

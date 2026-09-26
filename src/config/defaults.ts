@@ -8,6 +8,7 @@ import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coer
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { resolveCatalogOwnedModelCompat } from "../agents/model-compat-catalog.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
@@ -116,16 +117,13 @@ type SessionDefaultsOptions = {
 
 export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const messages = cfg.messages;
-  const hasAckScope = messages?.ackReactionScope !== undefined;
-  if (hasAckScope) {
+  if (messages?.ackReactionScope !== undefined) {
     return cfg;
   }
 
-  const nextMessages = messages ? { ...messages } : {};
-  nextMessages.ackReactionScope = "group-mentions";
   return {
     ...cfg,
-    messages: nextMessages,
+    messages: { ...messages, ackReactionScope: "group-mentions" },
   };
 }
 
@@ -158,6 +156,8 @@ export function applySessionDefaults(
 /** Catalog metadata eligible to fill fields the operator did not author. */
 type CatalogSeedModel = Pick<
   ModelDefinitionConfig,
+  | "api"
+  | "baseUrl"
   | "input"
   | "reasoning"
   | "cost"
@@ -202,7 +202,12 @@ function buildManifestCatalogModelLookup(
             const key = keyFor(catalogProviderId, model.id);
             if (!index.has(key)) {
               // SAFETY: ModelCatalogModel's seed fields are a structural subset of ModelDefinitionConfig; only the picked metadata fields are read from this entry.
-              index.set(key, model as Partial<CatalogSeedModel>);
+              const metadata = model as Partial<CatalogSeedModel>;
+              index.set(key, {
+                ...metadata,
+                api: model.api ?? provider.api,
+                baseUrl: model.baseUrl ?? provider.baseUrl,
+              });
             }
           }
         }
@@ -312,8 +317,12 @@ export function applyModelDefaults(
             ? catalogModel.thinkingLevelMap
             : undefined;
         const compat =
-          raw.compat === undefined && catalogModel?.compat !== undefined
-            ? catalogModel.compat
+          raw.compat === undefined
+            ? resolveCatalogOwnedModelCompat({
+                catalogRoute: catalogModel,
+                catalogCompat: catalogModel?.compat,
+                configuredRoute: { api, baseUrl: raw.baseUrl ?? normalizedProvider.baseUrl },
+              })
             : undefined;
         const modelMutated =
           raw.reasoning !== reasoning ||
@@ -545,15 +554,13 @@ export function applyContextPruningDefaults(
   if (!hasAnthropicDefaultSignal(cfg, env)) {
     return cfg;
   }
-  return (
-    applyProviderConfigDefaultsForConfig({
-      provider: "anthropic",
-      config: cfg,
-      env,
-      manifestRegistry: options.manifestRegistry,
-      loadManifestRegistry: options.loadManifestRegistry,
-    }) ?? cfg
-  );
+  return applyProviderConfigDefaultsForConfig({
+    provider: "anthropic",
+    config: cfg,
+    env,
+    manifestRegistry: options.manifestRegistry,
+    loadManifestRegistry: options.loadManifestRegistry,
+  });
 }
 
 export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {

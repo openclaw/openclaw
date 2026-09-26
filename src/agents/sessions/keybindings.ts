@@ -17,49 +17,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAgentDir } from "../config.js";
 
 /** OpenClaw-specific key ids added to the shared pi-tui keybinding registry. */
-interface AppKeybindings {
-  "app.interrupt": true;
-  "app.clear": true;
-  "app.exit": true;
-  "app.suspend": true;
-  "app.thinking.cycle": true;
-  "app.model.cycleForward": true;
-  "app.model.cycleBackward": true;
-  "app.model.select": true;
-  "app.tools.expand": true;
-  "app.thinking.toggle": true;
-  "app.session.toggleNamedFilter": true;
-  "app.editor.external": true;
-  "app.message.followUp": true;
-  "app.message.dequeue": true;
-  "app.clipboard.pasteImage": true;
-  "app.session.new": true;
-  "app.session.tree": true;
-  "app.session.fork": true;
-  "app.session.resume": true;
-  "app.tree.foldOrUp": true;
-  "app.tree.unfoldOrDown": true;
-  "app.tree.editLabel": true;
-  "app.tree.toggleLabelTimestamp": true;
-  "app.session.togglePath": true;
-  "app.session.toggleSort": true;
-  "app.session.rename": true;
-  "app.session.delete": true;
-  "app.session.deleteNoninvasive": true;
-  "app.models.save": true;
-  "app.models.enableAll": true;
-  "app.models.clearAll": true;
-  "app.models.toggleProvider": true;
-  "app.models.reorderUp": true;
-  "app.models.reorderDown": true;
-  "app.tree.filter.default": true;
-  "app.tree.filter.noTools": true;
-  "app.tree.filter.userOnly": true;
-  "app.tree.filter.labeledOnly": true;
-  "app.tree.filter.all": true;
-  "app.tree.filter.cycleForward": true;
-  "app.tree.filter.cycleBackward": true;
-}
+type AppKeybindings = Record<Exclude<keyof typeof KEYBINDINGS, keyof typeof TUI_KEYBINDINGS>, true>;
 
 declare module "@earendil-works/pi-tui" {
   interface Keybindings extends AppKeybindings {}
@@ -273,50 +231,26 @@ function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAM
   return key in KEYBINDING_NAME_MIGRATIONS;
 }
 
-function toKeybindingsConfig(value: unknown): KeybindingsConfig {
-  if (!isRecord(value)) {
-    return {};
-  }
-
-  const config: KeybindingsConfig = {};
-  for (const [key, binding] of Object.entries(value)) {
-    if (typeof binding === "string") {
-      config[key] = binding as KeyId;
-      continue;
-    }
-    if (Array.isArray(binding) && binding.every((entry) => typeof entry === "string")) {
-      config[key] = binding as KeyId[];
-    }
-  }
-  return config;
-}
-
 /** Migrates legacy keybinding names and orders known entries ahead of unknown extras. */
-function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
-  config: Record<string, unknown>;
-  migrated: boolean;
-} {
-  const config: Record<string, unknown> = {};
-  let migrated = false;
-
-  for (const [key, value] of Object.entries(rawConfig)) {
+function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): KeybindingsConfig {
+  const config: KeybindingsConfig = {};
+  for (const [key, binding] of Object.entries(rawConfig)) {
     const nextKey = isLegacyKeybindingName(key) ? KEYBINDING_NAME_MIGRATIONS[key] : key;
-    if (nextKey !== key) {
-      migrated = true;
-    }
     if (key !== nextKey && Object.hasOwn(rawConfig, nextKey)) {
-      // New names win when both legacy and migrated keys are present.
-      migrated = true;
+      // New names win even when their configured value is invalid.
       continue;
     }
-    config[nextKey] = value;
+    if (typeof binding === "string") {
+      config[nextKey] = binding as KeyId;
+    } else if (Array.isArray(binding) && binding.every((entry) => typeof entry === "string")) {
+      config[nextKey] = binding as KeyId[];
+    }
   }
-
-  return { config: orderKeybindingsConfig(config), migrated };
+  return orderKeybindingsConfig(config);
 }
 
-function orderKeybindingsConfig(config: Record<string, unknown>): Record<string, unknown> {
-  const ordered: Record<string, unknown> = {};
+function orderKeybindingsConfig(config: KeybindingsConfig): KeybindingsConfig {
+  const ordered: KeybindingsConfig = {};
   for (const keybinding of Object.keys(KEYBINDINGS)) {
     if (Object.hasOwn(config, keybinding)) {
       ordered[keybinding] = config[keybinding];
@@ -379,7 +313,7 @@ export class KeybindingsManager extends TuiKeybindingsManager {
     if (!rawConfig) {
       return {};
     }
-    return toKeybindingsConfig(migrateKeybindingsConfig(rawConfig).config);
+    return migrateKeybindingsConfig(rawConfig);
   }
 }
 

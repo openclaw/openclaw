@@ -1,16 +1,21 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
+
+beforeAll(() => {
+  vi.setConfig({ maxConcurrency: 2 });
+  return () => vi.resetConfig();
+});
 
 const candidate = "a".repeat(40);
 const harness = "b".repeat(40);
 const base = "c".repeat(40);
 const moved = "d".repeat(40);
 const merge = "e".repeat(40);
-const linuxIt = it.skipIf(process.platform !== "linux");
+const linuxIt = it.skipIf(process.platform !== "linux").concurrent;
 // Raw owner lifecycle checks use the shared POSIX census on Linux and macOS.
-const posixIt = it.skipIf(process.platform === "win32");
+const posixIt = it.skipIf(process.platform === "win32").concurrent;
 
 const resetProfiles = [
   {
@@ -368,6 +373,19 @@ posixIt(
     );
     expect(harnessFetch.args).toEqual(expect.arrayContaining(["--filter=blob:none"]));
     expect(harnessFetch.args.at(-1)).toBe(`+${harness}:refs/remotes/origin/ci-harness`);
+    const sparseCheckout = expectDefined(
+      harnessCommands.find(({ args }) => args[0] === "sparse-checkout"),
+      "harness sparse checkout",
+    );
+    for (const file of [
+      "scripts/ci-npm-lock-admission.mjs",
+      "scripts/generate-npm-package-lock.mjs",
+      "scripts/generate-npm-package-lock.mts",
+      "scripts/changed-lanes.mts",
+      "scripts/lib/merge-head-diff-base.mjs",
+    ]) {
+      expect(sparseCheckout.args).toContain(`/${file}`);
+    }
     // The selected checkout still needs real file contents, so it must stay unfiltered.
     const workspaceFetch = expectDefined(
       report.fetches.find(({ cwd }) => cwd === report.workspace),
@@ -1363,10 +1381,25 @@ posixIt.each([
       workflowRuns: [
         {
           id: 122,
+          run_attempt: 1,
           created_at: "2026-08-28T20:00:00Z",
           status: "completed",
           conclusion: "success",
           head_sha: moved,
+        },
+      ],
+      workflowJobs: [
+        {
+          runId: 122,
+          runAttempt: 1,
+          jobs: [
+            {
+              name: "update-docs",
+              status: "completed",
+              conclusion: "success",
+              steps: [{ name: "Run Codex docs agent", status: "completed", conclusion: "success" }],
+            },
+          ],
         },
       ],
       commandResults: {
@@ -1382,7 +1415,26 @@ posixIt.each([
       ...(probe === 128 ? [["rev-parse", `${candidate}^`]] : []),
     ]);
     expect(report.githubOutput).toBe(code === 0 ? agentOutput(reviewBase) : "");
-    expect(report.commands.filter(({ tool }) => tool === "gh")).toHaveLength(1);
+    expect(report.commands.filter(({ tool }) => tool === "gh").map(({ args }) => args)).toEqual([
+      [
+        "api",
+        "--method",
+        "GET",
+        "repos/fixture/checkout/actions/workflows/docs-agent.yml/runs",
+        "-f",
+        "branch=main",
+        "-f",
+        "event=workflow_run",
+        "-f",
+        "per_page=100",
+      ],
+      [
+        "api",
+        "--paginate",
+        "--slurp",
+        "repos/fixture/checkout/actions/runs/122/attempts/1/jobs?per_page=100",
+      ],
+    ]);
     expect(backoffs(report)).toEqual([]);
   },
   55_000,

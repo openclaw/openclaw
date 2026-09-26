@@ -1,4 +1,4 @@
-import { afterEach, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
 import type { WorkerInferenceStartParams } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import * as sessionAuthRuntime from "../../agents/auth-profiles/session-override.js";
 import * as extraParamsRuntime from "../../agents/embedded-agent-runner/extra-params.js";
@@ -7,9 +7,11 @@ import * as streamResolutionRuntime from "../../agents/embedded-agent-runner/str
 import * as modelSelectionRuntime from "../../agents/model-selection.js";
 import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import * as providerStreamRuntime from "../../agents/provider-stream.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
 import { createEmptyPluginMetadataSnapshot } from "../../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as diagnosticTraceRuntime from "../../infra/diagnostic-trace-context.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
@@ -24,7 +26,6 @@ import {
   executeWorkerInference,
   type WorkerInferenceExecutionParams,
 } from "./inference-runtime.js";
-import * as sessionTargetRuntime from "./session-target.js";
 
 type Deps = {
   applyStreamPolicy: typeof extraParamsRuntime.applyExtraParamsToAgent;
@@ -50,6 +51,12 @@ export const PROFILE = ["gateway", "profile"].join("-");
 export const AUTH_MARKER = ["gateway", "profile", "value"].join("-");
 export const SESSION_ID = "session-runtime-test";
 export const SESSION_KEY = "agent:runtime-agent:main";
+const sessionTarget: BoundAgentRunSessionTarget = {
+  agentId: "runtime-agent",
+  sessionId: SESSION_ID,
+  sessionKey: SESSION_KEY,
+  storePath: "runtime-sessions.json",
+};
 export const TOOL_CALL = { type: "toolCall" as const, id: "call-1", name: "lookup", arguments: {} };
 const WORKSPACE_BASE = "/gateway-workspace";
 export const WORKSPACE = `${WORKSPACE_BASE}/runtime-agent`;
@@ -290,13 +297,9 @@ export function setup(
       [Symbol.asyncDispose]: releaseRuntime,
     };
   });
-  vi.spyOn(sessionTargetRuntime, "resolveWorkerSessionTarget").mockReturnValue({
-    agentId: "runtime-agent",
-    sessionEntry: entry,
-    sessionId: SESSION_ID,
-    sessionKey: SESSION_KEY,
-    sessionStore: { [SESSION_KEY]: entry },
-    storePath: "runtime-sessions.json",
+  vi.spyOn(sessionAccessor, "loadSessionEntry").mockImplementation((target) => {
+    expect(target).toEqual(sessionTarget);
+    return entry;
   });
   vi.spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
     acquireRuntimeLease,
@@ -349,6 +352,7 @@ export function params(
 ): Execution {
   return {
     identity,
+    sessionTarget,
     request: inferenceRequest,
     signal: new AbortController().signal,
     emit,

@@ -13,15 +13,9 @@ import {
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
+import { renderSlashMatchedName } from "./chat-composer-slash-menu-dom.ts";
 
 const SKILL_MENTION_CHAR = /[-a-zA-Z0-9_:]/u;
-
-function renderSkillName(name: string, query: string): TemplateResult {
-  const matchLength = name.toLowerCase().startsWith(query.toLowerCase()) ? query.length : 0;
-  return matchLength === 0
-    ? html`${name}`
-    : html`<mark>${name.slice(0, matchLength)}</mark>${name.slice(matchLength)}`;
-}
 
 type SkillMentionTarget = {
   start: number;
@@ -304,7 +298,7 @@ export function renderSkillMenu(
                   requestUpdate();
                 },
                 icon: icons.pencilSparkles,
-                name: renderSkillName(
+                name: renderSlashMatchedName(
                   getSkillDisplayName(command),
                   state.skillMenuTarget?.query ?? "",
                 ),

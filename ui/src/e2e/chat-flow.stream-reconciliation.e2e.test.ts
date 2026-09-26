@@ -252,22 +252,23 @@ suite.define(() => {
   it("reconciles distinct commentary items once across reconnect", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const runId = "commentary-reconciliation-run";
+      const startedAt = Date.now() - 30_000;
       const items = [
         { itemId: "commentary-item-one", text: "Inspecting the workspace." },
         { itemId: "commentary-item-two", text: "Checking the result." },
-      ];
+      ] as const;
       const events = items.map(({ itemId, text }, index) => ({
         data: { kind: "preamble", itemId, phase: "end", progressText: text },
         runId,
         seq: index + 1,
         sessionKey: "agent:main:main",
         stream: "item",
-        ts: 2_000 + index,
+        ts: startedAt + 2_000 + index,
       }));
       const historyMessages = items.map(({ itemId, text }, index) => ({
         role: "assistant",
         content: [{ type: "text", text }],
-        timestamp: 1_000 + index,
+        timestamp: startedAt + 1_000 + index,
         __openclaw: { id: `commentary-message-${index}`, runId, seq: index + 1 },
         openclawStreamFallback: { itemId, replacementText: text, source: "segment" },
       }));
@@ -278,7 +279,7 @@ suite.define(() => {
       };
       const gateway = await installMockGateway(page, {
         historyMessages: [],
-        inFlightRun: { runId, startedAt: 1_000, text: "" },
+        inFlightRun: { runId, startedAt, text: "" },
         sessionInfo,
       });
       const transcript = page.locator(".chat-thread-inner");
@@ -293,11 +294,18 @@ suite.define(() => {
         await gateway.emitGatewayEvent("agent", event);
       }
       await expect.poll(itemOccurrences).toEqual([1, 1]);
+      await expect
+        .poll(async () =>
+          (
+            await transcript.locator(".chat-text").filter({ hasText: items[1].text }).textContent()
+          )?.trim(),
+        )
+        .toBe(items[1].text);
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       await gateway.setMethodResponse("chat.startup", {
         messages: historyMessages,
-        inFlightRun: { runId, startedAt: 1_000, text: "", events },
+        inFlightRun: { runId, startedAt, text: "", events },
         sessionInfo,
         thinkingLevel: null,
       });

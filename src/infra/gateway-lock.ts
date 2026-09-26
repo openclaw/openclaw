@@ -31,7 +31,7 @@ import {
   type GatewayOwnerLease,
   type GatewayOwnerSupervisor,
 } from "./gateway-owner-lease.js";
-import { isGatewayArgv, isOpenClawArgv, isOpenClawCommandArgv } from "./gateway-process-argv.js";
+import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
 import {
   acquireGatewayLifecycleCoordinator,
@@ -162,6 +162,7 @@ export async function resolveGatewayOwnerStatus(
     readCmdline ??
     ((p: number) =>
       readGatewayLockProcessCmdline(p, platform, remainingTimeoutMs(), opts.deadlineMs));
+  const identityOptions = readCmdline ? undefined : { pid };
   if (
     role === "agent-embedded" ||
     role === "sqlite-maintenance" ||
@@ -172,14 +173,20 @@ export async function resolveGatewayOwnerStatus(
     if (!args) {
       return "unknown";
     }
-    if (role === "agent-embedded") {
-      // The role covers every direct embedded surface (agent --local, agent exec,
-      // local TUI, and CLI model probes), so validate the owning OpenClaw process
-      // instead of baking one command spelling into stale-lock recovery.
-      return isOpenClawArgv(args) ? "alive" : "dead";
-    }
-    const command = role === "sqlite-maintenance" ? "doctor" : "skills";
-    return isOpenClawCommandArgv(args, command) ? "alive" : "dead";
+    // Embedded roles cover every direct state-writing command, including local TUI and probes.
+    const identity =
+      role === "agent-embedded"
+        ? classifyOpenClawArgv(args, identityOptions)
+        : classifyOpenClawArgv(args, {
+            ...identityOptions,
+            command: role === "sqlite-maintenance" ? "doctor" : "skills",
+          });
+    remainingTimeoutMs();
+    return identity.kind === "unclassified"
+      ? "unknown"
+      : identity.kind === "openclaw"
+        ? "alive"
+        : "dead";
   }
 
   const args = readFn(pid);
@@ -193,7 +200,13 @@ export async function resolveGatewayOwnerStatus(
   }
   // Long-running gateways retitle themselves so macOS/BSD process inspection
   // can identify the owner after the original argv is no longer available.
-  return isGatewayArgv(args, { allowGatewayBinary: true }) ? "alive" : "dead";
+  const identity = classifyOpenClawArgv(args, { command: "gateway", ...identityOptions });
+  remainingTimeoutMs();
+  return identity.kind === "unclassified"
+    ? "unknown"
+    : identity.kind === "openclaw"
+      ? "alive"
+      : "dead";
 }
 
 export async function readLockPayload(

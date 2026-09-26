@@ -6,12 +6,8 @@ import {
   TasksCancelResultSchema,
   TasksGetResultSchema,
   TasksListResultSchema,
-  TasksRecoveryResultSchema,
 } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
-import type {
-  TasksCancelResult,
-  TasksRecoveryResult,
-} from "../../../../packages/gateway-protocol/src/schema/tasks.js";
+import type { TasksCancelResult } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../format-duration.ts";
 import { normalizeTaskSummary, type TaskStatus, type TaskSummary } from "./task-summary.ts";
@@ -267,23 +263,6 @@ export function normalizeTasksCancelResult(value: unknown): NormalizedTasksCance
   };
 }
 
-type NormalizedTasksRecoveryResult = Omit<TasksRecoveryResult, "results"> & {
-  results: Array<Omit<TasksRecoveryResult["results"][number], "task"> & { task?: TaskSummary }>;
-};
-
-export function normalizeTasksRecoveryResult(value: unknown): NormalizedTasksRecoveryResult | null {
-  if (!Value.Check(TasksRecoveryResultSchema, value)) {
-    return null;
-  }
-  return {
-    results: value.results.map((result) => {
-      const task = normalizeTaskSummary(result.task);
-      const { task: _wireTask, ...rest } = result;
-      return { ...rest, ...(task ? { task } : {}) };
-    }),
-  };
-}
-
 export function normalizeTaskEventPayload(value: unknown): TaskEventPayload | null {
   if (!isRecord(value)) {
     return null;
@@ -300,28 +279,6 @@ export function normalizeTaskEventPayload(value: unknown): TaskEventPayload | nu
     return task ? { action: "upserted", task } : null;
   }
   return null;
-}
-
-export function applyTaskEvent(
-  tasks: readonly TaskSummary[],
-  value: unknown,
-): { tasks: TaskSummary[]; refetch: boolean } {
-  const event = normalizeTaskEventPayload(value);
-  if (!event || event.action === "restored") {
-    return { tasks: [...tasks], refetch: true };
-  }
-  if (event.action === "deleted") {
-    return {
-      tasks: sortTasks(tasks.filter((task) => task.id !== event.taskId)),
-      refetch: false,
-    };
-  }
-  const current = tasks.find((task) => task.id === event.task.id);
-  const next = current ? newestTaskSnapshot(current, event.task, "event") : event.task;
-  return {
-    tasks: sortTasks([next, ...tasks.filter((task) => task.id !== event.task.id)]),
-    refetch: false,
-  };
 }
 
 /** Task events omit detail-only prompts; repeated snapshots share the event freshness rules. */
@@ -353,10 +310,12 @@ export function replayTaskEvents(
   for (const [taskId, event] of pending) {
     // A recreated task must replace even a newer row from the pre-delete snapshot.
     if (event.action === "deleted" || event.afterDelete) {
-      result = applyTaskEvent(result, { action: "deleted", taskId }).tasks;
+      result = sortTasks(result.filter((task) => task.id !== taskId));
     }
     if (event.action === "upserted") {
-      result = applyTaskEvent(result, { action: "upserted", task: event.task }).tasks;
+      const current = result.find((task) => task.id === event.task.id);
+      const next = current ? newestTaskSnapshot(current, event.task, "event") : event.task;
+      result = sortTasks([next, ...result.filter((task) => task.id !== event.task.id)]);
     }
   }
   return result;

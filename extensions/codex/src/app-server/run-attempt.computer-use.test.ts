@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
@@ -20,6 +21,8 @@ describe("runCodexAppServerAttempt", () => {
   it.each(["completed", "cancelled"] as const)(
     "routes Computer Use MCP elicitations through the native bridge (%s)",
     async (outcome) => {
+      const turnStarted = createDeferred<void>();
+      const turnInterrupted = createDeferred<void>();
       const bridgeSpy = vi
         .spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest")
         .mockResolvedValue({
@@ -27,6 +30,12 @@ describe("runCodexAppServerAttempt", () => {
           response: { action: "accept", content: { approve: true }, _meta: null },
         });
       const request = async (method: string) => {
+        if (method === "turn/start") {
+          turnStarted.resolve();
+        }
+        if (method === "turn/interrupt") {
+          turnInterrupted.resolve();
+        }
         if (method === "plugin/installed" || method === "plugin/list") {
           const installed = {
             marketplaces: [
@@ -99,6 +108,8 @@ describe("runCodexAppServerAttempt", () => {
         path.join(tempDir, "sessions.json"),
         "session-computer-use",
       );
+      // Protocol events drive these cases; cold startup must not spend the execution budget.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = runCodexAppServerAttempt(params, {
         pluginConfig: {
           computerUse: {
@@ -109,7 +120,12 @@ describe("runCodexAppServerAttempt", () => {
         },
       });
       // The keyed router only accepts turn-scoped requests once the turn is bound.
-      await elicitation.waitForMethod("turn/start");
+      await Promise.race([
+        turnStarted.promise,
+        run.then((result) => {
+          throw new Error("Attempt settled before turn/start", { cause: result });
+        }),
+      ]);
       const result = await elicitation.handleServerRequest({
         id: "request-elicitation-1",
         method: "mcpServer/elicitation/request",
@@ -144,7 +160,7 @@ describe("runCodexAppServerAttempt", () => {
       expect(turnStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
       if (outcome === "cancelled") {
         abortController.abort("user_cancelled");
-        await elicitation.waitForMethod("turn/interrupt");
+        await turnInterrupted.promise;
         expect(elicitation.requests.filter(({ method }) => method === "turn/interrupt")).toEqual([
           { method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } },
         ]);

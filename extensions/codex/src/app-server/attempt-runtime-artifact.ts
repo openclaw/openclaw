@@ -1,11 +1,13 @@
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
+import type { CodexAppServerStartOptions } from "./config.js";
 import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 
 export async function verifyStartupArtifact(params: {
   client: CodexAppServerClient;
   request?: Readonly<{ expected?: AgentHarnessRuntimeArtifactBinding }>;
   signal: AbortSignal;
+  startOptions: CodexAppServerStartOptions;
 }): Promise<AgentHarnessRuntimeArtifactBinding | undefined> {
   if (!params.request) {
     return undefined;
@@ -20,7 +22,11 @@ export async function verifyStartupArtifact(params: {
   if (
     !runtimeArtifact ||
     !matchesExpected ||
-    !(await validateCodexAppServerRuntimeArtifact(runtimeArtifact, params.signal))
+    !(await validateCodexAppServerRuntimeArtifact(
+      runtimeArtifact,
+      params.signal,
+      params.startOptions,
+    ))
   ) {
     // Never let an unattested physical generation reach Computer Use,
     // plugin discovery, or a native thread request.

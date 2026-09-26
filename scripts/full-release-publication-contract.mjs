@@ -417,7 +417,14 @@ function validatePublicationSourceFact(value, expected = {}) {
     "run_release_soak",
     "coverage_policy",
   ];
-  object(value.coverage, coverageKeys, "source admission coverage");
+  // Published admissions bind this retired empty field into their digest.
+  object(value.coverage, [...coverageKeys, "known_flaky_jobs_json"], "source admission coverage");
+  if (
+    Object.hasOwn(value.coverage, "known_flaky_jobs_json") &&
+    value.coverage.known_flaky_jobs_json !== "[]"
+  ) {
+    throw new Error("source admission known_flaky_jobs_json must be empty");
+  }
   if (
     coverageKeys.some(
       (key) =>

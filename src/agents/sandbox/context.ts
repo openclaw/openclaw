@@ -125,7 +125,6 @@ async function ensureSandboxWorkspaceLayout(params: {
       workspaceDir: params.workspaceDir,
     });
 
-  let syncedSkills: Awaited<ReturnType<typeof syncSandboxSkillsToWorkspace>>;
   if (cfg.workspaceAccess !== "rw") {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
@@ -133,27 +132,18 @@ async function ensureSandboxWorkspaceLayout(params: {
       params.config?.agents?.defaults?.skipBootstrap,
       params.config?.agents?.defaults?.skipOptionalBootstrapFiles,
     );
-    syncedSkills = await syncSandboxSkillsToWorkspace({
-      sourceWorkspaceDir: agentWorkspaceDir,
-      targetWorkspaceDir: sandboxWorkspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      rawSessionKey,
-      execOverrides: params.execOverrides,
-      skillsSnapshot: params.skillsSnapshot,
-    });
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
-    syncedSkills = await syncSandboxSkillsToWorkspace({
-      sourceWorkspaceDir: agentWorkspaceDir,
-      targetWorkspaceDir: skillsWorkspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      rawSessionKey,
-      execOverrides: params.execOverrides,
-      skillsSnapshot: params.skillsSnapshot,
-    });
   }
+  const syncedSkills = await syncSandboxSkillsToWorkspace({
+    sourceWorkspaceDir: agentWorkspaceDir,
+    targetWorkspaceDir: cfg.workspaceAccess === "rw" ? skillsWorkspaceDir : sandboxWorkspaceDir,
+    config: params.config,
+    agentId: params.agentId,
+    rawSessionKey,
+    execOverrides: params.execOverrides,
+    skillsSnapshot: params.skillsSnapshot,
+  });
 
   return {
     agentWorkspaceDir,
@@ -171,17 +161,20 @@ function resolveSandboxSession(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  preparedRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 }) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
   }
 
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    agentId: params.agentId,
-    sessionKey: rawSessionKey,
-  });
+  const runtime = params.preparedRuntimeStatus
+    ? { ...params.preparedRuntimeStatus }
+    : resolveSandboxRuntimeStatus({
+        cfg: params.config,
+        agentId: params.agentId,
+        sessionKey: rawSessionKey,
+      });
   if (!runtime.sandboxed) {
     return null;
   }
@@ -226,24 +219,6 @@ function resolveSandboxSession(params: {
   return { rawSessionKey, runtime, cfg };
 }
 
-function resolveSandboxWorkspaceInfoWorkdir(params: {
-  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
-  rawSessionKey: string;
-  scopeKey: string;
-  workspaceDir: string;
-  agentWorkspaceDir: string;
-  skillsWorkspaceDir: string;
-}): string | undefined {
-  return getSandboxBackendWorkdirResolver(params.cfg.backend)?.({
-    sessionKey: params.rawSessionKey,
-    scopeKey: params.scopeKey,
-    workspaceDir: params.workspaceDir,
-    agentWorkspaceDir: params.agentWorkspaceDir,
-    skillsWorkspaceDir: params.skillsWorkspaceDir,
-    cfg: params.cfg,
-  });
-}
-
 type ResolveSandboxContextParams = {
   config?: OpenClawConfig;
   agentId?: string;
@@ -254,6 +229,8 @@ type ResolveSandboxContextParams = {
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
+  /** Classification already prepared for this session's workspace setup. */
+  preparedRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 
 type ResolvedSandboxSession = NonNullable<ReturnType<typeof resolveSandboxSession>>;
@@ -493,17 +470,9 @@ async function resolveProvisionedSandboxContext(
   return sandboxContext;
 }
 
-export async function resolveSandboxContext(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  execOverrides?: ExecPolicyOverrides;
-  requireCurrentConfig?: boolean;
-  assertCurrent?: () => void;
-  admittedRunContext?: AdmittedRunContext;
-  sessionKey?: string;
-  skillsSnapshot?: SkillSnapshot;
-  workspaceDir?: string;
-}): Promise<SandboxContext | null> {
+export async function resolveSandboxContext(
+  params: ResolveSandboxContextParams,
+): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
     return null;
@@ -556,9 +525,9 @@ export async function ensureSandboxWorkspaceForSession(params: {
     workspaceDir: localWorkspace?.workspaceDir ?? params.workspaceDir,
   });
 
-  const containerWorkdir = resolveSandboxWorkspaceInfoWorkdir({
+  const containerWorkdir = getSandboxBackendWorkdirResolver(cfg.backend)?.({
     cfg,
-    rawSessionKey,
+    sessionKey: rawSessionKey,
     scopeKey,
     workspaceDir,
     agentWorkspaceDir,

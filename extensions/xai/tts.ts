@@ -1,4 +1,3 @@
-// Xai plugin module implements tts behavior.
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { canonicalizeBase64, rawDataToString } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
@@ -11,6 +10,7 @@ import {
   isValidXaiTtsVoice,
   normalizeXaiLanguageCode,
   normalizeXaiTtsBaseUrl,
+  type XaiSpeechResponseFormat,
 } from "./speech-provider-metadata.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 import { WebSocket } from "./ws-runtime.js";
@@ -70,7 +70,17 @@ export async function listXaiTtsVoices(params: {
   }
 }
 
-type XaiTtsResponseFormat = "mp3" | "wav" | "pcm" | "mulaw" | "alaw";
+type XaiTtsRequest = {
+  text: string;
+  apiKey: string;
+  baseUrl: string;
+  voiceId: string;
+  language?: string;
+  speed?: number;
+  responseFormat?: XaiSpeechResponseFormat;
+  timeoutMs: number;
+  maxBytes?: number;
+};
 
 const XAI_NATIVE_TTS_STREAM_HOST = "api.x.ai";
 
@@ -84,7 +94,7 @@ function toXaiTtsWsUrl(params: {
   baseUrl: string;
   voiceId: string;
   language: string;
-  responseFormat: XaiTtsResponseFormat;
+  responseFormat: XaiSpeechResponseFormat;
   speed?: number;
 }): string {
   assertXaiNativeTtsStreamEndpoint(params.baseUrl);
@@ -133,17 +143,7 @@ function assertXaiNativeTtsStreamEndpoint(baseUrl: string): void {
   }
 }
 
-export async function xaiTTSStream(params: {
-  text: string;
-  apiKey: string;
-  baseUrl: string;
-  voiceId: string;
-  language?: string;
-  speed?: number;
-  responseFormat?: XaiTtsResponseFormat;
-  timeoutMs: number;
-  maxBytes?: number;
-}): Promise<{
+export async function xaiTTSStream(params: XaiTtsRequest): Promise<{
   audioStream: ReadableStream<Uint8Array>;
   release: () => Promise<void>;
 }> {
@@ -163,8 +163,6 @@ export async function xaiTTSStream(params: {
   if (!isValidXaiTtsVoice(voiceId)) {
     throw new Error(`Invalid voice: ${voiceId}`);
   }
-  assertXaiNativeTtsStreamEndpoint(baseUrl);
-
   const wsUrl = toXaiTtsWsUrl({
     baseUrl,
     voiceId,
@@ -413,17 +411,7 @@ export async function xaiTTSStream(params: {
   });
 }
 
-export async function xaiTTS(params: {
-  text: string;
-  apiKey: string;
-  baseUrl: string;
-  voiceId: string;
-  language?: string;
-  speed?: number;
-  responseFormat?: "mp3" | "wav" | "pcm" | "mulaw" | "alaw";
-  timeoutMs: number;
-  maxBytes?: number;
-}): Promise<Buffer> {
+export async function xaiTTS(params: XaiTtsRequest): Promise<Buffer> {
   const {
     text,
     apiKey,

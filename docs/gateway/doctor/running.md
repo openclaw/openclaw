@@ -9,6 +9,13 @@ read_when:
 Run `openclaw doctor` to repair and migrate an OpenClaw install. This page covers the
 command, its automation flags, and the read-only lint mode.
 
+When the System agent runs Doctor, it uses a separate process from the same
+OpenClaw installation. Bulk diagnostic checks can then run without blocking the
+Gateway's event loop. This uses the existing `--non-interactive` behavior,
+including its safe migrations; it does not enable additional repairs. Once
+started, Doctor finishes and releases its resources before a cancelled caller
+settles, so cancellation cannot abandon an in-progress migration.
+
 ## Quick start
 
 ```bash

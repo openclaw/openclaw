@@ -13,24 +13,32 @@ import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-ru
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import * as sessionRunError from "../sessions/session-run-error.js";
+import { ensureSessionEntryValidityProjection } from "../state/openclaw-agent-db-session-migrations.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 
-const roots = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  vi.restoreAllMocks();
-  clearAgentRunContext("startup-race-owner");
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+const roots = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    clearAgentRunContext("startup-race-owner");
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
 });
 
 it.each([
@@ -77,23 +85,30 @@ it.each([
             vi.spyOn(sessionRunError, "recordGatewaySessionRunFailure").mockImplementationOnce(
               async (params) => {
                 await Promise.resolve();
-                prepared = true;
                 if (race === "session") {
                   accessor.replaceSessionEntrySync(scope, {
                     ...original,
                     sessionId: "successor",
                   });
                 } else if (race === "generation") {
-                  const other = new DatabaseSync(database.path);
-                  try {
-                    other
-                      .prepare(
-                        "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-                      )
-                      .run("$.lifecycleRevision", "successor", scope.sessionKey);
-                  } finally {
-                    other.close();
-                  }
+                  // Keep the separate connection, but serialize its write with maintenance.
+                  await runOpenClawAgentWriteAdmission(
+                    { agentId: "main", path: database.path },
+                    () => {
+                      const other = new DatabaseSync(database.path);
+                      try {
+                        other
+                          .prepare(
+                            "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+                          )
+                          .run("$.lifecycleRevision", "successor", scope.sessionKey);
+                        // Keep row validity from masking the lifecycle-generation fence.
+                        ensureSessionEntryValidityProjection(other);
+                      } finally {
+                        other.close();
+                      }
+                    },
+                  );
                 } else if (race === "local-owner") {
                   registerAgentRunContext("startup-race-owner", {
                     sessionKey: scope.sessionKey,
@@ -129,6 +144,7 @@ it.each([
                       "{}",
                     );
                 }
+                prepared = true;
                 await writeReceipt(params);
               },
             );
@@ -168,8 +184,10 @@ it.each([
           });
         } finally {
           admission?.release();
+          await closeOpenClawAgentDatabasesAsync(stateDir);
           closeOpenClawAgentDatabasesForTest();
           await lock.release();
+          await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseForTest();
         }
       },
@@ -269,8 +287,10 @@ it.each(["owner", "settlement", "receipt"] as const)(
             expect(await receipts()).toHaveLength(1);
           });
         } finally {
+          await closeOpenClawAgentDatabasesAsync(stateDir);
           closeOpenClawAgentDatabasesForTest();
           await lock.release();
+          await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseForTest();
         }
       },

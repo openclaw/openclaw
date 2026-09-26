@@ -1,7 +1,3 @@
-/**
- * ACPX plugin service lifecycle. It resolves config, prepares isolated adapter
- * wrappers, registers the ACP backend, and manages startup/cleanup probes.
- */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { availableParallelism } from "node:os";
@@ -40,6 +36,7 @@ import {
 } from "./process-reaper.js";
 import type { CompleteAcpRuntime } from "./runtime-proxy.js";
 import { AcpxRuntime } from "./runtime.js";
+import { adoptAcpxStateDirectory } from "./session-owner-migration.js";
 import {
   ACPX_GATEWAY_INSTANCE_KEY,
   ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
@@ -190,19 +187,13 @@ async function withStartupProbeTimeout<T>(params: {
   }
 }
 
-function openGatewayInstanceStateStore(
-  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
-): PluginStateKeyedStore<AcpxGatewayInstanceRecord> {
-  return openKeyedStore<AcpxGatewayInstanceRecord>({
-    namespace: ACPX_GATEWAY_INSTANCE_NAMESPACE,
-    maxEntries: ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
-  });
-}
-
 async function resolveGatewayInstanceId(
   openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
 ): Promise<string> {
-  const store = openGatewayInstanceStateStore(openKeyedStore);
+  const store = openKeyedStore<AcpxGatewayInstanceRecord>({
+    namespace: ACPX_GATEWAY_INSTANCE_NAMESPACE,
+    maxEntries: ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
+  });
   const existing = normalizeAcpxGatewayInstanceRecord(
     await store.lookup(ACPX_GATEWAY_INSTANCE_KEY),
   );
@@ -233,57 +224,44 @@ async function reapOpenAcpxProcessLeases(params: {
   const terminatedPids: number[] = [];
   const legacyWrapperRoots = new Set<string>();
   for (const lease of leases) {
-    if (lease.rootPid <= 0) {
+    const pending = lease.rootPid <= 0;
+    if (pending) {
       legacyWrapperRoots.add(lease.wrapperRoot);
-      assertCurrent();
-      await params.leaseStore.markState(lease.leaseId, "closing");
-      assertCurrent();
-      const result = await cleanupOpenClawOwnedAcpxPendingLease({
-        leaseId: lease.leaseId,
-        gatewayInstanceId: lease.gatewayInstanceId,
-        wrapperRoot: lease.wrapperRoot,
-        wrapperPath: lease.wrapperPath,
-        deps,
-      });
-      inspectedPids.push(...result.inspectedPids);
-      terminatedPids.push(...result.terminatedPids);
-      // A missing probe wrapper cannot prove its detached adapter descendants
-      // exited because those descendants do not carry the lease arguments.
-      const retryableEvidenceFailure =
-        result.skippedReason === "ambiguous-root" ||
-        result.skippedReason === "process-list-unavailable" ||
-        result.skippedReason === "unsupported-platform" ||
-        result.skippedReason === "unverified-root" ||
-        (lease.sessionKey === ACPX_PROBE_LEASE_SESSION_KEY &&
-          result.skippedReason === "missing-root");
-      assertCurrent();
-      await params.leaseStore.markState(
-        lease.leaseId,
-        retryableEvidenceFailure ? "open" : result.terminatedPids.length > 0 ? "closed" : "lost",
-      );
-      continue;
     }
     assertCurrent();
     await params.leaseStore.markState(lease.leaseId, "closing");
     assertCurrent();
-    const result = await cleanupOpenClawOwnedAcpxProcessTree({
-      rootPid: lease.rootPid,
-      expectedLeaseId: lease.leaseId,
-      expectedGatewayInstanceId: lease.gatewayInstanceId,
-      wrapperRoot: lease.wrapperRoot,
-      deps,
-    });
+    const result = pending
+      ? await cleanupOpenClawOwnedAcpxPendingLease({
+          leaseId: lease.leaseId,
+          gatewayInstanceId: lease.gatewayInstanceId,
+          wrapperRoot: lease.wrapperRoot,
+          wrapperPath: lease.wrapperPath,
+          deps,
+        })
+      : await cleanupOpenClawOwnedAcpxProcessTree({
+          rootPid: lease.rootPid,
+          expectedLeaseId: lease.leaseId,
+          expectedGatewayInstanceId: lease.gatewayInstanceId,
+          wrapperRoot: lease.wrapperRoot,
+          deps,
+        });
     inspectedPids.push(...result.inspectedPids);
     terminatedPids.push(...result.terminatedPids);
+    // A missing probe wrapper cannot prove its detached adapter descendants
+    // exited because those descendants do not carry the lease arguments.
+    const retryableEvidenceFailure =
+      result.skippedReason === "process-list-unavailable" ||
+      result.skippedReason === "unsupported-platform" ||
+      (pending &&
+        (result.skippedReason === "ambiguous-root" ||
+          result.skippedReason === "unverified-root" ||
+          (lease.sessionKey === ACPX_PROBE_LEASE_SESSION_KEY &&
+            result.skippedReason === "missing-root")));
     assertCurrent();
     await params.leaseStore.markState(
       lease.leaseId,
-      result.skippedReason === "process-list-unavailable" ||
-        result.skippedReason === "unsupported-platform"
-        ? "open"
-        : result.terminatedPids.length > 0
-          ? "closed"
-          : "lost",
+      retryableEvidenceFailure ? "open" : result.terminatedPids.length > 0 ? "closed" : "lost",
     );
   }
   // Preserve the previous narrow trigger for marker cleanup: a pending lease
@@ -301,7 +279,6 @@ async function reapOpenAcpxProcessLeases(params: {
   return { inspectedPids, terminatedPids };
 }
 
-/** Create the ACPX plugin service that owns runtime registration and cleanup. */
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams,
 ): OpenClawPluginService & {
@@ -359,8 +336,25 @@ export function createAcpxRuntimeService(
         resolveAcpxPluginConfig({
           rawConfig: params.pluginConfig,
           workspaceDir: ctx.workspaceDir,
+          stateDir: ctx.stateDir,
         }),
       );
+      const adoption = await measureAcpxStartup(ctx, "state.adopt", () =>
+        adoptAcpxStateDirectory({
+          rawConfig: params.pluginConfig,
+          workspaceDir: ctx.workspaceDir,
+          stateDir: basePluginConfig.stateDir,
+          openKeyedStore,
+          assertCurrent: params.assertCurrent,
+        }),
+      );
+      basePluginConfig.stateDir = adoption.stateDir;
+      for (const change of adoption.changes) {
+        ctx.logger.info(change);
+      }
+      for (const warning of adoption.warnings) {
+        ctx.logger.warn(warning);
+      }
       const pluginConfig = await measureAcpxStartup(ctx, "config.prepare-codex-auth", () =>
         prepareAcpxCodexAuthConfig({
           pluginConfig: basePluginConfig,

@@ -15,7 +15,7 @@ import {
   shouldFilterLegacySessionRecordsByTarget,
 } from "../config/sessions/legacy-store-inspection.js";
 import { collectSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
   resolveAllAgentSessionStoreCandidateTargetsSync,
   type SessionStoreTarget,
@@ -56,7 +56,7 @@ export type LegacySessionRecord = {
   sessionKey: string;
   transcriptPath?: string;
   transcriptDependencies: string[];
-  recovery?: { complete: boolean; repaired: boolean; events: number };
+  recovery?: { complete: boolean; repaired: boolean; events: number; sqliteEvents?: number };
   sourceFingerprint?: ReturnType<typeof readTranscriptFingerprint>;
   historical?: {
     originalPath: string;

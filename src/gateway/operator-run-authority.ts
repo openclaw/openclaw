@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   assertAdmittedRunOperatorAuthority,
   createAdmittedRunOperatorAuthority,
@@ -10,11 +11,8 @@ import {
 } from "../agents/operator-model-policy.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
-import {
-  onUserProfilesChanged,
-  readUserProfileAliasRevision,
-} from "../state/user-profile-events.js";
-import { resolveUserProfileId } from "../state/user-profiles.js";
+import { onUserProfilesChanged } from "../state/user-profile-events.js";
+import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import {
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
@@ -22,10 +20,9 @@ import {
   retainGatewayDeviceRevocation,
 } from "./device-revocation.js";
 import {
-  authorizeCurrentOperatorRoleScopes,
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
-  resolveOperatorRolePolicyForProfile,
+  resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -83,7 +80,7 @@ function retainOperatorSource(
 }
 
 /** Transfers the original operator restriction into accepted work, independently of its request. */
-export function captureGatewayOperatorRunAuthority(params: {
+export async function captureGatewayOperatorRunAuthority(input: {
   client: GatewayClient | null;
   context: Pick<
     GatewayRequestContext,
@@ -97,7 +94,8 @@ export function captureGatewayOperatorRunAuthority(params: {
   }> | null;
   /** Additional request lifetime; never replaces the authenticated access grant. */
   invocationAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;
-}): { authority: AdmittedRunOperatorAuthority; release: () => void } | undefined {
+}): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void } | undefined> {
+  const params = { ...input };
   const inherited = params.client?.internal?.operatorRunAuthority;
   if (inherited !== undefined) {
     assertAdmittedRunOperatorAuthority(inherited);
@@ -120,11 +118,27 @@ export function captureGatewayOperatorRunAuthority(params: {
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;
-  if (!client || actor?.kind !== "operator") {
+  // Shared-secret owner sessions keep system role semantics, but still have an
+  // authenticated user subject. Capture only the real, handshake-attested ingress:
+  // an autonomous/synthetic system caller must not acquire the owner profile.
+  const isAuthenticatedOwner = (currentActor: typeof actor) =>
+    client?.internal?.authenticatedOperator === true &&
+    (currentActor === undefined || currentActor.kind === "system") &&
+    client.connect.role === "operator" &&
+    Boolean(client.connId) &&
+    !client.invalidated &&
+    !client.connectionSignal?.aborted &&
+    !client.internal.syntheticClient &&
+    !client.internal.agentRuntimeIdentity &&
+    !client.internal.agentToolCaller &&
+    client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID;
+  const authenticatedOwner = isAuthenticatedOwner(actor);
+  if (!client || (actor?.kind !== "operator" && !authenticatedOwner)) {
     return undefined;
   }
-  const profileId = actor.profileId;
-  let aliasRevision = readUserProfileAliasRevision();
+  const profileId = actor?.kind === "operator" ? actor.profileId : GATEWAY_OWNER_PROFILE_ID;
+  const connectionId = client.connId;
+  const connectionSignal = client.connectionSignal;
   if (params.hasCurrentClientAuthority?.() === false) {
     throw new Error("Gateway caller authority is no longer active.");
   }
@@ -146,34 +160,41 @@ export function captureGatewayOperatorRunAuthority(params: {
       : client.internal?.operatorAccessAuthority;
   const sourceAuthorities = [sourceAuthority, params.invocationAuthority];
   const scopes = Object.freeze([...(client.connect.scopes ?? [])]);
-  const policyClient: GatewayClient = {
-    connect: {
-      minProtocol: client.connect.minProtocol,
-      maxProtocol: client.connect.maxProtocol,
-      client: client.connect.client,
-      role: "operator",
-      scopes: [...scopes],
-    },
-    internal: { operatorRoleActor: { kind: "operator", profileId } },
-  };
+  const sourceOwners: OperatorSource["owners"] = [
+    gatewayContext ?? params.context,
+    resolveGatewayContext,
+    getConfig,
+    readGatewayDeviceSourceIdentity(params.hasCurrentClientAuthority) ??
+      (params.hasCurrentClientAuthority ? Object.freeze({}) : undefined),
+    sourceAuthority,
+    params.invocationAuthority,
+  ];
   let releaseSource: (() => void) | undefined;
   let references = 1;
   let revoked = false;
   const revocation = new AbortController();
   const subscriptions: Array<(() => void) | undefined> = [];
+  let preparedProfile: Awaited<ReturnType<typeof prepareUserProfileIdentity>> | undefined;
   const assertProfileCurrent = () => {
-    const currentAliasRevision = readUserProfileAliasRevision();
-    if (currentAliasRevision !== aliasRevision) {
-      if (resolveUserProfileId(profileId) !== profileId) {
-        throw new Error("operator source identity changed; start a new request");
+    try {
+      const profile = preparedProfile?.readCurrentProfile();
+      if (!profile || profile.profileId !== profileId) {
+        throw new Error("operator profile is unavailable");
       }
-      aliasRevision = currentAliasRevision;
+      return profile;
+    } catch (error) {
+      throw new Error("operator source identity changed; start a new request", { cause: error });
     }
   };
+  const resolveCurrentRole = (cfg = getConfig()) =>
+    resolveOperatorRolePolicyForAssignment(profileId, assertProfileCurrent().assignedRole, cfg);
   const assertRoleCurrent = () => {
-    const error = authorizeCurrentOperatorRoleScopes(policyClient, getConfig());
-    if (error) {
-      throw new Error(error.message);
+    const policy = resolveCurrentRole();
+    if (
+      policy &&
+      !roleScopesAllow({ role: "operator", requestedScopes: scopes, allowedScopes: policy.scopes })
+    ) {
+      throw new Error("Your operator role changed; reconnect before continuing.");
     }
   };
   const readModelPolicy = () => {
@@ -183,17 +204,19 @@ export function captureGatewayOperatorRunAuthority(params: {
     if (cfg !== modelPolicyConfig || metadata !== modelPolicyMetadata) {
       const current = prepareOperatorModelPolicy({
         cfg,
-        policy: resolveOperatorRolePolicyForProfile(profileId, cfg)?.modelPolicy,
+        policy: resolveCurrentRole(cfg)?.modelPolicy,
         manifestPlugins: metadata ?? [],
       });
       modelPolicy =
-        original && current
+        original &&
+        current &&
+        readOperatorModelPolicyMembership(original) !== readOperatorModelPolicyMembership(current)
           ? Object.freeze({
               models: Object.freeze(current.models.filter(original.allows)),
               allows: (ref: Parameters<typeof original.allows>[0]) =>
                 original.allows(ref) && current.allows(ref),
             })
-          : (original ?? current);
+          : (current ?? original);
       modelPolicyConfig = cfg;
       modelPolicyMetadata = metadata;
     }
@@ -214,19 +237,25 @@ export function captureGatewayOperatorRunAuthority(params: {
       }
     }
   };
-  const assertCurrent = () => {
+  const assertSourceCurrent = () => {
     if (revoked || references === 0) {
       throw new Error("operator execution authority is no longer active");
     }
+    if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
+      throw new Error("operator source authority is no longer active");
+    }
+    for (const authority of sourceAuthorities) {
+      authority?.signal?.throwIfAborted();
+      authority?.assertCurrent();
+      authority?.signal?.throwIfAborted();
+    }
+    if (revoked || references === 0) {
+      throw new Error("operator execution authority is no longer active");
+    }
+  };
+  const assertCurrent = () => {
     try {
-      if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
-        throw new Error("operator source authority is no longer active");
-      }
-      for (const authority of sourceAuthorities) {
-        authority?.signal?.throwIfAborted();
-        authority?.assertCurrent();
-      }
-      assertProfileCurrent();
+      assertSourceCurrent();
       assertRoleCurrent();
     } catch (error) {
       revoked = true;
@@ -244,6 +273,7 @@ export function captureGatewayOperatorRunAuthority(params: {
           for (const unsubscribe of subscriptions.splice(0)) {
             unsubscribe?.();
           }
+          preparedProfile?.release();
           releaseDevice?.();
         }
       }
@@ -251,34 +281,24 @@ export function captureGatewayOperatorRunAuthority(params: {
   };
   const release = releaseHold();
   try {
-    const capturedRole = structuredClone(
-      resolveOperatorRolePolicyForProfile(profileId, getConfig()),
-    );
-    const capturedSourcePolicy = sourceRolePolicy(capturedRole);
-    modelPolicy = prepareOperatorModelPolicy({
-      cfg: modelPolicyConfig,
-      policy: capturedRole?.modelPolicy,
-      manifestPlugins: modelPolicyMetadata ?? [],
-    });
-    originalModelPolicy = modelPolicy;
-    const source = retainOperatorSource(
-      client,
-      [
-        gatewayContext ?? params.context,
-        resolveGatewayContext,
-        getConfig,
-        readGatewayDeviceSourceIdentity(params.hasCurrentClientAuthority) ??
-          (params.hasCurrentClientAuthority ? Object.freeze({}) : undefined),
-        sourceAuthority,
-        params.invocationAuthority,
-      ],
-      readOperatorModelPolicyMembership(originalModelPolicy),
-    );
-    releaseSource = source.release;
+    const initialRoleConfig = {
+      gateway: { roles: structuredClone(modelPolicyConfig.gateway?.roles) },
+    };
+    const preparationConfigs = [initialRoleConfig];
+    let onConfigChange = () => {
+      preparationConfigs.push({ gateway: { roles: structuredClone(getConfig().gateway?.roles) } });
+    };
+    let profileChangedDuringPreparation = false;
+    let onProfileChange = () => {
+      profileChangedDuringPreparation = true;
+    };
+    // The assignment arrives asynchronously. Keep committed policy changes until
+    // it can be resolved, so revocation cannot disappear behind a later restore.
     subscriptions.push(
       onGatewayDeviceSourceRevoked(params.hasCurrentClientAuthority, () =>
         revoke(new Error("operator source authority is no longer active")),
       ),
+      onUserProfilesChanged(() => onProfileChange()),
       onOperatorRolePolicyChanged((change) => {
         if (change.kind === "assignment" && change.profileId === profileId) {
           revoke(new Error("Your operator role changed; reconnect before continuing."));
@@ -286,15 +306,9 @@ export function captureGatewayOperatorRunAuthority(params: {
           change.kind === "config" &&
           change.context === (gatewayContext ?? params.context)
         ) {
-          recheck(() => {
-            const currentRole = resolveOperatorRolePolicyForProfile(profileId, getConfig());
-            if (!isDeepStrictEqual(capturedSourcePolicy, sourceRolePolicy(currentRole))) {
-              throw new Error("Your operator role changed; reconnect before continuing.");
-            }
-          });
+          onConfigChange();
         }
       }),
-      onUserProfilesChanged(() => recheck(assertProfileCurrent)),
     );
     for (const authority of sourceAuthorities) {
       const sourceSignal = authority?.signal;
@@ -304,11 +318,88 @@ export function captureGatewayOperatorRunAuthority(params: {
         subscriptions.push(() => sourceSignal.removeEventListener("abort", onAbort));
       }
     }
+    assertSourceCurrent();
+    preparedProfile = await prepareUserProfileIdentity(profileId);
+    const currentActor = resolveGatewayOperatorRoleActor(params.client);
+    const originalActorCurrent = authenticatedOwner
+      ? isAuthenticatedOwner(currentActor) &&
+        client.connId === connectionId &&
+        client.connectionSignal === connectionSignal
+      : currentActor?.kind === "operator" && currentActor.profileId === profileId;
+    if (
+      params.client !== client ||
+      !originalActorCurrent ||
+      params.hasCurrentClientAuthority?.() === false ||
+      !isGatewayCurrent() ||
+      !roleScopesAllow({
+        role: "operator",
+        requestedScopes: scopes,
+        allowedScopes: client.connect.scopes ?? [],
+      })
+    ) {
+      throw new Error("Gateway caller authority is no longer active.");
+    }
+    const capturedAssignedRole = assertProfileCurrent().assignedRole;
+    const capturedRole = structuredClone(resolveCurrentRole());
+    const capturedSourcePolicy = sourceRolePolicy(capturedRole);
+    if (
+      preparationConfigs.some(
+        (config) =>
+          !isDeepStrictEqual(
+            capturedSourcePolicy,
+            sourceRolePolicy(
+              resolveOperatorRolePolicyForAssignment(profileId, capturedAssignedRole, config),
+            ),
+          ),
+      )
+    ) {
+      revoke(new Error("Your operator role changed; reconnect before continuing."));
+    }
+    const assertCapturedRoleCurrent = () => {
+      const current = assertProfileCurrent();
+      const policy = resolveOperatorRolePolicyForAssignment(
+        profileId,
+        current.assignedRole,
+        getConfig(),
+      );
+      if (
+        current.assignedRole !== capturedAssignedRole ||
+        !isDeepStrictEqual(capturedSourcePolicy, sourceRolePolicy(policy))
+      ) {
+        throw new Error("Your operator role changed; reconnect before continuing.");
+      }
+    };
+    onConfigChange = () => recheck(assertCapturedRoleCurrent);
+    onProfileChange = () => recheck(assertCapturedRoleCurrent);
+    if (profileChangedDuringPreparation) {
+      onProfileChange();
+    }
     assertCurrent();
+    originalModelPolicy = prepareOperatorModelPolicy({
+      cfg: modelPolicyConfig,
+      policy: resolveOperatorRolePolicyForAssignment(
+        profileId,
+        capturedAssignedRole,
+        initialRoleConfig,
+      )?.modelPolicy,
+      manifestPlugins: modelPolicyMetadata ?? [],
+    });
+    modelPolicy = originalModelPolicy;
+    preparationConfigs.length = 0;
+    const source = retainOperatorSource(
+      client,
+      sourceOwners,
+      readOperatorModelPolicyMembership(originalModelPolicy),
+    );
+    releaseSource = source.release;
     return {
       authority: createAdmittedRunOperatorAuthority({
         profileId,
         scopes,
+        readCurrentRoleAssignment: () => {
+          assertCurrent();
+          return assertProfileCurrent().assignedRole;
+        },
         gatewayAccessGrant: sourceAuthority === null ? null : sourceAuthority?.gatewayAccessGrant,
         source: source.token,
         assertCurrent,

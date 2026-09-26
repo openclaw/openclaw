@@ -96,33 +96,10 @@ function assertOpenClawStateDatabaseFreshOpenAllowed(
 
 const deferredStateDatabases = new WeakSet<DatabaseSync>();
 
-export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabaseOptions = {}): {
-  changes: string[];
-  warnings: string[];
-} {
-  const env = options.env ?? process.env;
-  const pathname = resolveDatabasePath(options);
-  assertOpenClawStateSchemaRepairAllowed(pathname);
-  if (!existsSync(pathname)) {
-    return { changes: [], warnings: [] };
-  }
-  return runWithOpenClawStateWriteAccess(
-    {
-      databasePath: pathname,
-      env,
-      openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-    },
-    "state schema repair",
-    () =>
-      withStateSchemaFence({ databasePath: pathname }, () =>
-        repairStateSchema(pathname, env, "doctor"),
-      ),
-  );
-}
-
-/** Make exact legacy catalog damage readable before Doctor loads config-dependent state. */
-export function repairOpenClawStateDatabaseReadabilityForDoctor(
-  options: OpenClawStateDatabaseOptions = {},
+function repairDoctorStateDatabase(
+  options: OpenClawStateDatabaseOptions,
+  scope: "doctor" | "indexes" | "readability",
+  operation: string,
 ): { changes: string[]; warnings: string[] } {
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
@@ -130,20 +107,43 @@ export function repairOpenClawStateDatabaseReadabilityForDoctor(
   if (!existsSync(pathname)) {
     return { changes: [], warnings: [] };
   }
-  // A writer close can checkpoint WAL and invalidate a generation-bound corruption refusal.
-  assertOpenClawStateDatabaseFreshOpenAllowed(options);
+  if (scope === "readability") {
+    // A writer close can checkpoint WAL and invalidate a generation-bound corruption refusal.
+    assertOpenClawStateDatabaseFreshOpenAllowed(options);
+  }
   return runWithOpenClawStateWriteAccess(
     {
       databasePath: pathname,
       env,
       openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
     },
-    "Doctor state readability repair",
+    operation,
     () =>
       withStateSchemaFence({ databasePath: pathname }, () =>
-        repairStateSchema(pathname, env, "readability"),
+        repairStateSchema(pathname, env, scope),
       ),
   );
+}
+
+export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabaseOptions = {}): {
+  changes: string[];
+  warnings: string[];
+} {
+  return repairDoctorStateDatabase(options, "doctor", "state schema repair");
+}
+
+/** Explicit Doctor maintenance before config readers encounter a quarantined index. */
+export function repairOpenClawStateDatabaseIndexesForDoctor(
+  options: OpenClawStateDatabaseOptions = {},
+): { changes: string[]; warnings: string[] } {
+  return repairDoctorStateDatabase(options, "indexes", "Doctor state index repair");
+}
+
+/** Repair known catalog damage and preserve orphan rows before Doctor backs up or loads state. */
+export function repairOpenClawStateDatabaseReadabilityForDoctor(
+  options: OpenClawStateDatabaseOptions = {},
+): { changes: string[]; warnings: string[] } {
+  return repairDoctorStateDatabase(options, "readability", "Doctor state readability repair");
 }
 
 /** Prepare schema and retire resources only when the admitted operation actually repairs it. */
@@ -211,8 +211,8 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
 export function initializeNativeOpenClawStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  initializeNativeOpenClawStateConnection(options, (db, pathname, env) =>
-    ensureSchema(db, pathname, env, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, true),
+  initializeNativeOpenClawStateConnection(options, (db, pathname, env, initialization) =>
+    ensureSchema(db, pathname, env, initialization, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, true),
   );
 }
 
@@ -329,7 +329,9 @@ function openOpenClawStateDatabaseWithBusyTimeout(
           busyTimeoutMs,
           lockFailureReporting,
           existingSchema,
-          ensureSchema: (database) => ensureSchema(database, pathname, env, busyTimeoutMs),
+          initializationAgentPaths: options.initializationAgentPaths,
+          ensureSchema: (database, initialization) =>
+            ensureSchema(database, pathname, env, initialization, busyTimeoutMs),
           recordOpenFailure: recordOpenClawStateDatabaseOpenFailure,
         }));
       },
@@ -353,7 +355,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   if (existingSchema) {
     recordExistingOpenClawStateSchemaDatabase(unpublished.db, pathname);
   }
-  const database = stateDbCache.publishOpenClawStateDatabase(unpublished);
+  const database = stateDbCache.publishOpenClawStateDatabase(unpublished, env);
   try {
     if (!existingSchema && readSqliteUserVersion(database.db) < OPENCLAW_STATE_SCHEMA_VERSION) {
       deferredStateDatabases.add(database.db);

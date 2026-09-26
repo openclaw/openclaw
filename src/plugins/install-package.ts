@@ -4,7 +4,6 @@ import { resolveUserPath } from "../utils.js";
 import {
   inspectBundlePluginArtifact,
   inspectNativePluginArtifact,
-  type PluginInstallArtifactInspection,
 } from "./install-artifact-inspection.js";
 import {
   scanAndLinkInstalledPackage,
@@ -213,43 +212,27 @@ async function installBundleFromSourceDir(
     : installed;
 }
 
-function withArtifactInspection(
-  result: InstallPluginResult,
-  artifactInspection: PluginInstallArtifactInspection,
-): InstallPluginResult {
-  return result.ok ? { ...result, artifactInspection } : result;
-}
-
 async function installPluginFromSourceDir(
   params: {
     sourceDir: string;
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const nativePackageManifest = await detectNativePackageInstallSource(params.sourceDir);
-  if (nativePackageManifest) {
-    return withArtifactInspection(
-      await installPluginFromPackageDir({
-        packageDir: params.sourceDir,
-        packageManifest: nativePackageManifest,
-        ...pickPackageInstallCommonParams(params),
-      }),
-      inspectNativePluginArtifact(),
-    );
+  if (!nativePackageManifest) {
+    const bundleResult = await installBundleFromSourceDir({
+      sourceDir: params.sourceDir,
+      ...pickPackageInstallCommonParams(params),
+    });
+    if (bundleResult) {
+      return bundleResult;
+    }
   }
-  const bundleResult = await installBundleFromSourceDir({
-    sourceDir: params.sourceDir,
+  const result = await installPluginFromPackageDir({
+    packageDir: params.sourceDir,
+    packageManifest: nativePackageManifest,
     ...pickPackageInstallCommonParams(params),
   });
-  if (bundleResult) {
-    return bundleResult;
-  }
-  return withArtifactInspection(
-    await installPluginFromPackageDir({
-      packageDir: params.sourceDir,
-      ...pickPackageInstallCommonParams(params),
-    }),
-    inspectNativePluginArtifact(),
-  );
+  return result.ok ? { ...result, artifactInspection: inspectNativePluginArtifact() } : result;
 }
 
 async function detectNativePackageInstallSource(

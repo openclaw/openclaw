@@ -5,6 +5,13 @@ export type SessionMutationOperatorScope = "operator.write" | "operator.admin";
 export type SessionOperatorScope = "operator.sessions.read" | "operator.sessions.write";
 
 const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
+  "agent.identity.get",
+  "agents.list",
+  "models.list",
+  "progressCard.get",
+  "projects.list",
+  "session.suggestions.list",
+  "sessions.groups.list",
   "sessions.list",
   "sessions.subscribe",
   "sessions.messages.subscribe",
@@ -25,6 +32,10 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "chat.message.get",
   "session.members.list",
   "session.members.listEvidence",
+  "themes.get",
+  "themes.list",
+  "users.prefs.get",
+  "users.self",
 ]);
 
 const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
@@ -38,7 +49,6 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "sessions.create",
   "sessions.patch",
   "sessions.patchMany",
-  "sessions.delete",
   "sessions.fork",
   "sessions.recover",
   "sessions.send",

@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { renderAttachmentCardIcon } from "./chat-attachment-card.ts";
+import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 
 type AttachmentFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
 
@@ -36,10 +36,10 @@ export function renderAssistantAttachmentStatusCard(params: {
     >
       <div class="chat-assistant-attachment-card__header">
         <div class="chat-assistant-attachment-card__identity">
-          ${renderAttachmentCardIcon({
-            label: params.label,
+          ${renderAttachmentFileIcon({
+            filename: params.label,
             mimeType: params.mimeType,
-            visualMode: "large-placeholder",
+            mode: "large-placeholder",
             unavailable,
           })}
           <span class="chat-assistant-attachment-card__details">

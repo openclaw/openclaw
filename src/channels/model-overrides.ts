@@ -149,40 +149,6 @@ function expandPeerIds(
   return expanded;
 }
 
-function resolveDirectChannelModelMatch(params: {
-  channel: string;
-  providerEntries: Record<string, string>;
-  groupId?: string | null;
-  parentSessionKey?: string | null;
-  directUserIds?: (string | null | undefined)[];
-}): { model: string; matchKey?: string; matchSource?: ChannelMatchSource } | null {
-  const expandedUserIds = expandPeerIds(params.directUserIds ?? [], params.channel);
-  const directKeys = buildChannelKeyCandidates(
-    params.groupId,
-    ...expandedUserIds,
-    ...buildGenericParentOverrideCandidates(params.parentSessionKey),
-  );
-  if (directKeys.length === 0) {
-    return null;
-  }
-  const match = resolveChannelEntryMatchWithFallback({
-    entries: params.providerEntries,
-    keys: directKeys,
-    parentKeys: [],
-    wildcardKey: "*",
-    normalizeKey: (value) => normalizeOptionalLowercaseString(value) ?? "",
-  });
-  const raw = match.entry ?? match.wildcardEntry;
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const model = normalizeOptionalString(raw);
-  if (!model) {
-    return null;
-  }
-  return { model, matchKey: match.matchKey, matchSource: match.matchSource };
-}
-
 /** Resolves a channel-scoped model override from direct, parent, and wildcard config entries. */
 export function resolveChannelModelOverride(
   params: ChannelModelOverrideParams,
@@ -201,47 +167,38 @@ export function resolveChannelModelOverride(
   if (!providerEntries) {
     return null;
   }
-  const isDirectChat = normalizeChatType(params.groupChatType ?? undefined) === "direct";
-  let directMatch = null;
-  if (isDirectChat) {
-    directMatch = resolveDirectChannelModelMatch({
-      channel,
-      providerEntries,
-      groupId: params.groupId,
-      parentSessionKey: params.parentSessionKey,
-      directUserIds: params.directUserIds,
+  const resolveMatch = (keys: string[], parentKeys: string[] = []): ChannelModelOverride | null => {
+    const match = resolveChannelEntryMatchWithFallback({
+      entries: providerEntries,
+      keys,
+      parentKeys,
+      wildcardKey: "*",
+      normalizeKey: (value) => normalizeOptionalLowercaseString(value) ?? "",
     });
-  }
-  if (directMatch) {
-    return {
-      channel: normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "",
-      model: directMatch.model,
-      matchKey: directMatch.matchKey,
-      matchSource: directMatch.matchSource,
-    };
+    const model = normalizeOptionalString(match.entry ?? match.wildcardEntry);
+    return model
+      ? {
+          channel:
+            normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "",
+          model,
+          matchKey: match.matchKey,
+          matchSource: match.matchSource,
+        }
+      : null;
+  };
+
+  if (normalizeChatType(params.groupChatType ?? undefined) === "direct") {
+    const directKeys = buildChannelKeyCandidates(
+      params.groupId,
+      ...expandPeerIds(params.directUserIds ?? [], channel),
+      ...buildGenericParentOverrideCandidates(params.parentSessionKey),
+    );
+    const directMatch = directKeys.length > 0 ? resolveMatch(directKeys) : null;
+    if (directMatch) {
+      return directMatch;
+    }
   }
 
   const { keys, parentKeys } = buildChannelCandidates(params);
-  const match = resolveChannelEntryMatchWithFallback({
-    entries: providerEntries,
-    keys,
-    parentKeys,
-    wildcardKey: "*",
-    normalizeKey: (value) => normalizeOptionalLowercaseString(value) ?? "",
-  });
-  const raw = match.entry ?? match.wildcardEntry;
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const model = normalizeOptionalString(raw);
-  if (!model) {
-    return null;
-  }
-
-  return {
-    channel: normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "",
-    model,
-    matchKey: match.matchKey,
-    matchSource: match.matchSource,
-  };
+  return resolveMatch(keys, parentKeys);
 }

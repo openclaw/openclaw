@@ -299,17 +299,28 @@ type ChannelTurnReplyPipelineOptions = Omit<
   "cfg" | "agentId" | "channel" | "accountId"
 >;
 
-/** Fully assembled channel turn ready to build the dispatch runner. */
-export type AssembledChannelTurn = {
-  cfg: OpenClawConfig;
+type ChannelTurnContext = {
   channel: string;
   accountId?: string;
-  agentId: string;
   routeSessionKey: string;
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
   afterRecord?: () => void | Promise<void>;
+  record?: ChannelTurnRecordOptions;
+  history?: ChannelTurnHistoryFinalizeOptions;
+  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Transport-defined outbound source identity, such as a webhook id. */
+  outboundEchoSourceId?: string;
+  log?: (event: ChannelTurnLogEvent) => void;
+  messageId?: string;
+};
+
+/** Fully assembled channel turn ready to build the dispatch runner. */
+export type AssembledChannelTurn = ChannelTurnContext & {
+  cfg: OpenClawConfig;
+  agentId: string;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   delivery: ChannelEventDeliveryAdapter;
   replyPipeline?: ChannelTurnReplyPipelineOptions;
@@ -324,14 +335,6 @@ export type AssembledChannelTurn = {
     signal?: AbortSignal;
     sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   };
-  record?: ChannelTurnRecordOptions;
-  history?: ChannelTurnHistoryFinalizeOptions;
-  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-  botLoopProtection?: ChannelBotLoopProtectionFacts;
-  /** Transport-defined outbound source identity, such as a webhook id. */
-  outboundEchoSourceId?: string;
-  log?: (event: ChannelTurnLogEvent) => void;
-  messageId?: string;
   /** Canonical adoption lifecycle threaded into replyOptions. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
 };
@@ -347,27 +350,12 @@ type PreparedChannelTurnDispatchLifecycle = {
 };
 
 /** Channel turn with dispatch runner already prepared. */
-export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
-  channel: string;
-  accountId?: string;
-  routeSessionKey: string;
-  storePath: string;
-  ctxPayload: FinalizedMsgContext;
-  recordInboundSession: RecordInboundSession;
-  afterRecord?: () => void | Promise<void>;
-  record?: ChannelTurnRecordOptions;
-  history?: ChannelTurnHistoryFinalizeOptions;
+export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = ChannelTurnContext & {
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
   runDispatch: () => Promise<TDispatchResult>;
   /** Optional for the legacy direct prepared runner; inbound adapters use the stricter type. */
   runDispatchLifecycle?: PreparedChannelTurnDispatchLifecycle;
   observeOnlyDispatchResult?: TDispatchResult;
-  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-  botLoopProtection?: ChannelBotLoopProtectionFacts;
-  /** Transport-defined outbound source identity, such as a webhook id. */
-  outboundEchoSourceId?: string;
-  log?: (event: ChannelTurnLogEvent) => void;
-  messageId?: string;
 };
 
 type ChannelTurnRoute = {
@@ -409,12 +397,8 @@ export type ChannelTurnResolved<
 > =
   | ChannelTurnPlan<TDelivery>
   | PreparedChannelTurnPlan<TDispatchResult>
-  | (AssembledChannelTurn & {
-      admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-    })
-  | (InboundPreparedChannelTurn<TDispatchResult> & {
-      admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-    });
+  | AssembledChannelTurn
+  | InboundPreparedChannelTurn<TDispatchResult>;
 
 /** Ordered lifecycle stage names emitted to channel turn log hooks. */
 type ChannelTurnStage =
@@ -466,24 +450,17 @@ type ChannelTurnAdapter<
   TDispatchResult = DispatchFromConfigResult,
   TDelivery extends ChannelTurnDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter,
 > = {
-  ingest: (raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null;
-  classify?: (input: NormalizedTurnInput) => Promise<ChannelEventClass> | ChannelEventClass;
+  ingest: (raw: TRaw) => MaybePromise<NormalizedTurnInput | null>;
+  classify?: (input: NormalizedTurnInput) => MaybePromise<ChannelEventClass>;
   preflight?: (
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
-  ) =>
-    | Promise<PreflightFacts | ChannelTurnAdmission | null | undefined>
-    | PreflightFacts
-    | ChannelTurnAdmission
-    | null
-    | undefined;
+  ) => MaybePromise<PreflightFacts | ChannelTurnAdmission | null | undefined>;
   resolveTurn: (
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
     preflight: PreflightFacts,
-  ) =>
-    | Promise<ChannelTurnResolved<TDispatchResult, TDelivery>>
-    | ChannelTurnResolved<TDispatchResult, TDelivery>;
+  ) => MaybePromise<ChannelTurnResolved<TDispatchResult, TDelivery>>;
   onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
 };
 

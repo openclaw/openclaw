@@ -2,6 +2,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
@@ -11,6 +12,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { ApplicationContext } from "../app/context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
@@ -500,7 +502,19 @@ suite.define(() => {
     const catalogRequests = new Set<string>();
     const catalogParams: unknown[] = [];
     let rejectCatalogReplies = false;
-    const publish = async (id: string) => {
+    const publish = async (page: Page, id: string) => {
+      const publication = await page.evaluateHandle(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          context: ApplicationContext;
+        };
+        const observed = { committed: false };
+        const stop = app.context.gateway.subscribeEvents((event) => {
+          if (event.event === "config.changed") {
+            observed.committed = true;
+          }
+        });
+        return { observed, stop };
+      });
       const args = [
         "config",
         "set",
@@ -509,9 +523,18 @@ suite.define(() => {
         "--strict-json",
         "--replace",
       ];
-      const result = await instance.cli(args);
-      commands.push({ args, ...result });
-      expect(result.code, result.stderr).toBe(0);
+      try {
+        const result = await instance.cli(args);
+        commands.push({ args, ...result });
+        expect(result.code, result.stderr).toBe(0);
+        // Runtime rows can arrive before this accepted-config event retires them.
+        await expect
+          .poll(() => publication.evaluate(({ observed }) => observed.committed))
+          .toBe(true);
+      } finally {
+        await publication.evaluate(({ stop }) => stop());
+        await publication.dispose();
+      }
     };
     try {
       await suite.withPage(
@@ -575,7 +598,7 @@ suite.define(() => {
           if (captureEnabled) {
             await page.screenshot({ path: path.join(suite.artifactDir, "initial.png") });
           }
-          await publish("palette-published");
+          await publish(page, "palette-published");
           await expect.poll(() => published.count()).toBe(1);
           expect(await retiring.count()).toBe(0);
           if (captureEnabled) {
@@ -583,7 +606,14 @@ suite.define(() => {
           }
 
           rejectCatalogReplies = true;
-          await publish("palette-held");
+          // Refresh the same catalog owner; a config write retires its display facts.
+          providerModel = "read-failure-fixture:latest";
+          const refreshParams = { agentId: "main", view: "configured", refresh: true };
+          commands.push({
+            method: "models.list",
+            params: refreshParams,
+            result: await readback.request("models.list", refreshParams),
+          });
           const status = page
             .locator(".cmd-palette [role=status]")
             .filter({ hasText: "Model search unavailable" });
@@ -593,6 +623,7 @@ suite.define(() => {
             await page.screenshot({ path: path.join(suite.artifactDir, "read-failure.png") });
           }
           rejectCatalogReplies = false;
+          await publish(page, "palette-held");
           await input.fill("palette-held");
           const recovered = page.getByRole("option", { name: "palette-held fixture", exact: true });
           await recovered.waitFor({ state: "visible" });

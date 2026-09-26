@@ -542,7 +542,8 @@ Usage:
     Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
     Keeps prior evidence and reruns admission; requires the same method and no auto/queue/admin route.
-    --cancel-auto instead retires the exact accepted non-queue auto request before any head repair.
+    --cancel-auto instead retires the exact accepted or uncertain non-queue auto request before head repair.
+    Cancels a matching active request once, or records an already absent request without sending cancellation.
     Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.
   scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion
     Finish a verified merge receipt after cleanup; never dispatches a merge or deletes resources.
@@ -702,6 +703,14 @@ main() {
     *)
       usage
       exit 2
+      ;;
+  esac
+
+  # Reject contradictory instructions before PR reads, locks, or preparation can
+  # retire valid evidence. prepare-push can refresh a head and rerun gates too.
+  case "$cmd" in
+    prepare-run | prepare-gates | prepare-push)
+      resolve_pr_gates_remote_mode >/dev/null || return $?
       ;;
   esac
 

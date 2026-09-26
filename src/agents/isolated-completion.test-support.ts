@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PreparedAgentRunAdmission } from "./admitted-run-context.js";
+import type { RunCliAgentParams } from "./cli-runner/types.js";
 import type {
   AgentHarnessSelectionDecision,
   AgentHarnessSelectionDecisionParams,
@@ -9,7 +10,7 @@ import type {
 import type { AgentHarness } from "./harness/types.js";
 import { createEmptyPluginMetadataSnapshot } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
-export type IsolatedCliRunParams = {
+export type IsolatedCliRunParams = RunCliAgentParams & {
   preparedRunAdmission: PreparedAgentRunAdmission;
   prompt: string;
   runId: string;
@@ -99,7 +100,7 @@ vi.mock("./runtime-plan/resolve-auth.js", () => ({
   }),
 }));
 vi.mock("./cli-runner.runtime.js", () => ({ runCliAgent: isolatedCompletionMocks.runCliAgent }));
-vi.mock("../infra/private-temp-workspace.js", () => ({
+vi.mock("@openclaw/fs-safe/temp", () => ({
   withTempWorkspace: async (_options: unknown, run: (value: { dir: string }) => unknown) =>
     await run({ dir: "/tmp/isolated" }),
 }));

@@ -88,6 +88,34 @@ class SwitchHandler(FixtureHandler):
         self.reply(200, b"{}", "application/json")
 
 
+def stop_private_vault(vault):
+    if vault is not None and vault.poll() is None:
+        vault.terminate()
+        vault.wait(timeout=5)
+
+
+def start_private_vault(chrome):
+    from gi.repository import Gio, GLib
+
+    vault = subprocess.Popen(
+        ["gnome-keyring-daemon", "--foreground", "--unlock", "--components=secrets"],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        vault.stdin.write(b"synthetic-private-vault\n")
+        vault.stdin.close()
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        chrome.until(lambda: bus.call_sync(
+            "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+            "NameHasOwner", GLib.Variant("(s)", ("org.freedesktop.secrets",)), None,
+            Gio.DBusCallFlags.NONE, 1000, None,
+        ).unpack()[0], "the isolated credential vault")
+    except BaseException:
+        stop_private_vault(vault)
+        raise
+    return vault
+
+
 class GatewaySwitchFixture(GatewayFixture):
     def __init__(self, artifacts_dir):
         super().__init__(artifacts_dir)
@@ -101,21 +129,8 @@ class GatewaySwitchFixture(GatewayFixture):
         self.config_hash = None
 
     def start(self):
-        from gi.repository import Gio, GLib
-
         self.chrome.start()
-        self.vault = subprocess.Popen(
-            ["gnome-keyring-daemon", "--foreground", "--unlock", "--components=secrets"],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        self.vault.stdin.write(b"synthetic-private-vault\n")
-        self.vault.stdin.close()
-        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        self.chrome.until(lambda: bus.call_sync(
-            "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
-            "NameHasOwner", GLib.Variant("(s)", ("org.freedesktop.secrets",)), None,
-            Gio.DBusCallFlags.NONE, 1000, None,
-        ).unpack()[0], "the isolated credential vault")
+        self.vault = start_private_vault(self.chrome)
         super().start()
         self.config_hash = self.primary_hash()
 
@@ -434,9 +449,7 @@ class GatewaySwitchFixture(GatewayFixture):
         self.shutdown()
         self.server_close()
         self.server_thread.join(timeout=5)
-        if self.vault is not None and self.vault.poll() is None:
-            self.vault.terminate()
-            self.vault.wait(timeout=5)
+        stop_private_vault(self.vault)
         self.chrome.close()
         if self.artifacts_dir:
             (self.artifacts_dir / "gateway-switch-results.json").write_text(json.dumps({

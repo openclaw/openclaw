@@ -539,9 +539,7 @@ class CodexCatalogListDriver {
       });
     });
     try {
-      return (await Promise.all(pendingHosts)).filter(
-        (host): host is CodexSessionCatalogHost => host !== undefined,
-      );
+      return await Promise.all(pendingHosts);
     } catch (error) {
       // A fatal callback still owns every started node's fail-soft foreground result.
       await Promise.allSettled(pendingHosts);

@@ -10,6 +10,7 @@ import type {
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
 import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
+import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type {
   SessionLifecycleRevisionExpectation,
@@ -75,6 +76,13 @@ export type CapturedSessionEntryReadSource = SessionEntryReadSource &
     databaseIdentity: OpenClawAgentDatabaseIdentity;
     databaseBirthtime?: string;
   }>;
+
+export type SessionEntryReadOnlyWorkerScope = SessionEntryReadScope & {
+  agentId: string;
+  databaseAgentId: string;
+  storePath: string;
+  env: NodeJS.ProcessEnv;
+};
 
 export type SessionEntryListScope = Partial<Omit<SessionEntryReadScope, "sessionKey">> & {
   /** Select exact persisted keys after validating the complete listing snapshot. */
@@ -808,8 +816,8 @@ export type SessionEntryCreateWithTranscriptContext = {
   existingEntry?: SessionEntry;
   /** Exact normalized target from the same snapshot, distinct from an alias-resolved entry. */
   targetEntry?: SessionEntry;
-  /** Detached sibling-label facts; excludes the exact normalized target only. */
-  isLabelInUse: (label: string) => boolean;
+  /** Requested label's detached occupancy; excludes the exact normalized target only. */
+  labelInUse: boolean;
 };
 
 export type SessionEntryCreateWithTranscriptResult<TError = string> =
@@ -818,10 +826,29 @@ export type SessionEntryCreateWithTranscriptResult<TError = string> =
   | { ok: false; error: string; phase: "transcript" };
 
 export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
-  | { ok: true; entry: SessionEntry }
+  | { ok: true; entry: SessionEntry; transcriptEvents?: readonly TranscriptEvent[] }
   | { ok: false; error: TError };
 
+/** Original physical writer custody; captured facts are not a new admission. */
+export type SessionEntryCommitContext = {
+  readonly env: NodeJS.ProcessEnv;
+  assertCurrent: () => void;
+};
+
+export type SessionEntryCreationPhase =
+  | "snapshot"
+  | "entry"
+  | "transcript"
+  | "writerAdmission"
+  | "commit"
+  | "publication";
+
 export type SessionEntryCreateWithTranscriptOptions = {
+  /** Explicit label claim, checked again inside the final write transaction. */
+  label?: string;
+  onPhase?: (phase: SessionEntryCreationPhase) => void;
+  /** Bind retained target facts to this creator's own placeholder publication. */
+  bindCreation?: (operation: SessionEntryCreationOperation) => void;
   /** Protect the newly created row from maintenance during its initial write. */
   activeSessionKey?: string;
   /** Working directory stored in the initial transcript header. */
@@ -834,6 +861,8 @@ export type SessionEntryCreateWithTranscriptOptions = {
   withCommit?: <T>(run: (assertSourceCurrent: () => void) => Promise<T>) => Promise<T>;
   /** Non-throwing notification after the entry's outer COMMIT, before publication or cleanup. */
   onLifecycleCommitted?: (entry: SessionEntry) => void;
+  /** Best-effort bookkeeping after publication, still under the original writer. */
+  afterCommitted?: (entry: SessionEntry, context: SessionEntryCommitContext) => Promise<void>;
   /** Resolves a trusted owner after entry projection; the assignment commits with a new entry. */
   resolveOwnerAssignment?: () => SessionOwnerAssignment | undefined;
 };

@@ -182,12 +182,12 @@ function rowToSnapshot(
   };
 }
 
-export function readHostedCatalogSnapshotInDatabase(
+function readHostedCatalogSnapshotRow(
   db: DatabaseSync,
   url: string,
-): HostedOfficialExternalPluginCatalogSnapshot | null {
+): HostedCatalogSnapshotRow | undefined {
   const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(db);
-  const row: HostedCatalogSnapshotRow | undefined = executeSqliteQueryTakeFirstSync(
+  return executeSqliteQueryTakeFirstSync(
     db,
     stateDb
       .selectFrom("official_external_plugin_catalog_snapshots")
@@ -207,7 +207,13 @@ export function readHostedCatalogSnapshotInDatabase(
       ])
       .where("feed_url", "=", url),
   );
-  return rowToSnapshot(row);
+}
+
+export function readHostedCatalogSnapshotInDatabase(
+  db: DatabaseSync,
+  url: string,
+): HostedOfficialExternalPluginCatalogSnapshot | null {
+  return rowToSnapshot(readHostedCatalogSnapshotRow(db, url));
 }
 
 /** The caller owns the write transaction containing the reread and upsert. */
@@ -217,65 +223,33 @@ export function writeHostedCatalogSnapshotInDatabase(
   now: number,
 ): void {
   const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(db);
-  const current: HostedCatalogSnapshotRow | undefined = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("official_external_plugin_catalog_snapshots")
-      .select([
-        "feed_url",
-        "body",
-        "status",
-        "etag",
-        "last_modified",
-        "checksum",
-        "saved_at",
-        "trust_mode",
-        "trust_key_id",
-        "trust_signature_count",
-        "trust_threshold",
-        "trust_verified_at",
-      ])
-      .where("feed_url", "=", snapshot.metadata.url),
-  );
   assertSignedSnapshotWriteIsMonotonic({
     candidate: snapshot.monotonic,
     candidateBody: snapshot.body,
-    current,
+    current: readHostedCatalogSnapshotRow(db, snapshot.metadata.url),
   });
+  const values = {
+    body: snapshot.body,
+    status: snapshot.metadata.status,
+    etag: snapshot.metadata.etag ?? null,
+    last_modified: snapshot.metadata.lastModified ?? null,
+    checksum: snapshot.metadata.checksum,
+    saved_at: snapshot.savedAt,
+    updated_at_ms: now,
+    trust_mode: snapshot.trust?.mode ?? null,
+    trust_key_id: snapshot.trust?.signedBy ?? null,
+    trust_signature_count: snapshot.trust?.signatureCount ?? null,
+    trust_threshold: snapshot.trust?.threshold ?? null,
+    trust_verified_at: snapshot.trust?.verifiedAt ?? null,
+  };
   executeSqliteQuerySync(
     db,
     stateDb
       .insertInto("official_external_plugin_catalog_snapshots")
       .values({
         feed_url: snapshot.metadata.url,
-        body: snapshot.body,
-        status: snapshot.metadata.status,
-        etag: snapshot.metadata.etag ?? null,
-        last_modified: snapshot.metadata.lastModified ?? null,
-        checksum: snapshot.metadata.checksum,
-        saved_at: snapshot.savedAt,
-        updated_at_ms: now,
-        trust_mode: snapshot.trust?.mode ?? null,
-        trust_key_id: snapshot.trust?.signedBy ?? null,
-        trust_signature_count: snapshot.trust?.signatureCount ?? null,
-        trust_threshold: snapshot.trust?.threshold ?? null,
-        trust_verified_at: snapshot.trust?.verifiedAt ?? null,
+        ...values,
       })
-      .onConflict((conflict) =>
-        conflict.column("feed_url").doUpdateSet({
-          body: snapshot.body,
-          status: snapshot.metadata.status,
-          etag: snapshot.metadata.etag ?? null,
-          last_modified: snapshot.metadata.lastModified ?? null,
-          checksum: snapshot.metadata.checksum,
-          saved_at: snapshot.savedAt,
-          updated_at_ms: now,
-          trust_mode: snapshot.trust?.mode ?? null,
-          trust_key_id: snapshot.trust?.signedBy ?? null,
-          trust_signature_count: snapshot.trust?.signatureCount ?? null,
-          trust_threshold: snapshot.trust?.threshold ?? null,
-          trust_verified_at: snapshot.trust?.verifiedAt ?? null,
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("feed_url").doUpdateSet(values)),
   );
 }

@@ -78,7 +78,7 @@ function contextMessages() {
 describe("registered Telegram retained history", () => {
   it("bounds the automatic window without deleting quiet history after reopen", async () => {
     cfg.channels!.telegram!.historyLimit = 2;
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     const quiet = ["Retain the launch code cobalt", "Latest one", "Latest two"].map(message);
     for (const [index, entry] of quiet.entries()) {
       await receive(bot, { message: { ...entry, chat: group, date: entry.date - 10 + index } });
@@ -112,7 +112,7 @@ describe("registered Telegram retained history", () => {
     "retains channel identity without a username (sender_chat: %s)",
     async (senderChat) => {
       const channel = { id: -100777111222, type: "channel", title: "Private Channel" } as const;
-      const bot = createBot(false, true, cfg);
+      const bot = await createBot(false, true, cfg);
       await receive(bot, {
         channel_post: {
           message_id: 601,
@@ -143,7 +143,7 @@ describe("registered Telegram retained history", () => {
   );
 
   it("keeps current discussion alongside stale ancestry and persists edited self text", async () => {
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     const old = {
       ...message("Old deployment answer"),
       chat: group,
@@ -193,7 +193,7 @@ describe("registered Telegram retained history", () => {
       ...cfg.messages,
       groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] },
     };
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     const sent = { ...message("Already delivered"), chat: group, from: bot.botInfo };
     await recordOutboundMessageForPromptContext({
       cfg,
@@ -214,7 +214,7 @@ describe("registered Telegram retained history", () => {
     "authenticates %s reply attribution instead of trusting display text",
     async (kind) => {
       cfg.channels!.telegram!.name = "Configured Agent";
-      const bot = createBot(false, true, cfg);
+      const bot = await createBot(false, true, cfg);
       const source =
         kind === "bot" ? bot.botInfo : { id: 777, is_bot: false, first_name: "Alex (you)" };
       const reply = {
@@ -250,7 +250,7 @@ describe("registered Telegram retained history", () => {
       eventId,
       message: { role: "assistant", content: "**Alpha** beta", timestamp: Date.now() - 1000 },
     });
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     for (const [partIndex, text] of ["Alpha", "beta"].entries()) {
       const messageId = 700 + partIndex;
       await recordOutboundMessageForPromptContext({
@@ -300,7 +300,7 @@ describe("registered Telegram retained history", () => {
   });
 
   it("preserves selected quote bytes and reply identity while excluding binary captions", async () => {
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     await receive(bot, {
       message: {
         ...message("check this"),
@@ -336,7 +336,7 @@ describe("registered Telegram retained history", () => {
   });
 
   it("keeps an external quote when its untrusted origin timestamp is outside Date range", async () => {
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     await receive(bot, {
       message: {
         ...message("Thoughts?"),
@@ -365,7 +365,7 @@ describe("registered Telegram retained history", () => {
     cfg.channels!.telegram!.groups = {
       "*": { requireMention: false, allowFrom: [String(from.id)] },
     };
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     await receive(bot, {
       message: {
         ...message("Thoughts?"),

@@ -92,7 +92,6 @@ function preAdmissionFixture(runId: string) {
       selectedAgent: { ok: true, agentId: "main" },
       requestedSessionId: undefined,
       backingSessionId: "mention-session",
-      activeRunScopeKey: session.sessionKey,
       resolvedSessionModel: { provider: "openai", model: "gpt-4.1" },
       resolvedSessionAuthProvider: "openai",
       timeoutMs: 1000,

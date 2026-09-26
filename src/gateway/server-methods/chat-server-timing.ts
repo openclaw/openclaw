@@ -34,13 +34,6 @@ export function chatSendAckServerTimingAttributes(
   };
 }
 
-export function shouldIncludeChatSendAckServerTiming(client?: {
-  id?: string | null;
-  mode?: string | null;
-}): boolean {
-  return isOperatorUiClient(client);
-}
-
 const CONTROL_UI_RECONNECT_RESUME_PARAM = "__controlUiReconnectResume";
 
 export function resolveControlUiReconnectResumeParams(

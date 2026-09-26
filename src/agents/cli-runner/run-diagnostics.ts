@@ -18,6 +18,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { isSignalTimeoutReason, isTimeoutError } from "../failover-error.js";
+import { subscribeAgentCommentaryDiagnostics } from "../harness/commentary-diagnostics.js";
 import type { RunCliAgentParams } from "./types.js";
 
 type ClaudeCliRunPhase = DiagnosticHarnessRunErrorEvent["phase"];
@@ -25,13 +26,14 @@ type ClaudeCliRunPhase = DiagnosticHarnessRunErrorEvent["phase"];
 export type ClaudeCliRunDiagnosticLifecycle = {
   setPhase: (phase: ClaudeCliRunPhase) => void;
   /**
-   * Publishes the execution owner that preparation resolved from the session.
+   * Publishes the execution owner and effective config resolved by preparation.
    * Run/harness events emitted after this call attribute to that owner so the
    * spans agree with model-call spans built from the prepared params; events
    * emitted before it carry the caller's requester identity, and an absent
-   * owner keeps that admission-time identity.
+   * owner keeps that admission-time identity. Commentary capture uses this
+   * prepared config rather than a potentially absent admission-time config.
    */
-  setExecutionOwner: (agentId: string | undefined) => void;
+  setExecutionContext: (context: Pick<RunCliAgentParams, "agentId" | "config">) => void;
 };
 
 type ClaudeCliRunDiagnosticParams = Pick<
@@ -117,20 +119,22 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
   const runBase = diagnosticBase(params, runTrace);
   const startedAt = Date.now();
   let phase: ClaudeCliRunPhase = "prepare";
+  let unsubscribeCommentary: (() => void) | undefined;
   const lifecycle: ClaudeCliRunDiagnosticLifecycle = {
     setPhase: (nextPhase) => {
       phase = nextPhase;
     },
-    setExecutionOwner: (agentId) => {
-      if (!agentId) {
-        return;
-      }
+    setExecutionContext: ({ agentId, config }) => {
       // The caller's agentId can name a distinct runtime-policy requester;
       // preparation is the authoritative producer of the execution-owner fact,
       // so once it publishes the resolved owner every later run/harness event
       // must report it instead of the admission-time requester.
-      harnessBase.agentId = agentId;
-      runBase.agentId = agentId;
+      if (agentId) {
+        harnessBase.agentId = agentId;
+        runBase.agentId = agentId;
+      }
+      unsubscribeCommentary?.();
+      unsubscribeCommentary = subscribeAgentCommentaryDiagnostics(config, harnessBase);
     },
   };
 
@@ -214,5 +218,7 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
       });
     }
     throw error;
+  } finally {
+    unsubscribeCommentary?.();
   }
 }

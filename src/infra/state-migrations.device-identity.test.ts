@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { configureFsSafeNative } from "@openclaw/fs-safe/config";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -222,7 +223,7 @@ describe("legacy device identity Doctor migration", () => {
     ).toBe(true);
   });
 
-  it("keeps normal migration read-only and imports with explicit startup authority", async () => {
+  it("keeps normal migration read-only and imports only with Doctor authority", async () => {
     const { env, stateDir } = useStateDir();
     const sourcePath = await writeLegacy({ stateDir });
 
@@ -240,11 +241,11 @@ describe("legacy device identity Doctor migration", () => {
     const repaired = await migrateLegacyDeviceIdentity({
       detected: detectLegacyDeviceIdentity({
         stateDir,
-        allowLegacyDeviceIdentityImport: true,
+        doctorOnlyStateMigrations: true,
       }),
       env,
       stateDir,
-      allowLegacyDeviceIdentityImport: true,
+      doctorOnlyStateMigrations: true,
     });
 
     expect(repaired.changes).toContain("Migrated primary device identity to SQLite.");
@@ -364,13 +365,6 @@ describe("legacy device identity Doctor migration", () => {
     seedInvalidCanonical(env);
 
     expect(detectLegacyDeviceIdentity({ stateDir, env }).hasInvalidCanonical).toBe(false);
-    expect(
-      detectLegacyDeviceIdentity({
-        stateDir,
-        env,
-        allowLegacyDeviceIdentityImport: true,
-      }).hasInvalidCanonical,
-    ).toBe(false);
     const detected = detectLegacyDeviceIdentity({
       stateDir,
       env,
@@ -398,13 +392,6 @@ describe("legacy device identity Doctor migration", () => {
       identity_key: "primary",
       device_id: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
-    expect(
-      detectLegacyDeviceIdentity({
-        stateDir,
-        env,
-        doctorOnlyStateMigrations: true,
-      }).hasInvalidCanonical,
-    ).toBe(false);
   });
 
   it("repairs canonical identity metadata without rotating valid key material", async () => {
@@ -871,4 +858,35 @@ describe("legacy device identity Doctor migration", () => {
       source_sha256: createHash("sha256").update(bytes).digest("hex"),
     });
   });
+
+  it.each(["source", "interrupted link pair"])(
+    "migrates legacy device identity from %s when native fs-safe mode is off",
+    async (initialState) => {
+      configureFsSafeNative({ mode: "off" });
+      try {
+        const { env, stateDir } = useStateDir();
+        const sourcePath = await writeLegacy({ stateDir });
+
+        if (initialState === "interrupted link pair") {
+          await fsp.link(sourcePath, `${sourcePath}.doctor-importing`);
+        }
+
+        const result = await migrate(stateDir, env);
+
+        expect(result.warnings).toEqual([]);
+        expect(result.changes).toEqual(["Migrated primary device identity to SQLite."]);
+        expect(fs.existsSync(sourcePath)).toBe(false);
+        expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
+        expect(identityRow(env)).toMatchObject({
+          identity_key: "primary",
+          device_id: normalizedSwift().deviceId,
+          public_key_pem: normalizedSwift().publicKeyPem,
+          private_key_pem: normalizedSwift().privateKeyPem,
+        });
+        expect(receipt(env)).toMatchObject({ removed_source: 1 });
+      } finally {
+        configureFsSafeNative({ mode: "auto" });
+      }
+    },
+  );
 });

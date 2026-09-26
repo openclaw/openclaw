@@ -2,6 +2,7 @@
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
@@ -87,7 +88,7 @@ async function isChannelPluginConfigured(
     let resolvedAccount: unknown = inspected;
     if (!resolvedAccount) {
       try {
-        resolvedAccount = plugin.config.resolveAccount(cfg, accountId);
+        resolvedAccount = await resolveChannelAccount({ plugin, cfg, accountId });
       } catch {
         resolvedAccount = null;
       }

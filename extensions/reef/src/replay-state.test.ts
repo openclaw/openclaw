@@ -1,3 +1,4 @@
+import { randomBytes } from "@noble/hashes/utils.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenAsyncKeyedStoreOptions,
@@ -21,6 +22,7 @@ import {
   REEF_REPLAY_MAX_ENTRIES,
   REEF_REPLAY_NAMESPACE,
   REEF_REPLAY_TTL_MS,
+  ReefSqliteReplayStore,
   reefReplayStoreKey,
   type ReefReplayRecord,
 } from "./replay-store.js";
@@ -62,18 +64,21 @@ function fixture(
     return adapter as PluginStateKeyedStore<T>;
   };
   const identity = generateIdentity();
+  const replayKey = new Uint8Array(32).fill(2);
   const keys = {
     ...identity,
     keyEpoch: 1,
     auditKey: base64url(new Uint8Array(32).fill(1)),
-    replayKey: base64url(new Uint8Array(32).fill(2)),
+    replayKey: base64url(replayKey),
   };
   const open = () => openStores(runtime, keys, { replayMaxEntries: maxEntries }).replay;
+  const openWithRng = (rng: (length: number) => Uint8Array) =>
+    new ReefSqliteReplayStore(runtime, replayKey, rng, maxEntries);
   const receipt = signReceipt(
     { id, bodyHash: "b".repeat(64), auditHead: "c".repeat(64), status: "accepted" },
     identity.signing.secretKey,
   );
-  return { store, raw, runtime, open, receipt, env };
+  return { store, raw, runtime, open, openWithRng, receipt, env };
 }
 
 describe("Reef replay worker ownership", () => {
@@ -280,16 +285,15 @@ describe("Reef replay worker ownership", () => {
       }
       return compare(...args);
     };
-    const replay = f.open();
-    await replay.claim("alice", id, hash);
     const failure = new Error("synthetic nonce preparation failure");
-    const rng = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation(() => {
+    const rng = vi.fn<(length: number) => Uint8Array>(() => {
       throw failure;
     });
+    const replay = f.openWithRng(rng);
+    await replay.claim("alice", id, hash);
     await expect(replay.complete("alice", id, f.receipt, { text: "body" })).rejects.toBe(failure);
-    expect(rng).toHaveBeenCalledTimes(1);
+    expect(rng.mock.calls).toEqual([[12]]);
     expect(f.raw.lookup(key)?.state).toBe("in_flight");
-    rng.mockRestore();
     await replay.consume("alice", id);
   });
 
@@ -310,9 +314,9 @@ describe("Reef replay worker ownership", () => {
       }
       return compare(entryKey, comparison, intent);
     };
-    const replay = f.open();
+    const rng = vi.fn(randomBytes);
+    const replay = f.openWithRng(rng);
     await replay.claim("alice", id, hash);
-    const rng = vi.spyOn(globalThis.crypto, "getRandomValues");
     const receipt = structuredClone(f.receipt);
     const body = { text: "original" };
     const complete = replay.complete("alice", id, receipt, body);
@@ -321,7 +325,7 @@ describe("Reef replay worker ownership", () => {
     await complete;
     expect(ciphertexts).toHaveLength(2);
     expect(new Set(ciphertexts).size).toBe(1);
-    expect(rng).toHaveBeenCalledTimes(1);
+    expect(rng.mock.calls).toEqual([[12]]);
     await expect(replay.completed("alice", id)).resolves.toEqual({
       receipt: f.receipt,
       body: { text: "original" },
@@ -369,8 +373,8 @@ describe("Reef replay worker ownership", () => {
     "preserves validation placement and native diagnostics on %s",
     async (host) => {
       const f = fixture(host);
-      const replay = f.open();
-      const rng = vi.spyOn(globalThis.crypto, "getRandomValues");
+      const rng = vi.fn(randomBytes);
+      const replay = f.openWithRng(rng);
       await expect(
         replay.complete("alice", id, { ...f.receipt, id: "wrong" }, { text: "body" }),
       ).rejects.toThrow("receipt id does not match");
@@ -387,7 +391,7 @@ describe("Reef replay worker ownership", () => {
       );
       expect(rng).not.toHaveBeenCalled();
       await replay.complete("alice", id, f.receipt, { text: "valid" });
-      expect(rng).toHaveBeenCalledTimes(1);
+      expect(rng.mock.calls).toEqual([[12]]);
     },
   );
 

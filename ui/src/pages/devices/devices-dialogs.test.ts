@@ -23,8 +23,6 @@ function createHost(overrides: Partial<DevicesDialogHost> = {}): DevicesDialogHo
     gatewayClient: () => null,
     gatewayUrl: () => "http://gateway.test",
     runPageTask: async (task) => task(state),
-    pendingDialog: () => null,
-    setPendingDialog: vi.fn(),
     setDevicesError: vi.fn(),
     ...overrides,
   };
@@ -90,7 +88,6 @@ describe("DevicesDialogController editAlias", () => {
   });
 
   it("aborts an open alias dialog when its slot is cancelled", async () => {
-    const slot: { current: AbortController | null } = { current: null };
     let captured: InputDialogOptions | undefined;
     vi.mocked(showInputDialog).mockImplementation(async (options) => {
       captured = options;
@@ -101,18 +98,11 @@ describe("DevicesDialogController editAlias", () => {
       return null;
     });
 
-    const controller = new DevicesDialogController(
-      createHost({
-        pendingDialog: () => slot.current,
-        setPendingDialog: (next) => {
-          slot.current = next;
-        },
-      }),
-    );
+    const controller = new DevicesDialogController(createHost());
     const pending = controller.editAlias({ id: "device-1", name: "Browser" });
     await vi.waitFor(() => expect(captured).toBeDefined());
 
-    slot.current?.abort();
+    controller.cancel();
     await pending;
 
     expect(captured?.signal?.aborted).toBe(true);

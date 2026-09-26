@@ -1,10 +1,10 @@
+import { PATH_ALIAS_POLICIES } from "@openclaw/fs-safe/advanced";
 /**
  * Shell plans for pinned sandbox filesystem operations.
  *
  * Selects the local interpreter and supplies quoted Python source to local and remote transports.
  */
-import { GUEST_FILESYSTEM_PYTHON } from "../../infra/guest-filesystem.js";
-import { PATH_ALIAS_POLICIES } from "../../infra/path-alias-guards.js";
+import { GUEST_FILESYSTEM_PYTHON } from "@openclaw/fs-safe/guest";
 import type {
   PathSafetyCheck,
   PinnedSandboxDirectoryEntry,
@@ -18,6 +18,14 @@ const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
   "/opt/homebrew/bin/python3",
   "/bin/python3",
 ] as const;
+
+export const PINNED_MUTATION_ACTION_LABELS = {
+  write: "write files",
+  create: "create files",
+  mkdir: "create directories",
+  remove: "remove files",
+  "copy-destination": "copy files",
+} as const;
 
 export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${GUEST_FILESYSTEM_PYTHON.replaceAll("'", `'\\''`)}'`;
 

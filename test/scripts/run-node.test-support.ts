@@ -10,7 +10,7 @@ import {
   bundledPluginFile,
   bundledPluginRoot,
 } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it as baseIt } from "vitest";
+import { expect, it as baseIt, vi } from "vitest";
 import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
 import {
   BUILD_STAMP_FILE,
@@ -26,6 +26,13 @@ import {
 } from "../../scripts/lib/update-compat-chunks.mts";
 import { runNodeMain } from "../../scripts/run-node.mts";
 import { withTestDir } from "../../src/test-helpers/temp-dir.js";
+// These launcher fixtures have no service. Publication custody is covered at its owner.
+vi.mock("../../src/cli/update-cli/update-command-service-publication.js", () => ({
+  withGatewayRuntimeArtifactPublication: async (
+    _params: unknown,
+    publish: () => Promise<unknown>,
+  ) => publish(),
+}));
 import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
@@ -210,7 +217,14 @@ export async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> 
 }
 
 export function expectedBuildSpawn() {
-  return [process.execPath, "--import", "tsx", "scripts/build-all.mts", "qaRuntime"];
+  return [
+    process.execPath,
+    "--import",
+    expect.stringMatching(/\/scripts\/tsx\.mjs$/),
+    expect.stringMatching(/[\\/]scripts[\\/]lib[\\/]dist-artifact-ownership\.mts$/),
+    expect.stringMatching(/\/scripts\/build-all\.mts$/),
+    "qaRuntime",
+  ];
 }
 
 export function statusCommandSpawn() {
@@ -234,7 +248,7 @@ export function resolvePath(tmp: string, relativePath: string) {
 }
 
 export function isTsxScriptArgs(args: string[], scriptPath: string): boolean {
-  return args[0] === "--import" && args[1] === "tsx" && args[2] === scriptPath;
+  return args[0] === "--import" && args.some((arg) => arg.endsWith(scriptPath));
 }
 
 export async function expectPathMissing(targetPath: string): Promise<void> {

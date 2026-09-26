@@ -62,7 +62,6 @@ import {
   resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
-import { createBackgroundExecTask } from "./bash-tools.exec-task-tracking.js";
 import type {
   ExecToolApprovalReview,
   ExecToolDefaults,
@@ -140,6 +139,9 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
+  const backgroundFollowUp = notifyOnExit
+    ? BACKGROUND_EXEC_FOLLOW_UP
+    : `${BACKGROUND_EXEC_FOLLOW_UP} Automatic completion wake is disabled (tools.exec.notifyOnExit=false). If the task needs this result, use poll with a timeout to collect it before ending the turn, unless another continuation is already arranged.`;
   const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
   const notifySessionKey = normalizeOptionalString(
     defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
@@ -673,14 +675,18 @@ export function createExecTool(
         markBackgrounded(run.session);
         // Only the guarded yield transition owns task registration. A process
         // that settles before this timer fires must stay out of the task ledger.
-        settlement.backgroundTask = createBackgroundExecTask({
-          processSessionId: run.session.id,
-          command: run.session.command,
-          sessionKey: notifySessionKey,
-          agentId,
-          startedAt: run.startedAt,
-        });
-        backgrounded.resolve({ status: "backgrounded" });
+        const registration = settlement.register(run, notifySessionKey, agentId);
+        const finishPromotion = () => {
+          // Promotion owns the process handle even if it exits during registration.
+          backgrounded.resolve({ status: "backgrounded" });
+        };
+        if (registration) {
+          void withoutGatewayToolCallerIdentity(() =>
+            registration.then(finishPromotion, backgrounded.reject),
+          );
+        } else {
+          finishPromotion();
+        }
       };
 
       try {
@@ -710,7 +716,7 @@ export function createExecTool(
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). ${BACKGROUND_EXEC_FOLLOW_UP}`,
+                    }). ${backgroundFollowUp}`,
                   },
                 ],
                 details: {
@@ -721,7 +727,7 @@ export function createExecTool(
                   cwd: run.session.cwd,
                   tail: run.session.tail,
                   // Structured callers receive details without the visible content.
-                  followUp: BACKGROUND_EXEC_FOLLOW_UP,
+                  followUp: backgroundFollowUp,
                 },
               },
           approvalReview,

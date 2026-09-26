@@ -49,15 +49,10 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 
 type SqliteBindRow = Record<string, SQLInputValue>;
 
-function normalizeLegacySqliteInteger(value: number | bigint | null): number | null {
-  return typeof value === "bigint" ? Number(value) : value;
-}
-
 // Only the file-to-SQLite cutover expires old intent; live queues have no age TTL.
 const LEGACY_DELIVERY_QUEUE_MAX_AGE_MS = 72 * 60 * 60_000;
 
 type LegacyArchiveResolution = {
-  sourcePath: string;
   targetPath: string;
   action: "archived" | "removed";
 };
@@ -84,13 +79,13 @@ function archiveLegacyFileSource(params: {
         index === 1 ? `${params.sourcePath}.migrated` : `${params.sourcePath}.migrated.${index}`;
       if (!fs.existsSync(targetPath)) {
         fs.renameSync(params.sourcePath, targetPath);
-        return { sourcePath: params.sourcePath, targetPath, action: "archived" };
+        return { targetPath, action: "archived" };
       }
       // Legacy sources can exceed whole-file allocation limits; hash only collisions.
       sourceSha256 ??= hashLegacyArchiveSource(params.sourcePath);
       if (sourceSha256 === hashLegacyArchiveSource(targetPath)) {
         fs.rmSync(params.sourcePath, { force: true });
-        return { sourcePath: params.sourcePath, targetPath, action: "removed" };
+        return { targetPath, action: "removed" };
       }
     }
   } catch (err) {
@@ -194,37 +189,26 @@ function readInstallRecordField(
   return (record as Partial<Record<string, unknown>>)[key];
 }
 
-function readInstallRecordStringField(
-  record: InstalledPluginIndex["installRecords"][string],
-  key: string,
-): string | undefined {
-  const value = readInstallRecordField(record, key);
-  return typeof value === "string" ? value : undefined;
-}
-
 function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   currentRecord: InstalledPluginIndex["installRecords"][string];
   legacyRecord: InstalledPluginIndex["installRecords"][string];
 }): boolean {
   const { currentRecord, legacyRecord } = params;
-  const currentResolvedSpec = readInstallRecordStringField(currentRecord, "resolvedSpec");
-  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
-  if (legacySpec) {
-    return currentResolvedSpec === legacySpec;
+  if (legacyRecord.spec) {
+    return currentRecord.resolvedSpec === legacyRecord.spec;
   }
-  const legacyResolvedSpec = readInstallRecordStringField(legacyRecord, "resolvedSpec");
-  return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
+  return Boolean(
+    legacyRecord.resolvedSpec && currentRecord.resolvedSpec === legacyRecord.resolvedSpec,
+  );
 }
 
 function readAuthoritativeCurrentNpmIdentity(
   record: InstalledPluginIndex["installRecords"][string],
 ): { name: string; version: string } | null {
-  const resolvedName = readInstallRecordStringField(record, "resolvedName");
-  const resolvedVersion = readInstallRecordStringField(record, "resolvedVersion");
+  const { resolvedName, resolvedVersion, resolvedSpec } = record;
   if (resolvedName && resolvedVersion) {
     return { name: resolvedName, version: resolvedVersion };
   }
-  const resolvedSpec = readInstallRecordStringField(record, "resolvedSpec");
   const parsed = resolvedSpec ? parseRegistryNpmSpec(resolvedSpec) : null;
   if (parsed?.selectorKind === "exact-version" && parsed.selector) {
     return { name: parsed.name, version: parsed.selector };
@@ -240,8 +224,7 @@ function legacyNpmInstallRecordSupersededByCurrent(params: {
   if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
     return false;
   }
-  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
-  const legacyParsedSpec = legacySpec ? parseRegistryNpmSpec(legacySpec) : null;
+  const legacyParsedSpec = legacyRecord.spec ? parseRegistryNpmSpec(legacyRecord.spec) : null;
   if (legacyParsedSpec?.selectorKind !== "exact-version") {
     return false;
   }
@@ -479,13 +462,10 @@ function legacyDeliveryQueueRowsMatch(
   ].every((column) => {
     const left = existing[column];
     const right = incoming[column];
-    if (typeof left === "bigint" || typeof right === "bigint") {
-      return (
-        normalizeLegacySqliteInteger(left as number | bigint | null) ===
-        normalizeLegacySqliteInteger(right as number | bigint | null)
-      );
-    }
-    return left === right;
+    return (
+      (typeof left === "bigint" ? Number(left) : left) ===
+      (typeof right === "bigint" ? Number(right) : right)
+    );
   });
 }
 

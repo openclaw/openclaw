@@ -1,8 +1,4 @@
-const INVALID_PATH_PATCH = Symbol("invalid-path-patch");
-
-type PathPatchResult =
-  | { ok: true; value: unknown }
-  | { ok: false; value: typeof INVALID_PATH_PATCH };
+type PathPatchResult = { ok: true; value: unknown } | { ok: false };
 
 function patchPathValue(
   current: unknown,
@@ -12,13 +8,13 @@ function patchPathValue(
 ): PathPatchResult {
   const segment = path[index];
   if (segment === undefined) {
-    return { ok: false, value: INVALID_PATH_PATCH };
+    return { ok: false };
   }
   const last = index === path.length - 1;
 
   if (typeof segment === "number") {
     if (current != null && !Array.isArray(current)) {
-      return { ok: false, value: INVALID_PATH_PATCH };
+      return { ok: false };
     }
     const next = Array.isArray(current) ? [...current] : [];
     if (last) {
@@ -38,37 +34,30 @@ function patchPathValue(
   }
 
   if (current != null && (typeof current !== "object" || Array.isArray(current))) {
-    return { ok: false, value: INVALID_PATH_PATCH };
+    return { ok: false };
   }
   const next = current ? { ...(current as Record<string, unknown>) } : {};
-  if (last) {
-    if (replacement === undefined) {
-      delete next[segment];
-    } else {
-      Object.defineProperty(next, segment, {
-        value: replacement,
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      });
-    }
-    return { ok: true, value: next };
-  }
-  const child = patchPathValue(
-    Object.hasOwn(next, segment) ? next[segment] : undefined,
-    path,
-    index + 1,
-    replacement,
-  );
+  const child = last
+    ? { ok: true as const, value: replacement }
+    : patchPathValue(
+        Object.hasOwn(next, segment) ? next[segment] : undefined,
+        path,
+        index + 1,
+        replacement,
+      );
   if (!child.ok) {
     return child;
   }
-  Object.defineProperty(next, segment, {
-    value: child.value,
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  });
+  if (last && child.value === undefined) {
+    delete next[segment];
+  } else {
+    Object.defineProperty(next, segment, {
+      value: child.value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
   return { ok: true, value: next };
 }
 

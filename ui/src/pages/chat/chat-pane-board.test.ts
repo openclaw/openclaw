@@ -113,6 +113,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
     chatError: null,
     chatLoading: false,
     chatMessages: [],
+    chatToolMessages: [],
     chatQueue: [],
     chatRunId: null,
     chatSending: false,

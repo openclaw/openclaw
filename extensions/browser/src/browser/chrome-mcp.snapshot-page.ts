@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { toErrorObject } from "../infra/errors.js";
 import {
+  evaluateChromeMcpScript,
   takeChromeMcpScreenshotOnTarget,
   type ChromeMcpScreenshotOptions,
 } from "./chrome-mcp-actions.js";
 import {
   ChromeMcpDocumentUnavailableError,
   rethrowChromeMcpDocumentError,
+  type ChromeMcpTargetOperation,
 } from "./chrome-mcp-contracts.js";
 import { extractJsonMessage } from "./chrome-mcp-result.js";
 import {
@@ -16,24 +18,12 @@ import {
   resolveChromeMcpSnapshotRef,
   withChromeMcpTarget,
 } from "./chrome-mcp-routing.js";
-import {
-  evaluateChromeMcpScript,
-  type ChromeMcpOperationOptions,
-  type ChromeMcpProfileOptions,
-} from "./chrome-mcp.js";
 import type { SnapshotUrlEntry } from "./snapshot-urls.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
 
-export type ChromeMcpSnapshotOperation = ChromeMcpOperationOptions & {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-};
-
 export async function collectChromeMcpSnapshotUrls(
-  params: ChromeMcpSnapshotOperation,
+  params: ChromeMcpTargetOperation,
 ): Promise<SnapshotUrlEntry[]> {
   const result = await evaluateChromeMcpScript({
     ...params,
@@ -69,7 +59,7 @@ export async function collectChromeMcpSnapshotUrls(
 
 /** Keep labels, capture, and document cleanup in one target operation. */
 export async function withChromeMcpLabels<T>(
-  params: ChromeMcpSnapshotOperation & { refs: string[]; clipToRef?: boolean },
+  params: ChromeMcpTargetOperation & { refs: string[]; clipToRef?: boolean },
   capture: (
     labels: { labels: number; skipped: number },
     screenshot: (options: ChromeMcpScreenshotOptions) => Promise<Buffer>,

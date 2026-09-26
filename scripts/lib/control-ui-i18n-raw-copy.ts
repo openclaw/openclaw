@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./native-typescript.mts";
 
 type RawCopyFinding = {
   kind: "html-attribute" | "html-text" | "object-property";
@@ -225,7 +226,7 @@ export function collectControlUiRawCopyFromSource(params: {
         }
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return findings;
@@ -234,10 +235,23 @@ export function collectControlUiRawCopyFromSource(params: {
 async function collectFindings(): Promise<RawCopyFinding[]> {
   const files = (await Promise.all(SOURCE_DIRS.map((dir) => walkSourceFiles(dir)))).flat();
   const findings: RawCopyFinding[] = [];
-  for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
-    const source = await readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
-    findings.push(...collectControlUiRawCopyFromSource({ filePath, source, sourceFile }));
+  const parser = createNativeTypeScriptParser({ cwd: ROOT });
+  try {
+    const sources: { fileName: string; text: string }[] = [];
+    for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
+      sources.push({ fileName: filePath, text: await readFile(filePath, "utf8") });
+    }
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      findings.push(
+        ...collectControlUiRawCopyFromSource({
+          filePath: sourceFile.fileName,
+          source: sourceFile.text,
+          sourceFile,
+        }),
+      );
+    }
+  } finally {
+    parser.close();
   }
   return findings;
 }

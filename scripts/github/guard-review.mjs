@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import {
   GitHubDiffDataError,
   GitHubRateLimitError,
+  SECURITY_REVIEW_CHECK_INTERVAL_MS,
   createGitHubApi,
   parseApprovalCommands,
   publishGuardStatus,
@@ -118,8 +119,25 @@ export async function readGuardReview(previousReview) {
     throw new Error("No valid pull request in the guard event.");
   }
   const [owner, repo] = GITHUB_REPOSITORY.split("/");
-  const api = createGitHubApi(GITHUB_TOKEN, { userAgent: "openclaw-security-review" });
   const pullPath = `/repos/${owner}/${repo}/pulls/${number}`;
+  let review = null;
+  let checkedAt = Date.now();
+  const api = createGitHubApi(GITHUB_TOKEN, {
+    userAgent: "openclaw-security-review",
+    beforeRead: async (path) => {
+      if (
+        !review ||
+        path === pullPath ||
+        Date.now() - checkedAt < SECURITY_REVIEW_CHECK_INTERVAL_MS
+      ) {
+        return;
+      }
+      // Cooperatively stop between reads, including pagination. Never interrupt
+      // a write or autoscrub cleanup, or replace the final authority checks.
+      await assertGuardUnchanged(review, { allowFileCountChange: true });
+      checkedAt = Date.now();
+    },
+  });
   const pullRequest = await api.request(pullPath);
   if (previousReview) {
     // Only diff counts may settle across recovery. Other PR changes still
@@ -140,7 +158,7 @@ export async function readGuardReview(previousReview) {
   if (pullRequest.state !== "open" || pullRequest.draft) {
     return null;
   }
-  return {
+  review = {
     api,
     owner,
     repo,
@@ -150,6 +168,7 @@ export async function readGuardReview(previousReview) {
     issuePath: `/repos/${owner}/${repo}/issues/${number}`,
     runUrl: `https://github.com/${owner}/${repo}/actions/runs/${GITHUB_RUN_ID}`,
   };
+  return review;
 }
 
 export async function openGuard({ context, commentMarker, approvalCommand }, prepared) {

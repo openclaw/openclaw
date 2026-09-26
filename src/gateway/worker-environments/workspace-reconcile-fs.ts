@@ -50,18 +50,6 @@ export async function removeEmptyWorkspaceDirectory(root: Root, entryPath: strin
   }
 }
 
-type WorkspaceFileSnapshot =
-  | { type: "file"; mode: number; size: number; sha256: string }
-  | { type: "unsupported" };
-
-async function readWorkspaceFileSnapshot(
-  root: string,
-  entryPath: string,
-): Promise<WorkspaceFileSnapshot> {
-  const absolute = localPath(root, entryPath);
-  return await computeWorkspaceFileSnapshot(absolute, MAX_RECONCILIATION_FILE_BYTES, root);
-}
-
 export async function localWorkspaceNode(root: string, entryPath: string): Promise<WorkspaceNode> {
   const absolute = localPath(root, entryPath);
   const stats = await fs.lstat(absolute).catch((error: unknown) => {
@@ -82,7 +70,11 @@ export async function localWorkspaceNode(root: string, entryPath: string): Promi
   if (!stats.isFile()) {
     return { path: entryPath, type: "unsupported" };
   }
-  const snapshot = await readWorkspaceFileSnapshot(root, entryPath);
+  const snapshot = await computeWorkspaceFileSnapshot(
+    absolute,
+    MAX_RECONCILIATION_FILE_BYTES,
+    root,
+  );
   if (snapshot.type === "unsupported") {
     return { path: entryPath, type: "unsupported" };
   }
@@ -95,8 +87,27 @@ export async function localWorkspaceNode(root: string, entryPath: string): Promi
   };
 }
 
-async function readAbsoluteFileSnapshot(absolute: string): Promise<WorkspaceFileSnapshot> {
-  return await computeWorkspaceFileSnapshot(absolute, MAX_RECONCILIATION_FILE_BYTES);
+async function fileEntryMatches(
+  absolute: string,
+  entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
+  root?: string,
+): Promise<boolean> {
+  const snapshot = await computeWorkspaceFileSnapshot(
+    absolute,
+    MAX_RECONCILIATION_FILE_BYTES,
+    root,
+  ).catch((error: unknown) => {
+    if (error instanceof WorkerTaskError) {
+      throw error;
+    }
+    return undefined;
+  });
+  return (
+    snapshot?.type === "file" &&
+    snapshot.mode === entry.mode &&
+    snapshot.size === entry.size &&
+    snapshot.sha256 === entry.sha256
+  );
 }
 
 export async function absoluteEntryMatches(
@@ -113,18 +124,7 @@ export async function absoluteEntryMatches(
   if (!stats.isFile() || stats.isSymbolicLink()) {
     return false;
   }
-  const snapshot = await readAbsoluteFileSnapshot(absolute).catch((error: unknown) => {
-    if (error instanceof WorkerTaskError) {
-      throw error;
-    }
-    return undefined;
-  });
-  return (
-    snapshot?.type === "file" &&
-    snapshot.mode === entry.mode &&
-    snapshot.size === entry.size &&
-    snapshot.sha256 === entry.sha256
-  );
+  return await fileEntryMatches(absolute, entry);
 }
 
 export async function entryMatches(
@@ -134,18 +134,7 @@ export async function entryMatches(
   if (entry.type === "symlink") {
     return await absoluteEntryMatches(localPath(root, entry.path), entry);
   }
-  const snapshot = await readWorkspaceFileSnapshot(root, entry.path).catch((error: unknown) => {
-    if (error instanceof WorkerTaskError) {
-      throw error;
-    }
-    return undefined;
-  });
-  return (
-    snapshot?.type === "file" &&
-    snapshot.mode === entry.mode &&
-    snapshot.size === entry.size &&
-    snapshot.sha256 === entry.sha256
-  );
+  return await fileEntryMatches(localPath(root, entry.path), entry, root);
 }
 
 export async function readWorkspaceTreeFile(params: {

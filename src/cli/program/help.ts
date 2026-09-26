@@ -8,6 +8,7 @@ import { escapeRegExp } from "../../utils.js";
 import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { CLI_NAME } from "../cli-name.js";
+import { formatHelpExamples } from "../help-format.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
 import {
   getCommanderErrorCommandNames,
@@ -101,7 +102,6 @@ export function configureProgramHelp(
   program.helpCommand("help [command]", "Display help for command");
 
   program.configureHelp({
-    // sort options and subcommands alphabetically
     sortSubcommands: true,
     sortOptions: true,
     optionTerm: (option) => theme.option(option.flags),
@@ -148,9 +148,7 @@ export function configureProgramHelp(
     return `\n${line}\n`;
   });
 
-  const fmtExamples = EXAMPLES.map(
-    ([cmd, desc]) => `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`,
-  ).join("\n");
+  const fmtExamples = formatHelpExamples(EXAMPLES);
 
   program.addHelpText("afterAll", ({ command }) => {
     if (command !== program) {

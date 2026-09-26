@@ -261,19 +261,30 @@ describe("appendSessionTranscriptNote", () => {
     },
   );
 
-  it.each(["canonical", "shared"] as const)(
+  it.each(["canonical", "shared", "custom-family"] as const)(
     "keeps invocation order while the first %s target preparation waits",
     async (layout) => {
       await withOpenClawTestState({ label: "static-note-preparation-order" }, async (state) => {
+        const agentId = layout === "custom-family" ? "worker" : "main";
         const target = {
-          agentId: "main",
+          agentId,
           sessionId: "ordered-notes",
-          sessionKey: "agent:main:ordered-notes",
+          sessionKey: `agent:${agentId}:ordered-notes`,
           storePath:
             layout === "canonical"
               ? path.join(state.agentDir("main"), "openclaw-agent.sqlite")
-              : state.path("shared.sqlite"),
+              : state.path(layout === "custom-family" ? "shared.json" : "shared.sqlite"),
         };
+        if (layout === "custom-family") {
+          const external = state.path("external.sqlite");
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: "agent:main:other", storePath: external },
+            { sessionId: "other", updatedAt: 1 },
+          );
+          await fs.symlink(external, state.path("shared.sqlite"), "file");
+        }
+        const queuedPath =
+          layout === "custom-family" ? state.path("shared.sqlite") : target.storePath;
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
         await waitForSessionTranscriptProjection(target);
         const entered = createDeferredCore();
@@ -294,12 +305,12 @@ describe("appendSessionTranscriptNote", () => {
           .mockImplementation(
             <T>(
               options: Parameters<typeof admit>[0],
-              run: () => T | Promise<T>,
+              run: Parameters<typeof admit<T>>[1],
               reentrant?: boolean,
               timing?: Parameters<typeof admit>[3],
             ) => {
               const pending = admit(options, run, reentrant, timing);
-              if (options.path === target.storePath && reentrant === true && ++admissions === 2) {
+              if (options.path === queuedPath && reentrant === true && ++admissions === 2) {
                 queued.resolve();
               }
               return pending;
@@ -344,6 +355,60 @@ describe("appendSessionTranscriptNote", () => {
       });
     },
   );
+
+  it("refuses a replaced custom family after awaited note preparation", async () => {
+    await withOpenClawTestState({ label: "static-note-family-replacement" }, async (state) => {
+      const original = state.path("original");
+      const replacement = state.path("replacement");
+      const alias = state.path("selected");
+      await fs.mkdir(original);
+      await fs.mkdir(replacement);
+      await fs.symlink(original, alias, "junction");
+      const external = state.path("external.sqlite");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:other", storePath: external },
+        { sessionId: "other", updatedAt: 1 },
+      );
+      await fs.symlink(external, path.join(original, "shared.sqlite"), "file");
+      const target = {
+        agentId: "worker",
+        sessionId: "replaced-family",
+        sessionKey: "agent:worker:replaced-family",
+        storePath: path.join(alias, "shared.json"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      await waitForSessionTranscriptProjection(target);
+      const physicalTarget = { ...target, storePath: path.join(original, "shared.worker.sqlite") };
+      const before = await loadTranscriptEvents(physicalTarget);
+      const prepare = transcriptScope.prepareSqliteTranscriptReadScope;
+      let prepared = false;
+      const spy = vi
+        .spyOn(transcriptScope, "prepareSqliteTranscriptReadScope")
+        .mockImplementationOnce(async (...args) => {
+          const result = await prepare(...args);
+          prepared = true;
+          await fs.unlink(alias);
+          await fs.symlink(replacement, alias, "junction");
+          return result;
+        });
+      try {
+        await expect(
+          appendSessionTranscriptNote(target, {
+            role: "custom",
+            customType: "openclaw.system-note",
+            content: "Must not reach the replacement",
+            display: true,
+            timestamp: 1,
+          }),
+        ).rejects.toThrow("Session store alias changed");
+        expect(prepared).toBe(true);
+        expect(await loadTranscriptEvents(physicalTarget)).toEqual(before);
+        expect(await fs.readdir(replacement)).toEqual([]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
 
   it("captures static note inputs before waiting and retains FIFO custody through idempotent replay", async () => {
     await withOpenClawTestState({ label: "static-note-capture" }, async (state) => {
@@ -391,7 +456,7 @@ describe("appendSessionTranscriptNote", () => {
         .mockImplementation(
           <T>(
             options: Parameters<typeof runWrite>[0],
-            run: () => T | Promise<T>,
+            run: Parameters<typeof runWrite<T>>[1],
             reentrant?: boolean,
             timing?: Parameters<typeof runWrite>[3],
           ) => {
@@ -548,14 +613,14 @@ describe("appendSessionTranscriptNote", () => {
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const spy = vi
         .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit) =>
+        .mockImplementation((admit, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === "commit" && changed === 0) {
               changed++;
               registerSecretValueForRedaction(marker);
             }
             admit(request, grant);
-          }),
+          }, attachment),
         );
       try {
         const rejected = await appendSessionTranscriptNote(target, note).then(

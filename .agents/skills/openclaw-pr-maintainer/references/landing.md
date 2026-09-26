@@ -17,7 +17,12 @@ the local wrapper or execute locally; use the source isolation procedure from
 `$openclaw-testing` and `$crabbox`. Do not weaken guards to accommodate missing
 commands or dependencies. The wrapper requires git, gh, jq, rg, pnpm, and node.
 Unset ambient `GITHUB_TOKEN`, `GH_TOKEN`, and `HOMEBREW_GITHUB_API_TOKEN` when they
-could select the wrong writer.
+could select the wrong writer. Check the effective PATH `gh` or configured
+`OPENCLAW_GH_BIN` writer, not only cached `ghx` reads. Preserve the protected
+route and qualify its exact native merge arguments using the
+[scripts guide](../../../../scripts/AGENTS.md#octopool-string-rewrite-protection).
+An unsupported writer is a route-owner blocker, not permission to select a raw
+binary, change merge semantics, or replay an uncertain request.
 
 ## Open or update the PR
 
@@ -61,7 +66,7 @@ scripts/pr review-artifacts-init <pr>
 # Complete .local/review.json for this exact head.
 scripts/pr review-validate-artifacts <pr>
 # After local review and a completed ClawSweeper review, submit with enforced GitHub gates.
-OPENCLAW_PR_GATES_REMOTE=github scripts/pr prepare-run <pr>
+env -u OPENCLAW_TESTBOX OPENCLAW_PR_GATES_REMOTE=github scripts/pr prepare-run <pr>
 scripts/pr merge-run <pr> --auto-merge
 ```
 
@@ -71,6 +76,12 @@ nit sweep is required. Templates describe unfinished work with valid enum values
 FOR /prepare-pr`. After every push, rerun `review-init`; checkout alone does not
 refresh the guard. Validate from PR-head mode. Do not fabricate passing evidence
 or erase a failing review condition.
+
+Select one gate mode per invocation; older shells or installed instructions may
+still set `OPENCLAW_TESTBOX=1`. The command above clears it only for that process.
+An unsupported or conflicting mode fails before PR reads, operation locks, or
+preparation can replace existing evidence. Do not rerun review or discard proof
+just to repair this environment mismatch.
 
 Preparation records pending gates bound to the prepared head, without success
 stamps or separate scheduled Testbox proof. Merge submits one pinned squash or
@@ -95,9 +106,15 @@ an accepted or uncertain request. GitHub's head precondition applies only when
 the request is submitted, and a collaborator push can leave auto-merge enabled.
 Treat a changed head as new review work, never as the original approved head.
 
-When completed hosted evidence is specifically needed, use
-`OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>` after CI is green, then ordinary
-`scripts/pr merge-run <pr>`. The wrapper may accept a patch-identical recently
+When completed hosted evidence is specifically needed, clear the pending-mode
+selector for that invocation:
+
+```bash
+env -u OPENCLAW_PR_GATES_REMOTE OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>
+scripts/pr merge-run <pr>
+```
+
+Run this after CI is green. The wrapper may accept a patch-identical recently
 green pre-rebase run when the incorporated main context is unchanged or disjoint.
 Incorporated overlapping or critical input changes require current-head CI.
 The merge workflow still owns later main-drift policy. For explicitly
@@ -112,24 +129,37 @@ separate landing gate. Check live rules and review state before claiming a human
 approval is mandatory; bypass ability is not authorization to skip an enforced
 review.
 
+The native ClawSweeper completion gate currently enforces a 12-hour window,
+including on an unchanged head. Reusing local review or CI proof does not waive
+that independent gate. New admission needs an eligible completion; retain other
+still-valid review and CI proof. Do not rewrite timestamps, manufacture proof,
+or change freshness policy to resume a task. An accepted or uncertain merge
+intent still takes the recovery path below before fresh admission.
+
 For non-main targets, do not use `prepare-run` or `merge-run`: their base is main.
 Use review artifacts and exact base/head CI, revalidate the remote head, and
 merge with `gh pr merge --match-head-commit <verified-sha>` under the same authority.
 
 ## Recovery and closeout
 
-Before replacing the remote head of an accepted auto-merge request, explicitly
-retire that request through its retained outcome:
+Before replacing the remote head after an accepted or uncertain auto-merge
+submission, explicitly retire that request through its retained outcome:
 
 ```bash
 git rev-parse refs/openclaw/pr-merge-outcomes/<PR>
 scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery --cancel-auto
 ```
 
-This supports an exact accepted non-queue auto request. It preserves the original
-intent and captures, checks the PR identity and head, and reconciles a concurrent
-merge. A lost cancellation response is observation-only on retry; never send a
-second cancellation blindly. Only a confirmed cancellation allows head repair.
+This supports an exact non-queue auto intent even when the submission response
+was lost. It preserves the original intent, acknowledgment state, and captures,
+checks the PR identity and head, and reconciles a concurrent merge. A matching
+active request is cancelled once; an already absent request is recorded as
+retired without sending a cancellation. This is an investigated operator
+recovery decision, not proof that the original submission never executed.
+A lost cancellation response is observation-only on retry; never send a second
+cancellation blindly. Only confirmed retirement allows head repair. Existing
+land authority covers this recovery; do not ask again or replace the PR merely
+because its submission response was lost.
 Then repair and push the branch, refresh review and preparation, and wait for
 completed CI. Use the current retained outcome OID and explicitly reviewed head:
 

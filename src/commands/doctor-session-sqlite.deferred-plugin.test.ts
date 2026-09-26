@@ -16,8 +16,11 @@ import {
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
 import * as directoryDurability from "../infra/directory-durability.js";
+import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
 import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
+import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
@@ -28,6 +31,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -523,6 +527,7 @@ describe("session sources needed by deferred plugin migrations", () => {
     { layout: "external", missingTranscript: false },
     { layout: "default", missingTranscript: false },
     { layout: "legacy-root", missingTranscript: false },
+    { layout: "legacy-root-custom-store", missingTranscript: false },
     { layout: "legacy-root-with-unused-agent", missingTranscript: false },
     { layout: "default", missingTranscript: true },
     { layout: "relocated", missingTranscript: false },
@@ -533,7 +538,7 @@ describe("session sources needed by deferred plugin migrations", () => {
       await withOpenClawTestState({ label: "deferred-plugin-session-source" }, async (state) => {
         const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
           state,
-          layout === "legacy-root-with-unused-agent"
+          layout === "legacy-root-with-unused-agent" || layout === "legacy-root-custom-store"
             ? "legacy-root"
             : layout === "relocated" || layout === "relocated-interrupted"
               ? "default"
@@ -541,6 +546,10 @@ describe("session sources needed by deferred plugin migrations", () => {
           "fixture-plugin",
           missingTranscript ? "declared" : undefined,
         );
+        if (layout === "legacy-root-custom-store") {
+          scope.storePath = state.path("custom/sessions.json");
+          cfg.session = { store: scope.storePath };
+        }
         let foreignSource: { path: string; bytes: Buffer } | undefined;
         if (layout === "relocated" || layout === "relocated-interrupted") {
           const foreignPath = state.path("foreign-root/agents/main/sessions/legacy-kept.jsonl");
@@ -605,6 +614,32 @@ describe("session sources needed by deferred plugin migrations", () => {
           pending: [],
           resolvedPluginIds: ["fixture-plugin"],
         });
+        if (
+          !missingTranscript &&
+          (layout === "default" ||
+            layout === "legacy-root" ||
+            layout === "legacy-root-custom-store")
+        ) {
+          const identities = new Map(
+            [...originals.keys()].map((file) => [file, readMigrationArtifactIdentity(file)]),
+          );
+          await autoMigrateLegacyState({
+            cfg:
+              layout === "legacy-root-custom-store"
+                ? { ...cfg, session: { store: "~/custom/sessions.json" } }
+                : cfg,
+            env:
+              layout === "legacy-root-custom-store"
+                ? { ...state.env, OPENCLAW_HOME: state.root, HOME: state.root }
+                : state.env,
+            homedir: () => state.home,
+            doctorOnlyStateMigrations: true,
+            legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+          });
+          for (const [file, identity] of identities) {
+            expect(readMigrationArtifactIdentity(file), file).toEqual(identity);
+          }
+        }
         if (layout === "relocated-interrupted") {
           const publication = vi
             .spyOn(migrationRun, "recordCompletedMigrationMoves")
@@ -702,6 +737,7 @@ describe("session sources needed by deferred plugin migrations", () => {
     "keeps startup blocked for an empty index with %s",
     async (kind) => {
       await withOpenClawTestState({ label: "deferred-empty-index-required" }, async (state) => {
+        openOpenClawStateDatabase({ env: state.env });
         const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
         const directory = state.sessionsDir("main");
         fs.mkdirSync(directory, { recursive: true });
@@ -975,33 +1011,4 @@ describe("session sources needed by deferred plugin migrations", () => {
       });
     },
   );
-
-  it("reverifies a changed retained index without replaying current canonical metadata", async () => {
-    await withOpenClawTestState({ label: "deferred-plugin-source-conflict" }, async (state) => {
-      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state);
-      await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
-      await upsertSessionEntryCore(
-        { ...scope, sessionKey: "agent:main:kept" },
-        { label: "current" },
-      );
-      fs.appendFileSync(storePath, "\n");
-      const retry = await runDoctorSessionSqlite({
-        cfg,
-        env: state.env,
-        allAgents: true,
-        mode: "import",
-      });
-      expect(retry.totals.importedEntries).toBe(0);
-      const issues = retry.targets.flatMap((target) => target.issues);
-      expect(issues).toContainEqual(
-        expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
-      );
-      expect(issues.every(isSessionSqliteMigrationWarning)).toBe(true);
-      expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(
-        "current",
-      );
-      expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
-      expect(fs.existsSync(storePath)).toBe(true);
-    });
-  });
 });

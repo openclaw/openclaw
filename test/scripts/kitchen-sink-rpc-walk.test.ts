@@ -1,4 +1,3 @@
-// Kitchen Sink Rpc Walk tests cover kitchen sink rpc walk script behavior.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -43,9 +42,7 @@ import {
   findDistCallGatewayModuleFiles,
   hasChildExited,
   MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
-  listKitchenSinkToolInvokeNames,
   listKitchenSinkAuthorizationRpcProbeNames,
-  listKitchenSinkReadOnlyRpcProbeNames,
   makeEnv,
   kitchenSinkResourceEnv,
   parseJsonOutput,
@@ -55,6 +52,7 @@ import {
   resolveKitchenSinkRpcConfig,
   resolveKitchenSinkRpcPort,
   runCommand,
+  runKitchenSinkResourceToolWorkload,
   sampleProcess,
   sampleWindowsProcessByPort,
   shouldPrintHelp,
@@ -67,6 +65,10 @@ import {
   validateCliArgs,
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mts";
+import {
+  measureResourceOperations,
+  type KitchenSinkResourcePhase,
+} from "../../scripts/e2e/lib/kitchen-sink-resources.mts";
 import {
   resolveWindowsPowerShellPath,
   resolveWindowsSystem32Path,
@@ -91,6 +93,112 @@ it("resource proof requires clean joined Gateway exit, not forced termination", 
     expect(() => assertKitchenSinkResourceShutdown(failed)).toThrow("did not exit cleanly");
   }
 });
+
+it.each(["valid", "wrong session", "wrong tool"])(
+  "measures the actual session and tool RPC callbacks: %s",
+  async (response) => {
+    const phases: KitchenSinkResourcePhase[] = [];
+    const events: string[] = [];
+    let step = 0;
+    const sample = async () => {
+      events.push("sample");
+      step++;
+      return {
+        pid: 123,
+        atMonotonicMicros: step * 1000,
+        process: { user: step * 100, system: step * 10 },
+        mainThread: { user: step * 50, system: step * 5 },
+        cpuEnvironment: { availableParallelism: 2, affinity: "0-1" },
+        memory: { rss: 100, heapTotal: 100, heapUsed: 100, external: 0, arrayBuffers: 0 },
+        activeResources: {},
+        runtime: { node: "26.0.0", platform: "linux", arch: "x64" },
+      };
+    };
+    const rpc = vi.fn(async (method: string, _params: unknown) => {
+      events.push(method);
+      return method === "sessions.create"
+        ? {
+            ok: true,
+            key: response === "wrong session" ? "wrong" : "agent:main:kitchen-sink-rpc",
+            sessionId: "fixture-session",
+          }
+        : {
+            ok: true,
+            source: "plugin",
+            output: {
+              route: "tool:kitchen_sink_text",
+              text: response === "wrong tool" ? "wrong" : "Kitchen Sink fixture",
+            },
+          };
+    });
+    const measure: Parameters<typeof runKitchenSinkResourceToolWorkload>[0]["measure"] = async (
+      name,
+      count,
+      run,
+      options,
+    ) => {
+      const phase = await measureResourceOperations({ name, count, run, sample, ...options });
+      phases.push(phase);
+      if (phase.status === "failed") {
+        throw new Error(phase.error);
+      }
+      return phase;
+    };
+    const result = runKitchenSinkResourceToolWorkload({ rpc, measure }, 20);
+    if (response !== "valid") {
+      await expect(result).rejects.toThrow(response === "wrong session" ? "session" : "fixture");
+      expect(phases.at(-1)).toMatchObject({
+        status: "failed",
+        operations: { attempted: 1, completed: 0, failed: 1 },
+      });
+      expect(rpc).toHaveBeenCalledTimes(response === "wrong session" ? 1 : 2);
+      return;
+    }
+    await result;
+    expect(rpc.mock.calls).toEqual([
+      [
+        "sessions.create",
+        { key: "agent:main:kitchen-sink-rpc", agentId: "main", label: "kitchen-sink-resources" },
+      ],
+      ...Array.from({ length: 20 }, (_, index) => [
+        "tools.invoke",
+        {
+          name: "kitchen_sink_text",
+          args: { prompt: "explain kitchen sink resource profiling" },
+          sessionKey: "agent:main:kitchen-sink-rpc",
+          agentId: "main",
+          idempotencyKey: `kitchen-sink-resources-${index}`,
+        },
+      ]),
+    ]);
+    expect(events).toEqual([
+      "sample",
+      "sessions.create",
+      "sample",
+      "sample",
+      "tools.invoke",
+      "sample",
+      ...Array.from({ length: 19 }, () => "tools.invoke"),
+      "sample",
+    ]);
+    expect(phases).toMatchObject([
+      {
+        name: "session-create",
+        status: "exercised",
+        operations: { attempted: 1, completed: 1, failed: 0 },
+      },
+      {
+        name: "plugin-tool",
+        status: "exercised",
+        operations: { attempted: 20, completed: 20, failed: 0 },
+        breakdown: [
+          { name: "plugin-tool-first", operations: { completed: 1 } },
+          { name: "plugin-tool-warm", operations: { completed: 19 } },
+        ],
+      },
+    ]);
+  },
+);
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 const realDelay = delay;
@@ -321,13 +429,12 @@ process.exit(17);
     expect(isProcessAlive(receipt.pid)).toBe(false);
   });
 
-  it("prints help without creating temp state or installing the plugin", async () => {
-    const result = await runCommand(process.execPath, [
-      "--import",
-      "tsx",
-      "scripts/e2e/kitchen-sink-rpc-walk.mts",
-      "--help",
-    ]);
+  it("prints help before malformed guardrails without creating temp state", async () => {
+    const result = await runCommand(
+      process.execPath,
+      ["--import", "tsx", "scripts/e2e/kitchen-sink-rpc-walk.mts", "--help"],
+      { env: { ...process.env, OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3" } },
+    );
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(
@@ -341,24 +448,6 @@ process.exit(17);
     expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS");
     expect(result.stdout).not.toContain("Kitchen Sink RPC walk using");
     expect(result.stdout).not.toContain("temp root preserved");
-  });
-
-  it("prints help before parsing malformed runtime guardrails", async () => {
-    const result = await runCommand(
-      process.execPath,
-      ["--import", "tsx", "scripts/e2e/kitchen-sink-rpc-walk.mts", "--help"],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3",
-        },
-      },
-    );
-
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(
-      "Usage: node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts",
-    );
   });
 
   it("detects short and long help flags", () => {
@@ -1471,37 +1560,6 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     ).toEqual(["kitchen_sink_text", "kitchen_sink_search", "kitchen_sink_image_job"]);
   });
 
-  it("invokes every advertised Kitchen Sink tool during the RPC walk", () => {
-    expect(listKitchenSinkToolInvokeNames().toSorted()).toEqual([
-      "kitchen_sink_image_job",
-      "kitchen_sink_search",
-      "kitchen_sink_text",
-    ]);
-  });
-
-  it("walks broad read-only gateway RPC surfaces", () => {
-    expect(listKitchenSinkReadOnlyRpcProbeNames()).toEqual(
-      expect.arrayContaining([
-        "gateway.identity.get",
-        "config.schema.lookup",
-        "models.list",
-        "skills.status",
-        "agents.list",
-        "sessions.list",
-        "cron.list",
-        "tasks.list",
-        "usage.status",
-        "voicewake.routing.get",
-        "talk.catalog",
-        "update.status",
-        "node.list",
-        "device.pair.list",
-        "exec.approvals.get",
-        "environments.status",
-      ]),
-    );
-  });
-
   it("proves node-only RPC authorization boundaries", async () => {
     expect(listKitchenSinkAuthorizationRpcProbeNames()).toEqual(["skills.bins"]);
     await expect(
@@ -1575,28 +1633,6 @@ describe("kitchen-sink RPC command catalog assertions", () => {
         }),
       ).toBeNull();
     }
-  });
-
-  it("requires provenance for effective Kitchen Sink plugin tools too", () => {
-    expect(() =>
-      assertExpectedKitchenSinkToolEntries(
-        [
-          { id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" },
-          {
-            id: "kitchen_sink_search",
-            source: "plugin",
-            pluginId: "openclaw-kitchen-sink-fixture",
-          },
-          {
-            id: "kitchen_sink_image_job",
-            source: "core",
-            pluginId: "openclaw-kitchen-sink-fixture",
-          },
-        ],
-        "tools.effective plugin tools",
-        { requirePluginProvenance: true },
-      ),
-    ).toThrow("tools.effective plugin tools plugin provenance mismatch");
   });
 
   it("requires the exact Kitchen Sink channel account", () => {

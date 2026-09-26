@@ -9,6 +9,7 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
+import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import {
@@ -422,6 +423,7 @@ export class ToolSearchRuntime {
       signal?: AbortSignal;
       onUpdate?: ToolSearchCallOptions["onUpdate"];
       recoverySurface?: UnknownToolRecoverySurface;
+      mcpNamespaceGuest?: boolean;
     },
   ) => {
     const catalog = resolveCatalog(this.ctx);
@@ -500,6 +502,7 @@ export class ToolSearchRuntime {
       parentToolCallId?: string;
       signal?: AbortSignal;
       onUpdate?: ToolSearchCallOptions["onUpdate"];
+      mcpNamespaceGuest?: boolean;
     },
   ) => {
     this.pluginRuntimeRefresh.assertCurrent();
@@ -534,6 +537,19 @@ export class ToolSearchRuntime {
       if (isPreExecutionBlockedToolResult(candidate)) {
         // The JSON-safe snapshot drops the private blocked-result marker.
         preExecutionBlocked = true;
+        if (entry.source === "mcp") {
+          const operation = entry.mcp?.operation ?? "tool";
+          if (operation === "tool") {
+            setMcpCodeModeGuestResultFromAgentResult(candidate);
+          } else if (options?.mcpNamespaceGuest) {
+            const details = isRecord(candidate.details) ? candidate.details : undefined;
+            const reason =
+              typeof details?.reason === "string" && details.reason.trim()
+                ? details.reason.trim()
+                : "Tool call blocked by policy";
+            throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
+          }
+        }
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
       const snapshot =

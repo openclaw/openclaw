@@ -6,9 +6,13 @@ import {
   shouldFilterLegacySessionRecordsByTarget,
 } from "../config/sessions/legacy-store-inspection.js";
 import { loadExactSessionEntryCandidates } from "../config/sessions/session-accessor.sqlite-exact-read.js";
-import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import {
+  resolveConfiguredAgentDatabaseTargets,
+  type SessionStoreTarget,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
   rebuildDeferredPluginSessionSourceIndex,
@@ -37,6 +41,8 @@ import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
+import { hasOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { planSessionJsonlArchiveMove } from "./doctor-session-sqlite-archive.js";
 import { countLegacyTranscript } from "./doctor-session-sqlite-diagnostics.js";
 import {
@@ -59,12 +65,39 @@ export function prepareRetainedSessionImport(
   issues: DoctorSessionSqliteIssue[],
 ) {
   const isSqliteStore = params.target.storePath.endsWith(".sqlite");
+  const sqlitePath = resolveTargetSqlitePath(params.target, params.env);
+  if (!isSqliteStore && (params.mode === "import" || params.mode === "recover")) {
+    const isHeld = createRetainedAgentDatabaseMatcher(
+      params.env,
+      () => resolveConfiguredAgentDatabaseTargets(params.cfg, { env: params.env }),
+      { kind: "legacy-database", readDatabasePaths: () => [sqlitePath] },
+    );
+    const disposition =
+      isHeld(params.target.storePath, params.target.agentId) ||
+      isHeld(sqlitePath, params.target.agentId);
+    if (
+      disposition &&
+      (disposition !== "unavailable" ||
+        hasOrphanedSqliteSidecars(sqlitePath) ||
+        hasDeferredPluginSessionImport({
+          target: { ...params.target, sqlitePath },
+          sqlitePath,
+          env: params.env,
+        }))
+    ) {
+      issues.push({
+        code: "plugin_migration_source_retained",
+        message: `Retained session sources skipped: store held for agent ${params.target.agentId} database ${sqlitePath}. Run openclaw doctor --fix for deletion-history repair and explicit restoration guidance.`,
+      });
+      return undefined;
+    }
+  }
   let retainedImport: DeferredPluginSessionImport | undefined;
   const sourceConflicts = new Map<string, string>();
   const sourceVerification = {
     ...prepareSessionSourceVerification({
       ...params,
-      sqlitePath: resolveTargetSqlitePath(params.target, params.env),
+      sqlitePath,
     }),
     allowMissingIndex: true,
     onSourceConflict: (sourcePath: string, artifactPath = sourcePath, error?: unknown) => {

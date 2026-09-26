@@ -1,3 +1,4 @@
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 
 const A2A_CONTEXT_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -121,10 +122,6 @@ export function resolveA2aRpcMethod(
   return A2A_UNSUPPORTED_METHODS.has(method) ? "unsupported" : undefined;
 }
 
-export function isA2aContextId(value: string): boolean {
-  return A2A_CONTEXT_PATTERN.test(value);
-}
-
 export function extractA2aMessageText(parts: unknown[]): string | undefined {
   const textParts: string[] = [];
   for (const candidate of parts) {
@@ -147,18 +144,9 @@ export function extractA2aMessageText(parts: unknown[]): string | undefined {
     return text;
   }
 
-  const encoded = Buffer.from(text);
-  let prefixBytes = A2A_MESSAGE_MAX_BYTES - Buffer.byteLength(A2A_TRUNCATION_MARKER);
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  while (prefixBytes > 0) {
-    try {
-      return decoder.decode(encoded.subarray(0, prefixBytes)) + A2A_TRUNCATION_MARKER;
-    } catch {
-      // Never split a multibyte UTF-8 character at the transport byte cap.
-      prefixBytes -= 1;
-    }
-  }
-  return A2A_TRUNCATION_MARKER.trimStart();
+  const prefixBytes = A2A_MESSAGE_MAX_BYTES - Buffer.byteLength(A2A_TRUNCATION_MARKER);
+  // Preserve TextDecoder's leading-BOM removal for truncated messages.
+  return truncateUtf8Prefix(text, prefixBytes).replace(/^\uFEFF/, "") + A2A_TRUNCATION_MARKER;
 }
 
 export class A2aProtocolError extends Error {

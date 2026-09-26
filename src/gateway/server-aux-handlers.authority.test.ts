@@ -14,7 +14,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { installTestApprovalClock } from "./exec-approval-manager.test-support.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
@@ -23,6 +23,7 @@ import { SharedGatewaySessionGenerationState } from "./server-shared-auth-genera
 import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
+import { bindWorkerTurnOwner } from "./worker-environments/placement-turn-claim-events.js";
 
 type GatewayAux = ReturnType<typeof createGatewayAuxHandlers>;
 type GatewayAuxParams = Parameters<typeof createGatewayAuxHandlers>[0];
@@ -402,6 +403,9 @@ describe("gateway auxiliary authority lifecycle", () => {
   });
 
   it("settles and publishes both approval kinds from the production worker-claim observer", async () => {
+    if (!fixture) {
+      throw new Error("expected Gateway authority fixture");
+    }
     const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database });
     const identity = {
@@ -414,7 +418,7 @@ describe("gateway auxiliary authority lifecycle", () => {
       sessionId: identity.sessionId,
       ownerEpoch: 7,
     });
-    let placement = placements.startDispatch(identity);
+    let placement = await placements.startDispatch(identity);
     placement = placements.transition({
       sessionId: identity.sessionId,
       from: "requested",
@@ -454,7 +458,7 @@ describe("gateway auxiliary authority lifecycle", () => {
       runId: "worker-run-close",
     });
     const runAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-    const turnClaim = placements.claimTurn({
+    const turnClaim = await placements.claimTurn({
       ...identity,
       claimId: "worker-claim-close",
       runId: operationalRunInstance.runId,
@@ -464,7 +468,19 @@ describe("gateway auxiliary authority lifecycle", () => {
         ownerEpoch: placement.activeOwnerEpoch,
       },
     });
-    const authority = { kind: "worker" as const, ...runAuthority, turnClaim };
+    const { capability } = await bindWorkerTurnOwner(
+      placements,
+      turnClaim,
+      undefined,
+      operationalRunInstance,
+      { ...identity, storePath: fixture.statePath("agents", "main", "sessions", "sessions.json") },
+      () => {},
+    );
+    const authority = await capability.run((owner) => ({
+      kind: "worker" as const,
+      ...owner.delegatedAuthority,
+      turnClaim: owner.turnClaim,
+    }));
     const validateAuthority = createAgentRuntimeApprovalAuthorityValidator(placements);
     const lifecycle = vi.fn();
     const gatewayAux = createAuthorityHarness({
@@ -528,7 +544,16 @@ describe("gateway auxiliary authority lifecycle", () => {
       onResolved: questionResolved,
     });
 
-    placements.releaseTurn(turnClaim);
+    for (const record of [execRecord, pluginRecord]) {
+      expect(await getOperatorApprovalDetailed({ id: record.id })).toMatchObject({
+        outcome: "found",
+        record: { status: "pending" },
+      });
+    }
+    expect(questionResolved).not.toHaveBeenCalled();
+    expect(publishResolved).not.toHaveBeenCalled();
+
+    await placements.releaseTurn(turnClaim);
 
     expect(questionResolved).toHaveBeenCalledExactlyOnceWith(
       { id: question.id, status: "cancelled" },

@@ -8,7 +8,6 @@ import {
 import {
   buildReactionIdentifier,
   createDiscordClient,
-  formatReactionEmoji,
   normalizeReactionEmoji,
 } from "./send.shared.js";
 import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
@@ -122,7 +121,7 @@ export async function fetchReactionsDiscord(
       emoji: {
         id: reaction.emoji.id ?? null,
         name: reaction.emoji.name ?? null,
-        raw: formatReactionEmoji(reaction.emoji),
+        raw: identifier,
       },
       count: reaction.count,
       users: users.map((user) => ({

@@ -113,7 +113,7 @@ export type PluginToolRegistration = PluginRegistrationOwner & {
   /** Explicitly registered required-authority context, never inferred from plugin identity. */
   contextVersion?: 2;
   names: string[];
-  declaredNames?: string[];
+  declaredNames?: ReadonlySet<string>;
   optional: boolean;
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */
   origin?: PluginOrigin;
@@ -129,6 +129,17 @@ type PluginCliRegistration = PluginRegistrationOwner & {
 export type PluginHttpRouteRegistration = {
   /** Retired ingress awaiting a lifecycle replacement; responds with Retry-After. */
   handoff?: true;
+  /** Compatibility endpoints retained by live holders or route handoffs. */
+  legacyListeners?: readonly {
+    port: number;
+    host?: string;
+    /** Shipped listener-liveness response: exact raw path, status 200, body "ok". */
+    health?: { path: string; contentType?: string };
+    /** Shipped Node HTTP deadlines in milliseconds; omission keeps Node defaults. */
+    timeouts?: { headers: number; request: number; socket: number };
+  }[];
+  /** Endpoints retained only by a handoff, without a live holder. */
+  legacyListenerHandoffs?: PluginHttpRouteRegistration["legacyListeners"];
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
@@ -391,6 +402,7 @@ export type PluginRecord = {
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  uiCapabilities?: PluginManifestRecord["uiCapabilities"];
   mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;
   dependencyStatus?: PluginDependencyStatus;

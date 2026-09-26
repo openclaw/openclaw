@@ -421,7 +421,7 @@ exit 1
       expect(curlCalls).toHaveLength(3);
       for (const call of curlCalls) {
         expect(call).toContain(
-          "-fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2",
+          "-fSL --no-progress-meter --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2",
         );
       }
       expect(curlCalls[0]).toContain("https://nodejs.org/dist/index.json");

@@ -5,14 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./build-program.js";
 import type { ProgramContext } from "./context.js";
 
-const registerProgramCommandsMock = vi.hoisted(() => vi.fn());
+const registerCoreCliCommandsMock = vi.hoisted(() => vi.fn());
+const registerSubCliCommandsMock = vi.hoisted(() => vi.fn());
 const createProgramContextMock = vi.hoisted(() => vi.fn());
 const configureProgramHelpMock = vi.hoisted(() => vi.fn());
 const registerPreActionHooksMock = vi.hoisted(() => vi.fn());
 const setProgramContextMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./command-registry.js", () => ({
-  registerProgramCommands: registerProgramCommandsMock,
+vi.mock("./command-registry-core.js", () => ({
+  registerCoreCliCommands: registerCoreCliCommandsMock,
+}));
+
+vi.mock("./register.subclis.js", () => ({
+  registerSubCliCommands: registerSubCliCommandsMock,
 }));
 
 vi.mock("./context.js", () => ({
@@ -76,7 +81,8 @@ describe("buildProgram", () => {
       expect(setProgramContextMock).toHaveBeenCalledWith(program, ctx);
       expect(configureProgramHelpMock).toHaveBeenCalledWith(program, ctx);
       expect(registerPreActionHooksMock).toHaveBeenCalledWith(program, ctx.programVersion);
-      expect(registerProgramCommandsMock).toHaveBeenCalledWith(program, ctx, argv);
+      expect(registerCoreCliCommandsMock).toHaveBeenCalledWith(program, ctx, argv);
+      expect(registerSubCliCommandsMock).toHaveBeenCalledWith(program, argv);
     } finally {
       process.argv = originalArgv;
     }

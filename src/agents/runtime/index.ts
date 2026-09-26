@@ -46,7 +46,6 @@ export type {
   CompactionSummaryPrompt,
   ContextUsageEstimate,
   FileOperations,
-  Result,
   SessionTreeEntry,
   StreamFn,
   ThinkingLevel,

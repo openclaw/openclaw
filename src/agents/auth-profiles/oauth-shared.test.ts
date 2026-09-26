@@ -5,9 +5,17 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  oauthCred,
+  oidcIdentity,
+} from "./credential-fixtures.test-support.js";
+import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
+import { createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
   isSafeOAuthOwnerRefreshResult,
+  isSafeToAdoptBootstrapOAuthIdentity,
+  isSafeToAdoptMainStoreOAuthIdentity,
   isSafeOAuthPostClaimSettlement,
   overlayRuntimeExternalOAuthProfiles,
 } from "./oauth-shared.js";
@@ -76,6 +84,87 @@ describe("OAuth refresh identity policy", () => {
       expect(isSafeOAuthPostClaimSettlement(claimed, refreshed)).toBe(differentOwner);
     },
   );
+});
+
+describe("OIDC registered identity", () => {
+  const existing: OAuthCredential = {
+    type: "oauth",
+    provider: "oidc-provider",
+    access: "old-access",
+    refresh: "old-refresh",
+    expires: Date.now() + 600_000,
+    ...oidcIdentity(),
+  };
+
+  it.each([
+    { name: "same subject and registration", metadata: oidcIdentity(), safe: true },
+    { name: "changed subject", metadata: oidcIdentity({ sub: "subject-b" }), safe: false },
+    {
+      name: "different issuer",
+      metadata: {
+        ...oidcIdentity({ iss: "https://other.example.test" }),
+        issuer: "https://other.example.test",
+      },
+      safe: false,
+    },
+    {
+      name: "different client",
+      metadata: { ...oidcIdentity({ aud: "client-other" }), clientId: "client-other" },
+      safe: false,
+    },
+    { name: "missing bound account identity", metadata: { accountId: undefined }, safe: false },
+    { name: "secret-free fence identity", metadata: { idToken: undefined }, safe: true },
+    {
+      name: "removed registration",
+      metadata: { issuer: undefined, clientId: undefined },
+      safe: false,
+    },
+  ])("gates adoption, mirroring and settlement for $name", ({ metadata, safe }) => {
+    // Equal email labels must not substitute for a registered OIDC identity.
+    const claimed = { ...existing, email: "same@example.test" };
+    const incoming = {
+      ...claimed,
+      access: "new-access",
+      refresh: "new-refresh",
+      expires: claimed.expires + 600_000,
+      ...metadata,
+    };
+    expect(isSafeToAdoptMainStoreOAuthIdentity(claimed, incoming)).toBe(safe);
+    expect(isSafeToAdoptBootstrapOAuthIdentity(claimed, incoming)).toBe(safe);
+    expect(
+      shouldMirrorRefreshedOAuthCredential({ existing: claimed, refreshed: incoming }).shouldMirror,
+    ).toBe(safe);
+    expect(isSafeOAuthOwnerRefreshResult(claimed, incoming)).toBe(safe);
+    expect(isSafeOAuthPostClaimSettlement(claimed, incoming)).toBe(safe);
+  });
+
+  it.each([
+    { issuer: "https://auth.x.ai", idToken: "provider-managed-id-token" },
+    { clientId: "chutes-client" },
+  ])("preserves provider account identity without an OIDC registration pair: %j", (metadata) => {
+    const claimed = {
+      ...existing,
+      issuer: undefined,
+      clientId: undefined,
+      idToken: undefined,
+      accountId: "account-a",
+      ...metadata,
+    };
+    const refreshed = { ...claimed, access: "new-access", refresh: "new-refresh" };
+    expect(isSafeOAuthOwnerRefreshResult(claimed, refreshed)).toBe(true);
+    expect(isSafeOAuthPostClaimSettlement(claimed, refreshed)).toBe(true);
+    expect(isSafeToAdoptMainStoreOAuthIdentity(claimed, refreshed)).toBe(true);
+  });
+
+  it("settles registered identity through a secret-free fence", () => {
+    const refreshed = { ...existing, access: "new-access", refresh: "new-refresh" };
+    const fence = createOAuthRefreshFence({ profileId: "provider:custom", credential: existing });
+    expect(isSafeOAuthPostClaimSettlement(existing, refreshed)).toBe(true);
+    expect(isSafeOAuthPostClaimSettlement(fence, refreshed)).toBe(true);
+    expect(isSafeToAdoptMainStoreOAuthIdentity({ ...fence, accountId: undefined }, refreshed)).toBe(
+      false,
+    );
+  });
 });
 
 describe("overlayRuntimeExternalOAuthProfiles", () => {

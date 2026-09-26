@@ -1,4 +1,4 @@
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CronService } from "./service.js";
 import * as cronStore from "./store.js";
@@ -53,14 +54,7 @@ it("loads complete partitioned cron state off the host and preserves it through 
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
     await closeOpenClawStateDatabaseByPathAsync(databasePath);
     const revision = getCronJobsStoreRevision(storePath);
-    const spies = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      vi.spyOn(StatementSync.prototype, "get"),
-      vi.spyOn(StatementSync.prototype, "all"),
-      vi.spyOn(StatementSync.prototype, "run"),
-      vi.spyOn(StatementSync.prototype, "iterate"),
-    ];
+    const sql = observeMainThreadSql();
     try {
       const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
       expect(loaded.store.jobs.map((job) => job.id)).toEqual(["first", "second"]);
@@ -74,38 +68,26 @@ it("loads complete partitioned cron state off the host and preserves it through 
       expect(loaded.invalidConfigRows).toEqual([]);
       expect((await loadCronJobsStoreWithConfigJobs(otherStorePath)).store.jobs).toEqual([]);
       expect(getCronJobsStoreRevision(storePath)).toBe(revision);
-      for (const spy of spies) {
-        expect(spy).not.toHaveBeenCalled();
-      }
+      sql.expectIdle();
       for (const job of store.jobs) {
         job.name = `updated ${job.id}`;
       }
       await saveCronJobsStore(storePath, store);
-      for (const spy of spies) {
-        spy.mockClear();
-      }
+      sql.clear();
       const updated = await loadCronJobsStoreWithConfigJobs(storePath);
       expect(updated.store.jobs.map((job) => job.name)).toEqual([
         "updated first",
         "updated second",
       ]);
       expect(updated.jobsFingerprint).not.toBe(loaded.jobsFingerprint);
-      for (const spy of spies) {
-        expect(spy).not.toHaveBeenCalled();
-      }
+      sql.expectIdle();
       // Canonical close joins database cleanup before the next read.
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      for (const spy of spies) {
-        spy.mockClear();
-      }
+      sql.clear();
       expect(await loadCronJobsStoreWithConfigJobs(storePath)).toEqual(updated);
-      for (const spy of spies) {
-        expect(spy).not.toHaveBeenCalled();
-      }
+      sql.expectIdle();
     } finally {
-      for (const spy of spies) {
-        spy.mockRestore();
-      }
+      sql.restore();
     }
   });
 });
@@ -186,14 +168,7 @@ it("persists full, changed, and runtime-only cron saves off the host through reo
     const storePath = state.statePath("cron", "jobs.json");
     const otherPath = state.statePath("other", "jobs.json");
     const original = cronWorkerFixture();
-    const spies = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      vi.spyOn(StatementSync.prototype, "get"),
-      vi.spyOn(StatementSync.prototype, "all"),
-      vi.spyOn(StatementSync.prototype, "run"),
-      vi.spyOn(StatementSync.prototype, "iterate"),
-    ];
+    const sql = observeMainThreadSql();
     try {
       await saveCronJobsStore(storePath, original);
       await saveCronJobsStore(otherPath, original);
@@ -215,21 +190,13 @@ it("persists full, changed, and runtime-only cron saves off the host through reo
         state: { nextRunAtMs: 120_001 },
       });
       expect((await loadCronJobsStoreWithConfigJobs(otherPath)).store.jobs[0]?.name).toBe("first");
-      for (const spy of spies) {
-        expect(spy).not.toHaveBeenCalled();
-      }
+      sql.expectIdle();
       await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
-      for (const spy of spies) {
-        spy.mockClear();
-      }
+      sql.clear();
       expect(await loadCronJobsStoreWithConfigJobs(storePath)).toEqual(loaded);
-      for (const spy of spies) {
-        expect(spy).not.toHaveBeenCalled();
-      }
+      sql.expectIdle();
     } finally {
-      for (const spy of spies) {
-        spy.mockRestore();
-      }
+      sql.restore();
     }
   });
 });

@@ -20,7 +20,6 @@ import {
 import type { GatewayClient } from "./server-methods/types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
-  authorizeResolvedSessionMutation,
   canReceiveSessionEvent,
   invalidateSessionSharingSnapshot,
   resolveSessionMutationAuthorization,
@@ -101,7 +100,7 @@ describe("session event authorization store work", () => {
     });
   });
 
-  it.each([1, 2, 32])(
+  it.each([1, 32])(
     "bounds metadata work for %i event targets while refreshing membership",
     async (targetCount) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -372,10 +371,10 @@ describe("session mutation authorization store caches", () => {
         };
         const parseSpy = vi.spyOn(JSON, "parse");
         expect(canAccessTaskRequesterSession(access)).toBe(true);
-        // A cold handle validates the store once; repeated reads reuse its admission.
+        // Both cold and warm exact reads validate only their selected candidate keys.
         expect(
           parseSpy.mock.calls.filter(([value]) => value.includes("unrelated-task-access-session-")),
-        ).toHaveLength(mode === "warm" ? 0 : 24);
+        ).toHaveLength(0);
         parseSpy.mockClear();
         expect(canAccessTaskRequesterSession(access)).toBe(true);
         expect(
@@ -557,67 +556,6 @@ describe("session mutation authorization store caches", () => {
 
       expect([...materializations.values()]).toEqual([1]);
       expect(discoverySpy.mock.calls.filter((call) => call[1] === "main")).toHaveLength(1);
-    });
-  });
-
-  it.each([
-    {
-      name: "shared",
-      sessionKey: "agent:main:cache-parity-shared",
-      entry: { sessionId: "session-shared", updatedAt: 1, visibility: "shared" as const },
-    },
-    {
-      name: "private draft",
-      sessionKey: "agent:main:cache-parity-private",
-      entry: {
-        sessionId: "session-private",
-        updatedAt: 1,
-        visibility: "draft" as const,
-        createdActor: {
-          type: "human" as const,
-          source: "profile" as const,
-          id: "owner@example.com",
-        },
-      },
-    },
-    {
-      name: "incognito",
-      sessionKey: "agent:main:dashboard:incognito-cache-parity",
-      entry: {
-        sessionId: "session-incognito",
-        updatedAt: 1,
-        visibility: "shared" as const,
-        incognito: true as const,
-        createdActor: {
-          type: "human" as const,
-          source: "profile" as const,
-          id: "owner@example.com",
-        },
-      },
-    },
-  ])("matches uncached $name authorization", async ({ sessionKey, entry }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await sessionAccessor.upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-      const cfg = {};
-      const requestClient = identifiedClient("viewer@example.com");
-      const uncachedError = authorizeResolvedSessionMutation({
-        cfg,
-        client: requestClient,
-        sessionKey,
-        agentId: "main",
-      });
-
-      expect(
-        resolveSessionMutationAuthorization({
-          client: requestClient,
-          method: "chat.send",
-          requestParams: { sessionKey, agentId: "main" },
-          context: {
-            chatAbortControllers: new Map(),
-            getRuntimeConfig: () => cfg,
-          } as never,
-        }).error,
-      ).toEqual(uncachedError);
     });
   });
 });

@@ -176,17 +176,9 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
           </div>
         `
       : nothing;
-  const groupClass = [
-    "settings-group",
-    props.danger ? "settings-group--danger" : "",
-    props.carapace ? "oc-settings-group" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
   return html`
     <section class="settings-section ${props.carapace ? "oc-settings-section" : ""}">
-      ${header} ${props.notice ?? nothing}
-      <div class=${groupClass}>${rows}</div>
+      ${header} ${props.notice ?? nothing} ${renderSettingsGroup(rows, props)}
     </section>
   `;
 }
@@ -217,7 +209,9 @@ export function renderSettingsGroup(
   return html`<div class=${groupClass}>${rows}</div>`;
 }
 
-export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
+export function renderSettingsRow(
+  props: SettingsRowProps & { role?: "alert" | "status" },
+): TemplateResult {
   const className = [
     "settings-row",
     props.stacked ? "settings-row--stacked" : "",
@@ -227,7 +221,7 @@ export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
     .filter(Boolean)
     .join(" ");
   return html`
-    <div class=${className}>
+    <div class=${className} role=${props.role ?? nothing}>
       <div class="settings-row__text ${props.carapace ? "oc-settings-row-content" : ""}">
         <span class="settings-row__title ${props.carapace ? "oc-settings-row-title" : ""}"
           >${props.title}</span

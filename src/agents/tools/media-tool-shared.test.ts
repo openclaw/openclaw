@@ -229,7 +229,7 @@ describe("resolveMediaToolReferenceAccess", () => {
   it.each([
     ["file://attacker/share.png", /remote hosts/i],
     ["file:///tmp/encoded%2Fseparator.png", /encode path separators/i],
-    ["file:///tmp/malformed%ZZ.png", /invalid|malformed/i],
+    ["file:///tmp/malformed%ZZ.png", URIError],
   ])("rejects unsafe or malformed file URL %s", async (input, expected) => {
     await expect(
       resolveMediaToolReferenceAccess({

@@ -398,7 +398,8 @@ suite.define(() => {
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Resumed progress", { exact: true })
           .waitFor();
-        expect(await gateway.getRequests("progressCard.get")).toHaveLength(2);
+        // A pending snapshot already carrying revision 3 satisfies the hidden event.
+        expect(await gateway.getRequests("progressCard.get")).toHaveLength(pendingSnapshot ? 1 : 2);
       });
     },
   );

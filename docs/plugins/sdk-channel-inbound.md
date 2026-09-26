@@ -48,6 +48,16 @@ import {
 - `dispatchChannelInboundReply(...)`: records and dispatches an already
   assembled inbound reply with a delivery adapter.
 
+For replies, channel plugins decode the platform reference and hydrate accessible
+parent messages. Pass the reference as `reply.replyToId` even when the parent
+cannot be fetched, and pass available text and sender facts as
+`supplemental.quote`. Core applies the configured context visibility policy and
+renders the reply relationship for the model. Quoted bot text is context for the
+current message; it does not independently admit a bot-authored turn. Self-authored
+quote text is preserved by default. Self-authored quote media is skipped by
+default; callers can explicitly set `suppressSelfQuoteBody: true` or
+`suppressSelfQuoteMedia: false` when resolving supplemental media.
+
 Native command adapters must authorize the sender before preparing a configured
 binding. `resolveCommandAuthorization(...)` from
 `openclaw/plugin-sdk/command-auth-native` returns an optional `assertOwnerCurrent`

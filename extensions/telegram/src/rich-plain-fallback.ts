@@ -80,38 +80,12 @@ export function splitTelegramPlainTextChunks(text: string, limit: number): strin
   return chunkTextForOutbound(text, normalizedLimit, { preserveWhitespace: true });
 }
 
-function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit: number): string[] {
-  if (!text) {
-    return [];
-  }
-  const normalizedLimit = Math.max(1, Math.floor(limit));
-  const fixedChunks = splitTelegramPlainTextChunks(text, normalizedLimit);
-  if (chunkCount <= 1 || fixedChunks.length >= chunkCount) {
-    return fixedChunks;
-  }
-  const chunks: string[] = [];
-  let offset = 0;
-  for (let index = 0; index < chunkCount; index += 1) {
-    const remainingChars = text.length - offset;
-    const remainingChunks = chunkCount - index;
-    const nextChunkLength =
-      remainingChunks === 1
-        ? remainingChars
-        : Math.min(normalizedLimit, Math.ceil(remainingChars / remainingChunks));
-    const end = surrogateSafeChunkEnd(text, offset + nextChunkLength, offset);
-    chunks.push(text.slice(offset, end));
-    offset = end;
-  }
-  return chunks;
-}
-
 export async function withTelegramPlainFallback<T>(params: {
   kind: "rich" | "html";
   context: string;
   plainText: string;
   warn: (message: string) => void;
   limit?: number;
-  chunkCount?: number;
   sendFormatted: () => Promise<T>;
   sendPlain: (plan: TelegramPlainFallbackPlan, label: string) => Promise<T>;
 }): Promise<T> {
@@ -133,10 +107,7 @@ export async function withTelegramPlainFallback<T>(params: {
       `telegram ${params.context} degrade=plain-fallback:${trigger}: ${formatErrorMessage(err)}`,
     );
     const limit = params.limit ?? 4000;
-    const chunks =
-      params.chunkCount === undefined
-        ? splitTelegramPlainTextChunks(params.plainText, limit)
-        : splitTelegramPlainTextFallback(params.plainText, params.chunkCount, limit);
+    const chunks = splitTelegramPlainTextChunks(params.plainText, limit);
     return await params.sendPlain(
       {
         plainText: params.plainText,

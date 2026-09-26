@@ -36,6 +36,9 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
     result: { items: [plugin("tool")] },
     error: null,
     remoteError: null,
+    categoriesLoading: false,
+    categoriesError: null,
+    onRetryCategories: vi.fn(),
     categories: [
       {
         slug: "channels",
@@ -88,6 +91,18 @@ describe("renderPluginCatalogResults", () => {
     }
     document.body.replaceChildren();
     vi.restoreAllMocks();
+  });
+
+  it("keeps built-in filters usable while category placeholders settle", () => {
+    const props = baseProps({ categories: [], categoriesLoading: true });
+    const container = mount(props);
+    const chips = container.querySelector(".plugin-catalog-chips")!;
+    expect(chips.querySelectorAll("button")).toHaveLength(3);
+    expect(chips.querySelectorAll(".plugin-catalog-chip--skeleton").length).toBeGreaterThan(0);
+    expect(chips.querySelector('[role="status"]')).not.toBeNull();
+    render(renderPluginCatalogResults({ ...props, categoriesLoading: false }), container);
+    expect(chips.querySelector(".plugin-catalog-chip--skeleton")).toBeNull();
+    expect(chips.querySelectorAll("button")).toHaveLength(3);
   });
 
   it("focuses unified search and places discovery chips before grouped sections", async () => {
@@ -342,6 +357,42 @@ describe("renderPluginCatalogResults", () => {
     );
   });
 
+  it("uses white tiles for official catalog images without styling placeholders or community icons", () => {
+    const imageUrl = "https://example.com/icon.png";
+    const container = mount(
+      baseProps({
+        result: {
+          items: [
+            plugin("official", {
+              catalog: { name: "Official", official: true, categories: ["channels"], imageUrl },
+            }),
+            plugin("community", {
+              catalog: { name: "Community", official: false, categories: ["channels"], imageUrl },
+            }),
+            plugin("missing"),
+          ],
+        },
+        iconUrls: { [imageUrl]: "blob:icon" },
+      }),
+    );
+
+    expect(
+      container.querySelector(
+        '.plugin-catalog-card[data-plugin-id="official"] .plugins-tile--white',
+      ),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        '.plugin-catalog-card[data-plugin-id="community"] .plugins-tile--white',
+      ),
+    ).toBeNull();
+    expect(
+      container.querySelector(
+        '.plugin-catalog-card[data-plugin-id="missing"] .plugins-tile--white',
+      ),
+    ).toBeNull();
+  });
+
   it("caps grouped sections at two desktop rows and opens the selected category", () => {
     const onCategoryChange = vi.fn();
     const container = mount(
@@ -358,51 +409,72 @@ describe("renderPluginCatalogResults", () => {
     expect(onCategoryChange).toHaveBeenCalledWith("tools");
   });
 
-  it("preserves every catalog result under Uncategorized without category metadata", () => {
-    const container = mount(
-      baseProps({
-        categories: [],
-        result: {
-          items: Array.from({ length: 10 }, (_, index) => plugin(`catalog-result-${index}`)),
-        },
-      }),
-    );
-
+  it("hides Other and Uncategorized from the homepage and category navigation while retaining search", () => {
+    const other = plugin("other-plugin", {
+      catalog: { name: "Other plugin", official: false, categories: ["other"] },
+    });
+    const uncategorized = plugin("uncategorized-plugin", {
+      catalog: { name: "Uncategorized plugin", official: false, categories: [] },
+    });
+    const props = baseProps({
+      categories: [
+        ...baseProps().categories,
+        { slug: "other", label: "Other", description: "Other", icon: "package", order: 99 },
+      ],
+      result: { items: [plugin("matched"), other, uncategorized] },
+    });
+    const container = mount(props);
+    expect(container.querySelector('[data-catalog-section="other"]')).toBeNull();
+    expect(container.querySelector('[data-catalog-section="uncategorized"]')).toBeNull();
     expect(
-      [...container.querySelectorAll<HTMLElement>("[data-catalog-section]")].map(
-        (section) => section.dataset.catalogSection,
+      [...container.querySelectorAll(".plugin-catalog-chip")].map((chip) =>
+        chip.textContent?.trim(),
       ),
-    ).toEqual(["featured", "trending", "uncategorized"]);
-    const uncategorized = container.querySelector('[data-catalog-section="uncategorized"]');
-    expect(uncategorized?.querySelectorAll(".plugin-catalog-card")).toHaveLength(10);
-    expect(uncategorized?.querySelector(".plugin-catalog-section__view-all")).toBeNull();
-    expect(uncategorized?.classList.contains("plugin-catalog-section--expandable")).toBe(false);
+    ).not.toContain("Other");
+    expect(container.querySelector('[data-plugin-id="matched"]')).not.toBeNull();
+    expect(container.querySelector('[data-plugin-id="other-plugin"]')).toBeNull();
+    render(renderPluginCatalogResults({ ...props, query: "plugin" }), container);
+    expect(container.querySelector('[data-plugin-id="other-plugin"]')).not.toBeNull();
+    expect(container.querySelector('[data-plugin-id="uncategorized-plugin"]')).not.toBeNull();
   });
 
-  it("groups only entries without a matching catalog category under Uncategorized", () => {
-    const container = mount(
-      baseProps({
-        result: {
-          items: [
-            plugin("matched"),
-            plugin("unmatched", {
-              catalog: {
-                name: "unmatched",
-                official: true,
-                categories: ["missing-category"],
-              },
-            }),
-          ],
+  it("orders each category by its own pins before downloads and truncation", () => {
+    const items = Array.from({ length: 9 }, (_, index) =>
+      plugin(`popular-${index}`, {
+        catalog: {
+          name: `Popular ${index}`,
+          official: index === 8,
+          categories: ["tools"],
+          downloads: 100 - index,
         },
       }),
     );
-
-    const tools = container.querySelector('[data-catalog-section="tools"]');
-    const uncategorized = container.querySelector('[data-catalog-section="uncategorized"]');
-    expect(tools?.querySelectorAll(".plugin-catalog-card")).toHaveLength(1);
-    expect(tools?.querySelector('[data-plugin-id="matched"]')).not.toBeNull();
-    expect(uncategorized?.querySelectorAll(".plugin-catalog-card")).toHaveLength(1);
-    expect(uncategorized?.querySelector('[data-plugin-id="unmatched"]')).not.toBeNull();
+    const pinned = plugin("pin", {
+      catalog: {
+        name: "Pin",
+        official: false,
+        categories: ["tools", "channels"],
+        downloads: 0,
+        categoryRanks: { tools: 0 },
+      },
+    });
+    const container = mount(baseProps({ result: { items: [...items, pinned] } }));
+    expect(
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          '[data-catalog-section="tools"] .plugin-catalog-card',
+        ),
+      ].map((card) => card.dataset.pluginId),
+    ).toEqual([
+      "pin",
+      "popular-0",
+      "popular-1",
+      "popular-2",
+      "popular-3",
+      "popular-4",
+      "popular-5",
+      "popular-6",
+    ]);
   });
 
   it("shows exactly one top-right status or install action and omits download counts", async () => {

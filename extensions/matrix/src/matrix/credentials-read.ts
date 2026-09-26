@@ -2,8 +2,12 @@
 // shapes/normalizers live in credentials-state.ts; this module owns the
 // plugin-state store access.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
-import { getMatrixRuntime, getOptionalMatrixRuntime } from "../runtime.js";
+import {
+  createPluginStateKeyedStore,
+  createPluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-store-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { getOptionalMatrixRuntime } from "../runtime.js";
 import {
   MATRIX_CREDENTIALS_MAX_ENTRIES,
   MATRIX_CREDENTIALS_NAMESPACE,
@@ -37,16 +41,19 @@ export function openMatrixCredentialsStore(env: NodeJS.ProcessEnv = process.env)
 }
 
 export function openMatrixCredentialsAsyncStore(env: NodeJS.ProcessEnv = process.env) {
-  return getMatrixRuntime().state.openKeyedStore<MatrixCredentialStateRecord>(
-    matrixCredentialsStoreOptions(env),
-  );
+  const options = matrixCredentialsStoreOptions(env);
+  const runtime = getOptionalMatrixRuntime();
+  return runtime
+    ? runtime.state.openKeyedStore<MatrixCredentialStateRecord>(options)
+    : createPluginStateKeyedStore<MatrixCredentialStateRecord>("matrix", options);
 }
 
 export function captureMatrixCredentialsEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // Resolve selectors before awaiting reads; spreading Windows process.env loses its lookup semantics.
   return {
     ...env,
-    OPENCLAW_STATE_DIR: getMatrixRuntime().state.resolveStateDir(env),
+    OPENCLAW_STATE_DIR:
+      getOptionalMatrixRuntime()?.state.resolveStateDir(env) ?? resolveStateDir(env),
     OPENCLAW_SUPERVISOR_MODE: env.OPENCLAW_SUPERVISOR_MODE,
   };
 }

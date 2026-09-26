@@ -230,7 +230,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await screenshot(page, `${viewport.name}-subagent-actions.png`);
       expect(await page.locator(".agent-chat__composer-combobox textarea").count()).toBe(0);
       expect.soft(await page.getByRole("button", { name: "Reply to message" }).count()).toBe(0);
-      const copy = page.getByRole("button", { name: "Copy as markdown", exact: true });
+      const copy = activePane.locator(".chat-group.assistant .chat-copy-btn");
       await copy.click();
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(message);
       await bubble.click({ button: "right" });

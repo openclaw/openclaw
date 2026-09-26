@@ -134,6 +134,31 @@ it.each([
   });
   expect(fetch).toHaveBeenCalledOnce();
 });
+it.each([413, 422])(
+  "cancels HTTP %s without reading secret-reflecting error bodies",
+  async (status) => {
+    const pull = vi.fn(() => {
+      throw new Error("synthetic credential and submitted state");
+    });
+    const cancel = vi.fn();
+    const fetch = mockFetch(
+      async () =>
+        new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), { status }),
+    );
+    const error = await requestEvaluation(request).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      name: "EvaluationError",
+      reason: "unsupported-input",
+      message: "TypeSafe rejected the supplied input.",
+    });
+    expect(pull).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(error).not.toHaveProperty("cause");
+    expect(String(error)).not.toContain("synthetic credential");
+  },
+);
+
 it("does not expose or consume HTTP error diagnostics", async () => {
   const cancelled = vi.fn();
   mockFetch(async () => new Response(new ReadableStream({ cancel: cancelled }), { status: 401 }));
@@ -144,6 +169,8 @@ it("does not expose or consume HTTP error diagnostics", async () => {
 it.each([
   { status: 401, trigger: "http", reason: "authentication" },
   { status: 429, trigger: "http", reason: "rate-limited" },
+  { status: 413, trigger: "http", reason: "unsupported-input" },
+  { status: 422, trigger: "http", reason: "unsupported-input" },
   { status: 200, trigger: "abort", reason: "transport" },
   { status: 200, trigger: "abort-at-headers", reason: "transport" },
   { status: 200, trigger: "overflow", reason: "invalid-response" },

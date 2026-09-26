@@ -1,6 +1,8 @@
 import { isMainThread } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   withDisposableOpenClawStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -9,11 +11,145 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { flushPendingSessionsChangedEvents } from "../server-methods/session-change-event.js";
-import { createGatewayWorkerPlacementChangePublisher } from "../server-worker-placement-change-events.js";
+import {
+  createGatewayWorkerPlacementChangePublisher,
+  subscribeGatewayWorkerMachineShapeChanges,
+} from "../server-worker-placement-change-events.js";
+import { readWorkerPlacementIdentity } from "./placement-projector.js";
 import type { WorkerSessionPlacementChangeSnapshot } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { createWorkerEnvironmentStore } from "./store.js";
+
+it("coalesces machine metadata bursts off thread and selects only correlated profile placements", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database, now: () => 1000 });
+    for (const sessionId of ["pending", "active", "terminal", "stale", "unowned", "other"]) {
+      const environmentId = `environment-${sessionId}`;
+      seedAttachedPlacementEnvironment(database, {
+        environmentId,
+        sessionId,
+        ownerEpoch: 7,
+        profileId: sessionId === "other" ? "other" : "development",
+      });
+      let placement = await store.startDispatch({
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        agentId: "main",
+      });
+      for (const step of [
+        { to: "provisioning", patch: { environmentId } },
+        { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+        {
+          to: "starting",
+          patch: { workspaceBaseManifestRef: "manifest", remoteWorkspaceDir: "/workspace" },
+        },
+        { to: "active", patch: { activeOwnerEpoch: 7 } },
+      ] as const) {
+        placement = store.transition({
+          sessionId,
+          from: placement.state,
+          expectedGeneration: placement.generation,
+          ...step,
+        });
+        if (sessionId === "pending" || sessionId === "unowned") {
+          break;
+        }
+      }
+      if (sessionId === "terminal") {
+        placement = store.transition({
+          sessionId,
+          from: placement.state,
+          expectedGeneration: placement.generation,
+          to: "draining",
+        });
+        store.startReconcile({
+          sessionId,
+          environmentId,
+          ownerEpoch: 7,
+          expectedGeneration: placement.generation,
+        });
+      }
+      if (sessionId === "terminal" || sessionId === "unowned") {
+        store.fail({ sessionId, recoveryError: "synthetic failure" });
+      }
+      if (sessionId === "stale") {
+        seedAttachedPlacementEnvironment(database, { environmentId, sessionId, ownerEpoch: 8 });
+      }
+    }
+    const environments = await createWorkerEnvironmentStore({ database });
+    const expected = ["active", "pending", "terminal"];
+    expect(
+      store
+        .list()
+        .filter(
+          (row) =>
+            readWorkerPlacementIdentity(
+              row,
+              undefined,
+              row.environmentId ? (environments.get(row.environmentId) ?? null) : null,
+            )?.profileId === "development",
+        )
+        .map((row) => row.sessionId),
+    ).toEqual(expected);
+    expect((await store.readChangeSnapshot(["development"])).map((row) => row.sessionId)).toEqual(
+      expected,
+    );
+    expect(await store.readChangeSnapshot([])).toEqual([]);
+    expect(await store.readChangeSnapshot(["missing"])).toEqual([]);
+    let changed!: (profileId: string) => void;
+    const received: string[] = [];
+    const published = createDeferredCore();
+    const unlisten = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change) {
+        received.push(change.sessionKey!);
+        if (received.length === expected.length) {
+          published.resolve();
+        }
+      }
+    });
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      chatAbortControllers: new Map(),
+      getRuntimeConfig: () => ({}),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+    };
+    const warn = vi.fn();
+    const stop = subscribeGatewayWorkerMachineShapeChanges({
+      placements: store,
+      environments: {
+        subscribeMachineShapeChanged: (listener) => {
+          changed = listener;
+          return () => {};
+        },
+      },
+      getSessionChangeContext: () => context,
+      warn,
+    });
+    requireNodeSqlite();
+    const calls = observeMainThreadSql();
+    try {
+      for (let i = 0; i < 3; i++) {
+        changed("development");
+      }
+      await published.promise;
+      await stop();
+      changed("development");
+      expect(received).toEqual(expected.map((id) => `agent:main:${id}`));
+      calls.expectIdle();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await stop();
+      vi.restoreAllMocks();
+      unlisten();
+      await environments.close();
+    }
+  });
+});
 
 it.each(["cached", "fresh"] as const)(
   "reads detached %s placement snapshots off thread and joins the captured source",
@@ -23,7 +159,11 @@ it.each(["cached", "fresh"] as const)(
       const database = openOpenClawStateDatabase();
       const store = createWorkerSessionPlacementStore({ database, now: () => 1000 });
       for (const sessionId of ["b", "a"]) {
-        store.startDispatch({ sessionId, agentId: "main", sessionKey: `agent:main:${sessionId}` });
+        await store.startDispatch({
+          sessionId,
+          agentId: "main",
+          sessionKey: `agent:main:${sessionId}`,
+        });
       }
       const failed = store.fail({ sessionId: "a", recoveryError: "synthetic failure" });
       const warn = vi.fn();
@@ -58,22 +198,15 @@ it.each(["cached", "fresh"] as const)(
       if (mode === "fresh") {
         await closeOpenClawStateDatabaseAsync();
       }
-      const { DatabaseSync, StatementSync } = requireNodeSqlite();
-      const watchSql = () => [
-        vi.spyOn(DatabaseSync.prototype, "prepare"),
-        vi.spyOn(DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((method) =>
-          vi.spyOn(StatementSync.prototype, method),
-        ),
-      ];
-      const calls = watchSql();
+      requireNodeSqlite();
+      const calls = observeMainThreadSql();
       let before: WorkerSessionPlacementChangeSnapshot[];
       try {
         before = await store.readChangeSnapshot();
         expect(before).toEqual(expected);
         await expect(publishChanges(async () => "reconciled")).resolves.toBe("reconciled");
         expect(warn).not.toHaveBeenCalled();
-        expect(calls.reduce((count, call) => count + call.mock.calls.length, 0)).toBe(0);
+        calls.expectIdle();
         expect(database.db.isOpen).toBe(mode === "cached");
       } finally {
         vi.restoreAllMocks();
@@ -84,7 +217,7 @@ it.each(["cached", "fresh"] as const)(
         expectedGeneration: failed.generation,
       });
       let after: unknown;
-      const laterCalls = watchSql();
+      const laterCalls = observeMainThreadSql();
       try {
         await withDisposableOpenClawStateReads(database.path, async () => {
           void store.readChangeSnapshot().then(
@@ -98,7 +231,7 @@ it.each(["cached", "fresh"] as const)(
         });
         expect(after).toEqual([expected[1]]);
         expect(before).toEqual(expected);
-        expect(laterCalls.reduce((count, call) => count + call.mock.calls.length, 0)).toBe(0);
+        laterCalls.expectIdle();
       } finally {
         vi.restoreAllMocks();
       }
@@ -110,7 +243,7 @@ it("reports committed placement changes inside an inspection snapshot", async ()
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawStateDatabase();
     const store = createWorkerSessionPlacementStore({ database, now: () => 1000 });
-    store.startDispatch({ sessionId: "a", agentId: "main", sessionKey: "agent:main:a" });
+    await store.startDispatch({ sessionId: "a", agentId: "main", sessionKey: "agent:main:a" });
     const failed = store.fail({ sessionId: "a", recoveryError: "synthetic failure" });
     const broadcastToConnIds = vi.fn();
     const warn = vi.fn();

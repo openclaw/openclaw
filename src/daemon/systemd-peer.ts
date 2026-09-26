@@ -56,6 +56,7 @@ function isLocalUnixAddress(address: string): boolean {
 export async function admitSystemdServiceReadBinding(
   env: GatewayServiceEnv,
   deadline: number,
+  selectedUnitName?: string,
 ): Promise<SystemdServiceReadBinding | undefined> {
   // Capture ambient selectors once; neither subsequent env mutation nor the
   // legacy machine fallback may change the broker authenticated here.
@@ -66,7 +67,7 @@ export async function admitSystemdServiceReadBinding(
   if (process.platform !== "linux" || uid === undefined || uid === 0 || route.SUDO_USER) {
     return undefined;
   }
-  const unit = `${resolveSystemdServiceName(env)}.service`;
+  const unit = selectedUnitName ?? `${resolveSystemdServiceName(env)}.service`;
   let broker: Awaited<ReturnType<typeof openSystemdBroker>> | undefined;
   const query = async (method: string, name: string, signature: string) => {
     if (!broker) {

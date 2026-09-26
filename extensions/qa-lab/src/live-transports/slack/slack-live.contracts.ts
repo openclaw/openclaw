@@ -14,12 +14,7 @@ export type SlackQaFetchFunction = NonNullable<
 >;
 type WebClient = SlackQaWebClient;
 
-export type SlackQaRuntimeEnv = {
-  channelId: string;
-  driverBotToken: string;
-  sutBotToken: string;
-  sutAppToken: string;
-};
+export type SlackQaRuntimeEnv = z.infer<typeof slackQaCredentialPayloadSchema>;
 
 export type SlackChannelStatus = {
   connected?: boolean;

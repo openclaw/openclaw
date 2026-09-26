@@ -6,9 +6,11 @@ import {
   runSqliteDeferredTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
+  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -26,8 +28,11 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.js";
 import {
+  appendAbortedSessionTranscriptPartialInTransaction,
   appendSelectedTranscriptReportInTransaction,
   prepareTranscriptReportSelection,
+  type AbortedSessionTranscriptPartial,
+  type AbortedSessionTranscriptPartialResult,
   type SelectedTranscriptReport,
   type TranscriptReport,
   type TranscriptReportSelection,
@@ -46,8 +51,16 @@ type ReportCommit = {
   committed: boolean;
   projectionNeedsReconcile: boolean;
   cliHistoryChanged?: boolean;
+  abortedPartial?: AbortedSessionTranscriptPartialResult;
+  sessionEntryChanged?: boolean;
 };
 export type TranscriptReportWorkerOperations = {
+  abortedPartial: {
+    input: AbortedSessionTranscriptPartial & {
+      preparedMessage: PreparedTranscriptMessageAppend<Record<string, unknown>>;
+    };
+    output: Result<ReportCommit, TranscriptAppendRefusal>;
+  };
   prepare: {
     input: TranscriptReportSelection;
     output: Result<PreparedReport, TranscriptAppendRefusal>;
@@ -78,6 +91,14 @@ export function bindSqliteWorkerBackend(
   const { fence } = target;
   const resolved = { ...target.resolved, env: getSqliteWorkerStateContext().environment };
   const options = toDatabaseOptions(resolved);
+  if (
+    readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(options)).canonicalPath !==
+    context.databasePath
+  ) {
+    throw new Error("Transcript report target changed its database owner");
+  }
+  resolved.path = context.databasePath;
+  options.path = context.databasePath;
   const database = getOpenClawAgentDatabaseIfOpen(options);
   if (!database || database.db !== context.database || database.path !== context.databasePath) {
     throw new Error("Transcript report lost its canonical database owner");
@@ -145,7 +166,16 @@ export function bindSqliteWorkerBackend(
               projectionNeedsReconcile = true;
             },
           };
-          if (command.type === "assistant") {
+          let abortedPartial: AbortedSessionTranscriptPartialResult | undefined;
+          if (command.type === "abortedPartial") {
+            abortedPartial = appendAbortedSessionTranscriptPartialInTransaction(
+              database,
+              resolved,
+              command.input,
+              command.input.preparedMessage,
+              projection,
+            );
+          } else if (command.type === "assistant") {
             const facts = prepareTranscriptReportSelection(database, resolved, {
               kind: "assistant",
               responseId: command.input.message.responseId,
@@ -209,7 +239,17 @@ export function bindSqliteWorkerBackend(
             throw new SessionTranscriptWriterClaimReboundError(rebound);
           }
           authorizeCommit();
-          return ok({ committed: true, projectionNeedsReconcile, cliHistoryChanged });
+          return ok({
+            committed: true,
+            projectionNeedsReconcile,
+            cliHistoryChanged,
+            ...(abortedPartial
+              ? {
+                  abortedPartial,
+                  sessionEntryChanged: !abortedPartial.skipped && abortedPartial.append.appended,
+                }
+              : {}),
+          });
         },
         options,
         { operationLabel: "session.transcript.report" },

@@ -30,11 +30,12 @@ import {
   commitTaskDeliveryFixture,
 } from "./task-registry-delivery.test-support.js";
 import * as taskRegistryListener from "./task-registry-listener-state.js";
-import { getTaskDeliveryState } from "./task-registry-mutation.js";
+import { applyTaskRegistryMaintenanceRetention } from "./task-registry-maintenance-retention.js";
+import { getTaskDeliveryState, updateTask } from "./task-registry-mutation.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import * as deliveryRuntime from "./task-registry-runtime-loaders.js";
 import * as taskRegistryState from "./task-registry-state.js";
-import { deleteTaskRecordById, getTaskById, markTaskRunningByRunId } from "./task-registry.js";
+import { getTaskById, markTaskRunningByRunId } from "./task-registry.js";
 import { getTaskRegistryStore, onTaskRegistryChange } from "./task-registry.store.js";
 import {
   loadTaskRegistryMutationStateFromSqlite,
@@ -137,9 +138,13 @@ afterEach(async () => {
     notification.complete();
   }
   await Promise.allSettled(notifications.map(({ result }) => result));
-  await nativeDeliveries?.settle();
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
-  vi.restoreAllMocks();
+  try {
+    await nativeDeliveries?.settle();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  } finally {
+    nativeDeliveries?.[Symbol.dispose]();
+    vi.restoreAllMocks();
+  }
   await closeOpenClawStateDatabaseAsync();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
@@ -640,7 +645,6 @@ describe("task state notification acknowledgements", () => {
         return;
       }
       replaced = true;
-      deleteTaskRecordById(task.taskId);
       upsertTaskWithDeliveryStateToSqlite({ task: replacement, deliveryState: delivery });
       publishTaskRecordAfterAtomicStore(replacement);
       commitTaskDeliveryFixture(delivery);
@@ -689,7 +693,6 @@ describe("task state notification acknowledgements", () => {
         expect(
           await Promise.race([loading.promise.then(() => "loading"), result.then(() => "settled")]),
         ).toBe("loading");
-        expect(deleteTaskRecordById(task.taskId)).toBe(true);
         const replacement: TaskRecord = {
           ...task,
           runId: "replacement-before-send",
@@ -729,7 +732,6 @@ describe("task state notification acknowledgements", () => {
       const event = progress(task.createdAt + 10);
       const notification = startNotification(task, event);
       await notification.dispatched;
-      expect(deleteTaskRecordById(task.taskId)).toBe(true);
       if (change === "replaced") {
         const replacement: TaskRecord = {
           ...task,
@@ -746,6 +748,14 @@ describe("task state notification acknowledgements", () => {
         upsertTaskWithDeliveryStateToSqlite({ task: replacement, deliveryState: delivery });
         publishTaskRecordAfterAtomicStore(replacement);
         commitTaskDeliveryFixture(delivery);
+      } else {
+        const expired = updateTask(task.taskId, { status: "succeeded", cleanupAfter: 0 });
+        if (!expired) {
+          throw new Error("Expected the terminal task before retention");
+        }
+        expect(
+          await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Set(), () => {}),
+        ).toBe("pruned");
       }
       const beforeAck = stored(task.taskId);
       notification.complete();

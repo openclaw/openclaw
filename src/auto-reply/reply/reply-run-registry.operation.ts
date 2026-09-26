@@ -7,6 +7,7 @@ import {
 } from "../../agents/run-termination.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
@@ -16,8 +17,10 @@ import {
   ReplyRunAlreadyActiveError,
   ReplyRunFollowupAdmissionBlockedError,
   ReplyRunSuccessorAdmissionBlockedError,
+  type ReplyBackendCancelReason,
   type ReplyOperation,
   type ReplyOperationPhase,
+  type ReplyToolAuthorityRoute,
   type ReplyToolAuthoritySnapshot,
   type ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
@@ -26,7 +29,6 @@ import {
   attachedBackendByOperation,
   clearReplyOperationByOperation,
   clearReplyRunState,
-  createUserAbortError,
   evictReplyOperationByOperation,
   expireReplyOperationByOperation,
   flushReplyOperationAfterClear,
@@ -35,12 +37,11 @@ import {
   hasCommittedReplyOperationOutcome,
   isReplyOperationAbortable,
   isReplyOperationPreBackendPhase,
-  markReplyRunDiagnosticProgress,
   notifyReplyRunEnded,
   operationsByUpstreamAbortSignal,
+  producerCompletionByOperation,
   prepareReplyRunKeyUpdate,
   registerFollowupAdmissionBarrier,
-  registerWaitSessionId,
   replyRunState,
   resolveReplyOperationAgentId,
   retainStateUntilCompleteOperations,
@@ -51,7 +52,6 @@ import {
   updateSuccessorAdmissionSessionId,
 } from "./reply-run-registry.state.js";
 
-type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 type ReplyOperationResult = NonNullable<ReplyOperation["result"]>;
 type ReplyOperationAbortCode = Extract<ReplyOperationResult, { kind: "aborted" }>["code"];
 
@@ -104,8 +104,9 @@ export function createReplyOperation(params: {
   let acceptedSteeredInboundAudio = false;
   let toolAuthorityFingerprint: string | undefined;
   let toolAuthoritySnapshot: ReplyToolAuthoritySnapshot | undefined;
-  let toolAuthorityRoute: { provider: string; model: string } | undefined;
+  let toolAuthorityRoute: ReplyToolAuthorityRoute | undefined;
   const ownerSettlement = createDeferredCore();
+  const producerCompletion = createDeferredCore();
   let ownerCompletionBarrier: Promise<void> | undefined;
   const settleOwner = (): void => {
     const pending = ownerCompletionBarrier;
@@ -137,6 +138,13 @@ export function createReplyOperation(params: {
     result = next;
     recordActivity();
   };
+  const markProgress = (reason: string) => {
+    markDiagnosticRunProgress({
+      sessionId: currentSessionId,
+      sessionKey: currentSessionKey,
+      reason,
+    });
+  };
 
   const clearState = (
     afterClearBarrier?: PromiseLike<unknown>,
@@ -164,11 +172,7 @@ export function createReplyOperation(params: {
     // Recovery-owner handoff must begin before the old slot wakes a successor;
     // otherwise that successor can snapshot durable state the handoff then mutates.
     startReplyOperationSuccessorBarriers(operation);
-    markReplyRunDiagnosticProgress({
-      sessionKey: currentSessionKey,
-      sessionId: currentSessionId,
-      reason: "reply_operation:ended",
-    });
+    markProgress("reply_operation:ended");
     clearReplyRunState({
       sessionKey: currentSessionKey,
       sessionId: currentSessionId,
@@ -295,22 +299,14 @@ export function createReplyOperation(params: {
         return;
       }
       phase = "waiting_for_deferred_maintenance";
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "deferred_maintenance:waiting",
-      });
+      markProgress("deferred_maintenance:waiting");
     },
     markDeferredMaintenanceWaitEnded() {
       if (result || phase !== "waiting_for_deferred_maintenance") {
         return;
       }
       phase = "queued";
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "deferred_maintenance:wait_ended",
-      });
+      markProgress("deferred_maintenance:wait_ended");
     },
     markWaitingForGlobalLane() {
       if (result || (phase !== "queued" && phase !== "running")) {
@@ -320,11 +316,7 @@ export function createReplyOperation(params: {
       // lets stale recovery silently drop replies while global capacity is busy.
       phaseBeforeGlobalLaneWait = phase;
       phase = "waiting_for_global_lane";
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "global_lane:waiting",
-      });
+      markProgress("global_lane:waiting");
     },
     markGlobalLaneWaitEnded() {
       if (result || phase !== "waiting_for_global_lane") {
@@ -332,11 +324,7 @@ export function createReplyOperation(params: {
       }
       phase = phaseBeforeGlobalLaneWait ?? "queued";
       phaseBeforeGlobalLaneWait = undefined;
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "global_lane:wait_ended",
-      });
+      markProgress("global_lane:wait_ended");
     },
     markTerminalRecovery() {
       terminalRecovery = true;
@@ -405,19 +393,15 @@ export function createReplyOperation(params: {
         );
       }
       replyRunState.activeKeysBySessionId.delete(currentSessionId);
-      registerWaitSessionId(currentSessionKey, currentSessionId);
+      replyRunState.waitKeysBySessionId.set(currentSessionId, currentSessionKey);
       currentSessionId = normalizedNextSessionId;
       ownedSessionIds.add(currentSessionId);
       updateFollowupAdmissionSessionId(operation);
       updateSuccessorAdmissionSessionId(operation, currentSessionId);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
-      registerWaitSessionId(currentSessionKey, currentSessionId);
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "reply_operation:session_updated",
-      });
+      replyRunState.waitKeysBySessionId.set(currentSessionId, currentSessionKey);
+      markProgress("reply_operation:session_updated");
     },
     updateSessionKey(nextSessionKey, agentId) {
       const update = prepareReplyRunKeyUpdate(operation, nextSessionKey, agentId, stateCleared);
@@ -445,11 +429,7 @@ export function createReplyOperation(params: {
       }
       // The previous key's slot is idle now; wake turns waiting on it.
       notifyReplyRunEnded(previousKey);
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "reply_operation:session_key_adopted",
-      });
+      markProgress("reply_operation:session_key_adopted");
     },
     attachBackend(handle) {
       if (result) {
@@ -491,6 +471,7 @@ export function createReplyOperation(params: {
     },
     ownerSettlement: ownerSettlement.promise,
     complete() {
+      producerCompletion.resolve();
       if (!result) {
         setResult({ kind: "completed" });
         phase = "completed";
@@ -503,6 +484,8 @@ export function createReplyOperation(params: {
       operation.complete();
     },
     completeWithAfterClearBarrier(barrier, timeoutMs) {
+      // Producer work is done; delivery may still need a successor operation.
+      producerCompletion.resolve();
       // Admission may time out to free a slot; the old writer settles only when
       // its actual delivery/persistence barrier finishes, including repeated complete().
       const completed = Promise.resolve(barrier).then(
@@ -540,7 +523,11 @@ export function createReplyOperation(params: {
       if (!isReplyOperationAbortable(operation)) {
         return false;
       }
-      abortOperation("user_abort", createUserAbortError(), "aborted_by_user");
+      abortOperation(
+        "user_abort",
+        createAbortError("Reply operation aborted by user"),
+        "aborted_by_user",
+      );
       return true;
     },
     abortForRestart() {
@@ -568,6 +555,7 @@ export function createReplyOperation(params: {
   };
 
   clearReplyOperationByOperation.set(operation, clearState);
+  producerCompletionByOperation.set(operation, producerCompletion.promise);
   expireReplyOperationByOperation.set(operation, (reason, options) => {
     if (
       replyRunState.activeRunsByKey.get(currentSessionKey) !== operation ||
@@ -635,12 +623,7 @@ export function createReplyOperation(params: {
       !result &&
       replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
     onActivity: recordActivity,
-    onFinalizationProgress: () =>
-      markReplyRunDiagnosticProgress({
-        sessionKey: currentSessionKey,
-        sessionId: currentSessionId,
-        reason: "reply_operation:finalizing_progress",
-      }),
+    onFinalizationProgress: () => markProgress("reply_operation:finalizing_progress"),
     onExpire: () => {
       diag.warn(
         `reply run finalization settle: forced release sessionKey=${currentSessionKey} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
@@ -677,33 +660,23 @@ export function createReplyOperation(params: {
       phase = "aborted";
     }
     abortInternally(createAgentRunRestartAbortError());
-    let cancelError: unknown;
-    let cancelFailed = false;
     try {
       getAttachedBackend(operation)?.cancel("restart");
     } catch (error) {
-      cancelFailed = true;
-      cancelError = error;
       diag.warn(
         `reply run lifecycle eviction cancel failed: sessionKey=${currentSessionKey} error=${String(error)}`,
       );
+      throw error;
     } finally {
       clearState();
-    }
-    if (cancelFailed) {
-      throw cancelError;
     }
   });
 
   replyRunState.activeRunsByKey.set(sessionKey, operation);
   replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
   replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
-  registerWaitSessionId(sessionKey, currentSessionId);
-  markReplyRunDiagnosticProgress({
-    sessionKey,
-    sessionId: currentSessionId,
-    reason: "reply_operation:queued",
-  });
+  replyRunState.waitKeysBySessionId.set(currentSessionId, sessionKey);
+  markProgress("reply_operation:queued");
   if (upstreamAbortSignal) {
     operationsByUpstreamAbortSignal.set(upstreamAbortSignal, operation);
     const abortFromUpstream = () => {

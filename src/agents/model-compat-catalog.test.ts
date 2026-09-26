@@ -62,5 +62,15 @@ describe("catalog-owned model compat", () => {
 
     expect(resolveUniqueCatalogModelRoute([routeA, routeB], {})).toBeUndefined();
     expect(resolveUniqueCatalogModelRoute([routeA, routeB], routeA)).toBe(routeA);
+    const anthropicRoute = {
+      api: "anthropic-messages",
+      baseUrl: "https://route-a.example.test",
+    };
+    expect(
+      resolveUniqueCatalogModelRoute(
+        [anthropicRoute, { ...anthropicRoute, baseUrl: `${anthropicRoute.baseUrl}/v1` }],
+        anthropicRoute,
+      ),
+    ).toBeUndefined();
   });
 });

@@ -30,10 +30,7 @@ import {
   listSubagentRunsForRequester,
 } from "./subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import {
-  getSubagentSessionListRunsSnapshotForRead,
-  withSubagentRunReadSnapshot,
-} from "./subagent-registry-state.js";
+import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
 
@@ -251,23 +248,6 @@ function buildControlledReadContext(
       );
     },
   };
-}
-
-/** Cancellation consumes current ownership facts without hydrating retained result payloads. */
-export function listControlledSubagentRunFacts(
-  controllerSessionKey: string,
-  controllerAgentId: string | undefined,
-  cfg: OpenClawConfig,
-): SubagentRunReadRecord[] {
-  if (!controllerAgentId) {
-    return [];
-  }
-  const index = buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentSessionListRunsSnapshotForRead(subagentRuns),
-  });
-  return [...index.latestRunsByChildSessionKey.values()].filter((entry) =>
-    isSubagentRunVisibleToSession(entry, controllerSessionKey, controllerAgentId, cfg),
-  );
 }
 
 export function ensureSubagentControllerOwnsRun(params: {

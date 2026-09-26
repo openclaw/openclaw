@@ -137,6 +137,7 @@ describe("Gateway Code Mode clock rollback", () => {
               call_id: "call_code_mode_clock",
               name: "exec",
               arguments: JSON.stringify({
+                title: "Verify the approval clock budget",
                 code: "return await code_mode_clock_approval({});",
               }),
               status: "completed",

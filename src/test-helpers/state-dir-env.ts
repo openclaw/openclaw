@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 
 // OPENCLAW_STATE_DIR test helpers isolate stateful tests and restore the caller
 // environment even when session cleanup fails.
@@ -24,6 +23,7 @@ export async function withStateDirEnv<T>(
   fn: (ctx: { tempRoot: string; stateDir: string }) => Promise<T>,
 ): Promise<T> {
   const snapshot = snapshotStateDirEnv();
+  const { cleanupSessionStateForTest } = await import("../test-utils/session-state-cleanup.js");
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const stateDir = path.join(tempRoot, "state");
   await fs.mkdir(stateDir, { recursive: true });

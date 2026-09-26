@@ -37,6 +37,7 @@ import {
   formatSqliteSessionReferenceForScope,
   normalizeSqliteSessionKey,
   resolveSqliteScope,
+  prepareSqliteScope,
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -45,10 +46,69 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
+import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 import { mergeSessionEntry } from "./types.js";
 
 // Parent-session fork owner: decision, transcript copy, and child entry commit.
+
+/** Prepare one source snapshot; the creation owner commits its copy with the child entry. */
+export async function prepareSessionForkTranscript(params: ForkSessionFromParentTranscriptParams) {
+  if (!params.parentEntry.sessionId) {
+    return { status: "missing-parent" as const };
+  }
+  params.commitGuard?.();
+  const resolved = await prepareSqliteScope({
+    agentId: params.agentId,
+    sessionKey: params.parentSessionKey,
+    storePath: params.storePath,
+  });
+  const target = params.targetStorePath
+    ? await prepareSqliteScope({ sessionKey: params.sessionKey, storePath: params.targetStorePath })
+    : resolved;
+  const sourceScope = {
+    agentId: resolved.agentId,
+    env: resolved.env,
+    sessionKey: normalizeSqliteSessionKey(params.parentSessionKey),
+    sessionId: params.parentEntry.sessionId,
+    storePath: resolved.path ?? params.storePath,
+  };
+  const hydration = prepareSessionTranscriptHydration(sourceScope);
+  const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
+  const snapshot = await readRestoredSessionTranscript(sourceScope, hydration.read, {
+    assertCurrent: params.commitGuard,
+  });
+  params.commitGuard?.();
+  hydration.assertCurrent();
+  if (snapshot.kind !== "full") {
+    throw new Error("Parent fork requires its complete transcript snapshot");
+  }
+  const source = resolveParentForkSourceTranscript(snapshot.snapshot.events, params.forkFrom);
+  if (!source) {
+    return { status: "failed" as const };
+  }
+  const decision = resolveParentForkLimitDecision(params, source);
+  if (decision) {
+    return { status: "too-large" as const, decision };
+  }
+  const sessionId = params.targetSessionId ?? randomUUID();
+  return {
+    status: "prepared" as const,
+    transcript: {
+      sessionId,
+      sessionFile: formatSqliteSessionReferenceForScope({
+        ...target,
+        sessionId,
+        sessionKey: params.sessionKey,
+      }),
+    },
+    events: buildForkedChildTranscriptEvents({
+      parentSessionFile: formatLegacySqliteSessionMarkerForScope({ ...resolved, ...sourceScope }),
+      source,
+      targetSessionId: sessionId,
+    }),
+  };
+}
 
 export async function forkSessionTranscriptFromParent(
   params: ForkSessionFromParentTranscriptParams,

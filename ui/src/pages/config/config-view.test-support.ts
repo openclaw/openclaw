@@ -35,7 +35,6 @@ export const baseProps = () => ({
   onSave: vi.fn(),
   onRawDiscard: vi.fn(),
   onSubsectionChange: vi.fn(),
-  version: "2026.3.11",
   theme: "claw" as ThemeName,
   themeOverridden: false,
   themeProvenance: "default" as const,

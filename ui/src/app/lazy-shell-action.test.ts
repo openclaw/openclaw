@@ -511,7 +511,6 @@ describe("shell lazy events", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellLifecycle & {
       approvalOverlay?: { show(): void };
       execApprovalElement: TestOptionalCustomElement;
-      openApprovals(): void;
     };
     shell.execApprovalElement = element;
     Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
@@ -521,7 +520,7 @@ describe("shell lazy events", () => {
     stubRenderedWhenDefined(shell);
 
     await withConnectedShell(shell, async () => {
-      shell.openApprovals();
+      window.dispatchEvent(new CustomEvent(SHELL_APPROVALS_OPEN_EVENT));
       await vi.waitFor(() => expect(show).toHaveBeenCalledOnce());
     });
   });

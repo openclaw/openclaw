@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionStoreIdentity } from "../../gateway/session-store-key.js";
 import {
@@ -21,7 +22,10 @@ import {
   patchSessionEntryCore,
   patchSessionEntryTarget,
 } from "./session-accessor.sqlite-entry.js";
-import { resolveSessionEntry } from "./session-accessor.sqlite-exact-read.js";
+import {
+  resolveSessionEntry,
+  retainSessionEntryKeyAbsence,
+} from "./session-accessor.sqlite-exact-read.js";
 import "./session-accessor.sqlite-summary.js";
 import type {
   SessionAccessScope,
@@ -42,7 +46,6 @@ import type {
   SessionEntryPatchResult,
 } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
-import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import {
   normalizeStoreSessionKey,
@@ -351,9 +354,22 @@ function resolveSessionEntryStoreTarget(
 }
 
 function projectQualifiedSessionEntryTarget(
-  scope: LogicalSessionAccessScope,
+  scope: Pick<LogicalSessionAccessScope, "env">,
   target: ResolvedSessionEntryStoreTarget & { readSource?: CapturedSessionEntryReadSource },
 ): QualifiedSessionEntryAccessTarget {
+  const prepared = prepareQualifiedSessionEntryTarget(target, undefined, scope.env);
+  try {
+    return prepared.target;
+  } finally {
+    prepared.release();
+  }
+}
+
+export function prepareQualifiedSessionEntryTarget(
+  target: ResolvedSessionEntryStoreTarget & { readSource?: CapturedSessionEntryReadSource },
+  readSources: readonly CapturedSessionEntryReadSource[] = [],
+  env?: NodeJS.ProcessEnv,
+) {
   // Projection never reinterprets the original selector or selects a different row.
   if (target.entry && !target.readSource) {
     throw new Error("Qualified session projection requires its captured physical source");
@@ -362,45 +378,83 @@ function projectQualifiedSessionEntryTarget(
     agentId: target.agentId,
     requestKey: target.storeKey,
   });
-  const storeKeys = [target.storeKey];
   const parsed = parseAgentSessionKey(canonicalKey);
-  if (parsed?.rest === "global" || parsed?.rest === "unknown") {
-    const legacyOwner = resolvePersistedSessionStoreOwnerForTarget({
-      config: scope.cfg,
-      sessionKey: parsed.rest,
-      storePath: target.storePath,
-      env: scope.env,
-    });
-    if (legacyOwner.kind === "none" || legacyOwner.agentId === target.agentId) {
-      storeKeys.push(parsed.rest, canonicalKey);
+  const physicalKeys = (physicalAgentId: string) => {
+    if (parsed?.rest !== "global" && parsed?.rest !== "unknown") {
+      return [canonicalKey];
     }
-  }
-  const keys = uniqueStrings(storeKeys);
-  if (keys.length > 1 && target.entry && target.readSource) {
-    const conflicts = loadExactSessionEntryCandidates({
-      readSource: target.readSource,
-      expectedSource: target.readSource,
-      env: scope.env,
-      readOnly: true,
-      sessionKeys: keys.filter((key) => key !== target.storeKey),
-    });
-    if (conflicts.length > 0) {
-      throw canonicalSessionKeyMigrationRequiredError(
-        `ambiguous stored identity for qualified session key ${canonicalKey}`,
-      );
-    }
-  }
-  return {
+    return physicalAgentId === target.agentId ? [parsed.rest, canonicalKey] : [canonicalKey];
+  };
+  const qualified: QualifiedSessionEntryAccessTarget = {
     keyFormat: "agent-qualified",
     agentId: target.agentId,
     canonicalKey,
     requestedKey: target.requestedKey,
     storeKey: target.storeKey,
-    storeKeys: keys,
+    storeKeys: uniqueStrings([
+      target.storeKey,
+      ...physicalKeys(target.readSource?.agentId ?? target.agentId),
+    ]),
     storePath: target.readSource?.path ?? target.storePath,
     entry: target.entry,
     readSource: target.readSource,
   };
+  const sources: ReturnType<typeof retainSessionEntryKeyAbsence>[] = [];
+  let active = true;
+  const release = () => {
+    active = false;
+    const failures: unknown[] = [];
+    for (let index = sources.length - 1; index >= 0; index--) {
+      try {
+        sources[index]!.release();
+        sources.splice(index, 1);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, "Qualified session sources could not be released");
+    }
+  };
+  try {
+    const capturedSources = target.readSource
+      ? [
+          target.readSource,
+          ...readSources.filter((source) => !isDeepStrictEqual(source, target.readSource)),
+        ]
+      : readSources;
+    for (const readSource of capturedSources) {
+      const selectedSource =
+        readSource.agentId === target.readSource?.agentId &&
+        readSource.databaseIdentity === target.readSource.databaseIdentity &&
+        readSource.databaseBirthtime === target.readSource.databaseBirthtime;
+      sources.push(
+        retainSessionEntryKeyAbsence({
+          source: readSource,
+          canonicalKey,
+          sessionKeys: physicalKeys(readSource.agentId).filter(
+            (key) => !selectedSource || key !== target.storeKey,
+          ),
+          env,
+        }),
+      );
+    }
+    return {
+      target: qualified,
+      assertCurrent: () => {
+        if (!active) {
+          throw new Error("Qualified session target is no longer active");
+        }
+        for (const source of sources) {
+          source.assertCurrent();
+        }
+      },
+      release,
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 /**

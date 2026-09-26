@@ -1,4 +1,3 @@
-// File Transfer plugin module implements mime behavior.
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 
 // MIME types we treat as inline-displayable images for vision-capable models.

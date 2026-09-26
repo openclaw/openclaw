@@ -9,7 +9,7 @@ import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateTransaction,
 } from "./package-update-steps.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const exec = promisify(execFile);
 const scenarios = [

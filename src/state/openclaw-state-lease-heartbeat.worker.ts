@@ -34,6 +34,7 @@ import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js
 // SAFETY: The lease owner alone starts this private entry with its typed structured-clone payload.
 const params = workerData as LeaseHeartbeatWorkerData;
 const shared = new BigInt64Array(params.shared);
+const renewalProgress = new BigInt64Array(params.renewalProgress);
 Atomics.store(shared, state.startupPhase, startupPhase["body-entry"]);
 function observeDurableExpiry(expiresAt: number | undefined) {
   Atomics.store(shared, state.expiresAt, BigInt(expiresAt ?? 0));
@@ -91,7 +92,7 @@ const lose = () => {
   closeTrackedStateDatabase(db);
   parentPort?.close();
 };
-const renew = (explicit = false): number | undefined => {
+const renewInWorker = (explicit: boolean): number | undefined => {
   if (Atomics.load(shared, state.status) >= state.closed) {
     return undefined;
   }
@@ -185,6 +186,19 @@ const renew = (explicit = false): number | undefined => {
     throw toErrorObject(contentionError, "state lease heartbeat renewal was delayed");
   }
   return expiresAt;
+};
+
+// SQLite and native process lookup are synchronous on this worker. Publish only
+// occupancy; callers still require a fresh reply and check the durable owner.
+const renew = (explicit = false): number | undefined => {
+  Atomics.add(renewalProgress, 0, 1n);
+  Atomics.notify(shared, state.ack);
+  try {
+    return renewInWorker(explicit);
+  } finally {
+    Atomics.add(renewalProgress, 0, 1n);
+    Atomics.notify(shared, state.ack);
+  }
 };
 
 function activateHeartbeat(): void {

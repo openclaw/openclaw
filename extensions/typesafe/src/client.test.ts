@@ -75,9 +75,13 @@ describe("TypeSafe HTTP evaluation", () => {
     [400, "transport"],
     [401, "authentication"],
     [403, "authentication"],
-    [422, "transport"],
+    [413, "unsupported-input"],
+    [422, "unsupported-input"],
+    [404, "transport"],
+    [415, "transport"],
     [429, "rate-limited"],
     [500, "transport"],
+    [529, "transport"],
   ])("classifies HTTP %s without exposing diagnostics or retrying", async (status, reason) => {
     const fetch = mockFetch(
       async () => new Response(`${config.apiKey}: synthetic state`, { status }),

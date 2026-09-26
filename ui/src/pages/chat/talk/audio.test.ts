@@ -1,10 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  bytesToBase64,
-  RealtimeTalkMediaStreamMeter,
-  RealtimeTalkPcmOutputQueue,
-} from "./audio.ts";
+import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
+import { RealtimeTalkMediaStreamMeter, RealtimeTalkPcmOutputQueue } from "./audio.ts";
 
 class MockAudioBufferSource {
   buffer: unknown = null;

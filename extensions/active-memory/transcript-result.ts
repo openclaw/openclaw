@@ -7,9 +7,7 @@ import { normalizeActiveSummary, truncateSummary } from "./prompt.js";
 import { extractTextContent } from "./query.js";
 import { readMergedActiveMemoryTranscriptState } from "./transcript-watch.js";
 import {
-  hasUnavailableMemoryResultInSessionRecord,
-  hasUsableMemoryResultInSessionRecord,
-  isUnavailableMemorySearchDebug,
+  readMemoryResultFromSessionRecord,
   resolveTranscriptReadLimits,
   streamActiveMemoryTranscriptRecords,
 } from "./transcript.js";
@@ -53,13 +51,9 @@ function readMemoryToolResultEvidence(params: {
       details: result?.details,
     },
   };
-  return {
-    hasUsableMemoryResult: hasUsableMemoryResultInSessionRecord(record, params.toolsAllow),
-    hasUnavailableMemorySearchResult: hasUnavailableMemoryResultInSessionRecord(
-      record,
-      params.toolsAllow,
-    ),
-  };
+  const { hasUsableMemoryResult, hasUnavailableMemorySearchResult } =
+    readMemoryResultFromSessionRecord(record, params.toolsAllow);
+  return { hasUsableMemoryResult, hasUnavailableMemorySearchResult };
 }
 
 function extractAssistantTextFromSessionRecord(value: unknown): string {
@@ -216,7 +210,7 @@ async function buildTimeoutRecallResult(
     subagentPartialData.resultStatus === "failed" ||
     params.cleanupFailed ||
     subagentPartialData.cleanupFailed ||
-    isUnavailableMemorySearchDebug(searchDebug) ||
+    Boolean(searchDebug?.error) ||
     !subagentPartialData.settled ||
     params.hasUnavailableMemorySearchResult ||
     subagentPartialData.hasUnavailableMemorySearchResult ||
@@ -247,7 +241,7 @@ function buildSubagentRecallResult(params: {
     resultStatus === "failed"
       ? "failed"
       : resultStatus === "unavailable" ||
-          isUnavailableMemorySearchDebug(searchDebug) ||
+          Boolean(searchDebug?.error) ||
           params.subagentResult.hasUnavailableMemorySearchResult === true
         ? "unavailable"
         : "no_relevant_memory";

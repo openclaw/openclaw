@@ -8,7 +8,7 @@ import {
 import {
   hasMatchingPluginLoadPath,
   removePluginRuntimePolicyFromConfig,
-  resolveComparableUninstallPathInternal,
+  resolveComparableUninstallPath,
 } from "./uninstall-package-config.js";
 
 type PluginPackageUpdateSnapshot = ReadonlyMap<string, InstalledPluginLifecycleOwnership>;
@@ -90,12 +90,12 @@ export function reconcilePluginPackageUpdateConfig(params: {
       [
         after.value.installRecord.installPath,
         after.value.installRecord.sourcePath,
-        ...params.afterIndex.plugins
-          .filter((plugin) => afterPluginIds.has(plugin.pluginId))
-          .flatMap((plugin) => [plugin.source, plugin.rootDir]),
+        ...params.afterIndex.plugins.flatMap((plugin) =>
+          afterPluginIds.has(plugin.pluginId) ? [plugin.source, plugin.rootDir] : [],
+        ),
       ]
         .filter((value): value is string => Boolean(value))
-        .map(resolveComparableUninstallPathInternal),
+        .map(resolveComparableUninstallPath),
     );
     const retainedContributionKeys = contributionKeys(params.afterIndex, afterPluginIds);
     for (const pluginId of removedPluginIds) {
@@ -112,9 +112,7 @@ export function reconcilePluginPackageUpdateConfig(params: {
           before.installRecord.sourcePath,
         ]
           .filter((value): value is string => Boolean(value))
-          .filter(
-            (value) => !retainedOwnedPaths.has(resolveComparableUninstallPathInternal(value)),
-          ),
+          .filter((value) => !retainedOwnedPaths.has(resolveComparableUninstallPath(value))),
       }).config;
     }
   }

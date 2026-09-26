@@ -83,11 +83,11 @@ describe("chat realtime actions", () => {
       startSpy.mockImplementation(async function (this: RealtimeTalkSession) {
         ids.set(this, `voice-${++creates}`);
       });
-      vi.spyOn(RealtimeTalkSession.prototype, "getVoiceSessionId").mockImplementation(
-        function (this: RealtimeTalkSession) {
-          return ids.get(this);
-        },
-      );
+      vi.spyOn(RealtimeTalkSession.prototype, "getVoiceSessionId").mockImplementation(function (
+        this: RealtimeTalkSession,
+      ) {
+        return ids.get(this);
+      });
       vi.spyOn(RealtimeTalkSession.prototype, "getTransport").mockReturnValue("webrtc");
       if (useSystemDefault) {
         startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());

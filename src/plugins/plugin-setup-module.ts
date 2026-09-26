@@ -17,7 +17,7 @@ export function getPluginSetupModuleLoader(
   if (!cached && cache.retirement) {
     throw new Error(`Plugin ${record.id} setup inventory has retired`);
   }
-  const instance = cached ?? new PluginInstance(record.id);
+  const instance = cached ?? new PluginInstance(record.id, { cache });
   const discard = () => {
     // Repeated inspections share callbacks already published by successful initialization.
     if (instance.controlPlaneInitialized) {

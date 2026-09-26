@@ -51,23 +51,20 @@ import {
   hasSessionRelatedCronJobs,
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
-import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
+import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
-import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
-import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
+import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-channel-actions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { buildWaitingStatusPayload } from "./waiting-status.js";
-type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
-
 export async function prepareReplyAgentPayloads(state: {
   context: FinalizeReplyAgentRunInput;
-  accounting: ReplyAgentAccounting;
+  accounting: AccountedAgentTurn;
 }) {
   const { context, accounting } = state;
   const {

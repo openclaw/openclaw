@@ -1,4 +1,3 @@
-// Control UI helpers shared by config form node renderers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
@@ -11,7 +10,7 @@ import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
-import type { ConfigSearchCriteria } from "./config-form.search.ts";
+import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   configFieldId,
   hasSensitiveConfigData,
@@ -69,6 +68,19 @@ export type ConfigNodeRenderer = (
   params: ConfigNodeRenderParams,
 ) => TemplateResult | typeof nothing;
 
+export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
+  const { label, help } = resolveConfigFieldMeta(params.path, params.schema, params.hints);
+  const showLabel = params.showLabel ?? true;
+  return {
+    label,
+    help,
+    showLabel,
+    helpId:
+      params.descriptionId ??
+      (showLabel && help ? configFieldId(params.path, "description") : undefined),
+  };
+}
+
 type SensitiveRenderState = {
   isSensitive: boolean;
   isMasked: boolean;
@@ -98,10 +110,6 @@ export function formatConfigValueText(value: unknown): string {
   return typeof value === "number" ? formatConfigFormNumber(value) : formatUnknownText(value);
 }
 
-export function schemaWithDefault(schema: JsonSchema, value: unknown): JsonSchema {
-  return { ...schema, default: value };
-}
-
 export function isSecretRefObject(value: unknown): value is {
   source: string;
   id: string;
@@ -110,11 +118,10 @@ export function isSecretRefObject(value: unknown): value is {
   if (!isRecord(value)) {
     return false;
   }
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.source !== "string" || typeof candidate.id !== "string") {
+  if (typeof value.source !== "string" || typeof value.id !== "string") {
     return false;
   }
-  return candidate.provider === undefined || typeof candidate.provider === "string";
+  return value.provider === undefined || typeof value.provider === "string";
 }
 
 export function getSensitiveRenderState(params: {

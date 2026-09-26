@@ -10,7 +10,6 @@ import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import type { DiscordVoiceSegmentOutcome } from "./recording-types.js";
 import { logVoiceVerbose, type VoiceSessionEntry } from "./session.js";
-import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
 
 const logger = createSubsystemLogger("discord/voice");
@@ -22,9 +21,6 @@ type DiscordVoiceResponseParams = {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
-  admissionAllowFrom?: string[];
-  fetchGuildName: (guildId: string) => Promise<string | undefined>;
-  speakerContext: DiscordVoiceSpeakerContextResolver;
   enqueuePlayback: (entry: VoiceSessionEntry, task: () => Promise<void>) => void;
 };
 
@@ -180,13 +176,9 @@ export async function respondToDiscordVoiceTranscript(
       accountId: params.accountId,
       userId,
       message: prompt,
-      cfg: params.cfg,
       discordConfig: params.discordConfig,
       runtime: params.runtime,
       context: ingress,
-      admissionAllowFrom: params.admissionAllowFrom,
-      fetchGuildName: params.fetchGuildName,
-      speakerContext: params.speakerContext,
     });
     if (!turn) {
       logVoiceVerbose(

@@ -1,6 +1,6 @@
-// Memory Wiki plugin module implements compile behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { retryTransientMemoryRead } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -12,7 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { walkMemoryWikiDirectory } from "./bounded-walk.js";
+import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -194,7 +194,7 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
     buildBody: ({ config, pages, now, sourceRelativeTo }) => {
       const claimHealth = collectWikiClaimHealth(pages, now);
       const missingEvidence = claimHealth.filter((claim) => claim.missingEvidence);
-      const contestedClaims = claimHealth.filter((claim) => isClaimHealthContested(claim));
+      const contestedClaims = claimHealth.filter((claim) => isClaimContestedStatus(claim.status));
       const staleClaims = claimHealth.filter(
         (claim) => claim.freshness.level === "stale" || claim.freshness.level === "unknown",
       );
@@ -374,21 +374,6 @@ type CompileMemoryWikiOptions = {
   signal?: AbortSignal;
 };
 
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
-async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
-  const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
-  return entries
-    .filter((entry) => entry.kind === "file" && entry.relativePath.endsWith(".md"))
-    .map((entry) => entry.relativePath.split(path.sep).join("/"))
-    .filter((relativePath) => path.basename(relativePath) !== "index.md")
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 async function readPageSummaries(
   rootDir: string,
   signal?: AbortSignal,
@@ -399,7 +384,13 @@ async function readPageSummaries(
   overviewItems: MemoryWikiOverviewItem[];
 }> {
   const filePaths = (
-    await Promise.all(COMPILE_PAGE_GROUPS.map((group) => collectMarkdownFiles(rootDir, group.dir)))
+    await Promise.all(
+      COMPILE_PAGE_GROUPS.map(async (group) =>
+        (await listMemoryWikiPagePaths(rootDir, group.dir)).toSorted((left, right) =>
+          left.localeCompare(right),
+        ),
+      ),
+    )
   ).flat();
   signal?.throwIfAborted();
 
@@ -638,10 +629,6 @@ function collectPrivacyReviewEntries(
 
 function formatClaimIdentity(claim: WikiClaimHealth): string {
   return claim.claimId ? `\`${claim.claimId}\`: ${claim.text}` : claim.text;
-}
-
-function isClaimHealthContested(claim: WikiClaimHealth): boolean {
-  return isClaimContestedStatus(claim.status);
 }
 
 function formatClaimHealthLine(
@@ -1087,7 +1074,7 @@ function rankFreshnessLevel(level: WikiFreshnessLevel): number {
 }
 
 function sortClaims(page: WikiPageSummary): WikiClaim[] {
-  return [...page.claims].toSorted((left, right) => {
+  return page.claims.toSorted((left, right) => {
     const leftConfidence = left.confidence ?? -1;
     const rightConfidence = right.confidence ?? -1;
     if (leftConfidence !== rightConfidence) {
@@ -1106,7 +1093,7 @@ function buildCompiledCacheSnapshot(
   scan: Awaited<ReturnType<typeof readPageSummaries>>,
 ): MemoryWikiCompiledCacheSnapshot {
   const pagesInput = scan.pages;
-  const pages = [...pagesInput]
+  const pages = pagesInput
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
     .map((page) => {
       return Object.assign(

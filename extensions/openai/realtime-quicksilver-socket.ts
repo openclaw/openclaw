@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
-import { Worker, type MessagePort } from "node:worker_threads";
+import type { Worker, MessagePort } from "node:worker_threads";
 import {
+  createCpuTrackedWorker,
   resolveRuntimeWorkerUrl,
   resolveRuntimeWorkerArgv,
 } from "openclaw/plugin-sdk/process-runtime";
@@ -35,7 +36,7 @@ export class OpenAIQuicksilverWorkerSocket extends EventEmitter implements Quick
         distWorkerPath: "realtime-quicksilver-socket.worker.js",
       },
     });
-    const worker = new Worker(workerUrl, {
+    const worker = createCpuTrackedWorker(workerUrl, {
       workerData: {
         url,
         options: { headers: options.headers, maxPayload: options.maxPayload },

@@ -90,7 +90,8 @@ export function captureTaskNotificationMutationOwner(assertDeliveryCurrent: () =
         const flows = await prepareTaskFlowRegistryRead(mutation.context);
         assertCurrent();
         if (!read || !flows) {
-          throw new Error("Task notification projections require preparation");
+          // Concurrent publication can invalidate the readers' bounded snapshot attempts.
+          continue;
         }
         const consumeCurrent = (readSubagentRun?: () => SubagentRunRecord | null) => {
           assertCurrent();

@@ -13,6 +13,25 @@ describe("createAnthropicPayloadLogger", () => {
   const bareGithubKey = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"; // pragma: allowlist secret
   const bareGoogleKey = "AIzaSyA1bC2dE3fG4hI5jK6lM7nO8pQrStUvW"; // pragma: allowlist secret
 
+  it.each(["dashboard", "subagent", "internal-session-effects"])(
+    "does not record Incognito %s payloads or raw errors when logging is enabled",
+    (surface) => {
+      const lines: string[] = [];
+      const logger = createAnthropicPayloadLogger({
+        env: { OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1" },
+        sessionKey: `agent:main:${surface}:incognito-private`,
+        writer: {
+          filePath: "memory",
+          write: (line) => lines.push(line),
+          flush: async () => undefined,
+        },
+      });
+      logger?.recordUsage([], new Error("synthetic private provider error"));
+      expect(lines).toEqual([]);
+      expect(logger).toBeNull();
+    },
+  );
+
   it("sanitizes credential fields and image base64 payload data before writing logs", async () => {
     const lines: string[] = [];
     const logger = createAnthropicPayloadLogger({

@@ -55,10 +55,6 @@ function readUploadFileCaptionText(args: Record<string, unknown>): string {
   );
 }
 
-function hasUploadFileBufferPayload(args: Record<string, unknown>): boolean {
-  return readStringParam(args, "buffer", { trim: false }) !== undefined;
-}
-
 function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string | undefined {
   const explicit =
     readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
@@ -123,7 +119,7 @@ async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParam
     readStringParam(params.params, "contentType") ?? readStringParam(params.params, "mimeType");
   const fileName =
     readStringParam(params.params, "filename") ?? readStringParam(params.params, "fileName");
-  if (!mediaUrl && !hasUploadFileBufferPayload(params.params)) {
+  if (!mediaUrl && encodedPayload === undefined) {
     throw new Error(
       "WhatsApp upload-file requires media, mediaUrl, filePath, path, fileUrl, or buffer.",
     );

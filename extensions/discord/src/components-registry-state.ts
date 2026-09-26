@@ -2,7 +2,7 @@ import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
-type PersistedDiscordRegistryEntry<T extends { id: string }> = {
+export type PersistedDiscordRegistryEntry<T extends { id: string }> = {
   version: 1;
   entry: T;
 };

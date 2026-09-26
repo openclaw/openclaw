@@ -90,17 +90,26 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     expect(match.matchKey).toBe(testCase.expectedMatchKey);
   });
 
-  it("matches normalized keys when normalizeKey is provided", () => {
-    const entries = { "My Team": { allow: true } };
-    const match = resolveChannelEntryMatchWithFallback({
-      entries,
-      keys: ["my-team"],
-      normalizeKey: normalizeChannelSlug,
-    });
-    expect(match.entry).toBe(entries["My Team"]);
-    expect(match.matchSource).toBe("direct");
-    expect(match.matchKey).toBe("My Team");
-  });
+  it.each([
+    { keys: ["my-team"], parentKeys: ["parent"], source: "direct" },
+    { keys: ["missing"], parentKeys: ["my-team"], source: "parent" },
+  ] as const)(
+    "matches normalized $source keys before wildcard fallback",
+    ({ keys, parentKeys, source }) => {
+      const entries = { "My Team": { allow: true } };
+      const match = resolveChannelEntryMatchWithFallback({
+        entries: { ...entries, parent: { allow: false }, "*": { allow: false } },
+        keys: [...keys],
+        parentKeys: [...parentKeys],
+        wildcardKey: "*",
+        normalizeKey: normalizeChannelSlug,
+      });
+      expect(match.entry).toBe(entries["My Team"]);
+      expect(match.matchSource).toBe(source);
+      expect(match.matchKey).toBe("My Team");
+      expect(match.parentEntry).toBe(source === "parent" ? entries["My Team"] : undefined);
+    },
+  );
 });
 
 describe("applyChannelMatchMeta", () => {

@@ -65,15 +65,23 @@ for matching, prompting, and binding restrictions.
 
 ## Inspecting the effective policy
 
-| Command                                                          | What it shows                                                                              |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `openclaw approvals get` / `--gateway` / `--node <id\|name\|ip>` | Requested policy, host policy sources, and the effective result.                           |
-| `openclaw exec-policy show`                                      | Local-machine merged view.                                                                 |
-| `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals document in one step. |
+| Command                                                          | What it shows                                                                                         |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `openclaw approvals get` / `--gateway` / `--node <id\|name\|ip>` | Requested policy, host policy sources, and the effective result.                                      |
+| `openclaw exec-policy show`                                      | Terminal tool policies and local command approvals; add `--session <key>` for a session tool preview. |
+| `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals document in one step.            |
 
 <Note>
 Per-session `/exec` overrides are not included. Run `/exec` in the relevant session to inspect its current defaults. See [session overrides](/tools/exec#session-overrides-%2Fexec).
 </Note>
+
+Tool availability and command approvals are separate: a `messaging` tool
+profile can exclude `exec` and `process` even when approvals permit commands.
+`exec-policy show` explains local exclusions offline and identifies the policy
+source. `--session <key>` previews tools from saved session settings. Inclusion
+does not guarantee execution, and absence does not prove a tool is disabled.
+Verify execution in a run; command approvals still apply.
+Use `--agent <id>` to select an agent and `--verbose` for all approval scopes.
 
 Full CLI reference (flags, JSON output, allowlist add/remove): [Approvals CLI](/cli/approvals).
 

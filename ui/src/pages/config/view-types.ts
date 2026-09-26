@@ -104,7 +104,6 @@ export type ConfigProps = {
   onSave: () => void;
   onRawDiscard: () => void;
   onOpenFile?: () => void;
-  version: string;
   theme: ThemeName;
   themeOverridden: boolean;
   themeProvenance: ServerUiPrefProvenance;

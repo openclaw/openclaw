@@ -4,6 +4,7 @@ import { retryAsync } from "../../infra/retry.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import {
   buildMainSessionRecoveryClearPatch,
+  removeMainSessionRecoveryForegroundClaim,
   type MainRecoveryStateFields,
 } from "./main-session-recovery-clear.js";
 
@@ -112,17 +113,7 @@ function settleForegroundOwner(
         ) || state?.reservation?.lifecycleGeneration === currentLifecycleGeneration,
     };
   }
-  const tokens = claims.tokens.filter((token) => token !== claimId);
-  const runIdsByClaimId = Object.fromEntries(
-    Object.entries(claims.runIdsByClaimId ?? {}).filter(([token]) => token !== claimId),
-  );
-  const foregroundClaims = tokens.length
-    ? {
-        lifecycleGeneration: claims.lifecycleGeneration,
-        tokens,
-        ...(Object.keys(runIdsByClaimId).length ? { runIdsByClaimId } : {}),
-      }
-    : undefined;
+  const foregroundClaims = removeMainSessionRecoveryForegroundClaim(claims, claimId);
   return {
     claimId,
     state: { ...state, revision: state.revision + 1, foregroundClaims },

@@ -13,20 +13,27 @@ import type {
   AckDeliveryOptions,
   FailPendingDeliveryResult,
 } from "./outbound/delivery-queue-settlement.types.js";
+import type { OutboundDeliveryStorageOperations } from "./outbound/delivery-queue-storage.worker-contract.js";
 
-export type DeliveryQueueWorkerOperations = {
+export type DeliveryQueueWorkerOperations = OutboundDeliveryStorageOperations & {
   "deliveryQueue.findIntentOwners": {
     input: Parameters<typeof findDeliveryIntentOwnersInDatabase>[1];
     output: ReturnType<typeof findDeliveryIntentOwnersInDatabase>;
   };
   "deliveryQueue.claimPlatformSend": {
-    input: Parameters<typeof claimDeliveryQueueEntryPlatformSendInDatabase>[1] & {
+    input: Omit<
+      Parameters<typeof claimDeliveryQueueEntryPlatformSendInDatabase>[1],
+      "queueName"
+    > & {
       claimId: string;
     };
     output: ReturnType<typeof claimDeliveryQueueEntryPlatformSendInDatabase>;
   };
   "deliveryQueue.renewPlatformSendLease": {
-    input: Parameters<typeof renewDeliveryQueueEntryPlatformSendLeaseInDatabase>[1];
+    input: Omit<
+      Parameters<typeof renewDeliveryQueueEntryPlatformSendLeaseInDatabase>[1],
+      "queueName"
+    >;
     output: ReturnType<typeof renewDeliveryQueueEntryPlatformSendLeaseInDatabase>;
   };
   "deliveryQueue.ack": {
