@@ -326,25 +326,6 @@ afterEach(async () => {
 });
 
 describe("users model-account connection lifecycle", () => {
-  it("rejects an actor replacement while preparing account authority", async () => {
-    const pending = createDeferredCore<{ profileId: string; isCurrent: () => boolean }>();
-    const entered = createDeferredCore();
-    prepareUserProfileSelectionAuthority.mockImplementationOnce(() => {
-      entered.resolve();
-      return pending.promise;
-    });
-    const request = rpc("users.listModelAccounts", {});
-    await entered.promise;
-    self.authenticatedUserProfile!.profileId = "profile-other";
-    pending.resolve({ profileId: "profile-1", isCurrent: () => true });
-    expect(await request).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
-    expect(listUserModelAccounts).not.toHaveBeenCalled();
-  });
-
   it("lists account pages for their owner or an identified administrator", async () => {
     const accounts = [
       {

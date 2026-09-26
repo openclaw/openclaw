@@ -43,6 +43,31 @@ test("prepared model-account authority rechecks without main-thread SQL", async 
   });
 });
 
+test("rejects an actor replacement while preparing account authority", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async () => {
+    const fixture = await createFixture("operator.write", false);
+    const replacement = ensureProfileForEmail("replacement@example.test");
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const prepare = profileAuthority.prepareUserProfileSelectionAuthority;
+    vi.spyOn(profileAuthority, "prepareUserProfileSelectionAuthority").mockImplementationOnce(
+      async (...args) => {
+        const prepared = await prepare(...args);
+        entered.resolve();
+        await release.promise;
+        return prepared;
+      },
+    );
+    const request = prepareUserModelAccountAction(fixture);
+    await entered.promise;
+    fixture.client.authenticatedUserProfile = identifiedClient(
+      replacement.id,
+    ).authenticatedUserProfile;
+    release.resolve();
+    await expect(request).rejects.toBeInstanceOf(ModelAccountConnectAuthorityError);
+  });
+});
+
 test.each(["during preparation", "after preparation"] as const)(
   "legacy model-account authority rejects an email relink %s",
   async (phase) => {
