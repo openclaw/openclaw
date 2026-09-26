@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 // A paused heartbeat is not renewal. Retain the real file fence until the
 // admitted operation settles, bounded by every owner's freshly read deadline.
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
@@ -18,13 +18,6 @@ const activeOwners = new AsyncLocalStorage<readonly CaptureOwner[]>();
 /** Independent work must acquire its own lease instead of inheriting a prior file owner. */
 export function runOutsideOpenClawStateLeaseScope<T>(run: () => T): T {
   return activeOwners.exit(run);
-}
-
-function fail(errors: unknown[]): never {
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  throw createSqliteLifecycleAggregateError(errors, "state lease exclusion failed", errors[0]);
 }
 
 async function perform<T>(
@@ -136,9 +129,7 @@ async function perform<T>(
       } catch (error) {
         bindingErrors.push(error);
       }
-      if (bindingErrors.length > 0) {
-        fail(bindingErrors);
-      }
+      throwSqliteLifecycleErrors(bindingErrors, "state lease exclusion failed");
       assertCurrent();
     }
   } catch (error) {
@@ -205,9 +196,7 @@ async function perform<T>(
       errors.push(error);
     }
   }
-  if (errors.length > 0) {
-    fail(errors);
-  }
+  throwSqliteLifecycleErrors(errors, "state lease exclusion failed");
   // SAFETY: successful operation assigned result; every failure above is rethrown.
   return result as T;
 }
@@ -298,9 +287,7 @@ export function createOpenClawStateLeaseExclusion(params: LeaseExclusionParams) 
       }
       // Close admission in the same turn as the final empty check.
       owner.admissionClosed = true;
-      if (errors.length > 0) {
-        fail(errors);
-      }
+      throwSqliteLifecycleErrors(errors, "state lease exclusion failed");
     },
   };
 }
