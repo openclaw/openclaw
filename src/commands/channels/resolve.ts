@@ -1,4 +1,3 @@
-// Implements `openclaw channels resolve` for provider-specific user/group target resolution.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -28,15 +27,6 @@ export type ChannelsResolveOptions = {
   entries?: string[];
 };
 
-type ResolveResult = {
-  input: string;
-  resolved: boolean;
-  id?: string;
-  name?: string;
-  error?: string;
-  note?: string;
-};
-
 function resolvePreferredKind(
   kind?: ChannelsResolveOptions["kind"],
 ): ChannelResolveKind | undefined {
@@ -51,22 +41,12 @@ function resolvePreferredKind(
 
 function detectAutoKind(input: string): ChannelResolveKind {
   const trimmed = input.trim();
-  if (!trimmed) {
-    return "group";
-  }
-  if (trimmed.startsWith("@")) {
-    return "user";
-  }
-  if (/^<@!?/.test(trimmed)) {
-    return "user";
-  }
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
-    return "user";
-  }
-  if (/^user:/i.test(trimmed)) {
-    return "user";
-  }
-  return "group";
+  return trimmed.startsWith("@") ||
+    /^<@!?/.test(trimmed) ||
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) ||
+    /^user:/i.test(trimmed)
+    ? "user"
+    : "group";
 }
 
 function detectAutoKindForPlugin(
@@ -107,16 +87,12 @@ function detectAutoKindForPlugin(
   return generic;
 }
 
-function formatResolveResult(result: ResolveResult): string {
-  if (!result.resolved || !result.id) {
-    return `${result.input} -> unresolved`;
-  }
+function formatResolveResult(result: ChannelResolveResult): string {
   const name = result.name ? ` (${result.name})` : "";
   const note = result.note ? ` [${result.note}]` : "";
   return `${result.input} -> ${result.id}${name}${note}`;
 }
 
-/** Resolve user/group/channel labels into plugin-specific stable target ids. */
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const entries = normalizeStringEntries(opts.entries);
   if (entries.length === 0) {
@@ -179,39 +155,37 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 
-  let results: ResolveResult[];
+  const byKind = new Map<ChannelResolveKind, string[]>();
   if (preferredKind) {
-    const resolved = await plugin.resolver.resolveTargets({
-      cfg,
-      accountId: opts.account ?? null,
-      inputs: entries,
-      kind: preferredKind,
-      runtime,
-    });
-    results = resolved.map((entry) => ({
-      input: entry.input,
-      resolved: entry.resolved,
-      id: entry.id,
-      name: entry.name,
-      note: entry.note,
-    }));
+    byKind.set(preferredKind, entries);
   } else {
-    const byKind = new Map<ChannelResolveKind, string[]>();
     for (const entry of entries) {
       const kind = detectAutoKindForPlugin(entry, plugin);
       byKind.set(kind, [...(byKind.get(kind) ?? []), entry]);
     }
-    const resolved: ChannelResolveResult[] = [];
-    for (const [kind, inputs] of byKind.entries()) {
-      const batch = await plugin.resolver.resolveTargets({
+  }
+  const resolved: ChannelResolveResult[] = [];
+  for (const [kind, inputs] of byKind) {
+    resolved.push(
+      ...(await plugin.resolver.resolveTargets({
         cfg,
         accountId: opts.account ?? null,
         inputs,
         kind,
         runtime,
-      });
-      resolved.push(...batch);
-    }
+      })),
+    );
+  }
+  let results: ChannelResolveResult[];
+  if (preferredKind) {
+    results = resolved.map(({ input, resolved, id, name, note }) => ({
+      input,
+      resolved,
+      id,
+      name,
+      note,
+    }));
+  } else {
     const byInput = new Map(resolved.map((entry) => [entry.input, entry]));
     results = entries.map((input) => {
       const entry = byInput.get(input);
@@ -235,9 +209,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
       runtime.log(formatResolveResult(result));
     } else {
       runtime.error(
-        danger(
-          `${result.input} -> unresolved${result.error ? ` (${result.error})` : result.note ? ` (${result.note})` : ""}`,
-        ),
+        danger(`${result.input} -> unresolved${result.note ? ` (${result.note})` : ""}`),
       );
     }
   }
