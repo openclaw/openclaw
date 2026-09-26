@@ -12,7 +12,7 @@ Sonar chat completions, direct or via OpenRouter (AI-synthesized answers with
 citations).
 
 <Note>
-This page covers the Perplexity **provider** setup. For the Perplexity **tool** (how the agent uses it), see [Perplexity search](/tools/perplexity-search).
+This page covers the Perplexity **web search provider** setup. For the Perplexity **tool** (how the agent uses it), see [Perplexity search](/tools/perplexity-search). To use the Perplexity **Agent API** as an LLM model provider, see [Perplexity Agent API](/providers/perplexity-agent-api).
 </Note>
 
 | Property    | Value                                                                  |
@@ -77,6 +77,26 @@ A configured key with any other prefix also uses the native Search API. The
 chat-completions path defaults to the `perplexity/sonar-pro` model; override it
 with `plugins.entries.perplexity.config.webSearch.model`.
 
+### Direct Sonar transition
+
+OpenClaw's current direct synthesized-answer path sends synchronous
+`POST https://api.perplexity.ai/chat/completions` requests. It does not use
+Perplexity's separate `/v1/async/sonar` endpoints. Agent API uses
+`POST /v1/agent`, with `POST /v1/responses` as its OpenAI Responses alias.
+
+Perplexity's public migration guide says Sonar Chat Completions remains supported
+and recommends Agent API for new integrations. It does not publish a September
+27 cutoff or automatic-routing contract for synchronous requests. In a private
+September 24 confirmation relayed by this PR's author, Perplexity's API owner
+said selecting Sonar for non-async requests will continue after September 27,
+2026 through automatic server-side routing to an Agent API preset, while the
+async Sonar endpoints will fully discontinue. This future policy is not
+independently verifiable from the public migration pages or observable in
+OpenClaw's current transport; operators who require a public contract should
+follow the published migration guidance. Automatic routing would preserve
+request continuity, not identical parameters, results, latency, pricing, or
+features.
+
 ## Native API filtering
 
 | Filter                               | Description                                                                             | Transport   |
@@ -89,8 +109,11 @@ with `plugins.entries.perplexity.config.webSearch.model`.
 | `domain_filter`                      | Max 20 domains; allowlist or `-`-prefixed denylist, never mixed                         | Native only |
 | `max_tokens` / `max_tokens_per_page` | Content budget across all results / per page; `max_tokens` max 1000000                  | Native only |
 
-Native-only filters return a descriptive error on the chat-completions path.
-`freshness` cannot be combined with `date_after`/`date_before`.
+In chat-completions mode, the generated `web_search` tool schema omits the seven
+native-only filter properties, so agents cannot request them through the tool.
+If a caller bypasses that schema and supplies one directly, the runtime returns
+a descriptive unsupported-option error. `freshness` cannot be combined with
+`date_after`/`date_before`.
 
 ## Advanced configuration
 
@@ -105,21 +128,29 @@ Native-only filters return a descriptive error on the chat-completions path.
     </Warning>
   </Accordion>
 
-  <Accordion title="OpenRouter proxy setup">
+  <Accordion title="OpenRouter compatibility">
     To route Perplexity searches through OpenRouter, set an `OPENROUTER_API_KEY`
-    (prefix `sk-or-`) instead of a native Perplexity key. OpenClaw detects the
-    key and switches to the Sonar transport automatically. Useful if you already
-    have OpenRouter billing set up and want to consolidate providers there.
+    (prefix `sk-or-`) instead of a native Perplexity key. OpenClaw currently
+    detects the key and uses OpenRouter's chat-completions endpoint.
+
+    OpenRouter is a third-party transport. Perplexity's direct, non-async Sonar
+    continuity does not guarantee OpenRouter model availability or future
+    behavior. Check [OpenRouter's Perplexity catalog](https://openrouter.ai/perplexity)
+    for the models and lifecycle that OpenRouter currently offers.
+
   </Accordion>
 </AccordionGroup>
 
 ## Related
 
-<CardGroup cols={2}>
+<CardGroup cols={3}>
   <Card title="Perplexity search tool" href="/tools/perplexity-search" icon="magnifying-glass">
     How the agent invokes Perplexity searches and interprets results.
   </Card>
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full configuration reference including plugin entries.
+  </Card>
+  <Card title="Perplexity Agent API" href="/providers/perplexity-agent-api" icon="robot">
+    Use Agent API as an OpenClaw LLM model provider.
   </Card>
 </CardGroup>

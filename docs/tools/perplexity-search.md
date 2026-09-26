@@ -8,7 +8,12 @@ title: "Perplexity search"
 
 OpenClaw supports the Perplexity Search API as a `web_search` provider. It returns structured results with `title`, `url`, and `snippet` fields.
 
-For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter setups. If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `plugins.entries.perplexity.config.webSearch.apiKey`, or set `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, the provider switches to the chat-completions path and returns AI-synthesized answers with citations instead of structured Search API results.
+For compatibility, OpenClaw also supports synthesized-answer setups through
+direct Perplexity Sonar or OpenRouter. If you use `OPENROUTER_API_KEY`, an
+`sk-or-...` key in `plugins.entries.perplexity.config.webSearch.apiKey`, or set
+`plugins.entries.perplexity.config.webSearch.baseUrl` / `.model`, the provider
+uses a synchronous chat-completions request and returns one AI-synthesized
+answer with citations instead of structured Search API rows.
 
 ## Install plugin
 
@@ -27,9 +32,28 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
 2. Generate an API key in the dashboard.
 3. Store the key in config or set `PERPLEXITY_API_KEY` in the Gateway environment.
 
-## OpenRouter compatibility
+## Sonar and OpenRouter compatibility
 
-If you were already using OpenRouter for Perplexity Sonar, keep `provider: "perplexity"` and set `OPENROUTER_API_KEY` in the Gateway environment, or store an `sk-or-...` key in `plugins.entries.perplexity.config.webSearch.apiKey`.
+Existing direct Perplexity and OpenRouter configurations remain supported by
+OpenClaw. Credential precedence is a configured `webSearch.apiKey`, then
+`PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`. An explicit `baseUrl` or
+`model` selects the compatibility path regardless of key type.
+
+OpenClaw's direct path calls synchronous
+`POST https://api.perplexity.ai/chat/completions`; it does not use
+`/v1/async/sonar`. Separately, Perplexity's API owner confirmed on September 24
+that non-async Sonar selections continue after September 27 through automatic
+server-side routing to an Agent API preset. Only the separate async Sonar
+endpoints fully discontinue on that date. This is owner-confirmed future rollout
+policy, not behavior stated in the current public migration pages or observable
+in OpenClaw's current transport. Agent API itself uses `POST /v1/agent`, with
+`POST /v1/responses` as its OpenAI Responses alias. Automatic routing does not
+promise identical parameters, results, latency, pricing, or features.
+
+OpenRouter is a third-party transport. That direct Perplexity continuity does
+not guarantee future OpenRouter availability or behavior; check
+[OpenRouter's Perplexity catalog](https://openrouter.ai/perplexity) for its
+current model lifecycle.
 
 Optional compatibility controls:
 
@@ -107,7 +131,8 @@ Search query.
 </ParamField>
 
 <ParamField path="count" type="number" default="5">
-Number of results to return (1-10).
+Number of results to return (1-10). Compatibility transports accept this field
+but still return one synthesized answer, not an N-result list.
 </ParamField>
 
 <ParamField path="country" type="string">
@@ -142,11 +167,11 @@ Total content budget (max 1000000).
 Per-page token limit.
 </ParamField>
 
-For the legacy Sonar/OpenRouter compatibility path:
+For the Sonar/OpenRouter compatibility path:
 
 - `query`, `count`, and `freshness` are accepted.
 - `count` is compatibility-only there; the response is still one synthesized answer with citations rather than an N-result list.
-- Search API-only filters (`country`, `language`, `date_after`, `date_before`, `domain_filter`, `max_tokens`, `max_tokens_per_page`) return explicit errors.
+- The generated tool schema omits Search API-only filters (`country`, `language`, `date_after`, `date_before`, `domain_filter`, `max_tokens`, `max_tokens_per_page`). A caller that bypasses the schema and supplies one directly receives an explicit unsupported-option error.
 
 **Examples:**
 
@@ -200,8 +225,8 @@ await web_search({
 ## Notes
 
 - Perplexity Search API returns structured web search results (`title`, `url`, `snippet`).
-- OpenRouter, or an explicit `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, switches Perplexity back to Sonar chat completions for compatibility.
-- Sonar/OpenRouter compatibility returns one synthesized answer with citations, not structured result rows.
+- Direct Perplexity overrides and OpenRouter currently use synchronous chat completions for compatibility.
+- Sonar/OpenRouter compatibility returns one synthesized answer with citations, not structured result rows. Automatic direct routing does not imply response parity.
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
 
 ## Related

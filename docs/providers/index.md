@@ -67,6 +67,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [OpenCode](/providers/opencode)
 - [OpenCode Go](/providers/opencode-go)
 - [OpenRouter](/providers/openrouter)
+- [Perplexity Agent API](/providers/perplexity-agent-api)
 - [Perplexity (web search)](/providers/perplexity-provider)
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
