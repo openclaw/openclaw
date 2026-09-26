@@ -361,33 +361,35 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
     }
   });
 
-  it("forwards legacy /api/messages requests to a custom webhook path", async () => {
+  it.each([
+    { path: undefined, endpoint: "/api/messages" },
+    { path: "", endpoint: "/api/messages" },
+    { path: "/teams/events", endpoint: "/teams/events" },
+  ])("routes /api/messages with configured path $path", async ({ path, endpoint }) => {
     const abort = new AbortController();
     const cfg = createConfig();
-    updateMSTeamsConfig(cfg, {
-      webhook: { path: "/teams/events" },
-    });
+    updateMSTeamsConfig(cfg, { webhook: { path } });
     const task = monitorMSTeamsProvider({
       cfg,
       runtime: createRuntime(),
       abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
+      ...createStores(),
     });
-
-    const server = await resolveStartedServer();
-    expect(loadMSTeamsSdkWithAuth.mock.calls[0]?.[1]).toMatchObject({
-      messagingEndpoint: "/teams/events",
-    });
-    const response = await fetch(resolveServerUrl(server, "/api/messages"), {
-      method: "POST",
-      headers: { authorization: "Bearer valid" },
-    });
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ url: "/teams/events" });
-
-    abort.abort();
-    await task;
+    try {
+      const server = await resolveStartedServer();
+      expect(routeState.routes[0]?.path).toBe(endpoint);
+      expect(loadMSTeamsSdkWithAuth.mock.calls[0]?.[1]).toMatchObject({
+        messagingEndpoint: endpoint,
+      });
+      const response = await fetch(resolveServerUrl(server, "/api/messages"), {
+        method: "POST",
+        headers: { authorization: "Bearer valid" },
+      });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ url: endpoint });
+    } finally {
+      abort.abort();
+      await task;
+    }
   });
 });

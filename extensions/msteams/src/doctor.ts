@@ -38,7 +38,7 @@ export function runMSTeamsWebhookDoctorSequence({
   if (pathIssue) {
     return { changeNotes: [], warningNotes: [pathIssue], infoNotes: [] };
   }
-  const path = channel.webhook?.path ?? "/api/messages";
+  const path = channel.webhook?.path || "/api/messages";
   const port = resolveGatewayPort(cfg, env);
   const legacy = resolveMSTeamsLegacyWebhook(channel);
   return {

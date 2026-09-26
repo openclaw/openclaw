@@ -938,7 +938,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       gateway: {
         startAccount: async (ctx) => {
           const { monitorMSTeamsProvider } = await import("./monitor.js");
-          const webhookPath = ctx.cfg.channels?.msteams?.webhook?.path ?? "/api/messages";
+          const webhookPath = ctx.cfg.channels?.msteams?.webhook?.path || "/api/messages";
           const statusSink = createAccountStatusSink({
             accountId: ctx.accountId,
             setStatus: ctx.setStatus,

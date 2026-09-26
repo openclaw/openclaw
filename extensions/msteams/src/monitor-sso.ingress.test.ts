@@ -208,6 +208,7 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
   const store = createMSTeamsSsoTokenStoreFs({ stateDir });
   const cfg = createConfig();
   updateMSTeamsConfig(cfg, {
+    webhook: { path: "" },
     dmPolicy: "allowlist",
     allowFrom: [allowedId],
     sso: { enabled: true, connectionName: "graph" },

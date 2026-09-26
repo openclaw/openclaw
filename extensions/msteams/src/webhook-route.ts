@@ -21,7 +21,7 @@ export function resolveMSTeamsWebhookPathIssue({
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
   const channel = cfg.channels?.msteams;
-  const path = channel?.webhook?.path ?? "/api/messages";
+  const path = channel?.webhook?.path || "/api/messages";
   const legacy = resolveMSTeamsLegacyWebhook(channel);
   const pathname = URL.parse(path, "http://localhost")?.pathname ?? path;
   const probe = classifyGatewayProbePath(pathname);

@@ -50,6 +50,7 @@ describe("msteamsPlugin", () => {
 
   it.each([
     { webhookPath: "/api/messages", info: "compatibility port 3978", warning: undefined },
+    { webhookPath: "", info: "18789/api/messages", warning: undefined },
     { webhookPath: "/ready", info: undefined, warning: "reserved for Gateway probes" },
   ])(
     "classifies Doctor webhook guidance for $webhookPath",

@@ -40,7 +40,7 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.appId`, `channels.msteams.appPassword`, `channels.msteams.tenantId`: bot credentials.
 - `channels.msteams.cloud`: Teams SDK cloud environment (`Public`, `USGov`, `USGovDoD`, or `China`; default `Public`). Set with `serviceUrl` for USGov/DoD SDK clouds; China uses the SDK preset and stored Azure China Bot Framework conversation references, with Graph-backed helpers disabled until Azure China Graph routing ships.
 - `channels.msteams.serviceUrl`: Bot Connector service URL boundary for SDK proactive operations. Public cloud uses the SDK default; set for GCC (`https://smba.infra.gcc.teams.microsoft.com/teams`), GCC High, or DoD. China accepts Azure China Bot Framework channel hosts when the stored conversation reference comes from Teams operated by 21Vianet.
-- `channels.msteams.webhook.path`: Gateway HTTP route (default `/api/messages`), served on `gateway.port` (default `18789`).
+- `channels.msteams.webhook.path`: Gateway HTTP route (omitted or empty uses `/api/messages`), served on `gateway.port` (default `18789`).
 - `channels.msteams.legacyWebhook`: compatibility listener. Omitted retains port `3978` with the previous wildcard bind; `{ port, host? }` selects an endpoint; `false` closes the old listener.
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default `pairing`).
 - `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). Stable AAD object IDs also authorize approval actions. The wizard resolves names to IDs during setup when Graph access is available.

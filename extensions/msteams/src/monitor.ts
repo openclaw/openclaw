@@ -251,7 +251,7 @@ export async function monitorMSTeamsProvider(
     next(err);
   });
 
-  const configuredPath = (msteamsCfg.webhook?.path ?? "/api/messages") as `/${string}`;
+  const configuredPath = (msteamsCfg.webhook?.path || "/api/messages") as `/${string}`;
   const ssoConnectionName =
     msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName
       ? msteamsCfg.sso.connectionName
