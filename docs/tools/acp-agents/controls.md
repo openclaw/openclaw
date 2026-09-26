@@ -47,7 +47,7 @@ sessions must be upgraded before those sessions can run.
 | -------------------- | --------------------------------------------------------- | ------------------------------------------------------------- |
 | `/acp spawn`         | Create ACP session; optional current bind or thread bind. | `/acp spawn codex --bind here --cwd /repo`                    |
 | `/acp cancel`        | Cancel in-flight turn for target session.                 | `/acp cancel agent:codex:acp:<uuid>`                          |
-| `/acp steer`         | Send steer instruction to running session.                | `/acp steer --session support inbox prioritize failing tests` |
+| `/acp steer`         | Queue an instruction to run after the in-flight turn.     | `/acp steer --session support inbox prioritize failing tests` |
 | `/acp close`         | Close session and unbind thread targets.                  | `/acp close`                                                  |
 | `/acp status`        | Show backend, mode, state, runtime options, capabilities. | `/acp status`                                                 |
 | `/acp set-mode`      | Set runtime mode for target session.                      | `/acp set-mode plan`                                          |
@@ -68,6 +68,12 @@ Gateway clients. Authorized non-owner senders can still use `sessions`,
 `doctor`, `install`, and `help`. For non-owner senders, `/acp sessions`
 lists only the current bound or requester session; owner identity and
 `operator.admin` clients see all recent sessions.
+
+ACP has no request that adds input to a turn that is already running, so
+`/acp steer` does not change the in-flight turn. The instruction waits for that
+turn to finish, then runs as the next turn in the same session and context. The
+command replies after that turn completes. To redirect work in progress, run
+`/acp cancel` first, then send the new instruction.
 
 `/acp status` shows the effective runtime options plus runtime-level and
 backend-level session identifiers. Unsupported-control errors surface

@@ -74,6 +74,10 @@ Use `/acp steer` when the target is an ACP harness session:
 /acp steer --session agent:main:acp:codex tighten the repro
 ```
 
+ACP harness sessions cannot accept input mid-turn. `/acp steer` queues the
+instruction and runs it after the active turn finishes; use `/acp cancel` first
+to stop work in progress. See [ACP controls](/tools/acp-agents/controls#acp-controls).
+
 See [ACP agents](/tools/acp-agents) for ACP session selection and runtime
 behavior.
 
