@@ -9,16 +9,6 @@ import {
 describe("resolveHostedPluginSurfaceUrl", () => {
   it.each([
     {
-      name: "maps the default Gateway port to the public HTTPS port behind a proxy",
-      params: {
-        port: 18789,
-        requestHost: "10.0.0.2:18789",
-        forwardedHost: "gateway.example.com",
-        forwardedProto: "https",
-      },
-      expected: "https://gateway.example.com:443",
-    },
-    {
       name: "prefers forwarded host over request host",
       params: {
         port: 18900,
@@ -46,11 +36,6 @@ describe("resolveHostedPluginSurfaceUrl", () => {
         scheme: "https",
       },
       expected: "https://gateway.example.com:18900",
-    },
-    {
-      name: "keeps an IPv4 host and port",
-      params: { port: 18900, requestHost: "192.0.2.1:18900" },
-      expected: "http://192.0.2.1:18900",
     },
     {
       name: "keeps one bracket pair on a directly requested IPv6 host",

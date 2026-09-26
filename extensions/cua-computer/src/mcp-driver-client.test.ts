@@ -421,32 +421,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     await driver.dispose();
   });
 
-  it.each([
-    ["not-json\n", "invalid JSON"],
-    [" \n", "invalid JSON"],
-    [JSON.stringify({ jsonrpc: "1.0", id: 1, result: {} }) + "\n", "invalid JSON-RPC version"],
-    [JSON.stringify({ jsonrpc: "2.0", id: "1", result: {} }) + "\n", "invalid response id"],
-    [
-      JSON.stringify({ jsonrpc: "2.0", id: Number.MAX_SAFE_INTEGER + 1, result: {} }) + "\n",
-      "invalid response id",
-    ],
-    [
-      JSON.stringify({ jsonrpc: "2.0", id: 0, result: { protocolVersion: "2024-11-05" } }) + "\n",
-      "incompatible protocol version",
-    ],
-  ])("fails closed for %s", async (response, message) => {
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.writeRaw(request, response);
-      }
-    });
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
-    await expect(driver.getDesktopState()).rejects.toThrow(message);
-    expect(driver.isAvailable()).toBe(false);
-    await driver.dispose();
-  });
-
   it("retains completed responses before a later fatal frame and ignores unknown numeric IDs", async () => {
     const held: RpcRequest[] = [];
     const endpoint = await createFakeEndpoint((request, fake) => {

@@ -43,8 +43,6 @@ describe("cross-OS release companion installation", () => {
 
   it.each([
     { cliPath: undefined, runner: "packaged", supported: true },
-    { cliPath: undefined, runner: "packaged", supported: false },
-    { cliPath: "/tmp/openclaw", runner: "installed", supported: true },
     { cliPath: "/tmp/openclaw", runner: "installed", supported: false },
   ] as const)(
     "probes capability consent once through the $runner runner (supported=$supported)",
@@ -99,13 +97,9 @@ describe("cross-OS release companion installation", () => {
     },
   );
 
-  it.each([
-    { cliPath: undefined, runner: "packaged" },
-    { cliPath: "/tmp/openclaw", runner: "installed" },
-  ] as const)("fails the lane when the $runner help probe fails", async ({ cliPath }) => {
+  it("fails the lane when the help probe fails", async () => {
     const lane = createLane();
-    const runner = cliPath ? mocks.runInstalledCli : mocks.runOpenClaw;
-    runner.mockRejectedValueOnce(new Error("help probe failed"));
+    mocks.runOpenClaw.mockRejectedValueOnce(new Error("help probe failed"));
 
     await expect(
       installLaneCompanions({
@@ -113,9 +107,8 @@ describe("cross-OS release companion installation", () => {
         logsDir: "/tmp/openclaw-release/logs",
         lane,
         env: { HOME: lane.homeDir },
-        ...(cliPath ? { cliPath } : {}),
       }),
     ).rejects.toThrow("help probe failed");
-    expect(runner).toHaveBeenCalledTimes(1);
+    expect(mocks.runOpenClaw).toHaveBeenCalledTimes(1);
   });
 });

@@ -510,11 +510,9 @@ not execute them in the shell of the Gateway hosting its session. A missing
 owner permission requires owner setup, and an externally supervised installation
 uses its deployment owner's update workflow.
 
-Chat, CLI, Control UI, and automatic updates share a durable run ID. Use
-`openclaw update status` to read the active or latest report, including after a
-restart; `--json` exposes the `activeRun` and `lastRun` records. See
-[Run history and reports](/cli/update#run-history-and-reports) for Gateway history
-queries.
+For installations updated by OpenClaw itself, chat, CLI, Control UI, and automatic updates share a durable run ID.
+Use `openclaw update status` to read the active or latest report, including after a restart; `--json` exposes the `activeRun` and `lastRun` records.
+See [Run history and reports](/cli/update#run-history-and-reports) for Gateway history queries.
 
 The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration)
 or have a [verified channel link to a current Gateway administrator](/concepts/user-model#channel-identity-links).

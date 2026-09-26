@@ -157,6 +157,7 @@ scripts/lib/vitest-worker-artifacts.mts
 scripts/lib/vitest-worker-cache-policy.mts
 scripts/lib/vitest-worker-declarations.mts
 scripts/lib/vitest-worker-run.mts
+scripts/lib/watch-pr-ci-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts

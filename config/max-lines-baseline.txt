@@ -53,7 +53,6 @@ extensions/codex/src/conversation-binding.test.ts
 extensions/codex/src/migration/provider.test.ts
 extensions/codex/src/migration/session-binding-sidecars.ts
 extensions/codex/src/supervision-tools.ts
-extensions/comfy/image-generation-provider.test.ts
 extensions/comfy/workflow-runtime.ts
 extensions/copilot/harness.test.ts
 extensions/copilot/harness.ts
@@ -242,7 +241,6 @@ packages/gateway-client/src/client.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
-packages/sdk/src/index.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
 src/acp/control-plane/manager.turn-results.test.ts

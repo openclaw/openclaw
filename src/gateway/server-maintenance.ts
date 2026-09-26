@@ -26,6 +26,7 @@ import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkInspectors,
 } from "../infra/gateway-active-work.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { generateSecureInt } from "../infra/secure-random.js";
@@ -81,6 +82,7 @@ const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
 const TELEMETRY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
+  scheduler: GatewayScheduler;
   broadcast: (
     event: string,
     payload: unknown,
@@ -606,6 +608,7 @@ export function startGatewayMaintenanceTimers(params: {
   };
 
   const sessionColdStorageMaintenance = startSessionColdStorageMaintenance({
+    scheduler: params.scheduler,
     getRuntimeConfig: params.getRuntimeConfig,
     onError: (message) => params.logHealth.error(`transcript cold storage failed: ${message}`),
   });

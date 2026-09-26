@@ -514,6 +514,9 @@ checks read those revisions and current configuration without querying SQLite.
 Relevant identity or role mutations revoke prior authority before publication;
 closing or replacing the store invalidates its retained authority. Display caches
 and discovery snapshots do not grant permission.
+While a Gateway runs, other processes must use its RPCs for profile mutations;
+direct out-of-process SQLite writes are not supported. Doctor repairs and
+migrations run under their existing offline maintenance or startup owners.
 
 Secret-store expiry runs in that worker for scheduled Gateway cleanup and
 post-mutation cleanup. The caller captures the database and expiry cutoffs before
