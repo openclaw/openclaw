@@ -84,6 +84,7 @@ import {
 } from "../sessions/session-agent-status.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
+import { isSessionUnreadAckOnlyPatch } from "./server-methods/session-unread-ack.js";
 import {
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
@@ -282,13 +283,19 @@ function* projectSessionPatchSteps(
 
   const existing =
     params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
+  // A read acknowledgement is not session activity: ageing the row here would move a
+  // just-opened session to the top of recency order, so only the read state commits.
+  const unreadAckOnly = isSessionUnreadAckOnlyPatch(patch);
+  const nextUpdatedAt = unreadAckOnly
+    ? (existing?.updatedAt ?? now)
+    : Math.max(existing?.updatedAt ?? 0, now);
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = {
     ...existing,
     sessionId: existing?.sessionId || randomUUID(),
     // Reset retains sessionId, so rollback also needs the original lifecycle revision.
     ...(existing?.sessionId ? {} : { lifecycleRevision: randomUUID() }),
-    updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+    updatedAt: nextUpdatedAt,
     ...(params.preparedSessionRoot ? { sessionRoot: params.preparedSessionRoot } : {}),
     // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
     ...(creation && params.existingEntry === undefined ? buildSessionCreationStamp(creation) : {}),
