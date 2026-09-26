@@ -141,3 +141,44 @@ it.each(["reset", "close", "body"] as const)(
     );
   },
 );
+
+// Every message-creating Bot API method is non-idempotent: Telegram can accept the
+// request and lose the response, so replaying it posts a second visible message.
+it.each(["sendPhoto", "sendDocument", "sendMediaGroup", "forwardMessage", "copyMessage"] as const)(
+  "does not replay an accepted %s when the server closes before its response",
+  async (method) => {
+    let accepted = 0;
+    await withServer(
+      (request) => {
+        request.resume();
+        request.on("end", () => {
+          accepted += 1;
+          void setImmediate().then(() => request.socket.end());
+        });
+      },
+      async (apiRoot) => {
+        await withApi(apiRoot, async (api) => {
+          const send = {
+            sendPhoto: () => api.sendPhoto(1, "https://example.com/photo.png"),
+            sendDocument: () => api.sendDocument(1, "https://example.com/file.pdf"),
+            sendMediaGroup: () =>
+              api.sendMediaGroup(1, [
+                { type: "photo", media: "https://example.com/a.png" },
+                { type: "photo", media: "https://example.com/b.png" },
+              ]),
+            forwardMessage: () => api.forwardMessage(1, 2, 3),
+            copyMessage: () => api.copyMessage(1, 2, 3),
+          }[method];
+          const error = await send().then(
+            () => {
+              throw new Error("expected transport failure");
+            },
+            (caught: unknown) => caught,
+          );
+          expect(isSafeToRetrySendError(error)).toBe(false);
+          expect(accepted).toBe(1);
+        });
+      },
+    );
+  },
+);
