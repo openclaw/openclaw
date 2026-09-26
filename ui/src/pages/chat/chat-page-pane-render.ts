@@ -146,7 +146,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .chatMessagesBySession=${options.chatMessagesBySession}
               .sessionSnapshotStore=${options.sessionSnapshotStore}
               .sessionKey=${sessionKey}
-              .agentId=${parseAgentSessionKey(sessionKey)?.agentId}
+              .agentId=${options.splitMode ? parseAgentSessionKey(sessionKey)?.agentId : undefined}
               .routeLoadingSkeleton=${routeData?.routeLoadingSkeleton ?? noChange}
               .presented=${presented}
               .visuallyPresented=${presented}
