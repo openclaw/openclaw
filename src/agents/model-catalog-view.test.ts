@@ -1,6 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  remoteDecisionCost,
+  remoteDecisionInference,
+} from "../../packages/model-catalog-core/src/remote-catalog-bundle.test-support.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import {
+  parseRemoteModelCatalogWireBundle,
+  projectRemoteModelCatalog,
+} from "../model-catalog/remote-bundle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -10,6 +19,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import {
   createModelCatalogView,
   loadPreparedModelCatalogView,
@@ -62,8 +72,56 @@ describe("prepared model catalog view", () => {
     });
   });
 
-  it("excludes explicit non-chat rows and their configured fallback from chat pickers", async () => {
-    const typed = { ...row("fixture", "typed"), inference: { chat: false } };
+  it("keeps hosted decision metadata through projection and excludes the row and configured fallback from chat pickers", async () => {
+    const remote = projectRemoteModelCatalog(
+      parseRemoteModelCatalogWireBundle({
+        schemaVersion: 3,
+        generatedAt: 1,
+        sourceCommit: "fixture-v3",
+        providers: { fixture: {} },
+        models: [
+          {
+            provider: "fixture",
+            id: "typed",
+            input: ["text"],
+            inference: remoteDecisionInference,
+            pricing: {
+              status: "known",
+              currency: "USD",
+              unit: "million_tokens",
+              ...remoteDecisionCost,
+            },
+            compat: {
+              baseUrl: "https://untrusted.invalid",
+              headers: { "X-Untrusted": "never-use" },
+            },
+          },
+        ],
+      }),
+    );
+    const plan = planManifestModelCatalogRows({
+      registry: {
+        plugins: [
+          {
+            id: "fixture",
+            providers: ["fixture"],
+            modelCatalog: {
+              providers: { fixture: { baseUrl: "https://fixture.invalid", models: [] } },
+            },
+          },
+        ],
+      },
+      remoteOverlay: remote.providers,
+    });
+    expect(plan.rows).toHaveLength(1);
+    const normalized = plan.rows[0]!;
+    expect(normalized.cost).toEqual(remoteDecisionCost);
+    expect(remote.pricing["fixture/typed"]?.cost).toEqual(remoteDecisionCost);
+    expect(normalized.baseUrl).toBe("https://fixture.invalid");
+    for (const field of ["headers", "authScope", "credentials", "runtimeHooks"]) {
+      expect(normalized).not.toHaveProperty(field);
+    }
+    const typed = modelCatalogRowToEntry(normalized);
     mocks.loadSnapshot.mockResolvedValue(snapshot([typed, row("fixture", "chat")]));
     const view = await loadPreparedModelCatalogView({
       kind: "picker",
@@ -90,6 +148,7 @@ describe("prepared model catalog view", () => {
     });
     expect(view.snapshot.entries.map((entry) => entry.id)).toEqual(["chat"]);
     expect(view.snapshot.routeVariants.map((entry) => entry.id)).toEqual(["chat"]);
+    expect(typed.inference).toEqual(remoteDecisionInference);
   });
 
   it("prepares physical variants with provider-bounded identity discovery", () => {

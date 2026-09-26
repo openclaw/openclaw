@@ -71,6 +71,22 @@ The `models` root also owns global model-catalog behavior.
   applies on the next Gateway restart; a release whose bundled catalog is newer
   always wins.
 
+Typed decision metadata requires the separately versioned v3 catalog. Legacy v1
+and strict v2 outputs remain chat-compatible: native-only rows are omitted, but
+valid pricing-only records remain available. A v3 reader preserves explicit task
+capabilities, physical-route limits, and declared token prices; omitted rates stay
+unknown and request/decision units are not token prices. Remote data cannot supply
+credentials, auth scope, runtime hooks, endpoints, or private headers.
+
+The publisher supports an additional `--out-v3 <file>` alongside its existing
+`--out` and `--out-v2` outputs. Hosting must publish that asset separately (for
+example, `models/v3/catalog.json`) before using the existing
+`models.catalogRefresh.url` setting to select it. This change does not refresh a
+live Gateway, change its configuration, or switch the retained default feed.
+Wire version 3 keeps older strict readers from accepting a typed catalog as chat;
+any supplied `minVersion` is still enforced. Restart activation, source comparison,
+and newer-bundled precedence are unchanged.
+
 Pricing updates ship in the same hosted catalog file as model metadata. The
 retired `models.pricing` toggle is removed automatically by `openclaw doctor
 --fix`; use `models.catalogRefresh.enabled: false` when OpenClaw must avoid all

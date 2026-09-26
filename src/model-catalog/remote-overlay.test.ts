@@ -1,10 +1,16 @@
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
+import {
+  remoteDecisionCost,
+  remoteDecisionInference,
+  remoteDecisionModel,
+} from "../../packages/model-catalog-core/src/remote-catalog-bundle.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { VERSION } from "../version.js";
 import {
   captureRemoteModelCatalogStartupSnapshot,
   prepareRemoteModelCatalogStartupSnapshot,
@@ -24,9 +30,9 @@ const mocks = {
 const bundle = {
   schemaVersion: 1,
   generatedAt: 200,
-  minVersion: "2026.7.0",
+  minVersion: VERSION,
   sourceCommit: "abc",
-  providers: { anthropic: { models: [{ id: "new" }] } },
+  providers: { anthropic: { models: [{ ...remoteDecisionModel, id: "new" }] } },
   pricing: { "openai/gpt-external": { input: 2.5, output: 10 } },
 };
 
@@ -47,6 +53,60 @@ afterEach(() => {
 });
 
 describe("remote model catalog overlay", () => {
+  it("activates v3 typed rows at startup and leaves later downloads pending until restart", () => {
+    const sourceUrl = "https://catalog.openclaw.ai/models/v3/catalog.json";
+    const config = { models: { catalogRefresh: { url: sourceUrl } } };
+    const typed = {
+      schemaVersion: 3,
+      generatedAt: 200,
+      sourceCommit: "fixture-v3",
+      providers: { anthropic: {} },
+      models: [
+        {
+          provider: "anthropic",
+          id: "typed",
+          inference: remoteDecisionInference,
+          pricing: {
+            status: "known",
+            currency: "USD",
+            unit: "million_tokens",
+            input: 0,
+            output: 0,
+            source: "fixture",
+          },
+        },
+      ],
+    };
+    mocks.read.mockReturnValue({ source_url: sourceUrl, bundle_json: JSON.stringify(typed) });
+    const snapshot = captureRemoteModelCatalogStartupSnapshot();
+    const first = getRemoteModelCatalogProviderOverlay(config, "anthropic");
+    expect(first?.models[0]).toMatchObject({
+      id: "typed",
+      inference: remoteDecisionInference,
+      cost: { input: 0, output: 0 },
+    });
+    mocks.read.mockReturnValue({
+      source_url: sourceUrl,
+      bundle_json: JSON.stringify({
+        ...typed,
+        generatedAt: 300,
+        models: [{ ...typed.models[0], id: "downloaded" }],
+      }),
+    });
+    expect(checkRemoteModelCatalogUpdate(config, { sourceUrl, generatedAt: 300 })).toBe(
+      "restart-required",
+    );
+    expect(captureRemoteModelCatalogStartupSnapshot()).toBe(snapshot);
+    expect(getRemoteModelCatalogProviderOverlay(config, "anthropic")).toBe(first);
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: mocks.builtAt,
+      readStoredCatalog: mocks.read,
+    });
+    expect(getRemoteModelCatalogProviderOverlay(config, "anthropic")?.models[0]?.id).toBe(
+      "downloaded",
+    );
+  });
+
   it("inspects pending generations without replacing the startup snapshot, rows, or prices", () => {
     const sourceUrl = "https://catalog.openclaw.ai/models/v1/catalog.json";
     const snapshot = captureRemoteModelCatalogStartupSnapshot();
@@ -189,7 +249,11 @@ describe("remote model catalog overlay", () => {
       source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
       bundle_json: JSON.stringify(bundle),
     });
-    expect(captureRemoteModelCatalogStartupSnapshot()?.pricing).toEqual(bundle.pricing);
+    expect(captureRemoteModelCatalogStartupSnapshot()?.pricing).toEqual(
+      Object.fromEntries(
+        Object.entries(bundle.pricing).map(([key, cost]) => [key, { cost, explicit: false }]),
+      ),
+    );
   });
 
   it("keeps the first published startup pair when asynchronous preparation completes later", async () => {
@@ -207,17 +271,19 @@ describe("remote model catalog overlay", () => {
     expect(await preparing).toBe(winner);
     expect(await prepareRemoteModelCatalogStartupSnapshot({ env })).toBe(winner);
     expect(getRemoteModelCatalogPricing({})?.["openai/gpt-external"]).toEqual({
-      input: 5,
-      output: 20,
+      cost: { input: 5, output: 20 },
+      explicit: false,
     });
   });
 
-  it("loads a newer compatible bundle once", () => {
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toHaveProperty("models");
+  it("loads a newer compatible decision bundle once with sanitized inference and billing intact", () => {
+    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")?.models).toEqual([
+      { id: "new", input: ["text"], inference: remoteDecisionInference, cost: remoteDecisionCost },
+    ]);
     expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toHaveProperty("models");
     expect(getRemoteModelCatalogPricing({})?.["openai/gpt-external"]).toEqual({
-      input: 2.5,
-      output: 10,
+      cost: { input: 2.5, output: 10 },
+      explicit: false,
     });
     expect(mocks.read).toHaveBeenCalledOnce();
   });
@@ -273,6 +339,19 @@ describe("remote model catalog overlay", () => {
       await worker.terminate();
     }
   });
+
+  it.each(["9999.1.1", "not-a-version"])(
+    "does not activate stored decision metadata with unsupported minVersion %s",
+    (minVersion) => {
+      mocks.read.mockReturnValue({
+        source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+        bundle_json: JSON.stringify({ ...bundle, minVersion }),
+      });
+      expect(captureRemoteModelCatalogStartupSnapshot()).toBeNull();
+      expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
+      expect(getRemoteModelCatalogPricing({})).toBeUndefined();
+    },
+  );
 
   it("fails closed when disabled, stale, or missing a build stamp", () => {
     expect(

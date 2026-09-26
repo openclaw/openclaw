@@ -37,6 +37,8 @@ export function finalizePluginModelUsage(params: {
   suppressUsage?: boolean;
   rawUsage: unknown;
   estimate: "direct" | "aggregate" | "none";
+  /** Prepared route facts, never an ID-only lookup after request normalization. */
+  declaredCost?: Parameters<typeof estimateUsageCost>[0]["declaredCost"];
   target: { provider: string; model: string; agentId?: string; sessionKey?: string };
   onUsage?: (usage: LlmCompleteUsage) => void;
 }): LlmCompleteUsage {
@@ -53,11 +55,14 @@ export function finalizePluginModelUsage(params: {
   // Isolated runtimes may report a whole run; only direct calls retain tier boundaries here.
   const estimateCost =
     params.estimate === "direct" ? estimateUsageCost : estimateAggregateUsageCost;
+  const explicitCostUsd = readExplicitCostUsd(params.rawUsage);
   const costUsd =
-    readExplicitCostUsd(params.rawUsage) ??
-    (params.estimate === "none"
-      ? undefined
-      : estimateCost({ usage: normalized, cost: costConfig }));
+    explicitCostUsd ??
+    (params.declaredCost
+      ? estimateUsageCost({ usage: normalized, declaredCost: params.declaredCost })
+      : params.estimate === "none"
+        ? undefined
+        : estimateCost({ usage: normalized, cost: costConfig }));
   const usage: LlmCompleteUsage = {
     ...(normalized?.input !== undefined ? { inputTokens: normalized.input } : {}),
     ...(normalized?.output !== undefined ? { outputTokens: normalized.output } : {}),
@@ -76,7 +81,13 @@ export function finalizePluginModelUsage(params: {
   const hasPositiveUsage = [input, output, cacheRead, cacheWrite, total, usage.costUsd].some(
     (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
   );
-  if (params.suppressUsage !== true && isDiagnosticsEnabled(params.cfg) && hasPositiveUsage) {
+  // Explicit billed zero and sparse native counters are observations, unlike empty
+  // chat adapter snapshots. Keep the ordinary no-evidence suppression for those.
+  const hasObservedUsage =
+    hasPositiveUsage ||
+    explicitCostUsd !== undefined ||
+    (params.estimate === "none" && normalized !== undefined);
+  if (params.suppressUsage !== true && isDiagnosticsEnabled(params.cfg) && hasObservedUsage) {
     emitTrustedDiagnosticEvent(
       markHostPluginUsageDiagnosticEvent(
         {

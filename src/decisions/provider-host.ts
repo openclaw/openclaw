@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   getConfiguredDecisionProviderIds,
   resolveDecisionModelSetting,
@@ -234,6 +235,7 @@ export class DecisionProviderHost {
       provider: this.provider.id,
       model,
     },
+    onPreparedBilling?: (billing: ModelDecisionCapabilities["billing"]) => void,
   ): Promise<DecisionOutcomeV2> {
     options.signal.throwIfAborted();
     // V1 providers cannot honor new modalities or reasoning controls. Reject before dispatch.
@@ -354,6 +356,7 @@ export class DecisionProviderHost {
               config,
               options,
               signal,
+              onPreparedBilling,
               deadlineMonotonicMs,
               assertCurrent: () => {
                 if (!instance.acceptingCalls || instance.owner?.revoked || interrupted(false)) {

@@ -1,10 +1,4 @@
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
-import {
-  parseRemoteModelCatalogBundle,
-  validateAndSanitizeRemoteModelCatalogBundle,
-  type RemoteModelCatalogBundle,
-  type RemoteModelCatalogPricing,
-} from "@openclaw/model-catalog-core";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,6 +6,13 @@ import { compareOpenClawVersions } from "../config/version.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { VERSION } from "../version.js";
 import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
+import {
+  parseRemoteModelCatalogWireBundle,
+  projectRemoteModelCatalog,
+  type RemoteModelCatalogWireBundle,
+  type RemoteModelCatalogPrice,
+  type RemoteModelCatalogUpstreamPrice,
+} from "./remote-bundle.js";
 import { isRemoteModelCatalogRefreshEnabled, resolveRemoteCatalogUrl } from "./remote-config.js";
 import { readRemoteModelCatalog, readRemoteModelCatalogAsync } from "./remote-store.js";
 
@@ -22,7 +23,8 @@ type RemoteModelCatalogMetadata = {
 };
 type ActiveRemoteModelCatalog = RemoteModelCatalogMetadata & {
   providers: RemoteModelCatalogOverlay;
-  pricing?: Readonly<Record<string, RemoteModelCatalogPricing>>;
+  pricing?: Readonly<Record<string, RemoteModelCatalogPrice>>;
+  upstreamPricing?: Readonly<Record<string, RemoteModelCatalogUpstreamPrice>>;
 };
 
 const STARTUP_SNAPSHOT_KEY = "openclaw.remoteModelCatalogStartupSnapshot";
@@ -30,7 +32,7 @@ let readBundledGeneratedAt = bundledCatalogGeneratedAt;
 let readStoredCatalog = readRemoteModelCatalog;
 let readStoredCatalogAsync = readRemoteModelCatalogAsync;
 
-function isCompatible(bundle: RemoteModelCatalogBundle, bundledGeneratedAt: number): boolean {
+function isCompatible(bundle: RemoteModelCatalogWireBundle, bundledGeneratedAt: number): boolean {
   if (bundle.generatedAt <= bundledGeneratedAt) {
     return false;
   }
@@ -58,7 +60,7 @@ function readCompatibleRemoteModelCatalogMetadata(): RemoteModelCatalogMetadata 
   if (!stored) {
     return null;
   }
-  const bundle = parseRemoteModelCatalogBundle(JSON.parse(stored.bundle_json));
+  const bundle = parseRemoteModelCatalogWireBundle(JSON.parse(stored.bundle_json));
   return isCompatible(bundle, bundledGeneratedAt)
     ? { sourceUrl: stored.source_url, generatedAt: bundle.generatedAt }
     : null;
@@ -71,15 +73,14 @@ function selectCompatibleRemoteModelCatalog(
   if (!stored) {
     return null;
   }
-  const bundle = validateAndSanitizeRemoteModelCatalogBundle(JSON.parse(stored.bundle_json));
+  const bundle = parseRemoteModelCatalogWireBundle(JSON.parse(stored.bundle_json));
   if (!isCompatible(bundle, bundledGeneratedAt)) {
     return null;
   }
   return {
     sourceUrl: stored.source_url,
     generatedAt: bundle.generatedAt,
-    providers: bundle.providers,
-    ...(bundle.pricing ? { pricing: bundle.pricing } : {}),
+    ...projectRemoteModelCatalog(bundle),
   };
 }
 
@@ -189,8 +190,15 @@ export function getRemoteModelCatalogProviderOverlay(
 
 export function getRemoteModelCatalogPricing(
   config: OpenClawConfig,
-): Readonly<Record<string, RemoteModelCatalogPricing>> | undefined {
+): Readonly<Record<string, RemoteModelCatalogPrice>> | undefined {
   return getActiveRemoteModelCatalog(config)?.pricing;
+}
+
+/** Source-qualified upstream facts from the same immutable startup snapshot. */
+export function getRemoteModelCatalogUpstreamPricing(
+  config: OpenClawConfig,
+): Readonly<Record<string, RemoteModelCatalogUpstreamPrice>> | undefined {
+  return getActiveRemoteModelCatalog(config)?.upstreamPricing;
 }
 
 function setRemoteModelCatalogOverlaySourcesForTest(sources?: {

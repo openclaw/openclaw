@@ -312,7 +312,7 @@ export function applyLocalNoAuthHeaderOverride<T extends Model>(
   };
 }
 
-export function applySecretRefHeaderSentinels<T extends Model>(
+export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" | "headers">>(
   model: T,
   cfg: OpenClawConfig | undefined,
 ): T {

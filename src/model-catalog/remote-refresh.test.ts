@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  remoteDecisionCost,
+  remoteDecisionInference,
+  remoteDecisionModel,
+} from "../../packages/model-catalog-core/src/remote-catalog-bundle.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { VERSION } from "../version.js";
 import { resolveRemoteCatalogUrl } from "./remote-config.js";
 import { refreshRemoteModelCatalog, REMOTE_MODEL_CATALOG_TTL_MS } from "./remote-refresh.js";
 import { readRemoteModelCatalog, writeRemoteModelCatalog } from "./remote-store.js";
@@ -80,10 +86,17 @@ describe("remote model catalog refresh", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("persists a sanitized valid bundle", async () => {
+  it("persists decision capabilities, billing and pricing without remote transport or authority", async () => {
     const databaseOptions = options();
+    const downloaded = {
+      ...bundle,
+      minVersion: VERSION,
+      providers: { anthropic: { ...bundle.providers.anthropic, models: [remoteDecisionModel] } },
+      pricing: { "anthropic/typed": remoteDecisionCost },
+    };
     const fetchImpl = vi.fn<typeof fetch>(
-      async () => new Response(JSON.stringify(bundle), { status: 200, headers: { etag: '"two"' } }),
+      async () =>
+        new Response(JSON.stringify(downloaded), { status: 200, headers: { etag: '"two"' } }),
     );
     await expect(
       refreshRemoteModelCatalog({
@@ -95,8 +108,81 @@ describe("remote model catalog refresh", () => {
       }),
     ).resolves.toMatchObject({ status: "updated", providers: 1, models: 1 });
     const persisted = JSON.parse(readRemoteModelCatalog(databaseOptions)?.bundle_json ?? "null");
-    expect(persisted.providers.anthropic).not.toHaveProperty("baseUrl");
-    expect(persisted.providers.anthropic.models[0]).not.toHaveProperty("headers");
+    expect(persisted.providers.anthropic).toEqual({
+      models: [
+        {
+          id: "typed",
+          input: ["text"],
+          inference: remoteDecisionInference,
+          cost: remoteDecisionCost,
+        },
+      ],
+    });
+    expect(persisted.pricing).toEqual(downloaded.pricing);
+  });
+
+  it("stores a negotiated v3 feed without rewriting its version or admitting runtime authority", async () => {
+    const databaseOptions = options();
+    const typed = {
+      schemaVersion: 3,
+      generatedAt: bundle.generatedAt,
+      sourceCommit: "fixture-v3",
+      providers: { anthropic: {} },
+      models: [
+        {
+          provider: "anthropic",
+          id: "typed",
+          inference: remoteDecisionInference,
+          pricing: {
+            status: "known",
+            currency: "USD",
+            unit: "million_tokens",
+            input: 0,
+            output: 0,
+            source: "fixture",
+          },
+          compat: {
+            headers: { authorization: "never-retain" },
+            baseUrl: "https://never-retain.invalid",
+          },
+        },
+      ],
+    };
+    const config = {
+      models: { catalogRefresh: { url: "https://catalog.openclaw.ai/models/v3/catalog.json" } },
+    };
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json(typed));
+    expect(
+      await refreshRemoteModelCatalog({
+        config,
+        fetchImpl,
+        databaseOptions,
+        force: true,
+        bundledGeneratedAt: () => bundle.generatedAt - 1,
+      }),
+    ).toMatchObject({ status: "updated", models: 1, providers: 1 });
+    const previous = readRemoteModelCatalog(databaseOptions)!;
+    const stored = JSON.parse(previous.bundle_json);
+    expect(stored.schemaVersion).toBe(3);
+    expect(stored.models[0]).toMatchObject({
+      inference: remoteDecisionInference,
+      pricing: { status: "known", input: 0, output: 0 },
+      compat: {},
+    });
+    const untrusted = {
+      ...typed,
+      generatedAt: typed.generatedAt + 1,
+      providers: { anthropic: { authScope: "plugin" } },
+    };
+    expect(
+      await refreshRemoteModelCatalog({
+        config,
+        fetchImpl: async () => Response.json(untrusted),
+        databaseOptions,
+        force: true,
+      }),
+    ).toMatchObject({ status: "error" });
+    expect(readRemoteModelCatalog(databaseOptions)).toMatchObject(previous);
   });
 
   it("does not report a catalog older than the bundled build as applicable", async () => {
@@ -155,24 +241,49 @@ describe("remote model catalog refresh", () => {
     expect(mirrorFetch).toHaveBeenCalledOnce();
   });
 
-  it("returns typed failures for invalid JSON, newer minVersion, and timeout", async () => {
+  it.each(["9999.1.1", "not-a-version"])(
+    "retains the stored catalog when decision metadata requires unsupported minVersion %s",
+    async (minVersion) => {
+      const databaseOptions = options();
+      const previous = {
+        bundle_json: JSON.stringify(bundle),
+        generated_at: bundle.generatedAt,
+        min_version: bundle.minVersion,
+        source_url: DEFAULT_REMOTE_MODEL_CATALOG_URL,
+        etag: '"previous"',
+        last_modified: null,
+        checked_at: 10_000,
+      };
+      writeRemoteModelCatalog(previous, databaseOptions);
+      const fetchImpl = vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ...bundle,
+              generatedAt: bundle.generatedAt + 1,
+              minVersion,
+              providers: { anthropic: { models: [remoteDecisionModel] } },
+            }),
+          ),
+      );
+      await expect(
+        refreshRemoteModelCatalog({
+          config: {},
+          fetchImpl,
+          databaseOptions,
+          force: true,
+        }),
+      ).resolves.toMatchObject({ status: "error", error: expect.stringContaining(minVersion) });
+      expect(readRemoteModelCatalog(databaseOptions)).toMatchObject(previous);
+    },
+  );
+
+  it("returns typed failures for invalid JSON and timeout", async () => {
     const invalid = vi.fn<typeof fetch>(async () => new Response("not json"));
     await expect(
       refreshRemoteModelCatalog({
         config: {},
         fetchImpl: invalid,
-        databaseOptions: options(),
-        force: true,
-      }),
-    ).resolves.toMatchObject({ status: "error" });
-
-    const newer = vi.fn<typeof fetch>(
-      async () => new Response(JSON.stringify({ ...bundle, minVersion: "9999.1.1" })),
-    );
-    await expect(
-      refreshRemoteModelCatalog({
-        config: {},
-        fetchImpl: newer,
         databaseOptions: options(),
         force: true,
       }),

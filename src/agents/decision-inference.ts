@@ -1,3 +1,8 @@
+import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
+import {
+  findConfiguredProviderModel,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
 import type {
@@ -7,13 +12,24 @@ import type {
   ProviderDecisionOutcomeV2,
 } from "../decisions/types-v2.js";
 import { validateDecisionResultV2 } from "../decisions/validation-v2.js";
+import { createProviderModelCatalogIdNormalizer } from "../plugins/provider-model-routes.js";
 import type { PluginProviderRegistration } from "../plugins/provider-plugin.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
-import { normalizeResolvedTransportApi } from "./embedded-agent-runner/model.inline-provider.js";
+import {
+  normalizeResolvedTransportApi,
+  sanitizeModelHeaders,
+} from "./embedded-agent-runner/model.inline-provider.js";
+import { applySecretRefHeaderSentinels } from "./model-auth-model.js";
 import { resolveApiKeyForProviderCore } from "./model-auth-provider.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+import { resolveManifestModelCatalogHeaders } from "./model-catalog-manifest.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { withPreparedModelInference } from "./prepared-model-inference.js";
+import {
+  resolveProviderRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "./provider-request-config.js";
 import {
   unwrapSecretSentinelsForProviderEgress,
   unwrapModelHeaderSentinelsForProviderEgress,
@@ -84,6 +100,7 @@ export async function executePreparedDecision(params: {
   signal: AbortSignal;
   deadlineMonotonicMs: number;
   assertCurrent: () => void;
+  onPreparedBilling?: (billing: ModelDecisionCapabilities["billing"]) => void;
 }): Promise<ProviderDecisionOutcomeV2> {
   const assertCurrent = () => {
     params.assertCurrent();
@@ -173,6 +190,40 @@ export async function executePreparedDecision(params: {
             headers: completion.model.headers,
           };
         } else {
+          const providerConfig = resolveMergedModelProviderConfig(prepared.config, row.provider);
+          const configuredModel = findConfiguredProviderModel(
+            providerConfig,
+            row.provider,
+            row.id,
+            createProviderModelCatalogIdNormalizer(row.provider, prepared.metadataSnapshot),
+          );
+          // The public catalog intentionally excludes private headers. Compile them from
+          // this generation's config with the same precedence and sanitizers as chat.
+          const request = resolveProviderRequestConfig({
+            provider: row.provider,
+            api: model.api,
+            baseUrl: model.baseUrl,
+            providerMetadataOwners: prepared.metadataSnapshot.owners,
+            discoveredHeaders: resolveManifestModelCatalogHeaders({
+              config: prepared.config,
+              snapshot: prepared.metadataSnapshot,
+              model,
+            }),
+            providerHeaders: sanitizeModelHeaders(providerConfig?.headers, {
+              stripSecretRefMarkers: true,
+            }),
+            modelHeaders: sanitizeModelHeaders(configuredModel?.headers, {
+              stripSecretRefMarkers: true,
+            }),
+            authHeader: providerConfig?.authHeader,
+            request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+            capability: "llm",
+            transport: "http",
+          });
+          model = applySecretRefHeaderSentinels(
+            { ...model, headers: request.headers },
+            prepared.config,
+          );
           auth = await resolveApiKeyForProviderCore({
             provider: row.provider,
             modelId: row.id,
@@ -195,10 +246,12 @@ export async function executePreparedDecision(params: {
       }
       assertPrepared();
       // A route rewrite cannot carry a hosted billing claim into another endpoint.
-      if ((model.baseUrl !== row.baseUrl || model.api !== row.api) && model.inference?.decision) {
+      if (!modelTransportRoutesMatch(row, model) && model.inference?.decision) {
         const { billing: _billing, ...decision } = model.inference.decision;
         model.inference = { ...model.inference, decision };
       }
+      // Capture host-prepared route facts before exposing a separate model copy to the adapter.
+      params.onPreparedBilling?.(structuredClone(model.inference?.decision?.billing));
       const offered = structuredClone(params.batch);
       const providerContext: DecisionProviderContextV2 = {
         model: structuredClone(

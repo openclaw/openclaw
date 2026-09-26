@@ -320,3 +320,76 @@ describe("usage cost estimation", () => {
     expect(total).toBeCloseTo(0.00225, 8);
   });
 });
+
+describe("declared per-call pricing with observed counters", () => {
+  it.each([
+    {
+      label: "input price and free output",
+      usage: { input: 100 },
+      rates: { input: 2, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: 0.0002,
+    },
+    {
+      label: "unknown output count is not zero",
+      usage: { input: 100 },
+      rates: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
+      expected: undefined,
+    },
+    {
+      label: "missing rate for used output",
+      usage: { input: 100, output: 4 },
+      rates: { input: 2, cacheRead: 0, cacheWrite: 0 },
+      expected: undefined,
+    },
+    {
+      label: "unused unknown rate",
+      usage: { input: 100, output: 0 },
+      rates: { input: 2, cacheRead: 0, cacheWrite: 0 },
+      expected: 0.0002,
+    },
+    {
+      label: "unknown billable cache count",
+      usage: { input: 100, output: 0 },
+      rates: { input: 2, output: 0, cacheRead: 1, cacheWrite: 0 },
+      expected: undefined,
+    },
+    {
+      label: "observed free usage",
+      usage: { input: 100, output: 3 },
+      rates: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: 0,
+    },
+    {
+      label: "nonfinite count",
+      usage: { input: Infinity },
+      rates: { input: 2, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: undefined,
+    },
+    {
+      label: "negative count",
+      usage: { input: -1 },
+      rates: { input: 2, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: undefined,
+    },
+    {
+      label: "nonfinite rate",
+      usage: { input: 100 },
+      rates: { input: Infinity, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: undefined,
+    },
+    {
+      label: "negative rate",
+      usage: { input: 100 },
+      rates: { input: -1, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: undefined,
+    },
+    {
+      label: "no reported counters",
+      usage: {},
+      rates: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: undefined,
+    },
+  ])("$label", ({ usage, rates, expected }) => {
+    expect(estimateUsageCost({ usage, declaredCost: rates })).toBe(expected);
+  });
+});

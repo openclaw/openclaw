@@ -211,6 +211,41 @@ A genuinely dual-capability model may declare both tasks on the same identity.
 Typed-only routes declare `chat: false`; neither capability implies the other.
 Task metadata never supplies fallback models or ambient conversation content.
 
+Declare a typed-only route in the owning plugin's
+`modelCatalog.providers.<provider>.models` list, without invented chat token
+limits or token costs. For example:
+
+```json
+{
+  "id": "native-decision",
+  "baseUrl": "https://decisions.example.com/v1",
+  "inference": {
+    "chat": false,
+    "decision": {
+      "protocol": "example-decision",
+      "input": ["text"],
+      "questions": {
+        "boolean": { "probabilities": "boolean", "abstention": false }
+      }
+    }
+  }
+}
+```
+
+The registered decision provider implements that protocol. Provider request
+headers and credentials still come from normal prepared provider configuration;
+private headers are not part of the public model catalog.
+
+A `models.providers.<provider>.baseUrl` override does not grant an unrelated
+endpoint the hosted catalog's task capabilities, limits, or prices. The source
+admission guard still requires the owning plugin to declare the served route.
+Currently, `models.providers.<provider>.models` and live text-provider catalog
+results use the chat-model configuration contract; they are not an independent
+native-task declaration surface. A live `text->decisions` modality alone cannot
+supply a decision protocol and question semantics. Do not fill in fake chat
+fields to work around this constraint. Custom native endpoints need their own
+route-specific declaration from the provider owner.
+
 Malformed explicit declarations exclude the row rather than falling back to
 a legacy chat interpretation. Unknown fields are discarded. A route change
 replaces the entire declaration rather than blending endpoints with different

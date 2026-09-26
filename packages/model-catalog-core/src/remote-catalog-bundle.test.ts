@@ -3,6 +3,11 @@ import {
   parseRemoteModelCatalogBundle,
   validateAndSanitizeRemoteModelCatalogBundle,
 } from "./remote-catalog-bundle.js";
+import {
+  remoteDecisionCost,
+  remoteDecisionInference,
+  remoteDecisionModel,
+} from "./remote-catalog-bundle.test-support.js";
 
 const validBundle = {
   schemaVersion: 1,
@@ -63,6 +68,55 @@ describe("remote model catalog bundle", () => {
       output: 10,
       cacheRead: 1.25,
     });
+  });
+
+  it("retains canonical inference and zero token pricing without admitting remote authority", () => {
+    const parsed = validateAndSanitizeRemoteModelCatalogBundle({
+      ...validBundle,
+      providers: { anthropic: { models: [remoteDecisionModel] } },
+    });
+    expect(parsed.providers.anthropic?.models).toEqual([
+      {
+        id: "typed",
+        input: ["text"],
+        inference: remoteDecisionInference,
+        cost: remoteDecisionCost,
+      },
+    ]);
+  });
+
+  it.each([
+    { decision: remoteDecisionInference.decision },
+    {
+      ...remoteDecisionInference,
+      decision: {
+        ...remoteDecisionInference.decision,
+        billing: { unit: "requests", source: "provider-catalog", usdPerMillion: { input: 1 } },
+      },
+    },
+  ])(
+    "rejects malformed inference rather than silently making a decision row conversational",
+    (inference) => {
+      expect(() =>
+        parseRemoteModelCatalogBundle({
+          ...validBundle,
+          providers: { anthropic: { models: [{ id: "typed", inference }] } },
+        }),
+      ).toThrow();
+    },
+  );
+
+  it.each([
+    { authScope: "plugin" },
+    { credentials: { fixture: "untrusted" } },
+    { runtimeHooks: ["untrusted"] },
+  ])("rejects provider authority in hosted metadata: %j", (authority) => {
+    expect(() =>
+      parseRemoteModelCatalogBundle({
+        ...validBundle,
+        providers: { anthropic: { ...authority, models: [remoteDecisionModel] } },
+      }),
+    ).toThrow();
   });
 
   it("rejects unsupported versions, invalid timestamps, and malformed providers", () => {

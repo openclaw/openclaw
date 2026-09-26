@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import {
   MODEL_PRICING_SOURCES,
+  OPENROUTER_DECISION_MODELS_URL,
   normalizeModelPricingCatalog,
   normalizeModelPricingProvider,
   normalizeOpenRouterModelPricing,
@@ -21,21 +22,32 @@ import type {
   RemoteModelCatalogPricing,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
 import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
+import {
+  createModelCatalogSourceLoader,
+  hydrateModelCatalogFromModelsDev,
+  type ModelCatalogManifestInput,
+  type ModelCatalogSourceLoader,
+} from "./lib/model-catalog-publication-source.mts";
+import {
+  loadClientBundleValidator,
+  compactPricing,
+  hasKnownPricing,
+  assembleModelCatalogBundleV2,
+  assembleModelCatalogBundleV3,
+  serializeModelCatalogBundle,
+  serializeModelCatalogBundleV2,
+  projectLegacyModelCatalogBundle,
+  type PricingSelection,
+  type StandalonePricing,
+} from "./lib/model-catalog-publication-wire.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-type ModelCatalogManifestInput = {
-  pluginId: string;
-  manifestPath: string;
-  manifest: {
-    providers?: string[];
-    modelCatalog?: {
-      providers?: Record<string, unknown>;
-      modelsDev?: Record<string, unknown>;
-      suppressions?: Array<{ provider?: string; model?: string; when?: unknown }>;
-    };
-    modelPricing?: { providers?: Record<string, unknown> };
-  };
-};
+export { hydrateModelCatalogFromModelsDev } from "./lib/model-catalog-publication-source.mts";
+export {
+  assembleModelCatalogBundleV2,
+  serializeModelCatalogBundle,
+  serializeModelCatalogBundleV2,
+} from "./lib/model-catalog-publication-wire.mts";
 
 type PublishedModelPricing = RemoteModelCatalogPricing;
 type PublishedModelCatalogBundle = RemoteModelCatalogBundle;
@@ -45,23 +57,13 @@ type PricingSource = (typeof MODEL_PRICING_SOURCES)[number];
 type LoadedPricingSource = PricingSource & {
   catalog: PricingCatalog;
   aliases: string[][];
+  decisionCatalog?: PricingCatalog;
 };
 type BundleValidator = (bundle: unknown) => PublishedModelCatalogBundle;
-type ModelsDevModel = Record<string, unknown> & {
-  id: string;
-  modalities: { input: unknown[]; output: unknown[] };
-  limit: Record<string, unknown>;
-};
-type ModelCatalogHydrationCounts = { added: number; filled: number; skipped: number };
-type ModelCatalogHydrationResult = Record<string, ModelCatalogHydrationCounts>;
-type ModelCatalogSourceLoader = (url: string, label: string) => Promise<unknown>;
 const MODEL_CATALOG_MIN_VERSION = "2026.7.0";
 export const MODEL_CATALOG_MIN_MODELS = 200;
 
 const SCRIPT_LABEL = "publish-model-catalog";
-const MODELS_DEV_CATALOG_URL = "https://models.opencode.ai/api.json";
-const PRICING_FETCH_TIMEOUT_MS = 60_000;
-const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const BUNDLE_SIZE_WARNING_BYTES = 2 * 1024 * 1024;
 const CLIENT_BUNDLE_LIMIT_BYTES = 4 * 1024 * 1024;
 const defaultRootDir = resolveRepoRoot(import.meta.url);
@@ -87,6 +89,8 @@ export function parsePublishModelCatalogArgs(args: string[]) {
   let dryRun = false;
   let pricing = false;
   let out: string | undefined;
+  let outV2: string | undefined;
+  let outV3: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--dry-run") {
@@ -102,12 +106,28 @@ export function parsePublishModelCatalogArgs(args: string[]) {
       index += 1;
       continue;
     }
+    if (arg === "--out-v2") {
+      outV2 = requireOptionValue(args, index, arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--out-v3") {
+      outV3 = requireOptionValue(args, index, arg);
+      index += 1;
+      continue;
+    }
     throw new Error(`unknown argument: ${arg}`);
   }
   if (!dryRun && !out) {
     throw new Error("provide --out <file> or --dry-run");
   }
-  return { dryRun, pricing, ...(out ? { out } : {}) };
+  return {
+    dryRun,
+    pricing,
+    ...(out ? { out } : {}),
+    ...(outV2 ? { outV2 } : {}),
+    ...(outV3 ? { outV3 } : {}),
+  };
 }
 
 export function readModelCatalogManifests(
@@ -131,18 +151,6 @@ export function readModelCatalogManifests(
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 }
 
-async function loadClientBundleValidator() {
-  const modulePath = path.join(
-    defaultRootDir,
-    "packages/model-catalog-core/src/remote-catalog-bundle.ts",
-  );
-  const module = await importToolingTypeScript(pathToFileURL(modulePath).href, import.meta.url);
-  if (typeof module.validateAndSanitizeRemoteModelCatalogBundle !== "function") {
-    throw new Error("remote catalog bundle validator export is unavailable");
-  }
-  return module.validateAndSanitizeRemoteModelCatalogBundle;
-}
-
 export async function assembleModelCatalogBundle(options: {
   manifests: ModelCatalogManifestInput[];
   generatedAt: number;
@@ -160,7 +168,16 @@ export async function assembleModelCatalogBundle(options: {
       if (Object.hasOwn(providers, providerId)) {
         throw new Error(`provider ${providerId} is declared by more than one plugin manifest`);
       }
-      providers[providerId] = provider;
+      if (!isRecord(provider)) {
+        throw new Error("invalid provider catalog declaration");
+      }
+      // Public facts only: plugin credential scope and runtime hooks never cross this boundary.
+      providers[providerId] = {
+        api: provider.api,
+        defaultModel: provider.defaultModel,
+        defaultUtilityModel: provider.defaultUtilityModel,
+        models: provider.models,
+      };
     }
   }
 
@@ -260,26 +277,6 @@ function parseLiteLLMPricing(value: unknown): PublishedModelPricing | undefined 
   };
 }
 
-function compactPricing(pricing: PublishedModelPricing): PublishedModelPricing {
-  return {
-    input: pricing.input,
-    output: pricing.output,
-    ...((pricing.cacheRead ?? 0) > 0 ? { cacheRead: pricing.cacheRead } : {}),
-    ...((pricing.cacheWrite ?? 0) > 0 ? { cacheWrite: pricing.cacheWrite } : {}),
-    ...(pricing.tieredPricing ? { tieredPricing: pricing.tieredPricing } : {}),
-  };
-}
-
-function hasKnownPricing(pricing: Partial<PublishedModelPricing>): boolean {
-  return (
-    (pricing.input ?? 0) > 0 ||
-    (pricing.output ?? 0) > 0 ||
-    (pricing.cacheRead ?? 0) > 0 ||
-    (pricing.cacheWrite ?? 0) > 0 ||
-    Boolean(pricing.tieredPricing?.some(hasKnownPricing))
-  );
-}
-
 function modelIdVariants(modelId: string, transforms?: string[], reverse = false): string[] {
   if (!transforms?.includes("version-dots")) {
     return [modelId];
@@ -323,8 +320,10 @@ function buildPricingCandidates(
   if (seen.has(ref) || !policy) {
     return [];
   }
+  // models.dev prices are pre-keyed by OpenClaw provider; `provider` only picks the entry.
+  const namespace = source.id === "modelsDev" ? providerId : (policy.provider ?? providerId);
   const candidates = modelIdVariants(modelId, policy.modelIdTransforms).map(
-    (id) => `${policy.provider ?? providerId}/${id}`,
+    (id) => `${namespace}/${id}`,
   );
   const slash = modelId.indexOf("/");
   if (policy.passthroughProviderModel && slash > 0) {
@@ -356,208 +355,34 @@ function readPricingPolicies(manifests: ModelCatalogManifestInput[]): PricingPol
   return policies;
 }
 
-async function readJsonResponse(response: Response, source: string) {
-  if (!response.ok) {
-    throw new Error(`${source} request failed: HTTP ${response.status}`);
-  }
-  const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > MAX_PRICING_CATALOG_BYTES) {
-    throw new Error(`${source} response exceeds ${MAX_PRICING_CATALOG_BYTES} bytes`);
-  }
-  const reader = response.body?.getReader();
-  if (!reader) {
-    throw new Error(`${source} response has no body`);
-  }
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-    total += value.byteLength;
-    if (total > MAX_PRICING_CATALOG_BYTES) {
-      await reader.cancel();
-      throw new Error(`${source} response exceeds ${MAX_PRICING_CATALOG_BYTES} bytes`);
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    throw new Error(`${source} response is malformed JSON`);
-  }
-  return payload;
-}
-
-function createModelCatalogSourceLoader(fetchImpl: typeof fetch = fetch): ModelCatalogSourceLoader {
-  // Metadata and pricing consume the same response within one publication. A failed
-  // metadata request must not be retried as pricing and publish a smaller catalog.
-  const sources = new Map<string, Promise<unknown>>();
-  return (url, label) => {
-    let source = sources.get(url);
-    if (!source) {
-      source = fetchImpl(url, {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(PRICING_FETCH_TIMEOUT_MS),
-      })
-        .then((response) => readJsonResponse(response, label))
-        .catch((cause: unknown) => {
-          throw new Error(`${label} catalog unavailable: ${String(cause)}`, { cause });
-        });
-      sources.set(url, source);
-    }
-    return source;
-  };
-}
-
-function isModelsDevModel(value: unknown, modelId: string): value is ModelsDevModel {
-  return (
-    isRecord(value) &&
-    value.id === modelId &&
-    isRecord(value.modalities) &&
-    Array.isArray(value.modalities.input) &&
-    Array.isArray(value.modalities.output) &&
-    isRecord(value.limit)
-  );
-}
-
-// Metadata only: cost stays with the provider pricing policy in enrichModelCatalogPricing.
-function translateModelsDevModel(model: ModelsDevModel): ModelCatalogModel {
-  const contextWindow = parseStrictFiniteNumber(model.limit.context);
-  const maxTokens = parseStrictFiniteNumber(model.limit.output);
-  return {
-    id: model.id,
-    ...(typeof model.name === "string" ? { name: model.name } : {}),
-    ...(typeof model.reasoning === "boolean" ? { reasoning: model.reasoning } : {}),
-    input: [
-      ...new Set(
-        model.modalities.input.flatMap((value) =>
-          value === "text" || value === "image" ? value : value === "pdf" ? "document" : [],
-        ),
-      ),
-    ],
-    ...(contextWindow !== undefined && contextWindow > 0 ? { contextWindow } : {}),
-    ...(maxTokens !== undefined && maxTokens > 0 ? { maxTokens } : {}),
-  };
-}
-
-const HYDRATED_MODEL_FIELDS = [
-  "name",
-  "reasoning",
-  "input",
-  "contextWindow",
-  "maxTokens",
-] as const satisfies readonly (keyof ModelCatalogModel)[];
-
-export async function hydrateModelCatalogFromModelsDev(options: {
-  bundle: PublishedModelCatalogBundle;
-  manifests: ModelCatalogManifestInput[];
-  fetchImpl?: typeof fetch;
-  loadSource?: ModelCatalogSourceLoader;
-}): Promise<ModelCatalogHydrationResult> {
-  const result: ModelCatalogHydrationResult = {};
-  const mappings = new Map<string, string>();
-  const suppressions = new Set<string>();
-  for (const { manifest } of options.manifests) {
+/** Maps each OpenClaw provider to the models.dev entry that bills it. */
+function readModelsDevPricingProviders(
+  manifests: ModelCatalogManifestInput[],
+  policies: PricingPolicies,
+): Map<string, string> {
+  const providers = new Map<string, string>();
+  for (const { manifest } of manifests) {
     const ownedProviders = new Set((manifest.providers ?? []).map(normalizeModelCatalogProviderId));
-    const catalog = normalizeModelCatalog(manifest.modelCatalog, { ownedProviders });
-    for (const [provider, source] of Object.entries(catalog?.modelsDev ?? {})) {
-      if (catalog?.providers?.[provider] && options.bundle.providers[provider]) {
-        mappings.set(provider, source);
-      }
-    }
-    // Endpoint-specific rules remain runtime-owned. Another plugin cannot veto
-    // an owner's imports through an unowned shared-catalog suppression.
-    for (const { provider, model, when } of catalog?.suppressions ?? []) {
-      if (ownedProviders.has(provider) && when === undefined) {
-        suppressions.add(`${provider}/${model.toLowerCase()}`);
+    // The metadata mapping names the same billing entry unless pricing policy overrides it.
+    const mapped = normalizeModelCatalog(manifest.modelCatalog, { ownedProviders })?.modelsDev;
+    for (const providerId of ownedProviders) {
+      const policy = policies.get(providerId)?.modelsDev;
+      const named = (policy && policy.provider) || mapped?.[providerId];
+      // A pass-through gateway has its own price list only when its manifest names one;
+      // otherwise it bills the vendor's rate (Cloudflare Unified Billing, for example).
+      if (named || !(policy && policy.passthroughProviderModel)) {
+        providers.set(providerId, named || providerId);
       }
     }
   }
-  if (mappings.size === 0) {
-    return result;
-  }
-  const loadSource = options.loadSource ?? createModelCatalogSourceLoader(options.fetchImpl);
-  const catalog = await loadSource(MODELS_DEV_CATALOG_URL, "models.dev");
-  if (!isRecord(catalog)) {
-    throw new Error("models.dev response is not a JSON object");
-  }
-  for (const [providerId, provider] of Object.entries(options.bundle.providers)) {
-    const upstreamProviderId = mappings.get(providerId);
-    if (!upstreamProviderId) {
-      continue;
-    }
-    const upstreamProvider = catalog[upstreamProviderId];
-    if (
-      !isRecord(upstreamProvider) ||
-      upstreamProvider.id !== upstreamProviderId ||
-      !isRecord(upstreamProvider.models)
-    ) {
-      // One renamed or broken upstream provider must not freeze every other
-      // provider's catalog updates. Its manifest rows still publish as authored.
-      process.stderr.write(
-        `[${SCRIPT_LABEL}] warning: models.dev catalog missing or malformed for provider ${upstreamProviderId}; publishing ${providerId} without models.dev hydration\n`,
-      );
-      continue;
-    }
-    if (provider.models.some((model) => model.api !== undefined)) {
-      process.stderr.write(
-        `[${SCRIPT_LABEL}] warning: skipping models.dev hydration for ${providerId}; its rows pick a transport per model\n`,
-      );
-      continue;
-    }
-    const existing = new Map(provider.models.map((model) => [model.id, model]));
-    let filled = 0;
-    let skipped = 0;
-    const additions = Object.entries(upstreamProvider.models).flatMap(([modelId, rawModel]) => {
-      // Agents need tool calling; models.dev rows without it are embeddings, image, guard, and
-      // safety models that would only clutter the picker.
-      if (
-        !isModelsDevModel(rawModel, modelId) ||
-        rawModel.tool_call !== true ||
-        !rawModel.modalities.output.includes("text") ||
-        rawModel.status === "deprecated" ||
-        rawModel.status === "retired" ||
-        suppressions.has(`${providerId}/${modelId.toLowerCase()}`)
-      ) {
-        skipped += 1;
-        return [];
-      }
-      const current = existing.get(modelId);
-      if (!current) {
-        return [translateModelsDevModel(rawModel)];
-      }
-      const translated = translateModelsDevModel(rawModel);
-      let modelFilled = false;
-      for (const key of HYDRATED_MODEL_FIELDS) {
-        if (current[key] === undefined && translated[key] !== undefined) {
-          Object.assign(current, { [key]: translated[key] });
-          modelFilled = true;
-        }
-      }
-      if (modelFilled) {
-        filled += 1;
-      }
-      return [];
-    });
-    provider.models.push(...additions);
-    result[providerId] = { added: additions.length, filled, skipped };
-  }
-  return result;
+  return providers;
 }
 
 async function parsePricingCatalog(
   source: PricingSource,
   body: unknown,
   policies: PricingPolicies,
+  modelsDevProviders: ReadonlyMap<string, string>,
 ): Promise<LoadedPricingSource> {
   const catalog: PricingCatalog = new Map();
   const aliases: string[][] = [];
@@ -604,14 +429,48 @@ async function parsePricingCatalog(
         catalog.set(`${upstreamId}/${id}`, pricing);
       }
     }
+  } else if (source.id === "modelsDev") {
+    // Each OpenClaw provider reads the models.dev entry that bills it, keyed in its own
+    // namespace for its catalog rows. Vendors are also keyed under their models.dev slug
+    // (`moonshotai/…`), the `vendor/model` ID that gateways pass through.
+    const gateways = readPassthroughProviders(policies);
+    for (const [providerId, upstreamId] of modelsDevProviders) {
+      if (!sourcePolicy(policies, providerId, source)) {
+        continue;
+      }
+      const provider = body[upstreamId];
+      if (!isRecord(provider) || provider.id !== upstreamId || !isRecord(provider.models)) {
+        continue;
+      }
+      const rows = Object.entries(provider.models).map(([id, model]) =>
+        isRecord(model) && model.id === id ? model : undefined,
+      );
+      const prices = normalizeModelPricingCatalog(rows, normalizeUpstreamModelPricing, {
+        readPricing: (model) => model.cost,
+      });
+      if (!prices) {
+        process.stderr.write(
+          `[${SCRIPT_LABEL}] warning: models.dev pricing malformed for provider ${upstreamId}; skipping it\n`,
+        );
+        continue;
+      }
+      for (const [id, pricing] of prices) {
+        catalog.set(`${providerId}/${id}`, pricing);
+        if (upstreamId !== providerId && !gateways.has(providerId)) {
+          catalog.set(`${upstreamId}/${id}`, pricing);
+        }
+      }
+    }
   } else if (source.id === "openRouter") {
+    // OpenRouter's feed is OpenRouter's billing, promotions included. Its IDs look like
+    // vendor keys (`openai/gpt-…`), so namespace them to price only OpenRouter routes.
     for (const row of Array.isArray(body.data) ? body.data : []) {
       if (!isRecord(row)) {
         continue;
       }
       const pricing = normalizeOpenRouterModelPricing(row.pricing);
       if (typeof row.id === "string" && pricing) {
-        catalog.set(row.id, pricing);
+        catalog.set(`openrouter/${row.id}`, pricing);
       }
     }
   } else {
@@ -630,12 +489,22 @@ async function parsePricingCatalog(
       aliases.push(keys);
     }
   }
+  // Only a native billing owner establishes an advertised free tariff. Third-party zero
+  // rows may be placeholders; positive third-party estimates retain their existing policy.
+  if (!source.authoritative && source.id !== "openRouter") {
+    for (const [key, pricing] of catalog) {
+      if (!hasKnownPricing(pricing)) {
+        catalog.delete(key);
+      }
+    }
+  }
   return { ...source, catalog, aliases };
 }
 
 async function fetchPricingSources(
   loadSource: ModelCatalogSourceLoader,
   policies: PricingPolicies,
+  modelsDevProviders: ReadonlyMap<string, string>,
 ) {
   const sources = MODEL_PRICING_SOURCES.filter(
     (source) =>
@@ -646,7 +515,36 @@ async function fetchPricingSources(
     sources.map(async (source) => {
       try {
         const body = await loadSource(source.url, source.label);
-        return await parsePricingCatalog(source, body, policies);
+        const parsed = await parsePricingCatalog(source, body, policies, modelsDevProviders);
+        if (source.id === "openRouter") {
+          try {
+            const native = await loadSource(OPENROUTER_DECISION_MODELS_URL, "OpenRouter decisions");
+            const decisionCatalog: PricingCatalog = new Map();
+            for (const row of isRecord(native) && Array.isArray(native.data) ? native.data : []) {
+              if (!isRecord(row) || typeof row.id !== "string") {
+                continue;
+              }
+              const pricing = normalizeOpenRouterModelPricing(row.pricing, { tokenOnly: true });
+              if (pricing) {
+                decisionCatalog.set("openrouter/" + row.id, pricing);
+              }
+            }
+            parsed.decisionCatalog = decisionCatalog;
+            // Pricing-only entries survive legacy publication, but never displace a chat tariff.
+            for (const [key, pricing] of decisionCatalog) {
+              if (!parsed.catalog.has(key)) {
+                parsed.catalog.set(key, pricing);
+              }
+            }
+          } catch (error) {
+            process.stderr.write(
+              "[publish-model-catalog] warning: decision pricing unavailable: " +
+                String(error) +
+                "\n",
+            );
+          }
+        }
+        return parsed;
       } catch (cause) {
         return {
           source,
@@ -683,11 +581,27 @@ function selectProviderPricingSources(
   return native ? [native] : eligible;
 }
 
+/** Providers that charge a vendor's price for `vendor/model` IDs, such as gateways. */
+function readPassthroughProviders(policies: PricingPolicies): Set<string> {
+  return new Set(
+    [...policies].flatMap(([id, policy]) =>
+      MODEL_PRICING_SOURCES.some(({ id: source }) => {
+        const selected = policy[source];
+        return selected && selected.passthroughProviderModel;
+      })
+        ? [id]
+        : [],
+    ),
+  );
+}
+
 function materializePolicyRuntimePricing(
   hosted: PricingCatalog,
   policies: PricingPolicies,
   sources: LoadedPricingSource[],
   metadataOwnedKeys: Set<string>,
+  gateways: ReadonlySet<string>,
+  providerPrices?: StandalonePricing["provider"],
 ): void {
   for (const [providerId] of policies) {
     for (const key of hosted.keys()) {
@@ -695,31 +609,38 @@ function materializePolicyRuntimePricing(
         hosted.delete(key);
       }
     }
-    for (const source of selectProviderPricingSources(providerId, sources, policies)) {
-      const policy = sourcePolicy(policies, providerId, source);
-      if (!policy) {
-        continue;
-      }
-      for (const [key, pricing] of source.catalog) {
-        if (!source.authoritative && !hasKnownPricing(pricing)) {
+    const providerSources = selectProviderPricingSources(providerId, sources, policies);
+    // A provider's own price from any source beats the vendor price it passes through.
+    for (const passthrough of [false, true]) {
+      for (const source of providerSources) {
+        const policy = sourcePolicy(policies, providerId, source);
+        if (!policy || (passthrough && !policy.passthroughProviderModel)) {
           continue;
         }
-        const slash = key.indexOf("/");
-        if (slash <= 0 || slash === key.length - 1) {
-          continue;
-        }
-        const runtimeKeys =
-          key.slice(0, slash) === (policy.provider ?? providerId)
-            ? modelIdVariants(key.slice(slash + 1), policy.modelIdTransforms, true).map(
-                (id) => `${providerId}/${id}`,
-              )
-            : [];
-        if (policy.passthroughProviderModel) {
-          runtimeKeys.push(`${providerId}/${key}`);
-        }
-        for (const runtimeKey of runtimeKeys) {
-          if (!metadataOwnedKeys.has(runtimeKey) && !hosted.has(runtimeKey)) {
-            hosted.set(runtimeKey, pricing);
+        const namespace = source.id === "modelsDev" ? providerId : (policy.provider ?? providerId);
+        for (const [key, pricing] of source.catalog) {
+          // Entries here passed the source parser: an advertised zero is not a seed placeholder.
+          const slash = key.indexOf("/");
+          if (slash <= 0 || slash === key.length - 1) {
+            continue;
+          }
+          const runtimeKeys = passthrough
+            ? gateways.has(key.slice(0, slash))
+              ? []
+              : [`${providerId}/${key}`]
+            : key.slice(0, slash) === namespace
+              ? modelIdVariants(key.slice(slash + 1), policy.modelIdTransforms, true).map(
+                  (id) => `${providerId}/${id}`,
+                )
+              : [];
+          for (const runtimeKey of runtimeKeys) {
+            if (!metadataOwnedKeys.has(runtimeKey) && !hosted.has(runtimeKey)) {
+              hosted.set(runtimeKey, pricing);
+              // V2 resolves passthrough keys from the upstream table at lookup time.
+              if (!passthrough) {
+                providerPrices?.set(runtimeKey, { source: source.id, pricing });
+              }
+            }
           }
         }
       }
@@ -732,11 +653,14 @@ export async function enrichModelCatalogPricing(options: {
   manifests: ModelCatalogManifestInput[];
   fetchImpl?: typeof fetch;
   loadSource?: ModelCatalogSourceLoader;
+  pricingSelections?: WeakMap<ModelCatalogModel, PricingSelection>;
+  standalonePricing?: StandalonePricing;
 }): Promise<{ modelsEnriched: number; pricingEntries: number }> {
   const policies = readPricingPolicies(options.manifests);
   const sources = await fetchPricingSources(
     options.loadSource ?? createModelCatalogSourceLoader(options.fetchImpl),
     policies,
+    readModelsDevPricingProviders(options.manifests, policies),
   );
   let enriched = 0;
   const coveredKeys = new Set<string>();
@@ -746,10 +670,14 @@ export async function enrichModelCatalogPricing(options: {
     for (const model of provider.models) {
       const matches = providerSources.map((source) => {
         const candidates = buildPricingCandidates(providerId, model.id, source, policies);
+        const prices =
+          source.id === "openRouter" && model.inference?.chat === false
+            ? source.decisionCatalog
+            : source.catalog;
         return {
           source,
           candidates,
-          pricing: candidates.map((key) => source.catalog.get(key)).find(Boolean),
+          pricing: candidates.map((key) => prices?.get(key)).find(Boolean),
         };
       });
       // Flat third-party estimates cannot replace a declared context-price schedule.
@@ -757,19 +685,50 @@ export async function enrichModelCatalogPricing(options: {
       const chosen = matches.find(
         ({ source, pricing }) =>
           source.authoritative ||
-          (pricing &&
-            hasKnownPricing(pricing) &&
-            (!model.cost?.tieredPricing?.length || pricing.tieredPricing?.length)),
+          (pricing && (!model.cost?.tieredPricing?.length || pricing.tieredPricing?.length)),
       );
       if (chosen?.pricing) {
         model.cost = chosen.pricing;
+        options.pricingSelections?.set(model, { status: "known", source: chosen.source.id });
         enriched += 1;
       } else if (chosen) {
         // Keep the metadata row: removing it would revive the bundled seed's stale price.
         delete model.cost;
+        options.pricingSelections?.set(model, { status: "unavailable", source: chosen.source.id });
         process.stderr.write(
           `[${SCRIPT_LABEL}] warning: ${chosen.source.label} pricing unavailable for ${providerId}/${model.id}; preserving metadata without cost\n`,
         );
+      }
+      const inference = model.inference;
+      const decision = inference?.decision;
+      const billing = decision?.billing;
+      if (inference && decision && billing?.unit === "tokens") {
+        const native = matches.flatMap(({ source, candidates }) =>
+          candidates.flatMap((key) => {
+            const rate = source.decisionCatalog?.get(key);
+            return rate ? [{ rate, source }] : [];
+          }),
+        )[0];
+        if (native) {
+          const { usdPerMillion: _oldRates, ...billingFacts } = billing;
+          model.inference = {
+            ...inference,
+            decision: {
+              ...decision,
+              billing: {
+                ...billingFacts,
+                source: "provider-catalog",
+                ...(!native.rate.tieredPricing?.length
+                  ? { usdPerMillion: { input: native.rate.input, output: native.rate.output } }
+                  : {}),
+              },
+            },
+          };
+          if (!model.inference.chat) {
+            model.cost = native.rate;
+            options.pricingSelections?.set(model, { status: "known", source: native.source.id });
+          }
+        }
       }
       // Native zero prices keep standalone entries as evidence of free, not unknown, usage.
       if ((model.cost && hasKnownPricing(model.cost)) || (chosen && !chosen.pricing)) {
@@ -785,14 +744,29 @@ export async function enrichModelCatalogPricing(options: {
     }
   }
 
+  const gateways = readPassthroughProviders(policies);
   const hosted: PricingCatalog = new Map();
   for (const source of sources) {
     // Opted-in feeds only enter the owner's mapped namespace, never the global fallback map.
     if (!source.authoritative) {
       for (const [key, pricing] of source.catalog) {
         const existing = hosted.get(key);
-        if (!existing || !hasKnownPricing(existing)) {
+        if (!existing) {
           hosted.set(key, pricing);
+        }
+        // Unpruned: gateways pass through to catalogued vendor models too. A gateway's own
+        // keys are its billing, served from providerPricing rather than as vendor prices.
+        const slash = key.indexOf("/");
+        if (options.standalonePricing && slash > 0 && !gateways.has(key.slice(0, slash))) {
+          const upstream = options.standalonePricing.upstream.get(key);
+          if (!upstream) {
+            options.standalonePricing.upstream.set(key, { source: source.id, pricing });
+          } else if (upstream.source !== source.id) {
+            upstream.alternatives = [
+              ...(upstream.alternatives ?? []),
+              { source: source.id, pricing },
+            ];
+          }
         }
       }
     }
@@ -806,43 +780,26 @@ export async function enrichModelCatalogPricing(options: {
   }
   for (const key of coveredKeys) {
     hosted.delete(key);
+    // Catalog rows own these keys; direct lookups must not revive an unknown row's price.
+    const upstream = options.standalonePricing?.upstream.get(key);
+    if (upstream) {
+      upstream.passthroughOnly = true;
+    }
   }
-  materializePolicyRuntimePricing(hosted, policies, sources, metadataOwnedKeys);
+  materializePolicyRuntimePricing(
+    hosted,
+    policies,
+    sources,
+    metadataOwnedKeys,
+    gateways,
+    options.standalonePricing?.provider,
+  );
   options.bundle.pricing = Object.fromEntries(
     [...hosted.entries()]
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, pricing]) => [key, compactPricing(pricing)]),
   );
   return { modelsEnriched: enriched, pricingEntries: hosted.size };
-}
-
-function sortCatalogValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sortCatalogValue);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, sortCatalogValue(entry)]),
-  );
-}
-
-export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle): string {
-  const providers = Object.fromEntries(
-    Object.entries(bundle.providers)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([providerId, provider]) => [
-        providerId,
-        {
-          ...provider,
-          models: provider.models.toSorted((left, right) => left.id.localeCompare(right.id)),
-        },
-      ]),
-  );
-  return `${JSON.stringify(sortCatalogValue({ ...bundle, providers }), null, 2)}\n`;
 }
 
 function resolveSourceCommit(rootDir: string): string {
@@ -853,7 +810,7 @@ function resolveSourceCommit(rootDir: string): string {
   }).trim();
 }
 
-async function runPublishModelCatalog(
+export async function runPublishModelCatalog(
   options: {
     args?: string[];
     fetchImpl?: typeof fetch;
@@ -864,22 +821,75 @@ async function runPublishModelCatalog(
 ) {
   const rootDir = options.rootDir ?? defaultRootDir;
   const args = parsePublishModelCatalogArgs(options.args ?? process.argv.slice(2));
+  if (
+    args.out &&
+    args.outV2 &&
+    path.resolve(rootDir, args.out) === path.resolve(rootDir, args.outV2)
+  ) {
+    throw new Error("--out and --out-v2 must name different files");
+  }
+  const outputs = [args.out, args.outV2, args.outV3]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => path.resolve(rootDir, value));
+  if (new Set(outputs).size !== outputs.length) {
+    throw new Error("catalog output paths must be distinct");
+  }
   const generatedAt = (options.now ?? Date.now)();
   const sourceCommit = options.sourceCommit ?? resolveSourceCommit(rootDir);
   const manifests = readModelCatalogManifests({ rootDir });
   let bundle = await assembleModelCatalogBundle({ manifests, generatedAt, sourceCommit });
+  const pricingSelections = new WeakMap<ModelCatalogModel, PricingSelection>();
+  // Capture seed ownership before hydration/enrichment can replace its cost.
+  for (const provider of Object.values(bundle.providers)) {
+    for (const model of provider.models) {
+      if (model.cost && hasKnownPricing(model.cost)) {
+        pricingSelections.set(model, { status: "known", source: "manifest" });
+      }
+    }
+  }
   const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
   const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
+  const standalonePricing: StandalonePricing = { upstream: new Map(), provider: new Map() };
   const pricingResult = args.pricing
-    ? await enrichModelCatalogPricing({ bundle, manifests, loadSource })
+    ? await enrichModelCatalogPricing({
+        bundle,
+        manifests,
+        loadSource,
+        pricingSelections,
+        standalonePricing,
+      })
     : { modelsEnriched: 0, pricingEntries: 0 };
   // Validate after all enrichment so metadata-only and dry-run output obey the
   // same client contract as priced catalogs.
   const validateBundle = await loadClientBundleValidator();
-  bundle = validateBundle(bundle);
+  // Project while selection facts still refer to the assembled model objects.
+  const bundleV2 = args.outV2
+    ? await assembleModelCatalogBundleV2(bundle, pricingSelections, standalonePricing)
+    : undefined;
+  const bundleV3 = args.outV3
+    ? await assembleModelCatalogBundleV3(bundle, pricingSelections, standalonePricing)
+    : undefined;
+  bundle = validateBundle(projectLegacyModelCatalogBundle(bundle, pricingSelections));
   const summary = summarizeModelCatalogBundle(bundle);
+  // Typed rows cannot mask a truncated legacy chat catalog during wire projection.
+  if (
+    summary.models < MODEL_CATALOG_MIN_MODELS ||
+    !bundle.providers.anthropic ||
+    !bundle.providers.openai
+  ) {
+    throw new Error(
+      `legacy catalog must retain anthropic/openai and at least ${MODEL_CATALOG_MIN_MODELS} chat models`,
+    );
+  }
   const serialized = serializeModelCatalogBundle(bundle);
   const bundleBytes = Buffer.byteLength(serialized);
+  const serializedV2 = bundleV2 ? serializeModelCatalogBundleV2(bundleV2) : undefined;
+  const bundleV2Bytes = serializedV2 ? Buffer.byteLength(serializedV2) : 0;
+  const serializedV3 = bundleV3 ? serializeModelCatalogBundleV2(bundleV3) : undefined;
+  const bundleV3Bytes = serializedV3 ? Buffer.byteLength(serializedV3) : 0;
+  if (bundleV3Bytes > CLIENT_BUNDLE_LIMIT_BYTES) {
+    throw new Error("catalog v3 bundle exceeds client limit");
+  }
   if (bundleBytes > BUNDLE_SIZE_WARNING_BYTES) {
     process.stderr.write(
       `[${SCRIPT_LABEL}] warning: bundle size ${bundleBytes} bytes exceeds ${BUNDLE_SIZE_WARNING_BYTES} bytes\n`,
@@ -888,6 +898,11 @@ async function runPublishModelCatalog(
   if (bundleBytes > CLIENT_BUNDLE_LIMIT_BYTES) {
     throw new Error(
       `catalog bundle ${bundleBytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
+    );
+  }
+  if (bundleV2Bytes > CLIENT_BUNDLE_LIMIT_BYTES) {
+    throw new Error(
+      `catalog v2 bundle ${bundleV2Bytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
     );
   }
   const hydrationSummary = Object.entries(hydrationResult)
@@ -908,6 +923,22 @@ async function runPublishModelCatalog(
   const outputFile = path.resolve(rootDir, args.out);
   fs.mkdirSync(path.dirname(outputFile), { recursive: true });
   fs.writeFileSync(outputFile, serialized);
+  if (args.outV2 && serializedV2) {
+    const outputV2File = path.resolve(rootDir, args.outV2);
+    fs.mkdirSync(path.dirname(outputV2File), { recursive: true });
+    fs.writeFileSync(outputV2File, serializedV2);
+    process.stdout.write(
+      `[${SCRIPT_LABEL}] published schemaVersion=2 models=${summary.models} bundleBytes=${bundleV2Bytes} out=${args.outV2}\n`,
+    );
+  }
+  if (args.outV3 && serializedV3) {
+    const output = path.resolve(rootDir, args.outV3);
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.writeFileSync(output, serializedV3);
+    process.stdout.write(
+      `[${SCRIPT_LABEL}] published schemaVersion=3 models=${bundleV3?.models.length} bundleBytes=${bundleV3Bytes} out=${args.outV3}\n`,
+    );
+  }
   process.stdout.write(`[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}`);
   return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: true };
 }

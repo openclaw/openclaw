@@ -194,11 +194,34 @@ normalizes independent estimates or replaces abstention with argmax. Unknown cos
 remain absent, not zero. Partial errors are data, not fabricated negative answers.
 Results do not authorize actions.
 
+Decision accounting uses the same usage finalizer and cost calculator as plugin
+LLM completion. Reported USD, including explicit zero, wins. Otherwise, a prepared
+physical route with token billing and declared `billing.usdPerMillion` can supply
+a flat-rate estimate; unreported counts or rates remain unknown unless their
+contribution is provably zero. Qualified or tiered tariffs remain catalog pricing
+data but are not flattened into unconditional native billing rates. Request or decision-unit billing, mixed units, and API or endpoint
+rewrites without matching route facts do not acquire token-price estimates from a
+provider/model ID lookup. V2 returns an available estimate in `usage.costUsd`; V1
+keeps its existing token-only result shape while diagnostics can record the estimate.
+
+Observed token or USD accounting emits the existing `model.usage` diagnostic when diagnostics
+are enabled. Missing native token fields stay absent, including for cost-only
+responses. A session association is included only when supplied by the host-issued
+capability, not inferred from a plugin caller or added to provider evidence. These
+diagnostics are not transcript records: the session-cost UI reads transcripts, so
+this accounting does not by itself provide persistent session-cost UI parity.
+
 Import versioned types from `openclaw/plugin-sdk/decisions`. Version 1 evaluation
 narrows through the same internal execution owner and returns `unsupported-input`
 when richer results cannot be represented without losing information. Caller
 cancellation and closed authority still reject; physical cleanup precedes authority
 release. Decision-provider registration stays a first-class SDK operation.
+
+Provider-reported USD or provider metadata that V1 cannot represent still makes a
+V1 call return `unsupported-input`; it is not silently discarded. For example, an
+OpenRouter response carrying those fields needs `evaluateV2`. Consumers that still
+use V1 (including an unversioned core-tool request) must handle that outcome; native
+provider registration alone does not guarantee that every result can be narrowed.
 
 ## Decision models (contract version 1)
 
@@ -256,9 +279,12 @@ another plugin's provider.
 
 The host supplies `DecisionProviderContextV2`: canonical model metadata, prepared
 auth, the selected config/agent scope, cancellation, task reasoning, and a monotonic
-deadline. For a both-task provider, `model.headers` retains effective request
-headers produced by normal auth preparation, with protected values unwrapped only
-for the current provider handoff. These private headers are never catalog or
+deadline. `model.headers` contains the effective manifest, provider, model and
+request headers compiled by the existing request owner from the captured
+configuration. Request overrides are provider-level; configured model rows can
+supply static `headers`, not a separate `request` block. A matching manifest route can supply defaults; an unrelated
+endpoint cannot borrow them. Both-task auth exchanges can further prepare the
+request. Protected values are unwrapped only for the current provider handoff. These private headers are never catalog or
 client-facing metadata. The executor translates the decision wire protocol; it does
 not select credentials or fabricate a conversational model descriptor. Task support comes
 from canonical `modelCatalog` inference metadata, not a separate model list.

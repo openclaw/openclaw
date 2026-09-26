@@ -1,4 +1,5 @@
 import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
@@ -6,10 +7,12 @@ import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-co
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 
 type ManifestModelCatalogCacheEntry = {
   snapshot: PluginMetadataSnapshot;
   rows: ModelCatalogEntry[];
+  transportRows: readonly NormalizedModelCatalogRow[];
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
 export function resetManifestModelCatalogRowsCache() {
@@ -84,6 +87,26 @@ export function loadManifestModelCatalogRows(
       }
       return entry;
     });
-  manifestModelCatalogCache.set(config, { snapshot, rows });
+  manifestModelCatalogCache.set(config, { snapshot, rows, transportRows: plan.rows });
   return rows;
+}
+
+/** Private route defaults from the same captured plan as the public catalog projection. */
+export function resolveManifestModelCatalogHeaders(params: {
+  config: OpenClawConfig;
+  snapshot: PluginMetadataSnapshot;
+  model: Pick<ModelCatalogEntry, "provider" | "id" | "baseUrl"> & { api?: string };
+}): Record<string, string> | undefined {
+  loadManifestModelCatalogRows(params.config, params.snapshot);
+  const captured = manifestModelCatalogCache.get(params.config);
+  if (params.config.models?.mode === "replace" || captured?.snapshot !== params.snapshot) {
+    return undefined;
+  }
+  const row = captured.transportRows.find(
+    (entry) =>
+      entry.provider === params.model.provider &&
+      entry.id === params.model.id &&
+      modelTransportRoutesMatch(entry, params.model),
+  );
+  return row?.headers;
 }

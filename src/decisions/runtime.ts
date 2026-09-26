@@ -1,3 +1,4 @@
+import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import { resolveDecisionModelSetting } from "../agents/decision-model-setting.js";
 import { normalizeModelRef } from "../agents/model-ref-shared.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -102,6 +103,7 @@ export async function evaluateDecisionInRegistry(
     consumerId
       ? { caller: { kind: "plugin", id: consumerId }, pluginIdForPolicy: consumerId }
       : { agentId: options.agentId },
+    1,
   );
   if (outcome.status !== "ok") {
     return outcome;
@@ -166,6 +168,7 @@ async function executeDecisionInRegistry(
   registry: PluginRegistry | null,
   config: OpenClawConfig,
   authority?: RuntimeLlmAuthority,
+  resultVersion: 1 | 2 = 2,
 ): Promise<DecisionOutcomeV2> {
   validateOptions(params);
   if (
@@ -265,6 +268,7 @@ async function executeDecisionInRegistry(
       if (remaining <= 0) {
         return entry.host.unavailable("deadline");
       }
+      let preparedBilling: ModelDecisionCapabilities["billing"];
       const outcome = await entry.host.evaluateV2(
         request.batch,
         { ...request, agentId, signal, timeoutMs: remaining },
@@ -273,6 +277,9 @@ async function executeDecisionInRegistry(
         registry,
         consumerId,
         selected,
+        (billing) => {
+          preparedBilling = billing;
+        },
       );
       signal.throwIfAborted();
       assertCurrent();
@@ -284,14 +291,20 @@ async function executeDecisionInRegistry(
           return entry.host.unavailable("deadline");
         }
         const usage = outcome.result.usage;
-        finalizePluginModelUsage({
+        const finalized = finalizePluginModelUsage({
           cfg: config,
           hostPluginId: consumerId,
           estimate: "none",
+          // Native unit counters are not tokens; route invalidation leaves no pricing authority.
+          declaredCost:
+            preparedBilling?.unit === "tokens" && !usage?.units && preparedBilling.usdPerMillion
+              ? { ...preparedBilling.usdPerMillion, cacheRead: 0, cacheWrite: 0 }
+              : undefined,
           target: {
             provider: normalizedSelection.provider,
             model: normalizedSelection.model,
             agentId,
+            ...(authority?.sessionKey ? { sessionKey: authority.sessionKey } : {}),
           },
           rawUsage: usage
             ? {
@@ -301,6 +314,18 @@ async function executeDecisionInRegistry(
               }
             : undefined,
         });
+        // V1 cannot represent USD: record the host estimate without changing whether
+        // the original provider result can be narrowed losslessly to that SDK contract.
+        if (
+          resultVersion === 2 &&
+          finalized.costUsd !== undefined &&
+          usage?.costUsd === undefined
+        ) {
+          return {
+            ...outcome,
+            result: { ...outcome.result, usage: { ...usage, costUsd: finalized.costUsd } },
+          };
+        }
       }
       return outcome;
     },
