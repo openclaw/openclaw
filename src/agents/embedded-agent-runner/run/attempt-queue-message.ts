@@ -48,6 +48,42 @@ class EmbeddedSteeringAcceptedUnconfirmedError extends Error {
   }
 }
 
+function steerActiveSession(
+  activeSession: EmbeddedAgentActiveSessionSteerTarget,
+  text: string,
+  images?: ImageContent[],
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+  media?: MediaFact[],
+  imageOrder?: PromptImageOrderEntry[],
+  queueIdentity?: string,
+  canInject?: () => boolean,
+): Promise<void> {
+  if (canInject) {
+    return activeSession.steer(
+      text,
+      images,
+      userTurnTranscriptRecorder,
+      media,
+      imageOrder,
+      queueIdentity,
+      canInject,
+    );
+  }
+  if (media?.length || queueIdentity) {
+    return activeSession.steer(
+      text,
+      images,
+      userTurnTranscriptRecorder,
+      media,
+      imageOrder,
+      queueIdentity,
+    );
+  }
+  return userTurnTranscriptRecorder
+    ? activeSession.steer(text, images, userTurnTranscriptRecorder)
+    : activeSession.steer(text, images);
+}
+
 function isQueuedUserMessageEnd(event: unknown, queueIdentity: string): boolean {
   if (!event || typeof event !== "object") {
     return false;
@@ -215,7 +251,8 @@ async function steerAndWaitForTranscriptCommit(
       rejectBeforeAcceptance("queued steering message was cancelled before acceptance");
       return;
     }
-    const steer = activeSession.steer(
+    const steer = steerActiveSession(
+      activeSession,
       text,
       images,
       userTurnTranscriptRecorder,
@@ -314,7 +351,8 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   }
   if (options?.waitForTranscriptCommit !== true) {
     try {
-      await activeSession.steer(
+      await steerActiveSession(
+        activeSession,
         text,
         options?.images,
         options?.userTurnTranscriptRecorder,
