@@ -1,22 +1,31 @@
 use super::{
     AppView,
-    sidebar_navigation::{append_agent_navigation, append_identity_navigation},
-    theme::{self, Appearance, Palette},
+    sidebar_menu_surface::{SidebarMenuStyle, sidebar_menu_surface},
+    sidebar_navigation::{
+        append_identity_navigation, navigation_active_background, navigation_icon,
+    },
+    theme::Palette,
 };
 use gpui_kit::{
     assets::IconName,
     component::{
-        Disableable, Icon, Sizable, StyledExt,
-        button::{Button, ButtonVariants},
+        Disableable, Icon, Selectable, Sizable, StyledExt,
+        button::{Button, ButtonCustomVariant, ButtonVariants},
         menu::{DropdownMenu, PopupMenuItem},
+        spinner::Spinner,
     },
     prelude::FluentBuilder,
     *,
 };
 
 impl AppView {
-    pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = Palette::get(cx);
+    pub(super) fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let p = Palette::sidebar(cx);
+        let pages_focus = window
+            .use_keyed_state("sidebar-pages-focus", cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let pages_focused = pages_focus.contains_focused(window, cx);
         let content = self.sidebar_session_sections(cx);
         div()
             .h_flex()
@@ -26,10 +35,19 @@ impl AppView {
             .child(
                 div()
                     .v_flex()
-                    .w(px(self.sidebar_state.width - 4.))
+                    .w(px(self.sidebar_state.width - 1.))
                     .h_full()
                     .px(px(10.))
-                    .child(self.sidebar_agent_picker(cx))
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .child(self.sidebar_agent_picker(window, cx))
+                            .when(self.sidebar_state.preferences.all_agents, |el| {
+                                el.child(div().flex_1())
+                                    .child(self.sidebar_filter_button(cx))
+                            }),
+                    )
                     .child(
                         div()
                             .id("sidebar-scroll")
@@ -38,26 +56,38 @@ impl AppView {
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
-                            .when(!self.sidebar_state.preferences.all_agents, |el| {
-                                el.child(self.sidebar_home(cx))
-                            })
-                            .child(self.sidebar_navigation(cx))
+                            .child(
+                                div()
+                                    .relative()
+                                    .group("sidebar-pages")
+                                    .mx(px(2.))
+                                    .track_focus(&pages_focus)
+                                    .v_flex()
+                                    .gap(px(2.))
+                                    .when(!self.sidebar_state.preferences.all_agents, |el| {
+                                        el.child(self.sidebar_home(cx))
+                                    })
+                                    .child(self.sidebar_navigation(cx))
+                                    .child(self.sidebar_pinned_navigation(cx))
+                                    .child(self.sidebar_more_button(pages_focused, cx)),
+                            )
                             .child(self.people_section(cx))
                             .when(!self.sidebar_state.preferences.all_agents, |el| {
                                 el.child(
                                     div()
                                         .h_flex()
                                         .gap(px(2.))
-                                        .pt(px(14.))
-                                        .pb(px(4.))
-                                        .px(px(8.))
+                                        .mt(px(16.))
+                                        .min_h(px(24.))
+                                        .pl(px(36.))
+                                        .pr(px(10.))
                                         .child(
                                             div()
                                                 .flex_1()
                                                 .text_size(px(11.))
                                                 .font_weight(FontWeight::MEDIUM)
                                                 .text_color(p.muted)
-                                                .child("Threads"),
+                                                .child("SESSIONS"),
                                         )
                                         .when(self.sidebar_state.preferences.filtered(), |el| {
                                             el.child(self.sidebar_filter_summary(cx))
@@ -67,22 +97,14 @@ impl AppView {
                                             Button::new("section-new")
                                                 .ghost()
                                                 .small()
-                                                .size(px(26.))
-                                                .icon(Icon::new(IconName::Plus).size(px(16.)))
+                                                .size(px(22.))
+                                                .icon(Icon::new(IconName::Plus).size(px(14.)))
                                                 .accessibility_label("New conversation (⇧⌘O)")
                                                 .disabled(self.session.is_none())
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.new_chat(window, cx)
                                                 })),
                                         ),
-                                )
-                            })
-                            .when(self.sidebar_state.preferences.all_agents, |el| {
-                                el.child(
-                                    div()
-                                        .h_flex()
-                                        .justify_end()
-                                        .child(self.sidebar_filter_button(cx)),
                                 )
                             })
                             .when(!self.sidebar_state.selection.keys.is_empty(), |el| {
@@ -117,7 +139,9 @@ impl AppView {
             .child(
                 div()
                     .id("sidebar-resize")
-                    .w(px(4.))
+                    .relative()
+                    .w(px(1.))
+                    .child(div().absolute().left(px(-2.)).w(px(5.)).h_full())
                     .h_full()
                     .cursor_col_resize()
                     .hover(|el| el.bg(p.border))
@@ -134,7 +158,7 @@ impl AppView {
 
     fn sidebar_home(&self, cx: &mut Context<Self>) -> AnyElement {
         use crate::model::sidebar_activity::SidebarAttention;
-        let p = Palette::get(cx);
+        let p = Palette::sidebar(cx);
         let key = self.agent_home();
         let related: Vec<_> = self
             .rows
@@ -154,32 +178,89 @@ impl AppView {
         let running = related
             .iter()
             .any(|row| !row.archived && row.display_running());
-        let unread = related.iter().any(|row| !row.archived && row.unread);
+        let active = !self.web.settings_open && self.chat.selected_session.as_ref() == Some(&key);
+        let unread = !active && related.iter().any(|row| !row.archived && row.unread);
+        let icon = match attention {
+            SidebarAttention::Question | SidebarAttention::Approval => IconName::Hand,
+            SidebarAttention::Error => IconName::TriangleAlert,
+            _ => IconName::House,
+        };
         Button::new("sidebar-home")
-            .ghost()
-            .small()
-            .h(px(30.))
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .foreground(p.muted)
+                    .hover(p.hover.opacity(0.84))
+                    .active(p.hover.opacity(0.84)),
+            )
+            .group("nav-home")
+            .h(px(32.))
             .w_full()
-            .justify_start()
             .px(px(8.))
-            .gap(px(8.))
-            .icon(
-                Icon::new(match attention {
-                    SidebarAttention::Question | SidebarAttention::Approval => IconName::Hand,
-                    SidebarAttention::Error => IconName::TriangleAlert,
-                    _ if running => IconName::LoaderCircle,
-                    _ => IconName::House,
-                })
-                .size(px(16.)),
+            .py_0()
+            .border_1()
+            .border_color(transparent_black())
+            .rounded(px(12.5))
+            .child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .gap(px(8.))
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .line_height(px(20.15))
+                    .text_color(if active { p.strong } else { p.muted })
+                    .when(!active, |el| {
+                        el.group_hover("nav-home", |style| style.text_color(p.text))
+                    })
+                    .child(
+                        div()
+                            .relative()
+                            .w(px(20.))
+                            .h(px(22.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .opacity(if active { 1. } else { 0.72 })
+                                    .group_hover("nav-home", |style| style.opacity(1.))
+                                    .child(navigation_icon(icon, 16.).text_color(if active {
+                                        p.accent
+                                    } else {
+                                        p.muted
+                                    })),
+                            )
+                            .when(running, |el| {
+                                el.child(
+                                    div().absolute().left(px(-1.)).top_0().child(
+                                        Spinner::new()
+                                            .icon(IconName::LoaderCircle)
+                                            .with_size(px(22.))
+                                            .color(p.muted),
+                                    ),
+                                )
+                            })
+                            .when(unread && !running, |el| {
+                                el.child(
+                                    div()
+                                        .absolute()
+                                        .right(px(-1.))
+                                        .top_0()
+                                        .size(px(6.))
+                                        .rounded_full()
+                                        .bg(p.accent),
+                                )
+                            }),
+                    )
+                    .child(div().flex_1().min_w_0().truncate().child("Home")),
             )
-            .child(div().flex_1().child("Home"))
-            .when(unread, |el| {
-                el.child(div().size(px(6.)).rounded_full().bg(p.accent))
+            .accessibility_label("Home")
+            .selected(active)
+            .when(active, |el| {
+                el.bg(navigation_active_background(p, cx))
+                    .border_color(p.accent.opacity(0.16))
             })
-            .when(
-                !self.web.settings_open && self.chat.selected_session.as_ref() == Some(&key),
-                |el| el.bg(p.hover),
-            )
             .on_click(
                 cx.listener(move |this, _, window, cx| {
                     this.select_session(key.clone(), window, cx)
@@ -188,135 +269,9 @@ impl AppView {
             .into_any_element()
     }
 
-    fn sidebar_agent_picker(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = Palette::get(cx);
-        let agents = self.sidebar_state.agents.clone();
-        let selected = self.sidebar_state.selected_agent.clone();
-        let roster = self.sidebar_state.preferences.all_agents;
-        let view = cx.entity().downgrade();
-        let other_unread = self
-            .sidebar_state
-            .agent_activity
-            .iter()
-            .chain(self.rows.iter())
-            .any(|row| row.unread && !row.archived && row.agent() != selected.as_deref());
-        let avatar = self
-            .sidebar_state
-            .agents
-            .iter()
-            .find(|agent| Some(&agent.id) == selected.as_ref())
-            .map(|agent| self.render_agent_avatar(agent, 32., cx));
-        Button::new("agent-picker")
-            .ghost()
-            .w_full()
-            .h(px(48.))
-            .px(px(8.))
-            .justify_start()
-            .gap(px(8.))
-            .child(
-                div()
-                    .relative()
-                    .size(px(32.))
-                    .flex_shrink_0()
-                    .child(if roster {
-                        div()
-                            .size_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(24.))
-                            .child("🦞")
-                            .into_any_element()
-                    } else {
-                        avatar.unwrap_or_else(|| div().child("◈").into_any_element())
-                    })
-                    .when(other_unread, |el| {
-                        el.child(
-                            div()
-                                .absolute()
-                                .right(px(0.))
-                                .top(px(0.))
-                                .size(px(7.))
-                                .rounded_full()
-                                .bg(p.accent),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(15.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(if roster {
-                        self.profile
-                            .as_ref()
-                            .map(|profile| profile.name.clone())
-                            .unwrap_or_else(|| "OpenClaw".into())
-                    } else {
-                        self.selected_agent_name()
-                    }),
-            )
-            .child(
-                Icon::new(IconName::ChevronsUpDown)
-                    .size(px(14.))
-                    .text_color(p.muted),
-            )
-            .accessibility_label("Select agent")
-            .dropdown_menu(move |mut menu, _, _| {
-                let all_view = view.clone();
-                menu = menu
-                    .item(
-                        PopupMenuItem::new("All Agents")
-                            .icon(IconName::UsersRound)
-                            .checked(roster)
-                            .on_click(move |_, _, cx| {
-                                let _ = all_view.update(cx, |this, cx| {
-                                    this.change_sidebar_preferences(
-                                        |prefs| prefs.all_agents = !roster,
-                                        cx,
-                                    )
-                                });
-                            }),
-                    )
-                    .separator();
-                for agent in &agents {
-                    let view = view.clone();
-                    let avatar_view = view.clone();
-                    let option = agent.clone();
-                    let id = agent.id.clone();
-                    menu = menu.item(
-                        PopupMenuItem::element(move |_, cx| {
-                            let avatar = avatar_view.upgrade().map(|entity| {
-                                entity.read(cx).render_agent_avatar(&option, 24., cx)
-                            });
-                            div()
-                                .h_flex()
-                                .gap(px(8.))
-                                .py(px(2.))
-                                .when_some(avatar, |this, avatar| this.child(avatar))
-                                .child(option.name().to_owned())
-                        })
-                        .checked(!roster && selected.as_ref() == Some(&id))
-                        .on_click(move |_, window, cx| {
-                            let _ = view.update(cx, |this, cx| {
-                                this.sidebar_state.preferences.all_agents = false;
-                                this.persist_sidebar_preferences(cx);
-                                this.switch_agent(id.clone(), window, cx);
-                            });
-                        }),
-                    );
-                }
-                append_agent_navigation(menu, view.clone())
-            })
-            .into_any_element()
-    }
-
     fn sidebar_identity(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = Palette::get(cx);
+        let p = Palette::sidebar(cx);
         let view = cx.entity().downgrade();
-        let appearance = theme::appearance(cx);
         let name = self
             .sidebar_state
             .people
@@ -324,23 +279,15 @@ impl AppView {
             .as_ref()
             .and_then(|person| person.name.clone().or(person.email.clone()))
             .or_else(|| self.access_identity.clone())
-            .unwrap_or_else(|| "Gateway user".into());
+            .unwrap_or_else(|| "Owner".into());
         let status = if self.session.is_some() {
-            self.profile
-                .as_ref()
-                .map(|p| p.name.clone())
-                .unwrap_or_else(|| "Connected".into())
-        } else if let Some(next) = self.sidebar_state.reconnect_at {
-            format!(
-                "Reconnecting in {}s",
-                next.saturating_duration_since(std::time::Instant::now())
-                    .as_secs()
-                    + 1
-            )
-        } else if self.connecting {
-            "Connecting…".into()
+            self.profile.as_ref().map(|profile| profile.name.clone())
         } else {
-            "Offline".into()
+            Some(if self.connecting {
+                "Connecting…".into()
+            } else {
+                "Offline".into()
+            })
         };
         let avatar = self
             .sidebar_state
@@ -359,105 +306,103 @@ impl AppView {
                     .child(Icon::new(IconName::UserRound).size(px(16.)))
                     .into_any_element()
             });
+        let pending: Vec<_> = self
+            .rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    self.sidebar_attention(row),
+                    crate::model::sidebar_activity::SidebarAttention::Question
+                        | crate::model::sidebar_activity::SidebarAttention::Approval
+                        | crate::model::sidebar_activity::SidebarAttention::Agent
+                )
+            })
+            .cloned()
+            .collect();
+        let attention_view = view.clone();
+        let trigger = Button::new("identity-menu")
+            .ghost()
+            .flex_1()
+            .min_w_0()
+            .h(px(34.))
+            .rounded(px(10.))
+            .px(px(6.))
+            .child(
+                div().w_full().h_flex().gap(px(8.)).child(avatar).child(
+                    div()
+                        .v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(13.5))
+                                .line_height(px(18.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(p.strong)
+                                .child(name),
+                        )
+                        .when_some(status, |el, status| {
+                            el.child(
+                                div()
+                                    .text_size(px(11.))
+                                    .line_height(px(14.))
+                                    .text_color(p.muted)
+                                    .child(status),
+                            )
+                        }),
+                ),
+            )
+            .accessibility_label("Profile and settings");
+        let identity_menu = sidebar_menu_surface(
+            "sidebar-identity-popup",
+            trigger,
+            SidebarMenuStyle::identity(),
+            move |menu, window, cx| append_identity_navigation(menu, view.clone(), window, cx),
+        );
         div()
             .h_flex()
-            .h(px(57.))
+            .h(px(44.))
+            .mb(px(4.))
+            .pl(px(8.))
             .gap(px(4.))
+            .child(identity_menu)
             .child(
-                Button::new("identity-menu")
+                Button::new("footer-home")
                     .ghost()
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(48.))
-                    .justify_start()
-                    .px(px(6.))
-                    .gap(px(8.))
-                    .child(avatar)
-                    .child(
-                        div()
-                            .v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .h_flex()
-                                    .gap(px(5.))
-                                    .child(div().size(px(5.)).rounded_full().bg(
-                                        if self.session.is_some() {
-                                            p.ok
-                                        } else {
-                                            p.danger
-                                        },
-                                    ))
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_size(px(11.))
-                                            .text_color(p.muted)
-                                            .child(status),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        Icon::new(IconName::ChevronsUpDown)
-                            .size(px(13.))
-                            .text_color(p.muted),
-                    )
-                    .accessibility_label("Profile and settings")
-                    .dropdown_menu(move |menu, window, cx| {
-                        let mut menu =
-                            append_identity_navigation(menu.label(name.clone()), view.clone());
-                        menu = menu.separator().submenu(
-                            "Appearance",
-                            window,
-                            cx,
-                            move |mut menu, _, _| {
-                                for (label, mode) in [
-                                    ("System", Appearance::System),
-                                    ("Light", Appearance::Light),
-                                    ("Dark", Appearance::Dark),
-                                ] {
-                                    menu = menu.item(
-                                        PopupMenuItem::new(label)
-                                            .checked(mode == appearance)
-                                            .on_click(move |_, window, cx| {
-                                                theme::set_appearance(mode, window, cx)
-                                            }),
-                                    );
-                                }
-                                menu
-                            },
-                        );
-                        let retry = view.clone();
-                        menu = menu.item(PopupMenuItem::new("Reconnect").on_click(
-                            move |_, window, cx| {
-                                let _ = retry.update(cx, |this, cx| this.retry(window, cx));
-                            },
-                        ));
-                        let switch = view.clone();
-                        menu = menu.item(PopupMenuItem::new("Switch Gateway…").on_click(
-                            move |_, window, cx| {
-                                let _ =
-                                    switch.update(cx, |this, cx| this.switch_gateway(window, cx));
-                            },
-                        ));
-                        let signout = view.clone();
-                        menu.item(
-                            PopupMenuItem::new("Sign out").on_click(move |_, window, cx| {
-                                let _ = signout.update(cx, |this, cx| this.sign_out(window, cx));
-                            }),
-                        )
+                    .small()
+                    .size(px(32.))
+                    .icon(Icon::new(IconName::House).size(px(18.)).text_color(p.muted))
+                    .accessibility_label("Home")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.select_session(this.agent_home(), window, cx)
+                    })),
+            )
+            .child(
+                Button::new("footer-attention")
+                    .ghost()
+                    .small()
+                    .size(px(32.))
+                    .icon(Icon::new(IconName::Inbox).size(px(18.)).text_color(p.muted))
+                    .accessibility_label("Attention")
+                    .dropdown_menu(move |mut menu, _, _| {
+                        if pending.is_empty() {
+                            return menu.label("You're all caught up");
+                        }
+                        for row in &pending {
+                            let row = row.clone();
+                            let view = attention_view.clone();
+                            menu = menu.item(PopupMenuItem::new(row.title()).on_click(
+                                move |_, window, cx| {
+                                    let _ = view.update(cx, |this, cx| {
+                                        this.select_session(row.key.clone(), window, cx)
+                                    });
+                                },
+                            ));
+                        }
+                        menu
                     }),
             )
-            .child(self.gateway_menu(cx))
             .into_any_element()
     }
 }

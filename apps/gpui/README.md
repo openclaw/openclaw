@@ -365,7 +365,7 @@ visible scroll anchor.
 ## Isolated proof
 
 Sidebar proof uses the durable directory
-`/Users/steipete/Projects/openclaw-campaign-backup/gpui-proof`, with launchers and
+a task-owned durable proof directory outside the repository, with launchers and
 logs in `sidebar-rig/`, screenshots in `shots-sidebar/`, the source inventory in
 `sidebar-gap-table.md`, and outcomes in `sidebar-report.md`. The earlier task
 scratchpad was removed; its launchers and screenshots are not available.

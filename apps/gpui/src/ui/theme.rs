@@ -20,6 +20,7 @@ pub struct Palette {
     pub accent_fg: Hsla,
     pub ok: Hsla,
     pub danger: Hsla,
+    pub warn: Hsla,
     pub accent_subtle: Hsla,
     pub user_bubble: Hsla,
     pub panel_strong: Hsla,
@@ -30,6 +31,19 @@ pub struct Palette {
 impl Palette {
     pub fn get(cx: &App) -> Self {
         Self::for_dark(Theme::global(cx).is_dark())
+    }
+
+    pub(super) fn sidebar(cx: &App) -> Self {
+        let mut palette = Self::get(cx);
+        palette.sidebar = if Theme::global(cx).is_dark() {
+            palette.bg.blend(palette.elevated.opacity(0.04))
+        } else {
+            palette.sidebar.blend(Hsla {
+                a: 0.02,
+                ..rgb(0xffffff).into()
+            })
+        };
+        palette
     }
 
     pub(super) fn for_dark(dark: bool) -> Self {
@@ -78,6 +92,7 @@ impl Palette {
             accent_fg,
             ok,
             danger,
+            warn: rgb(if dark { 0xf59e0b } else { 0x92400e }).into(),
             accent_subtle: bg.blend(Hsla {
                 a: if dark { 0.1 } else { 0.08 },
                 ..accent
@@ -91,7 +106,7 @@ impl Palette {
                 rgb(0xe6faf9).into()
             },
             panel_strong: elevated,
-            popover: card,
+            popover: elevated,
             focus_ring: accent,
         }
     }

@@ -115,7 +115,7 @@ impl AppView {
         if rows.len() < 2 {
             return div().into_any_element();
         }
-        let p = Palette::get(cx);
+        let p = Palette::sidebar(cx);
         let view = cx.entity().downgrade();
         div()
             .h_flex()

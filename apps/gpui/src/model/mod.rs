@@ -12,6 +12,7 @@ pub mod web_urls;
 
 pub mod avatars;
 pub mod people;
+pub mod person_card;
 pub mod session_links;
 pub mod sidebar;
 pub mod sidebar_activity;

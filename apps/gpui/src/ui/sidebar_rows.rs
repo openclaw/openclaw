@@ -14,7 +14,7 @@ use gpui_kit::{
         Disableable, Icon, Sizable, StyledExt, Theme,
         button::{Button, ButtonVariants},
         input::Input,
-        menu::{ContextMenuExt, DropdownMenu},
+        menu::ContextMenuExt,
     },
     prelude::FluentBuilder,
     *,
@@ -32,15 +32,14 @@ impl AppView {
         depth: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let p = Palette::get(cx);
+        let p = Palette::sidebar(cx);
         let selected =
             !self.web.settings_open && self.chat.selected_session.as_ref() == Some(&row.key);
+        let pinned_navigation = row.pinned && !self.sidebar_state.preferences.all_agents;
         let multi_selected = self.sidebar_state.selection.keys.contains(&row.key);
         let key = row.key.clone();
         let view = cx.entity().downgrade();
         let menu_row = row.clone();
-        let button_view = view.clone();
-        let button_row = row.clone();
         let shortcut_row = row.clone();
         let shortcut_epoch = self.epoch;
         let shortcut_revision = self.sidebar_state.agent_revision;
@@ -49,7 +48,6 @@ impl AppView {
         let expanded = self.sidebar_state.expanded.contains(&key);
         let main_key = self.agent_home();
         let menu_main_key = main_key.clone();
-        let button_main_key = main_key.clone();
         let known: Vec<_> = self
             .rows
             .iter()
@@ -66,7 +64,7 @@ impl AppView {
                 ArchiveFilter::All => true,
             })
             .collect();
-        let count = children.len();
+        let count = child_keys.len();
         let team = self.sidebar_state.preferences.all_agents;
         let own_attention = if row.archived {
             SidebarAttention::None
@@ -135,27 +133,44 @@ impl AppView {
             )
             .h_flex()
             .relative()
-            .min_h(px(30.))
-            .px_2()
-            .py(px(4.))
+            .min_h(px(if team { 32. } else { 30. }))
+            .pl(px(if team { 24. } else { 8. }))
+            .pr(px(if team { 0. } else { 2. }))
+            .py(px(if team { 0. } else { 4. }))
             .gap(px(8.))
-            .rounded_md()
+            .rounded(px(12.5))
             .when_some(color, |el, color| {
                 el.bg(color.opacity(0.08)).border_l_2().border_color(color)
             })
-            .when(selected, |el| el.bg(p.hover))
-            .when(multi_selected, |el| {
-                el.bg(p.accent_subtle)
-                    .border_1()
-                    .border_color(p.accent.opacity(0.5))
+            .when(pinned_navigation, |el| {
+                el.border_1().border_color(transparent_black())
             })
-            .hover(|el| el.bg(p.hover))
+            .when(selected, |el| {
+                if pinned_navigation {
+                    el.bg(super::sidebar_navigation::navigation_active_background(
+                        p, cx,
+                    ))
+                    .border_color(p.accent.opacity(0.16))
+                } else {
+                    el.bg(p.text.opacity(0.1))
+                }
+            })
+            .when(multi_selected, |el| el.bg(p.accent.opacity(0.14)))
+            .hover(|el| {
+                el.bg(if multi_selected {
+                    p.accent.opacity(0.14)
+                } else if selected {
+                    p.text.opacity(0.1)
+                } else {
+                    p.hover.opacity(0.78)
+                })
+            })
             .on_click(cx.listener(move |this, event, window, cx| {
                 this.sidebar_row_click(row_key.clone(), event, window, cx);
             }))
             .child(
                 div()
-                    .w(px(22.))
+                    .w(px(20.))
                     .flex_shrink_0()
                     .flex()
                     .items_center()
@@ -192,8 +207,22 @@ impl AppView {
                             .child(
                                 div()
                                     .text_size(px(13.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(if selected || unread { p.strong } else { p.text })
+                                    .line_height(px(18.))
+                                    .font_weight(if team {
+                                        FontWeight(450.)
+                                    } else {
+                                        FontWeight::MEDIUM
+                                    })
+                                    .text_color(match attention {
+                                        SidebarAttention::Agent | SidebarAttention::Approval => {
+                                            p.text.blend(p.warn.opacity(0.82))
+                                        }
+                                        SidebarAttention::Error => {
+                                            p.text.blend(p.danger.opacity(0.86))
+                                        }
+                                        _ if selected => p.strong,
+                                        _ => p.text,
+                                    })
                                     .truncate()
                                     .child(row.title()),
                             )
@@ -229,7 +258,14 @@ impl AppView {
                         el.child(
                             div()
                                 .text_size(px(11.))
-                                .text_color(p.muted)
+                                .line_height(px(18.))
+                                .text_color(match attention {
+                                    SidebarAttention::Agent | SidebarAttention::Approval => {
+                                        p.text.blend(p.warn.opacity(0.82))
+                                    }
+                                    SidebarAttention::Error => p.text.blend(p.danger.opacity(0.86)),
+                                    _ => p.muted,
+                                })
                                 .truncate()
                                 .child(preview),
                         )
@@ -245,6 +281,14 @@ impl AppView {
             .child(self.sidebar_row_badges(row, depth, cx));
         if team {
             line = line
+                .when(!expanded && count > 0, |el| {
+                    el.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child(count.to_string()),
+                    )
+                })
                 .when(unread, |el| el.child(unread_dot(p)))
                 .when(attention != SidebarAttention::None, |el| {
                     el.child(attention_badge(attention_row, attention, p))
@@ -260,16 +304,28 @@ impl AppView {
                     .ghost()
                     .small()
                     .h(px(22.))
-                    .px(px(4.))
+                    .w(px(24.))
+                    .px_0()
+                    .when(team, |button| {
+                        button
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .w(px(20.))
+                            .h(px(32.))
+                            .py_0()
+                    })
                     .icon(
                         Icon::new(if expanded {
                             IconName::ChevronDown
                         } else {
                             IconName::ChevronRight
                         })
-                        .size(px(14.)),
+                        .size(px(if team { 12. } else { 14. })),
                     )
-                    .label(count.max(row.child_sessions.len()).to_string())
+                    .when(!team, |button| {
+                        button.label(count.max(row.child_sessions.len()).to_string())
+                    })
                     .text_size(px(11.))
                     .accessibility_label(if expanded {
                         "Collapse children"
@@ -285,11 +341,11 @@ impl AppView {
         line = line.child(
             div()
                 .absolute()
-                .right(px(if count > 0 { 44. } else { 4. }))
-                .top(px(1.))
+                .right(px(if !team && count > 0 { 28. } else { 4. }))
+                .top(px(if team { 4. } else { 1. }))
                 .h_flex()
                 .bg(if selected { p.hover } else { p.sidebar })
-                .rounded_md()
+                .rounded(px(12.5))
                 .invisible()
                 .group_hover("session-row", |el| el.visible().bg(p.hover))
                 .when(!row.archived && row.can_pin(&main_key), |el| {
@@ -297,15 +353,8 @@ impl AppView {
                         Button::new(SharedString::from(format!("pin:{key}")))
                             .ghost()
                             .small()
-                            .size(px(28.))
-                            .icon(
-                                Icon::new(if row.pinned {
-                                    IconName::PinOff
-                                } else {
-                                    IconName::Pin
-                                })
-                                .size(px(16.)),
-                            )
+                            .size(px(24.))
+                            .icon(Icon::new(IconName::Pin).size(px(14.)))
                             .accessibility_label(if row.pinned { "Unpin" } else { "Pin" })
                             .tooltip(if row.pinned {
                                 "Unpin session"
@@ -326,14 +375,14 @@ impl AppView {
                     Button::new(SharedString::from(format!("archive:{key}")))
                         .ghost()
                         .small()
-                        .size(px(28.))
+                        .size(px(24.))
                         .icon(
                             Icon::new(if row.archived {
                                 IconName::ArchiveRestore
                             } else {
                                 IconName::Archive
                             })
-                            .size(px(16.)),
+                            .size(px(14.)),
                         )
                         .accessibility_label(if row.archived {
                             "Restore session"
@@ -352,30 +401,19 @@ impl AppView {
                             cx.stop_propagation();
                             this.archive_session(archive_row.clone(), cx);
                         })),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("menu:{key}")))
-                        .ghost()
-                        .small()
-                        .size(px(28.))
-                        .icon(Icon::new(IconName::Ellipsis).size(px(16.)))
-                        .accessibility_label("Conversation menu")
-                        .dropdown_menu(move |menu, window, cx| {
-                            session_menu(
-                                menu,
-                                button_row.clone(),
-                                button_view.clone(),
-                                &button_main_key,
-                                window,
-                                cx,
-                            )
-                        }),
                 ),
         );
         let mut branch = div()
             .v_flex()
-            .gap(px(2.))
-            .ml(px(if depth > 0 { 20. } else { 0. }))
+            .gap(px(if team { 0. } else { 2. }))
+            .mx(px(if team { 0. } else { 2. }))
+            .ml(px(if depth > 0 {
+                if team { 16. } else { 22. }
+            } else if team {
+                0.
+            } else {
+                2.
+            }))
             .child(line.context_menu(move |menu, window, cx| {
                 session_menu(
                     menu,

@@ -1,11 +1,14 @@
+#[path = "sidebar_avatar_http.rs"]
+mod http;
+use http::download_avatar;
+
 use super::{AppView, theme::Palette};
 use crate::{
-    gateway::{access, sessions_rpc::Agent},
+    gateway::sessions_rpc::Agent,
     model::{
-        avatars::{self, AvatarFallback, AvatarSpec, MAX_AVATAR_BYTES, SessionAvatarKind},
+        avatars::{self, AvatarFallback, AvatarSpec, SessionAvatarKind},
         people::Person,
         sessions::SessionRow,
-        web_urls::WebAuth,
     },
 };
 use gpui_kit::{assets::IconName, component::Icon, prelude::FluentBuilder, *};
@@ -95,32 +98,84 @@ impl AppView {
     }
 
     pub(super) fn render_person_avatar(&self, person: &Person, size: f32, cx: &App) -> AnyElement {
+        let font_size = match size {
+            18. => 7.,
+            20. => 8.,
+            28. => 10.,
+            _ => size * 0.4,
+        };
+        self.render_person_avatar_on(person, size, font_size, Palette::sidebar(cx).sidebar, cx)
+    }
+
+    pub(super) fn render_person_avatar_on(
+        &self,
+        person: &Person,
+        size: f32,
+        font_size: f32,
+        surface: Hsla,
+        _cx: &App,
+    ) -> AnyElement {
         let gateway = self
             .web
             .auth
             .as_ref()
             .map(|auth| auth.gateway_url.as_str())
             .unwrap_or("");
-        self.render_avatar_spec(&avatars::person_avatar(person, gateway), size, cx)
+        let spec = avatars::person_avatar(person, gateway);
+        let face = match &spec.fallback {
+            AvatarFallback::AgentFace(id) => Some(self.sidebar_state.avatars.face(id)),
+            _ => None,
+        };
+        div()
+            .size(px(size))
+            .flex_shrink_0()
+            .rounded_full()
+            .border_1()
+            .border_color(surface)
+            .child(avatar_element(
+                &spec,
+                self.sidebar_state.avatars.image(&spec),
+                face,
+                size - 2.,
+                Some(font_size),
+            ))
+            .into_any_element()
     }
 
     pub(super) fn render_agent_avatar(&self, agent: &Agent, size: f32, cx: &App) -> AnyElement {
+        self.render_agent_avatar_sized(agent, size, size * 0.72, cx)
+    }
+
+    pub(super) fn render_agent_avatar_sized(
+        &self,
+        agent: &Agent,
+        size: f32,
+        text_size: f32,
+        _cx: &App,
+    ) -> AnyElement {
         let gateway = self
             .web
             .auth
             .as_ref()
             .map(|auth| auth.gateway_url.as_str())
             .unwrap_or("");
-        self.render_avatar_spec(
-            &avatars::agent_avatar(
-                &agent.id,
-                agent.identity.avatar.as_deref(),
-                agent.identity.avatar_url.as_deref(),
-                agent.identity.emoji.as_deref(),
-                gateway,
-            ),
+        let spec = avatars::agent_avatar(
+            &agent.id,
+            agent.identity.avatar.as_deref(),
+            agent.identity.avatar_url.as_deref(),
+            agent.identity.emoji.as_deref(),
+            gateway,
+        );
+        let face = match &spec.fallback {
+            AvatarFallback::AgentFace(id) => Some(self.sidebar_state.avatars.face(id)),
+            _ => None,
+        };
+        avatar_element(
+            &spec,
+            self.sidebar_state.avatars.image(&spec),
+            face,
             size,
-            cx,
+            Some(text_size),
         )
     }
 
@@ -255,7 +310,7 @@ impl AppView {
                     div()
                         .size(px(size))
                         .rounded_full()
-                        .bg(Palette::get(cx).elevated)
+                        .bg(Palette::sidebar(cx).elevated)
                         .flex()
                         .items_center()
                         .justify_center()
@@ -326,7 +381,7 @@ impl AppView {
         repeated_section || repeated_filter
     }
 
-    pub(super) fn render_avatar_spec(&self, spec: &AvatarSpec, size: f32, cx: &App) -> AnyElement {
+    pub(super) fn render_avatar_spec(&self, spec: &AvatarSpec, size: f32, _cx: &App) -> AnyElement {
         avatar_element(
             spec,
             self.sidebar_state.avatars.image(spec),
@@ -335,7 +390,7 @@ impl AppView {
                 _ => None,
             },
             size,
-            Palette::get(cx),
+            None,
         )
     }
 
@@ -532,7 +587,7 @@ pub(super) fn avatar_element(
     image: Option<Arc<Image>>,
     face: Option<Arc<Image>>,
     size: f32,
-    p: Palette,
+    text_size: Option<f32>,
 ) -> AnyElement {
     let fallback = match &spec.fallback {
         AvatarFallback::Initials { text, hue, owner } => div()
@@ -548,7 +603,7 @@ pub(super) fn avatar_element(
                 1.,
             ))
             .text_color(rgb(0xffffff))
-            .text_size(px(size * 0.4))
+            .text_size(px(text_size.unwrap_or(size * 0.4)))
             .font_weight(FontWeight::BOLD)
             .child(text.clone())
             .into_any_element(),
@@ -558,8 +613,7 @@ pub(super) fn avatar_element(
             .flex()
             .items_center()
             .justify_center()
-            .bg(p.elevated)
-            .text_size(px(size * 0.72))
+            .text_size(px(text_size.unwrap_or(size * 0.72)))
             .child(text.clone())
             .into_any_element(),
         AvatarFallback::AgentFace(_) => face
@@ -591,88 +645,4 @@ pub(super) fn avatar_element(
             )
         })
         .into_any_element()
-}
-
-async fn download_avatar(
-    url: &str,
-    auth: &WebAuth,
-    device_token: Option<&str>,
-) -> Option<(ImageFormat, Vec<u8>)> {
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .ok()?;
-    let mut credentials: Vec<_> = [
-        device_token,
-        auth.token.as_deref(),
-        auth.password.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .filter(|token| !token.is_empty())
-    .collect();
-    credentials.dedup();
-    if credentials.is_empty() {
-        credentials.push("");
-    }
-    for retry in 0..=3 {
-        let mut retry_after = None;
-        for credential in &credentials {
-            let mut request = http.get(url).header("Accept", "image/*");
-            if !credential.is_empty() {
-                request = request.bearer_auth(credential);
-            }
-            if let Some(token) = auth
-                .access_session
-                .as_ref()
-                .and_then(|session| session.authorization_header(url, access::now()))
-            {
-                request = request.header("Cf-Access-Token", token);
-            }
-            let mut response = request.send().await.ok()?;
-            let status = response.status();
-            if matches!(status.as_u16(), 401 | 403) {
-                continue;
-            }
-            if status.as_u16() == 503 {
-                retry_after = response
-                    .headers()
-                    .get("retry-after")
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .filter(|seconds| (1..=30).contains(seconds));
-                break;
-            }
-            if !status.is_success()
-                || response
-                    .content_length()
-                    .is_some_and(|size| size > MAX_AVATAR_BYTES as u64)
-            {
-                return None;
-            }
-            let mime = response
-                .headers()
-                .get("content-type")?
-                .to_str()
-                .ok()?
-                .split(';')
-                .next()?
-                .trim();
-            let format = ImageFormat::from_mime_type(mime)?;
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await.ok()? {
-                if bytes.len() + chunk.len() > MAX_AVATAR_BYTES {
-                    return None;
-                }
-                bytes.extend(chunk);
-            }
-            return Some((format, bytes));
-        }
-        if retry == 3 {
-            return None;
-        }
-        tokio::time::sleep(Duration::from_secs(retry_after?)).await;
-    }
-    None
 }

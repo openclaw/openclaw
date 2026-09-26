@@ -64,6 +64,7 @@ pub struct SidebarPreferences {
     pub section_order: Vec<String>,
     pub all_agents: bool,
     pub people_collapsed: bool,
+    pub people_collapsed_roster: bool,
     pub sidebar_entries: Vec<String>,
     pub hidden_catalogs: BTreeSet<String>,
 }
@@ -85,6 +86,7 @@ impl Default for SidebarPreferences {
             section_order: Vec::new(),
             all_agents: false,
             people_collapsed: false,
+            people_collapsed_roster: true,
             hidden_catalogs: BTreeSet::new(),
             sidebar_entries: [
                 "route:agents-home",

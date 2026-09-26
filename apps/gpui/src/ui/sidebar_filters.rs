@@ -1,4 +1,8 @@
-use super::{AppView, theme::Palette};
+use super::{
+    AppView,
+    sidebar_menu_surface::{SidebarMenuStyle, sidebar_menu_surface},
+    theme::Palette,
+};
 use crate::model::{
     people::Person,
     sidebar::{ArchiveFilter, EmptyGroups, Grouping, SidebarPreferences, SortMode},
@@ -8,34 +12,32 @@ use gpui_kit::{
     component::{
         Icon, Sizable,
         button::{Button, ButtonVariants},
-        menu::{DropdownMenu, PopupMenuItem},
+        menu::PopupMenuItem,
     },
     *,
 };
 
 impl AppView {
     pub(super) fn sidebar_filter_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = Palette::get(cx);
+        let p = Palette::sidebar(cx);
         let prefs = self.sidebar_state.preferences.clone();
         let owners = self.sidebar_state.owners.clone();
-        let self_id = self
-            .sidebar_state
-            .people
-            .self_user
-            .as_ref()
-            .map(|person| person.id.clone());
         let view = cx.entity().downgrade();
-        Button::new("sidebar-filter")
+        let trigger = Button::new("sidebar-filter")
             .ghost()
             .small()
-            .size(px(26.))
+            .size(px(22.))
             .icon(
                 Icon::new(IconName::ListFilter)
-                    .size(px(16.))
+                    .size(px(14.))
                     .text_color(if prefs.filtered() { p.accent } else { p.muted }),
             )
-            .accessibility_label("Filter and sort conversations")
-            .dropdown_menu(move |mut menu, window, cx| {
+            .accessibility_label("Filter and sort conversations");
+        sidebar_menu_surface(
+            "sidebar-filter-popup",
+            trigger,
+            SidebarMenuStyle::below(300., 450.),
+            move |mut menu, window, cx| {
                 let page = view.clone();
                 menu = menu
                     .item(
@@ -51,44 +53,39 @@ impl AppView {
                         }),
                     )
                     .separator();
-                let group_view = view.clone();
-                let current = prefs.grouping;
-                menu = menu.submenu("Group by", window, cx, move |mut menu, _, _| {
-                    for (label, value) in [
-                        ("Category", Grouping::Category),
-                        ("Person", Grouping::Person),
-                        ("Project", Grouping::Project),
-                        ("None", Grouping::None),
-                    ] {
-                        menu = menu.item(preference_item(
-                            label,
-                            current == value,
-                            group_view.clone(),
-                            move |prefs| prefs.grouping = value,
-                        ));
-                    }
-                    menu
-                });
-                let sort_view = view.clone();
-                let current = prefs.sort;
                 menu = menu
-                    .submenu("Sort by", window, cx, move |mut menu, _, _| {
-                        for (label, value) in [
-                            ("Created", SortMode::Created),
-                            ("Updated", SortMode::Updated),
-                            ("People", SortMode::People),
-                        ] {
-                            menu = menu.item(preference_item(
-                                label,
-                                current == value,
-                                sort_view.clone(),
-                                move |prefs| prefs.sort = value,
-                            ));
-                        }
-                        menu
-                    })
-                    .separator()
-                    .label("Status");
+                    .min_w(px(300.))
+                    .max_w(px(300.))
+                    .max_h(px(450.))
+                    .scrollable(true)
+                    .label("GROUP BY");
+                for (label, value) in [
+                    ("Custom groups", Grouping::Category),
+                    ("Project", Grouping::Project),
+                    ("Person", Grouping::Person),
+                    ("None", Grouping::None),
+                ] {
+                    menu = menu.item(preference_item(
+                        label,
+                        prefs.grouping == value,
+                        view.clone(),
+                        move |prefs| prefs.grouping = value,
+                    ));
+                }
+                menu = menu.separator().label("SORT BY");
+                for (label, value) in [
+                    ("Created", SortMode::Created),
+                    ("Last updated", SortMode::Updated),
+                    ("Owners", SortMode::People),
+                ] {
+                    menu = menu.item(preference_item(
+                        label,
+                        prefs.sort == value,
+                        view.clone(),
+                        move |prefs| prefs.sort = value,
+                    ));
+                }
+                menu = menu.separator().label("STATUS");
                 for (label, value) in [
                     ("Active", ArchiveFilter::Active),
                     ("Archived", ArchiveFilter::Archived),
@@ -103,7 +100,7 @@ impl AppView {
                 }
                 menu = menu
                     .separator()
-                    .label("Owners")
+                    .label("OWNERS")
                     .item(preference_item(
                         "Everyone",
                         prefs.owner_id.is_none() && !prefs.involving_me,
@@ -122,17 +119,6 @@ impl AppView {
                             prefs.involving_me = true;
                         },
                     ));
-                if let Some(id) = self_id.clone() {
-                    menu = menu.item(preference_item(
-                        "Mine",
-                        prefs.owner_id.as_ref() == Some(&id),
-                        view.clone(),
-                        move |prefs| {
-                            prefs.owner_id = Some(id.clone());
-                            prefs.involving_me = false;
-                        },
-                    ));
-                }
                 let owner_view = view.clone();
                 let owner_rows = owners.clone();
                 let current = prefs.owner_id.clone();
@@ -157,13 +143,13 @@ impl AppView {
                     .separator();
                 menu = menu
                     .item(preference_item(
-                        "Show previews",
+                        "Show preview",
                         prefs.show_preview,
                         view.clone(),
                         |prefs| prefs.show_preview = !prefs.show_preview,
                     ))
                     .item(preference_item(
-                        "Show cron / automations",
+                        "Show cron jobs",
                         prefs.show_cron,
                         view.clone(),
                         |prefs| prefs.show_cron = !prefs.show_cron,
@@ -192,7 +178,8 @@ impl AppView {
                     menu
                 });
                 menu
-            })
+            },
+        )
     }
 
     pub(super) fn sidebar_filter_summary(&self, cx: &mut Context<Self>) -> AnyElement {

@@ -165,7 +165,7 @@ impl AppView {
     }
 
     pub(super) fn sidebar_catalog_sections(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = Palette::get(cx);
+        let p = Palette::sidebar(cx);
         let prefs = &self.sidebar_state.preferences;
         let state = &self.sidebar_state.catalogs;
         let mut content = div().v_flex().gap(px(2.));
@@ -210,8 +210,17 @@ impl AppView {
                 .iter()
                 .map(|host| host.sessions.len())
                 .sum::<usize>();
+            let header_group = SharedString::from(format!("catalog-header:{}", catalog.id));
+            let new_path = sidebar_catalog::new_session_path(
+                self.sidebar_state
+                    .selected_agent
+                    .as_deref()
+                    .unwrap_or("main"),
+                &catalog.id,
+            );
             let mut block = div().v_flex().pt(px(12.)).child(
                 div()
+                    .group(header_group.clone())
                     .h_flex()
                     .gap(px(2.))
                     .child(
@@ -253,7 +262,10 @@ impl AppView {
                         Button::new(SharedString::from(format!("catalog-menu:{id}")))
                             .ghost()
                             .small()
-                            .size(px(24.))
+                            .size(px(22.))
+                            .opacity(0.)
+                            .group_hover(header_group.clone(), |style| style.opacity(1.))
+                            .focus_visible(|style| style.opacity(1.))
                             .icon(Icon::new(IconName::ListFilter).size(px(14.)))
                             .accessibility_label("Session source options")
                             .dropdown_menu(move |mut menu, _, _| {
@@ -306,25 +318,25 @@ impl AppView {
                                     },
                                 ))
                             }),
-                    ),
+                    )
+                    .when(catalog.capabilities.start_terminal, |header| {
+                        header.child(
+                            Button::new(SharedString::from(format!("catalog-new:{}", catalog.id)))
+                                .ghost()
+                                .small()
+                                .size(px(22.))
+                                .icon(Icon::new(IconName::Plus).size(px(14.)))
+                                .opacity(0.)
+                                .group_hover(header_group, |style| style.opacity(1.))
+                                .focus_visible(|style| style.opacity(1.))
+                                .accessibility_label(format!("New {} session", catalog.label))
+                                .disabled(self.session.is_none())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_control_page(&new_path, "New session", window, cx)
+                                })),
+                        )
+                    }),
             );
-            if catalog.capabilities.start_terminal {
-                let agent = self
-                    .sidebar_state
-                    .selected_agent
-                    .as_deref()
-                    .unwrap_or("main");
-                let path = sidebar_catalog::new_session_path(agent, &catalog.id);
-                block = block.child(
-                    Button::new(SharedString::from(format!("catalog-new:{}", catalog.id)))
-                        .ghost()
-                        .small()
-                        .label(format!("New {} session", catalog.label))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_control_page(&path, "New session", window, cx)
-                        })),
-                );
-            }
             if let Some(error) = error {
                 block = block.child(div().px_2().text_xs().text_color(p.danger).child(error));
             }

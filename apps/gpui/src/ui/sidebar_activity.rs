@@ -1,4 +1,6 @@
+use crate::model::sidebar_pr;
 use gpui_kit::*;
+use serde_json::json;
 
 use super::AppView;
 use crate::model::{
@@ -80,5 +82,58 @@ impl AppView {
             self.sidebar_state.preferences.live_activity,
             now_ms(),
         )
+    }
+}
+
+impl AppView {
+    pub(super) fn sync_sidebar_pull_requests(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let advertised = session
+            .hello()
+            .pointer("/features/methods")
+            .and_then(|value| value.as_array())
+            .is_some_and(|methods| {
+                methods.iter().any(|method| {
+                    method.as_str() == Some("controlUi.sessionPullRequests.subscribe")
+                })
+            });
+        if !advertised {
+            return;
+        }
+        let visible = self.sidebar_visible_keys();
+        let keys = self
+            .rows
+            .iter()
+            .filter(|row| {
+                visible.contains(&row.key)
+                    && row.worktree.as_ref().and_then(|v| v.get("id")).is_some()
+            })
+            .map(|row| sidebar_pr::scoped_key(&row.key, row.agent()))
+            .collect();
+        if self.sidebar_state.pull_requests.set_watched(keys) {
+            let keys = self.sidebar_state.pull_requests.watched_keys();
+            self.sidebar_state.pull_request_generation += 1;
+            let generation = self.sidebar_state.pull_request_generation;
+            self.request(
+                "controlUi.sessionPullRequests.subscribe",
+                json!({"sessionKeys":keys,"refreshSessionKeys":keys}),
+                cx,
+                move |this, result, _| {
+                    if this.sidebar_state.pull_request_generation != generation {
+                        return;
+                    }
+                    if let Err(error) = result {
+                        if this.sidebar_state.pull_requests.watched_keys() == keys {
+                            this.sidebar_state.pull_requests.clear();
+                        }
+                        this.mutation_error(format!(
+                            "Could not subscribe to pull requests: {error}"
+                        ));
+                    }
+                },
+            );
+        }
     }
 }

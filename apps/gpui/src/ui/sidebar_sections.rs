@@ -1,22 +1,19 @@
-use super::{AppView, theme::Palette};
+use super::{AppView, sidebar_people::PersonHoverCard, theme::Palette};
 use crate::model::{
     people::{OnlinePerson, Person},
     sessions::SessionRow,
     sidebar::{self, SECTION_PAGE_SIZE, SidebarSection},
-    sidebar_pr,
 };
 use gpui_kit::{
     assets::IconName,
     component::{
         Disableable, Icon, Sizable, StyledExt,
         button::{Button, ButtonVariants},
-        hover_card::HoverCard,
         menu::{DropdownMenu, PopupMenuItem},
     },
     prelude::FluentBuilder,
     *,
 };
-use serde_json::json;
 
 impl AppView {
     fn projected_sections(&self, rows: &[SessionRow], main: &str) -> Vec<SidebarSection> {
@@ -53,9 +50,28 @@ impl AppView {
         }
         sections
     }
-    pub(super) fn sidebar_session_sections(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = Palette::get(cx);
+    pub(super) fn sidebar_pinned_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut content = div().v_flex().gap(px(2.));
+        if !self.sidebar_state.preferences.all_agents {
+            for section in self
+                .projected_sections(&self.rows, &self.agent_home())
+                .into_iter()
+                .filter(|section| section.id == "pinned")
+            {
+                for row in section.rows {
+                    content = content.child(self.sidebar_row(&row, 0, cx));
+                }
+            }
+        }
+        content.into_any_element()
+    }
+    pub(super) fn sidebar_session_sections(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = Palette::sidebar(cx);
+        let team = self.sidebar_state.preferences.all_agents;
+        let mut content = div()
+            .v_flex()
+            .gap(px(if team { 0. } else { 2. }))
+            .when(team, |content| content.px(px(8.)));
         if self.sidebar_state.preferences.all_agents {
             for agent in &self.sidebar_state.agents {
                 let id = agent.id.clone();
@@ -86,18 +102,22 @@ impl AppView {
                 let new_agent = id.clone();
                 let menu_agent = id.clone();
                 let menu_main = main.clone();
+                let header_group = SharedString::from(format!("agent-header:{id}"));
                 let view = cx.entity().downgrade();
                 content = content.child(
                     div()
+                        .group(header_group.clone())
                         .h_flex()
-                        .pt(px(10.))
+                        .h(px(48.))
                         .gap(px(4.))
                         .child(
                             Button::new(SharedString::from(format!("agent-section:{id}")))
                                 .ghost()
                                 .small()
                                 .size(px(20.))
-                                .h(px(34.))
+                                .h(px(22.))
+                                .px_0()
+                                .py_0()
                                 .justify_start()
                                 .gap(px(7.))
                                 .icon(
@@ -106,7 +126,7 @@ impl AppView {
                                     } else {
                                         IconName::ChevronDown
                                     })
-                                    .size(px(12.)),
+                                    .size(px(14.)),
                                 )
                                 .accessibility_label(format!(
                                     "{} {}",
@@ -125,9 +145,26 @@ impl AppView {
                                 .min_w_0()
                                 .justify_start()
                                 .gap(px(7.))
-                                .h(px(34.))
-                                .child(self.render_agent_avatar(agent, 24., cx))
-                                .label(agent.name().to_owned())
+                                .h(px(44.))
+                                .px_0()
+                                .py(px(4.))
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .h_flex()
+                                        .gap(px(8.))
+                                        .child(self.render_agent_avatar(agent, 36., cx))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_size(px(16.))
+                                                .font_weight(FontWeight(650.))
+                                                .line_height(px(24.8))
+                                                .child(agent.name().to_owned()),
+                                        ),
+                                )
                                 .when(attention || running || unread, |el| {
                                     el.child(
                                         Icon::new(if attention {
@@ -151,7 +188,10 @@ impl AppView {
                             Button::new(SharedString::from(format!("agent-new:{id}")))
                                 .ghost()
                                 .small()
-                                .size(px(24.))
+                                .size(px(22.))
+                                .opacity(0.)
+                                .group_hover(header_group.clone(), |style| style.opacity(1.))
+                                .focus_visible(|style| style.opacity(1.))
                                 .icon(Icon::new(IconName::Plus).size(px(14.)))
                                 .accessibility_label(format!("New conversation: {}", agent.name()))
                                 .disabled(self.session.is_none())
@@ -165,7 +205,10 @@ impl AppView {
                             Button::new(SharedString::from(format!("agent-options:{id}")))
                                 .ghost()
                                 .small()
-                                .size(px(24.))
+                                .size(px(22.))
+                                .opacity(0.)
+                                .group_hover(header_group, |style| style.opacity(1.))
+                                .focus_visible(|style| style.opacity(1.))
                                 .icon(Icon::new(IconName::Ellipsis).size(px(14.)))
                                 .accessibility_label(format!("Agent options: {}", agent.name()))
                                 .dropdown_menu(move |menu, _, _| {
@@ -224,6 +267,7 @@ impl AppView {
                                                     this.sidebar_state.preference_revision += 1;
                                                     this.persist_sidebar_preferences(cx);
                                                     this.sync_sidebar_pull_requests(cx);
+                                                    this.refresh_sidebar_avatars(cx);
                                                     this.sync_sidebar_activity(cx);
                                                     cx.notify();
                                                 });
@@ -239,6 +283,7 @@ impl AppView {
                         content = content.child(self.render_sidebar_section(&section, &scope, cx));
                     }
                 }
+                content = content.child(div().h(px(12.)).flex_shrink_0());
             }
         } else {
             let sections = self.projected_sections(&self.rows, &self.agent_home());
@@ -257,7 +302,10 @@ impl AppView {
                     },
                 ));
             }
-            for section in sections {
+            for section in sections
+                .into_iter()
+                .filter(|section| section.id != "pinned")
+            {
                 content = content.child(self.render_sidebar_section(&section, "", cx));
             }
         }
@@ -269,7 +317,7 @@ impl AppView {
         scope: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let p = Palette::get(cx);
+        let p = Palette::sidebar(cx);
         let key = if scope.is_empty() {
             section.id.clone()
         } else {
@@ -295,7 +343,11 @@ impl AppView {
             .rows
             .iter()
             .any(|row| !row.archived && row.display_running());
-        let mut content = div().v_flex().gap(px(2.));
+        let team = self.sidebar_state.preferences.all_agents;
+        let mut content = div()
+            .v_flex()
+            .gap(px(if team { 0. } else { 2. }))
+            .mt(px(if team { 0. } else { 12. }));
         if section.render_header {
             let toggle = key.clone();
             let person = section.person_owner.as_ref().and_then(Person::from_actor);
@@ -311,17 +363,24 @@ impl AppView {
                 .small()
                 .flex_1()
                 .min_w_0()
-                .h(px(29.))
+                .h(px(24.))
                 .justify_start()
                 .px(px(8.))
-                .gap(px(6.))
-                .icon(
-                    Icon::new(if collapsed {
-                        IconName::ChevronRight
-                    } else {
-                        IconName::ChevronDown
-                    })
-                    .size(px(12.)),
+                .gap(px(8.))
+                .child(
+                    div()
+                        .w(px(20.))
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            Icon::new(if collapsed {
+                                IconName::ChevronRight
+                            } else {
+                                IconName::ChevronDown
+                            })
+                            .size(px(10.)),
+                        ),
                 )
                 .when_some(person.clone(), |el, person| {
                     el.child(
@@ -349,7 +408,8 @@ impl AppView {
                         .flex_1()
                         .text_size(px(11.))
                         .text_color(p.muted)
-                        .child(section.label.clone()),
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(section.label.to_uppercase()),
                 )
                 .when(collapsed, |el| {
                     el.child(
@@ -389,10 +449,10 @@ impl AppView {
             let header = if let Some(person) = card_person {
                 let person = person.clone();
                 let view = cx.entity().downgrade();
-                HoverCard::new(SharedString::from(format!("section-person:{key}")))
-                    .anchor(Anchor::TopLeft)
-                    .trigger(header)
-                    .content(move |_, _, cx| {
+                PersonHoverCard::new(
+                    SharedString::from(format!("section-person:{key}")),
+                    header,
+                    move |_, cx| {
                         let Some(entity) = view.upgrade() else {
                             return div().into_any_element();
                         };
@@ -409,8 +469,9 @@ impl AppView {
                                 watched_sessions: Vec::new(),
                             });
                         this.person_card(&online, view.clone(), cx)
-                    })
-                    .into_any_element()
+                    },
+                )
+                .into_any_element()
             } else {
                 header.into_any_element()
             };
@@ -473,6 +534,7 @@ impl AppView {
                                 .section_limits
                                 .insert(key.clone(), limit + SECTION_PAGE_SIZE);
                             this.sync_sidebar_pull_requests(cx);
+                            this.refresh_sidebar_avatars(cx);
                             cx.notify();
                         })),
                 );
@@ -488,6 +550,7 @@ impl AppView {
                             this.sidebar_state.section_limits.remove(&key);
                             this.sidebar_state.selection.clear();
                             this.sync_sidebar_pull_requests(cx);
+                            this.refresh_sidebar_avatars(cx);
                             cx.notify();
                         })),
                 );
@@ -510,6 +573,7 @@ impl AppView {
         self.sidebar_state.preference_revision += 1;
         self.persist_sidebar_preferences(cx);
         self.sync_sidebar_pull_requests(cx);
+        self.refresh_sidebar_avatars(cx);
         cx.notify();
     }
     pub(super) fn sidebar_visible_keys(&self) -> Vec<String> {
@@ -606,55 +670,5 @@ impl AppView {
         }
         self.sidebar_state.list_focus.focus(window, cx);
         cx.notify();
-    }
-    pub(super) fn sync_sidebar_pull_requests(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = &self.session else {
-            return;
-        };
-        let advertised = session
-            .hello()
-            .pointer("/features/methods")
-            .and_then(|value| value.as_array())
-            .is_some_and(|methods| {
-                methods.iter().any(|method| {
-                    method.as_str() == Some("controlUi.sessionPullRequests.subscribe")
-                })
-            });
-        if !advertised {
-            return;
-        }
-        let visible = self.sidebar_visible_keys();
-        let keys = self
-            .rows
-            .iter()
-            .filter(|row| {
-                visible.contains(&row.key)
-                    && row.worktree.as_ref().and_then(|v| v.get("id")).is_some()
-            })
-            .map(|row| sidebar_pr::scoped_key(&row.key, row.agent()))
-            .collect();
-        if self.sidebar_state.pull_requests.set_watched(keys) {
-            let keys = self.sidebar_state.pull_requests.watched_keys();
-            self.sidebar_state.pull_request_generation += 1;
-            let generation = self.sidebar_state.pull_request_generation;
-            self.request(
-                "controlUi.sessionPullRequests.subscribe",
-                json!({"sessionKeys":keys,"refreshSessionKeys":keys}),
-                cx,
-                move |this, result, _| {
-                    if this.sidebar_state.pull_request_generation != generation {
-                        return;
-                    }
-                    if let Err(error) = result {
-                        if this.sidebar_state.pull_requests.watched_keys() == keys {
-                            this.sidebar_state.pull_requests.clear();
-                        }
-                        this.mutation_error(format!(
-                            "Could not subscribe to pull requests: {error}"
-                        ));
-                    }
-                },
-            );
-        }
     }
 }

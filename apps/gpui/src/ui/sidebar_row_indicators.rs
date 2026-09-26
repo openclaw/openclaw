@@ -31,7 +31,7 @@ impl AppView {
             queued,
             unread,
         } = state;
-        let p = Palette::get(cx);
+        let p = Palette::sidebar(cx);
         let has_avatar = row.icon.is_some()
             || row.channel_avatar_url.is_some()
             || (depth == 0 && (row.owner.is_some() || row.created_actor.is_some()));
@@ -93,7 +93,7 @@ impl AppView {
         depth: usize,
         cx: &App,
     ) -> AnyElement {
-        let p = Palette::get(cx);
+        let p = Palette::sidebar(cx);
         let agent = row.agent().or(self.sidebar_state.selected_agent.as_deref());
         let pr = self
             .sidebar_state
@@ -278,15 +278,13 @@ pub(super) fn attention_badge(
     p: Palette,
 ) -> AnyElement {
     let (icon, label, color) = match attention {
-        SidebarAttention::Question => (
-            IconName::Hand,
-            "Waiting for your answer".to_owned(),
-            p.accent,
-        ),
+        SidebarAttention::Question => {
+            (IconName::Hand, "Waiting for your answer".to_owned(), p.warn)
+        }
         SidebarAttention::Approval => (
             IconName::ShieldQuestionMark,
             "Waiting for approval".to_owned(),
-            p.accent,
+            p.warn,
         ),
         SidebarAttention::Error => (
             IconName::TriangleAlert,
@@ -310,7 +308,7 @@ pub(super) fn attention_badge(
                 status
                     .map(|status| status.note.clone())
                     .unwrap_or_else(|| "Needs attention".into()),
-                p.accent,
+                p.warn,
             )
         }
         SidebarAttention::None => return div().into_any_element(),

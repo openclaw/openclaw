@@ -595,7 +595,7 @@ impl Render for AppView {
                     .min_h_0()
                     .when(
                         !self.show_connect_form && !self.sidebar_state.collapsed,
-                        |d| d.child(self.sidebar(cx)),
+                        |d| d.child(self.sidebar(window, cx)),
                     )
                     .when(
                         !self

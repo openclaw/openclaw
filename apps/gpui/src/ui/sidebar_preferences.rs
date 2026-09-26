@@ -78,6 +78,7 @@ impl AppView {
             self.refresh_sessions(cx);
         }
         self.sync_sidebar_pull_requests(cx);
+        self.refresh_sidebar_avatars(cx);
         self.sync_sidebar_activity(cx);
         cx.notify();
     }

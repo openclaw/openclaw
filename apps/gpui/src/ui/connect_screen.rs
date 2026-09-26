@@ -2,10 +2,9 @@ use super::{AppView, app_view::ConnectionStage, theme::Palette};
 use gpui_kit::{
     assets::IconName,
     component::{
-        Disableable, Icon, Sizable, StyledExt,
+        Disableable, Icon, StyledExt,
         button::{Button, ButtonVariants},
         input::Input,
-        menu::{DropdownMenu, PopupMenuItem},
         spinner::Spinner,
     },
     prelude::FluentBuilder,
@@ -13,40 +12,6 @@ use gpui_kit::{
 };
 
 impl AppView {
-    pub(super) fn gateway_menu(&self, cx: &mut Context<Self>) -> AnyElement {
-        let identity_view = cx.entity().downgrade();
-        let can_sign_out = self.access_identity.is_some() || self.session.is_some();
-        Button::new("gateway-menu")
-            .ghost()
-            .small()
-            .size(px(28.))
-            .icon(Icon::new(IconName::Ellipsis).size(px(16.)))
-            .accessibility_label("Gateway account")
-            .dropdown_menu(move |menu, _, _| {
-                let sign_out_view = identity_view.clone();
-                let settings_view = identity_view.clone();
-                menu.item(
-                    PopupMenuItem::new("Settings…").on_click(move |_, window, cx| {
-                        let _ = settings_view.update(cx, |this, cx| this.open_settings(window, cx));
-                    }),
-                )
-                .separator()
-                .item(
-                    PopupMenuItem::new("Manage Gateways…").on_click(move |_, _, cx| {
-                        crate::gateway_windows::manage(cx);
-                    }),
-                )
-                .item(
-                    PopupMenuItem::new("Sign out")
-                        .disabled(!can_sign_out)
-                        .on_click(move |_, window, cx| {
-                            let _ = sign_out_view.update(cx, |this, cx| this.sign_out(window, cx));
-                        }),
-                )
-            })
-            .into_any_element()
-    }
-
     pub(super) fn connect_screen(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::get(cx);
         let busy = matches!(
