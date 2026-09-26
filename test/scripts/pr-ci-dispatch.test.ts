@@ -217,6 +217,30 @@ function pendingText(fakeGh: ReturnType<typeof createFakeGh>) {
   return readFileSync(join(fakeGh.tempDir, ".local/gates.env"), "utf8");
 }
 
+function writeCompleted(fakeGh: ReturnType<typeof createFakeGh>, provenance = "") {
+  // Literal receipt shape from the pre-resume gate writer, including its empty
+  // hosted stamp. New provenance is optional only as one complete group.
+  writeFileSync(
+    join(fakeGh.tempDir, ".local/gates.env"),
+    [
+      "PR_NUMBER=12345",
+      "DOCS_ONLY=false",
+      "CHANGELOG_REQUIRED=false",
+      "GATES_MODE=remote_crabbox_aws",
+      "HOSTED_GATES_TARGET_HEAD_SHA=''",
+      `LAST_VERIFIED_HEAD_SHA=${headSha}`,
+      `FULL_GATES_HEAD_SHA=${headSha}`,
+      "REMOTE_GATES_PROVIDER=aws",
+      "REMOTE_GATES_RUN_ID=run_abc123",
+      "REMOTE_GATES_LEASE_ID=cbx_def456",
+      `REMOTE_GATES_RUN_URL=${runUrl}`,
+      "GATES_PASSED_AT=2026-09-26T00:00:00Z",
+      provenance,
+      "",
+    ].join("\n"),
+  );
+}
+
 describePosix("scripts/pr ci-dispatch", () => {
   it("dispatches ordinary CI for the exact remote head", () => {
     const fakeGh = createFakeGh();
@@ -510,21 +534,12 @@ syncBuiltinESMExports();
   });
   it("reverifies completed gates after interrupted preparation without dispatch", () => {
     const fakeGh = createFakeGh();
-    writeFileSync(
-      join(fakeGh.tempDir, ".local/gates.env"),
+    writeCompleted(
+      fakeGh,
       [
-        "PR_NUMBER=12345",
-        "GATES_MODE=remote_crabbox_aws",
-        `LAST_VERIFIED_HEAD_SHA=${headSha}`,
-        `FULL_GATES_HEAD_SHA=${headSha}`,
-        "REMOTE_GATES_PROVIDER=aws",
-        "REMOTE_GATES_RUN_ID=run_abc123",
-        "REMOTE_GATES_LEASE_ID=cbx_def456",
-        `REMOTE_GATES_RUN_URL=${runUrl}`,
         `REMOTE_GATES_BASE_SHA=${baseSha}`,
         `REMOTE_GATES_WORKFLOW_SHA=${workflowSha}`,
         "REMOTE_GATES_ACTIONS_RUN_ATTEMPT=1",
-        "",
       ].join("\n"),
     );
     const before = pendingText(fakeGh);
@@ -545,4 +560,59 @@ syncBuiltinESMExports();
     expect(wrongRun.status).not.toBe(0);
     expect(wrongRun.stderr).toContain("does not match the selected pending publisher");
   });
+
+  it("reverifies an old completed stamp using its retained broker pair and observed attempt", () => {
+    const fakeGh = createFakeGh();
+    writeCompleted(fakeGh);
+    const before = pendingText(fakeGh);
+    const result = runDispatch(fakeGh, {
+      backend: "crabbox",
+      pending: true,
+      resume: "99",
+      run: { run_attempt: 3 },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('"actionsRunAttempt":3');
+    expect(pendingText(fakeGh)).toBe(before);
+    const calls = readFileSync(fakeGh.calls, "utf8");
+    expect(calls).not.toContain("workflow run");
+    expect(calls).not.toContain("actions/workflows/");
+  });
+
+  it.each(["run", "lease", "base", "selector", "partial", "failed", "attempt-race"])(
+    "refuses old completed stamp %s mismatch without changing it or dispatching",
+    (mode) => {
+      const fakeGh = createFakeGh();
+      writeCompleted(fakeGh, mode === "partial" ? `REMOTE_GATES_BASE_SHA=${baseSha}` : "");
+      const path = join(fakeGh.tempDir, ".local/gates.env");
+      if (mode === "run" || mode === "lease") {
+        writeFileSync(
+          path,
+          pendingText(fakeGh).replace(
+            mode === "run" ? "run_abc123" : "cbx_def456",
+            mode === "run" ? "run_other" : "cbx_other",
+          ),
+        );
+      }
+      const before = pendingText(fakeGh);
+      const result = runDispatch(fakeGh, {
+        backend: "crabbox",
+        pending: true,
+        resume: mode === "selector" ? "100" : "99",
+        proofBase: mode === "base" ? changedSha : undefined,
+        run: mode === "failed" ? { conclusion: "failure" } : undefined,
+        finalRun: mode === "attempt-race" ? { run_attempt: 2 } : undefined,
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain('"backend":"crabbox"');
+      expect(pendingText(fakeGh)).toBe(before);
+      expect(existsSync(fakeGh.dispatched)).toBe(false);
+      if (mode === "run" || mode === "lease") {
+        expect(result.stderr).toContain("retained completed broker run and lease");
+      }
+      if (mode === "base") {
+        expect(result.stderr).toContain("does not bind the dispatched PR base");
+      }
+    },
+  );
 });

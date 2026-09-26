@@ -49,6 +49,11 @@ until the trusted exact-head check succeeds. An accepted dispatch without a
 recorded run requires explicit run selection; ordinary prepare-push refuses to
 redispatch. Legacy pending preparations use the retained review base and fail
 if the publisher proof does not match; current main is never substituted.
+Pre-change completed stamps additionally require their retained broker run and
+lease to match the trusted check. Their missing controller/attempt is pinned from
+the selected Actions run, not treated as historical receipt evidence. A retained
+base mismatch requires investigation of the original dispatch; resume refuses
+without changing the receipt or substituting today's main or the check's base.
 
 `OPENCLAW_PR_TOOLING_ROOT` selects a full checkout of the same repository for
 materialized wrappers' third-party dependencies; otherwise `openclaw.pr.toolingRoot` in the

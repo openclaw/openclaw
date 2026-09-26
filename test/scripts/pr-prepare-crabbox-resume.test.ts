@@ -168,6 +168,26 @@ describePosix("prepare-push retained Crabbox finalization", () => {
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
   });
 
+  it("finalizes a pre-change completed gate using the retained preparation base", () => {
+    const f = publishedPreparation();
+    // The old writer took only eleven arguments, with no controller provenance.
+    const written = runGatesBash(
+      `write_gates_env_stamp 4242 false false remote_crabbox_aws '${f.head}' '${f.head}' '' aws run_fixture cbx_fixture https://github.com/openclaw/openclaw/actions/runs/99`,
+      { cwd: f.repoDir },
+    );
+    expect(written.status, written.stderr).toBe(0);
+    expect(readFileSync(join(f.local, "gates.env"), "utf8")).not.toContain("REMOTE_GATES_BASE_SHA");
+    const result = runPublisher(f, 'prepare_push 4242 "" 99', f.setup);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
+      `PREP_MAINLINE_BASE_SHA=${f.base}`,
+    );
+    expect(readFileSync(join(f.local, "gates.env"), "utf8")).toContain(
+      `REMOTE_GATES_BASE_SHA=${f.base}`,
+    );
+    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+  });
+
   it.each([
     "PENDING_CRABBOX_STATE=$(touch .local/evaluated)\n",
     "PENDING_CRABBOX_STATE=selected\n",

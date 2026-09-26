@@ -120,17 +120,41 @@ function pendingGateReceipt(record, allowCompleted) {
     throw new Error("Crabbox gates do not match the published preparation.");
   }
   let selected;
+  let completedProof;
   if (complete) {
     if (
-      values.get("REMOTE_GATES_BASE_SHA") !== record.baseRefOid ||
-      !values.has("REMOTE_GATES_WORKFLOW_SHA")
+      values.get("REMOTE_GATES_PROVIDER") !== "aws" ||
+      !values.get("REMOTE_GATES_RUN_ID") ||
+      !values.get("REMOTE_GATES_LEASE_ID")
     ) {
-      throw new Error("Missing completed publisher provenance.");
+      throw new Error("Missing completed broker identity.");
     }
+    const provenance = [
+      "REMOTE_GATES_BASE_SHA",
+      "REMOTE_GATES_WORKFLOW_SHA",
+      "REMOTE_GATES_ACTIONS_RUN_ATTEMPT",
+    ];
+    const recorded = provenance.filter((key) => values.has(key)).length;
+    if (
+      recorded &&
+      (recorded !== provenance.length || values.get("REMOTE_GATES_BASE_SHA") !== record.baseRefOid)
+    ) {
+      throw new Error("Incomplete or mismatched completed publisher provenance.");
+    }
+    // Old success stamps predate controller/attempt fields. Their run URL and
+    // broker pair still bind the proof; never invent a recorded historical attempt.
     selected = {
       id: positiveInteger(values.get("REMOTE_GATES_RUN_URL")?.split("/").at(-1)),
-      run_attempt: positiveInteger(values.get("REMOTE_GATES_ACTIONS_RUN_ATTEMPT")),
-      head_sha: values.get("REMOTE_GATES_WORKFLOW_SHA"),
+      ...(recorded
+        ? {
+            run_attempt: positiveInteger(values.get("REMOTE_GATES_ACTIONS_RUN_ATTEMPT")),
+            head_sha: values.get("REMOTE_GATES_WORKFLOW_SHA"),
+          }
+        : {}),
+    };
+    completedProof = {
+      runId: values.get("REMOTE_GATES_RUN_ID"),
+      leaseId: values.get("REMOTE_GATES_LEASE_ID"),
     };
   } else if (state) {
     if (values.get("PENDING_CRABBOX_BASE_SHA") !== record.baseRefOid) {
@@ -147,6 +171,7 @@ function pendingGateReceipt(record, allowCompleted) {
   return {
     state,
     selected,
+    completedProof,
     write(run) {
       if (!lstatSync(path).isFile() || readFileSync(path, "utf8") !== contents) {
         throw new Error("Crabbox gate receipt changed during observation.");
@@ -361,6 +386,7 @@ async function waitForCrabboxResult(
     terminalPollAttempts = 1080,
     terminalPollIntervalMs = 15_000,
     wait = delay,
+    completedProof,
   },
 ) {
   let run;
@@ -402,6 +428,12 @@ async function waitForCrabboxResult(
     throw new Error(
       "Crabbox check summary does not bind the dispatched PR base, head, and workflow.",
     );
+  }
+  if (
+    completedProof &&
+    (binding.runId !== completedProof.runId || binding.leaseId !== completedProof.leaseId)
+  ) {
+    throw new Error("Crabbox check does not match the retained completed broker run and lease.");
   }
   // A rerun keeps the URL, so the check alone cannot pin the completed attempt.
   const finalRun = requireCrabboxRun(record, readRun(run.id), observedRun);
@@ -447,7 +479,11 @@ async function dispatchCiForPr(
     const selected = pending.selected ?? { id: backend.resumeRunId };
     const run = requireCrabboxRun(record, readWorkflowRun(backend.resumeRunId), selected);
     pending.write(run);
-    return waitForCrabbox(record, run, { readHeadOid, wait });
+    return waitForCrabbox(record, run, {
+      readHeadOid,
+      wait,
+      completedProof: pending.completedProof,
+    });
   }
   if (pending?.state) {
     throw new Error(

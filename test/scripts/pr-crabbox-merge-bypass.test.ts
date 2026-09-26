@@ -113,10 +113,12 @@ function input() {
     },
     publisherRun: {
       conclusion: "success",
+      display_title: `PR Crabbox gate #131091 / ${headSha}`,
       event: "workflow_dispatch",
       head_branch: "main",
       head_sha: workflowSha,
       id: 8001,
+      run_attempt: 1,
       path: ".github/workflows/pr-crabbox-gate-publisher.yml",
       status: "completed",
     },
@@ -518,6 +520,9 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
       proof: readArtifact("merge-crabbox-bypass.json"),
       audit: readArtifact("merge-crabbox-parent-audit.json"),
       intent: readArtifact("intent.json"),
+      gates: existsSync(join(root, ".local/gates.env"))
+        ? readFileSync(join(root, ".local/gates.env"), "utf8")
+        : undefined,
       calls: readFileSync(join(root, "calls.jsonl"), "utf8")
         .trim()
         .split("\n")
@@ -601,9 +606,12 @@ merge_run 131091
 
 describe("Crabbox authorization before final effects", () => {
   it.each(["member", "admin"])("gates remote dispatch on the authenticated %s", (role) => {
-    const result = runProtectedShell(`finalize_remote_crabbox_aws_gate 131091 ${headSha}`, {
-      role,
-    });
+    const result = runProtectedShell(
+      `PR_HEAD=topic
+write_gates_env_stamp 131091 false false remote_crabbox_aws_pending ${headSha} '' '' aws '' '' ''
+finalize_remote_crabbox_aws_gate 131091 ${headSha}`,
+      { role },
+    );
     expect(result.status, result.stdout + result.stderr).toBe(role === "admin" ? 0 : 1);
     const writer = result.calls.findIndex((args) => args.includes("user"));
     const membership = result.calls.findIndex((args) =>
@@ -617,6 +625,8 @@ describe("Crabbox authorization before final effects", () => {
     expect(result.calls.filter((args) => args[0] === "pr" && args[1] === "merge")).toEqual([]);
     expect(dispatches).toHaveLength(role === "admin" ? 1 : 0);
     if (role === "admin") {
+      expect(result.gates).toContain(`REMOTE_GATES_BASE_SHA=${baseSha}`);
+      expect(result.gates).toContain("REMOTE_GATES_ACTIONS_RUN_ATTEMPT=1");
       expect(result.calls.indexOf(dispatches[0]!)).toBeGreaterThan(membership);
       expect(dispatches[0]).toEqual([
         "workflow",
@@ -632,6 +642,8 @@ describe("Crabbox authorization before final effects", () => {
         `base_sha=${baseSha}`,
       ]);
     } else {
+      expect(result.gates).toContain("GATES_MODE=remote_crabbox_aws_pending");
+      expect(result.gates).not.toContain("PENDING_CRABBOX_STATE");
       expect(result.stderr).toContain("requires an active openclaw organization admin");
     }
   });
