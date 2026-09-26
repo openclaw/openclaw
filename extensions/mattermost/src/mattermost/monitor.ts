@@ -252,6 +252,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     turnAdoptionLifecycle: MattermostIngressLifecycle;
     laneKey?: string;
     laneTracked?: boolean;
+    debounceKey?: string;
   };
   const resolveDebounceKey = (entry: MattermostDebounceEntry) => {
     const channelId =
@@ -294,12 +295,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   // monitor-ingress.ts) lets independent thread/sender debounce keys admit and
   // flush concurrently; without this guard a later-arriving key can flush
   // ahead of an earlier one still merging, inverting conversation order.
-  const pendingLaneKeys = new Map<string, { count: number; batchKey: string }>();
+  const pendingLaneKeys = new Map<
+    string,
+    { count: number; batchKey: string; admission?: Promise<void> }
+  >();
   const trackLane = (laneKey: string, batchKey: string) => {
     pendingLaneKeys.set(laneKey, {
       count: (pendingLaneKeys.get(laneKey)?.count ?? 0) + 1,
       batchKey,
     });
+  };
+  // Record that a lane's tracked batch has started flushing, so a
+  // different-key arrival can await this flush's admission directly instead
+  // of calling debouncer.flushKey — which is a no-op once the batch has left
+  // the debouncer's own pending-buffer map, letting the arrival through
+  // before the earlier batch is actually admitted.
+  const markLaneFlushing = (laneKey: string, batchKey: string, admission: Promise<void>) => {
+    const pending = pendingLaneKeys.get(laneKey);
+    if (pending && pending.batchKey === batchKey) {
+      pending.admission = admission;
+    }
   };
   const releaseLane = (entry: MattermostDebounceEntry) => {
     if (!entry.laneKey || entry.laneTracked !== true) {
@@ -318,14 +333,22 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     buildKey: resolveDebounceKey,
     shouldDebounce: shouldDebounceEntry,
     onFlush: (entries, createFlush) => {
+      // Only a lane-tracked entry (debounceMs > 0, ordinary batching) ever
+      // holds a pendingLaneKeys record; release those synchronously here as
+      // before so an untracked flush (debounceMs === 0) never pays an extra
+      // microtask tick on its admission path, which upstream retry/backoff
+      // logic can be timing-sensitive to.
+      const trackedEntries = entries.filter((entry) => entry.laneTracked === true);
       for (const entry of entries) {
-        releaseLane(entry);
+        if (entry.laneTracked !== true) {
+          releaseLane(entry);
+        }
       }
       const last = entries.at(-1);
       const { lifecycle, settle } = fanInChannelIngressLifecycles(
         entries.map((entry) => entry.turnAdoptionLifecycle),
       );
-      return createFlush({
+      const flush = createFlush({
         lifecycle,
         dispatch: async (admissionLifecycle) => {
           if (!last) {
@@ -358,6 +381,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           }
         },
       });
+      // Hold the lane record until this flush is actually admitted, not
+      // merely started: onFlush firing only means the timer elapsed, while
+      // admission (onAdopted/onDeferred/onFailed, or completion for gated
+      // dispatch) is when the earlier batch has genuinely cleared the lane.
+      // Mark the flush's admission on the lane record so a different-key
+      // arrival in the ingress dispatch can await it directly, and release
+      // the lane only once it settles.
+      if (trackedEntries.length > 0) {
+        for (const entry of trackedEntries) {
+          if (entry.laneKey && entry.debounceKey) {
+            markLaneFlushing(entry.laneKey, entry.debounceKey, flush.admission);
+          }
+        }
+        void flush.admission.finally(() => {
+          for (const entry of trackedEntries) {
+            releaseLane(entry);
+          }
+        });
+      }
+      return flush;
     },
     onError: (err) => {
       runtime.error?.(`mattermost debounce flush failed: ${String(err)}`);
@@ -371,15 +414,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       const entry: MattermostDebounceEntry = { post, payload, turnAdoptionLifecycle };
       const debounceKey = resolveDebounceKey(entry);
       if (debounceKey) {
+        entry.debounceKey = debounceKey;
         const laneKey = resolveLaneKey(entry);
         if (laneKey) {
           entry.laneKey = laneKey;
           const pendingLane = pendingLaneKeys.get(laneKey);
           // One channel lane orders admission; a thread/sender change ends the
           // current batch so a later-arriving key cannot flush ahead of an
-          // earlier one still merging in the same channel.
+          // earlier one still merging in the same channel. Once the pending
+          // batch has started flushing, its buffer is already gone from the
+          // debouncer's own map, so flushKey would be a no-op; await the
+          // flush's admission directly in that case. Otherwise force the
+          // still-buffered batch to flush now (which itself waits for
+          // admission) instead of its full debounce delay.
           if (pendingLane && pendingLane.batchKey !== debounceKey) {
-            await debouncer.flushKey(pendingLane.batchKey);
+            await (pendingLane.admission ?? debouncer.flushKey(pendingLane.batchKey));
           }
           if (resolveDebounceMs() > 0 && shouldDebounceEntry(entry)) {
             entry.laneTracked = true;
