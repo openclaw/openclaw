@@ -451,7 +451,9 @@ class PortalsPage extends OpenClawLightDomElement {
         </header>
         ${
           this.error
-            ? html`<div class="callout danger portals-preview__error">${this.error}</div>`
+            ? html`<div class="callout danger portals-preview__error" role="alert">
+                ${this.error}
+              </div>`
             : nothing
         }
         ${
@@ -549,7 +551,7 @@ class PortalsPage extends OpenClawLightDomElement {
     return html`
       <section class="content-header content-header--page">
         <div>
-          <div class="page-title">${titleForRoute("portals")}</div>
+          <h1 class="page-title">${titleForRoute("portals")}</h1>
         </div>
       </section>
       ${

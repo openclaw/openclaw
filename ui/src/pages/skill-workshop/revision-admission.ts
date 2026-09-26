@@ -1,4 +1,7 @@
-import { readSkillProposalRevisionChangedError } from "@openclaw/gateway-protocol";
+import {
+  readSkillProposalRevisionChangedError,
+  type SkillsProposalInspectResult,
+} from "@openclaw/gateway-protocol";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type {
   SkillWorkshopRevisionAdmissionBinding,
@@ -7,7 +10,6 @@ import type {
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatSendAck } from "../chat/chat-send-ack.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
-import type { SkillProposalInspectResult } from "./proposal-records.ts";
 import { resolveSkillWorkshopRevisionTarget } from "./revision-session.ts";
 
 export async function requestSkillWorkshopRevisionAdmission(params: {
@@ -31,7 +33,7 @@ export async function requestSkillWorkshopRevisionAdmission(params: {
   };
   let entry = params.entry;
   if (!entry.expectedRevisionHash) {
-    const result = await client.request<SkillProposalInspectResult>("skills.proposals.inspect", {
+    const result = await client.request<SkillsProposalInspectResult>("skills.proposals.inspect", {
       agentId: normalizeAgentId(entry.proposalAgentId),
       proposalId: entry.proposalId,
     });

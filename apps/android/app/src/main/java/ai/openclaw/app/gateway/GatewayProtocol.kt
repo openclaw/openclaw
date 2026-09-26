@@ -973,6 +973,12 @@ enum class GatewayMethod(
   UsersLinkChannelIdentity("users.linkChannelIdentity"),
   UsersUnlinkChannelIdentity("users.unlinkChannelIdentity"),
   UsersListChannelIdentities("users.listChannelIdentities"),
+  UsersPersonalFileGet("users.personalFile.get"),
+  UsersPersonalFileSet("users.personalFile.set"),
+  PortalSessionList("portal.session.list"),
+  PortalSessionOpen("portal.session.open"),
+  PortalSessionClose("portal.session.close"),
+  CronHistory("cron.history"),
 }
 
 enum class GatewayEvent(

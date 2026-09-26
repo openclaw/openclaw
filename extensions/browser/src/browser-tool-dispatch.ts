@@ -11,8 +11,7 @@ import {
   executeConsoleAction,
   executeDownloadAction,
   executeEmulateAction,
-  executeRequestsAction,
-  executeErrorsAction,
+  executeDebugLogAction,
   executeTextAction,
   executeTabsAction,
   formatBrowserExternalToolResult,
@@ -99,6 +98,8 @@ export async function executeBrowserTabAction(context: {
     touchTab(readStringValue(asNullableRecord(result)?.targetId) ?? targetId);
     return jsonResult(result);
   };
+  const actionOptions = { input: params, baseUrl, profile, proxyRequest, signal };
+  const clientOptions = { profile, timeoutMs: toolTimeoutMs, signal };
   switch (action) {
     case "tabs":
       return await executeTabsAction({
@@ -113,10 +114,8 @@ export async function executeBrowserTabAction(context: {
       const targetUrl = readTargetUrlParam(params);
       const label = normalizeOptionalString(params.label);
       const opened = await browserOpenTab(proxyRequest ?? baseUrl, targetUrl, {
-        profile,
+        ...clientOptions,
         label,
-        timeoutMs: toolTimeoutMs,
-        signal,
       });
       const closeOpenedTab = async (targetId: string, openedProfile?: string) => {
         if (nodeRoute && !proxyRequest?.isHostFallbackActive()) {
@@ -142,50 +141,26 @@ export async function executeBrowserTabAction(context: {
       const targetId = readStringParam(params, "targetId", {
         required: true,
       });
-      const result = await browserFocusTab(proxyRequest ?? baseUrl, targetId, {
-        profile,
-        timeoutMs: toolTimeoutMs,
-        signal,
-      });
+      const result = await browserFocusTab(proxyRequest ?? baseUrl, targetId, clientOptions);
       return trackedTabResult(result, targetId);
     }
     case "close": {
       const targetId = readStringParam(params, "targetId");
       const result = targetId
-        ? await browserCloseTab(proxyRequest ?? baseUrl, targetId, {
-            profile,
-            timeoutMs: toolTimeoutMs,
-            signal,
-          })
-        : await browserAct(
-            proxyRequest ?? baseUrl,
-            { kind: "close" },
-            {
-              profile,
-              timeoutMs: toolTimeoutMs,
-              signal,
-            },
-          );
+        ? await browserCloseTab(proxyRequest ?? baseUrl, targetId, clientOptions)
+        : await browserAct(proxyRequest ?? baseUrl, { kind: "close" }, clientOptions);
       sessionTabs.untrack(readStringValue(asNullableRecord(result)?.targetId) ?? targetId);
       return jsonResult(result);
     }
     case "snapshot":
       return await executeSnapshotAction({
-        input: params,
-        baseUrl,
-        profile,
-        proxyRequest,
-        signal,
+        ...actionOptions,
         onTabActivity: touchTab,
       });
     case "screenshot":
       return await executeScreenshotAction({
-        input: params,
-        baseUrl,
-        profile,
+        ...actionOptions,
         requestedTimeoutMs,
-        proxyRequest,
-        signal,
         onTabActivity: touchTab,
         opts,
       });
@@ -220,13 +195,7 @@ export async function executeBrowserTabAction(context: {
       });
     }
     case "console": {
-      const result = await executeConsoleAction({
-        input: params,
-        baseUrl,
-        profile,
-        proxyRequest,
-        signal,
-      });
+      const result = await executeConsoleAction(actionOptions);
       const targetId = readStringParam(params, "targetId");
       const canonicalTargetId = readStringValue(asNullableRecord(result.details)?.targetId);
       touchTab(canonicalTargetId ?? targetId);
@@ -236,13 +205,10 @@ export async function executeBrowserTabAction(context: {
     case "errors":
     case "text":
     case "emulate": {
-      const execute = {
-        requests: executeRequestsAction,
-        errors: executeErrorsAction,
-        text: executeTextAction,
-        emulate: executeEmulateAction,
-      }[action];
-      const result = await execute({ input: params, baseUrl, profile, proxyRequest, signal });
+      const result =
+        action === "requests" || action === "errors"
+          ? await executeDebugLogAction(action, actionOptions)
+          : await (action === "text" ? executeTextAction : executeEmulateAction)(actionOptions);
       touchTab(
         readStringValue(asNullableRecord(result.details)?.targetId) ??
           readStringValue(params.targetId),
@@ -261,12 +227,8 @@ export async function executeBrowserTabAction(context: {
     case "download":
     case "waitfordownload":
       return await executeDownloadAction({
+        ...actionOptions,
         action,
-        input: params,
-        baseUrl,
-        profile,
-        proxyRequest,
-        signal,
         onTabActivity: touchTab,
       });
     case "upload": {
@@ -278,21 +240,21 @@ export async function executeBrowserTabAction(context: {
       if (!resolvedResult.ok) {
         throw new Error(resolvedResult.error);
       }
-      const normalizedPaths = resolvedResult.paths;
       const ref = readStringParam(params, "ref");
       const inputRef = readStringParam(params, "inputRef");
       const element = readStringParam(params, "element");
       const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
-      const request = {
-        paths: normalizedPaths,
-        ref,
-        inputRef,
-        element,
-        targetId,
-        timeoutMs,
-      };
       return trackedTabResult(
-        await browserArmFileChooser(proxyRequest ?? baseUrl, { ...request, profile, signal }),
+        await browserArmFileChooser(proxyRequest ?? baseUrl, {
+          paths: resolvedResult.paths,
+          ref,
+          inputRef,
+          element,
+          targetId,
+          timeoutMs,
+          profile,
+          signal,
+        }),
         targetId,
       );
     }

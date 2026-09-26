@@ -1,5 +1,5 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { Frame, Page } from "playwright-core";
-import { toErrorObject } from "../infra/errors.js";
 import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import {
   assertBrowserNavigationResultAllowed,
@@ -8,7 +8,6 @@ import {
 } from "./navigation-guard.js";
 import {
   assertPageNavigationCompletedSafely,
-  ensurePageState,
   getPageForTargetId,
   isBrowserObservedDialogBlockedError,
   isPolicyDenyNavigationError,
@@ -24,7 +23,7 @@ export type InteractionTargetOptions = {
   cdpUrl: string;
   browserFilesystemLocal?: boolean;
   targetId?: string;
-  assertCurrent?: () => Promise<void>;
+  assertCurrent?: () => void | Promise<void>;
 };
 
 export type NavigationTargetOptions = InteractionTargetOptions & BrowserNavigationPolicyOptions;
@@ -43,14 +42,19 @@ export class BrowserInteractionAuthorityError extends Error {
   }
 }
 
-export async function assertInteractionCurrent(
+export function assertInteractionCurrent(
   opts: Pick<InteractionTargetOptions, "assertCurrent">,
-): Promise<void> {
-  try {
-    await opts.assertCurrent?.();
-  } catch (error) {
+): void | Promise<void> {
+  const reject = (error: unknown): never => {
     // Authority loss is fatal even inside a batch configured to continue on errors.
     throw new BrowserInteractionAuthorityError(error);
+  };
+  try {
+    // Preserve a resident assertion's synchronous fence through native action dispatch.
+    const assertion = opts.assertCurrent?.();
+    return assertion ? assertion.catch(reject) : undefined;
+  } catch (error) {
+    reject(error);
   }
 }
 
@@ -91,7 +95,6 @@ export function resolveBoundedDelayMs(
 
 export async function getRestoredPageForTarget(opts: InteractionTargetOptions) {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   return page;
 }
@@ -172,24 +175,7 @@ export async function runCancellablePageInteraction<T>(
 // fragment — do not cause a network request and must not trigger SSRF checks.
 function didCrossDocumentUrlChange(page: { url(): string }, previousUrl: string): boolean {
   const currentUrl = page.url();
-  if (currentUrl === previousUrl) {
-    return false;
-  }
-  try {
-    const prev = new URL(previousUrl);
-    const curr = new URL(currentUrl);
-    if (
-      prev.origin === curr.origin &&
-      prev.pathname === curr.pathname &&
-      prev.search === curr.search
-    ) {
-      // Only the fragment changed — same-document navigation, no fetch.
-      return false;
-    }
-  } catch {
-    // Non-parseable URL; fall through to string comparison.
-  }
-  return true;
+  return currentUrl !== previousUrl && !isHashOnlyNavigation(currentUrl, previousUrl);
 }
 
 // Returns true when a framenavigated event represents only a hash-only
@@ -347,7 +333,7 @@ function scheduleDelayedInteractionNavigationGuard(
   if (!hasInteractionNavigationPolicy(navigationPolicy)) {
     return Promise.resolve();
   }
-  const page = opts.page as unknown as NavigationObservablePage;
+  const page: NavigationObservablePage = opts.page;
   if (didCrossDocumentUrlChange(page, opts.previousUrl)) {
     return assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
@@ -439,7 +425,7 @@ async function assertInteractionNavigationCompletedSafely<T>(
   // action so navigations triggered mid-click or mid-evaluate are not missed.
   // Using a fixed pre-action timer would expire before the action finishes for
   // slow interactions, silently bypassing the SSRF guard.
-  const navPage = opts.page as unknown as NavigationObservablePage;
+  const navPage: NavigationObservablePage = opts.page;
   let navigatedDuringAction = false;
   const subframeNavigationsDuringAction: string[] = [];
   const onFrameNavigated = (frame: Frame) => {
@@ -606,7 +592,10 @@ export async function awaitNavigationGuardedInteraction<T>(
             try {
               // Preserve native dispatch ordering for callers without an authority check.
               if (opts.assertCurrent) {
-                await assertInteractionCurrent(opts);
+                const assertion = assertInteractionCurrent(opts);
+                if (assertion) {
+                  await assertion;
+                }
               }
               throwIfInteractionAborted(signal);
               return await opts.action();

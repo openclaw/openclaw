@@ -1,6 +1,6 @@
 // Gateway run option resolution and local server startup command implementation.
 import fs from "node:fs";
-import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalObjectRecord, expectDefined } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -22,11 +22,7 @@ import { CONFIG_PATH, normalizeStateDirEnv, resolveGatewayPort } from "../../con
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
-import {
-  createConfiguredGatewayLocalProbe,
-  normalizeGatewayHttpProbeHost,
-  requestGatewayLocalHttpProbe,
-} from "../../gateway/local-http-probe.js";
+import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
@@ -64,6 +60,7 @@ import {
 } from "../../infra/gateway-processes.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
+import { parseTcpPort } from "../../infra/tcp-port.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -72,7 +69,6 @@ import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 import { withProgress } from "../progress.js";
-import { parsePort } from "../shared/parse-port.js";
 import {
   isTerminalInteractive,
   NON_INTERACTIVE_GATEWAY_RUN_FORCE_MESSAGE,
@@ -125,24 +121,12 @@ function extractGatewayMiskeys(parsed: unknown): {
   hasRemoteToken: boolean;
 } {
   // Detect common token misplacements before startup falls back to unauthenticated mode.
-  if (!parsed || typeof parsed !== "object") {
-    return { hasGatewayToken: false, hasRemoteToken: false };
-  }
-  const gateway = (parsed as Record<string, unknown>).gateway;
-  if (!gateway || typeof gateway !== "object") {
-    return { hasGatewayToken: false, hasRemoteToken: false };
-  }
-  const hasGatewayToken = "token" in (gateway as Record<string, unknown>);
-  const remote = (gateway as Record<string, unknown>).remote;
-  const hasRemoteToken =
-    remote && typeof remote === "object" ? "token" in (remote as Record<string, unknown>) : false;
-  return { hasGatewayToken, hasRemoteToken };
-}
-
-function warnInlinePasswordFlag() {
-  defaultRuntime.error(
-    "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
-  );
+  const gateway = asOptionalObjectRecord(asOptionalObjectRecord(parsed)?.gateway);
+  const remote = asOptionalObjectRecord(gateway?.remote);
+  return {
+    hasGatewayToken: gateway ? "token" in gateway : false,
+    hasRemoteToken: remote ? "token" in remote : false,
+  };
 }
 
 async function resolveGatewayPasswordOption(opts: GatewayRunOpts): Promise<string | undefined> {
@@ -162,10 +146,7 @@ function parseEnumOption<T extends string>(
   raw: string | undefined,
   allowed: readonly T[],
 ): T | null {
-  if (!raw) {
-    return null;
-  }
-  return (allowed as readonly string[]).includes(raw) ? (raw as T) : null;
+  return raw ? (allowed.find((value) => value === raw) ?? null) : null;
 }
 
 function formatModeErrorList(modes: readonly string[]): string {
@@ -180,18 +161,6 @@ function formatModeErrorList(modes: readonly string[]): string {
     return `${quoted[0]} or ${quoted[1]}`;
   }
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
-}
-
-function shouldBlockGatewayBindWithoutExplicitAuth(params: {
-  bindHost: string;
-  hasSharedSecret: boolean;
-  resolvedAuthMode: GatewayAuthMode;
-}): boolean {
-  return (
-    !isLoopbackHost(params.bindHost) &&
-    !params.hasSharedSecret &&
-    params.resolvedAuthMode !== "trusted-proxy"
-  );
 }
 
 async function readGatewayStartupConfig(params: {
@@ -290,10 +259,6 @@ async function clearGatewayRunShellEnvFallback(
   clearShellEnvAppliedKeys(keys);
 }
 
-function gatewayRunShellEnvFallbackPlanSignature(plan: GatewayRunShellEnvFallbackPlan): string {
-  return JSON.stringify(plan);
-}
-
 async function readGatewayStartupConfigWithShellEnv(params: {
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
 }): Promise<
@@ -312,7 +277,7 @@ async function readGatewayStartupConfigWithShellEnv(params: {
       const plan = await resolveGatewayRunShellEnvFallbackPlan(
         startupConfig.snapshot?.valid === true ? startupConfig.cfg : {},
       );
-      const planSignature = gatewayRunShellEnvFallbackPlanSignature(plan);
+      const planSignature = JSON.stringify(plan);
       if (!plan.enabled) {
         if (Object.keys(lowerPrecedenceEnv).length === 0) {
           return { ...startupConfig, lowerPrecedenceEnv };
@@ -382,8 +347,6 @@ function resolveGatewayStartupFailureExitCode(err: unknown): number {
     : 1;
 }
 
-const normalizeGatewayHealthProbeHost = normalizeGatewayHttpProbeHost;
-
 function isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean {
   if (statusCode !== 200) {
     return false;
@@ -394,21 +357,6 @@ function isGatewayHealthzResponse(statusCode: number | undefined, body: string):
   } catch {
     return false;
   }
-}
-
-async function probeGatewayHealthz(params: {
-  host: string;
-  port: number;
-  timeoutMs?: number;
-  tlsFingerprint?: string;
-}): Promise<boolean> {
-  const timeoutMs = params.timeoutMs ?? SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS;
-  const result = await requestGatewayLocalHttpProbe({
-    ...params,
-    pathname: "/healthz",
-    timeoutMs,
-  });
-  return isGatewayHealthzResponse(result?.statusCode, result?.body ?? "");
 }
 
 function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
@@ -431,7 +379,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
   log: GatewayRunLogger;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  probeHealth?: (params: { host: string; port: number }) => Promise<boolean>;
+  probeHealth: (params: { host: string; port: number }) => Promise<boolean>;
   retryMs?: number;
   timeoutMs?: number;
 }) {
@@ -448,7 +396,6 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       await new Promise((resolve) => {
         setTimeout(resolve, ms);
       }));
-  const probeHealth = params.probeHealth ?? ((probeParams) => probeGatewayHealthz(probeParams));
   const retryMs = params.retryMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_MS;
   const timeoutMs = params.timeoutMs ?? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS;
   const startedAt = now();
@@ -466,7 +413,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       const lifecycleContention = isGatewayLifecycleContentionError(err);
       if (
         !lifecycleContention &&
-        (await probeHealth({ host: params.healthHost, port: params.port }))
+        (await params.probeHealth({ host: params.healthHost, port: params.port }))
       ) {
         if (supervisor === "systemd") {
           throw new SupervisedGatewayLockError(
@@ -670,7 +617,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
-  const portOverride = parsePort(opts.port);
+  const portOverride = parseTcpPort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error(formatInvalidPortOption("--port"));
     defaultRuntime.exit(1);
@@ -817,14 +764,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     defaultRuntime.exit(1);
     return;
   }
-  // Now that Tailscale mode is known, compute the effective bind mode.
   const effectiveTailscaleMode = tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off";
-  const bind = (bindExplicitRaw ?? defaultGatewayBindMode(effectiveTailscaleMode)) as
-    | "loopback"
-    | "lan"
-    | "auto"
-    | "custom"
-    | "tailnet";
+  const bind = bindExplicitRaw ?? defaultGatewayBindMode(effectiveTailscaleMode);
 
   let passwordRaw: string | undefined;
   try {
@@ -835,7 +776,9 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     return;
   }
   if (toOptionString(opts.password)) {
-    warnInlinePasswordFlag();
+    defaultRuntime.error(
+      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+    );
   }
   const tokenRaw = toOptionString(opts.token);
 
@@ -870,7 +813,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       authConfig: cfg.gateway?.auth,
       authOverride,
       env: process.env,
-      tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
+      tailscaleMode: effectiveTailscaleMode,
     }),
   );
   const resolvedAuthMode = resolvedAuth.mode;
@@ -908,9 +851,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
         "Gateway auth is set to password, but no password is configured.",
         "Set gateway.auth.password (or OPENCLAW_GATEWAY_PASSWORD), or pass --password.",
         ...authHints,
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      ].join("\n"),
     );
     defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
@@ -921,13 +862,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     );
   }
   const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
-  if (
-    shouldBlockGatewayBindWithoutExplicitAuth({
-      bindHost: healthHost,
-      hasSharedSecret,
-      resolvedAuthMode,
-    })
-  ) {
+  if (!isLoopbackHost(healthHost) && !hasSharedSecret && resolvedAuthMode !== "trusted-proxy") {
     defaultRuntime.error(
       [
         `Refusing to bind gateway to ${bind} without auth.`,
@@ -940,9 +875,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
               "Set gateway.auth.token/password (or OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD) or pass --token/--password.",
             ]),
         ...authHints,
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      ].join("\n"),
     );
     defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
@@ -1180,8 +1113,6 @@ export async function runGatewayCommand(
 const testing = {
   createConfiguredGatewayHealthProbe,
   isGatewayHealthzResponse,
-  normalizeGatewayHealthProbeHost,
-  probeGatewayHealthz,
   resolveGatewayLockErrorExitCode,
   resolveGatewayStartupFailureExitCode,
   runGatewayLoopWithSupervisedLockRecovery,

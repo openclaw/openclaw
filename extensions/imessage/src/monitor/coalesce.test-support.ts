@@ -195,43 +195,26 @@ describe("combineIMessagePayloads", () => {
     );
   });
 
-  it("preserves reply context from any entry that carries one", () => {
-    const noReply = makePayload({ text: "hello", guid: "row-1" });
-    const reply = makePayload({
-      text: "follow-up",
-      guid: "row-2",
-      reply_to_guid: "parent-msg",
-      reply_to_text: "earlier",
-      reply_to_sender: "+15555550199",
-    });
-    const merged = combineIMessagePayloads([noReply, reply]);
+  it.each([{ reply_to_guid: "reply-parent" }, { thread_originator_guid: "thread-parent" }])(
+    "preserves the complete real provider reply tuple from a later row",
+    (parent) => {
+      const first = makePayload({ text: "hello", guid: "row-1" });
+      const reply = makePayload({
+        text: "follow-up",
+        guid: "row-2",
+        ...parent,
+        reply_to_text: "the original question",
+        reply_to_sender: "+15555550199",
+      });
+      const merged = combineIMessagePayloads([first, reply]);
 
-    expect(merged.reply_to_guid).toBe("parent-msg");
-    expect(merged.reply_to_text).toBe("earlier");
-    expect(merged.reply_to_sender).toBe("+15555550199");
-  });
-
-  it.each([
-    { reply_to_guid: "reply-parent" },
-    { thread_originator_guid: "thread-parent" },
-    { reply_to_guid: "reply-parent", thread_originator_guid: "thread-parent" },
-  ])("preserves the complete real provider reply tuple from a later row", (parent) => {
-    const first = makePayload({ text: "hello", guid: "row-1" });
-    const reply = makePayload({
-      text: "follow-up",
-      guid: "row-2",
-      ...parent,
-      reply_to_text: "the original question",
-      reply_to_sender: "+15555550199",
-    });
-    const merged = combineIMessagePayloads([first, reply]);
-
-    expect(merged).toMatchObject({
-      ...parent,
-      reply_to_text: "the original question",
-      reply_to_sender: "+15555550199",
-    });
-  });
+      expect(merged).toMatchObject({
+        ...parent,
+        reply_to_text: "the original question",
+        reply_to_sender: "+15555550199",
+      });
+    },
+  );
 
   it("keeps the parent GUID and quote metadata from the same reply row", () => {
     const first = makePayload({

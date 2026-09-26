@@ -15,6 +15,8 @@ export interface Skill {
   contentHash?: string;
   filePath: string;
   baseDir: string;
+  /** Discovery provenance for collision diagnostics, never read authority. */
+  discoveryRoot?: { path: string; worktree: boolean };
   /** Assigned by Gateway discovery, never accepted from the workspace provider. */
   fileHost?: "gateway" | "workspace";
   /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */
@@ -86,14 +88,16 @@ export function compactSkillsPromptForContext(prompt: string, contextTokenBudget
   let lo = 64;
   let hi = COMPACT_DESCRIPTION_MAX_CHARS;
   let result = render(lo);
-  while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    const candidate = render(mid);
-    if (candidate.length <= targetChars) {
-      result = candidate;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
+  if (result.length <= targetChars) {
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const candidate = render(mid);
+      if (candidate.length <= targetChars) {
+        result = candidate;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
     }
   }
   return result.length < prompt.length ? result : prompt;

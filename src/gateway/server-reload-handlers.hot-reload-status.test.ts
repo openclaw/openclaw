@@ -14,6 +14,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
@@ -84,6 +85,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       mentionInbox: { invalidate: invalidateMentions },
     } as unknown as GatewayRequestContext;
     const reloader = startManagedGatewayConfigReloader({
+      scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
       getPluginRegistry: () => pluginRegistry,
       configRevisionProjector: {
         projectRawHash: (hash) => `opaque:${hash}`,
@@ -178,9 +180,9 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
         "committed runtime config reader",
       );
       gatewayContext.resolveGatewayContext = () => gatewayContext;
-      const capture = () =>
+      const capture = async () =>
         expectDefined(
-          captureGatewayOperatorRunAuthority({
+          await captureGatewayOperatorRunAuthority({
             client: createSyntheticPluginRuntimeClient({
               scopes: ["operator.write"],
               operatorRoleActor: { kind: "operator", profileId: profile.id },
@@ -189,8 +191,8 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
           }),
           "operator source",
         );
-      const original = capture();
-      let duringActivation: ReturnType<typeof capture> | undefined;
+      const original = await capture();
+      let duringActivation: Awaited<ReturnType<typeof capture>> | undefined;
       const candidate: OpenClawConfig = {
         ...initialConfig,
         gateway: {
@@ -206,7 +208,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
         setRuntimeConfigSnapshot(candidate);
         expect(original.authority.signal?.aborted).toBe(false);
         expect(() => original.authority.assertCurrent()).not.toThrow();
-        duringActivation = capture();
+        duringActivation = await capture();
         // An unrelated Gateway publication cannot turn this tentative policy into source loss.
         publishOperatorRoleConfigChange({});
         expect(duringActivation.authority.signal?.aborted).toBe(false);

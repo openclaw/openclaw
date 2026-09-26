@@ -343,7 +343,7 @@
           "opus-5.5": "claude-opus-5-5",
           "opus-5-5": "claude-opus-5-5",
           "opus-5": "claude-opus-5",
-          "opus": "claude-opus-5",
+          "opus": "claude-opus-5-5",
           "opus-4.8": "claude-opus-4-8",
           "opus-4.7": "claude-opus-4-7",
           "opus-4.6": "claude-opus-4-6",
@@ -358,8 +358,11 @@
   "modelPricing": {
     "providers": {
       "anthropic": {
-        "openRouter": {
-          "modelIdTransforms": ["version-dots"]
+        "modelsDev": {
+          "provider": "anthropic"
+        },
+        "liteLLM": {
+          "provider": "anthropic"
         }
       }
     }
@@ -450,7 +453,7 @@
     "anthropic": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "claude-opus-5"
+        "image": "claude-opus-5-5"
       },
       "autoPriority": {
         "image": 20

@@ -17,6 +17,7 @@ import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.
 import { SessionManager } from "../agents/sessions/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
@@ -52,6 +53,7 @@ import {
   type VerifySetupInferenceResult,
 } from "./setup-inference-core.js";
 import {
+  registerHiddenSetupInferenceProbeRun,
   runSetupInferenceProbeWork,
   SETUP_INFERENCE_TEST_MAX_TOKENS,
   type SetupTurnFailure,
@@ -138,6 +140,7 @@ export async function runSetupInferenceTurn(params: {
     messageChannel: "openclaw",
     messageProvider: "openclaw",
     disableTools: true,
+    ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     onSuccessfulAuthBinding: (binding: AgentExecutionAuthBinding) => {
       successfulAuth = binding;
     },
@@ -147,6 +150,7 @@ export async function runSetupInferenceTurn(params: {
     if (params.signal?.aborted) {
       throw new SetupInferenceCancelledError();
     }
+    registerHiddenSetupInferenceProbeRun(runId, route.agentId, sessionKey);
     const cliError = await resolveToolFreeCliSetupError(route);
     if (cliError) {
       return failed("unavailable", cliError);
@@ -160,7 +164,6 @@ export async function runSetupInferenceTurn(params: {
       const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
       result = await runCli({
         ...shared,
-        ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
         executionMode: "side-question",
         cleanupCliLiveSessionOnRunEnd: true,
       });
@@ -172,9 +175,7 @@ export async function runSetupInferenceTurn(params: {
         ...shared,
         // The probe owns its transcript; session admission must not create durable agent state.
         sessionPersistence: "detached",
-        ...(route.authProfileId
-          ? { authProfileId: route.authProfileId, authProfileIdSource: "user" as const }
-          : {}),
+        ...(route.authProfileId ? { authProfileIdSource: "user" as const } : {}),
         authProfileStateMode: "read-only",
         allowAuthProfileFallback: false,
         preparedModelRuntimeMode: "isolated-read-only",
@@ -197,8 +198,7 @@ export async function runSetupInferenceTurn(params: {
     }
     const terminalError = extractAgentRunTerminalError(result);
     if (terminalError) {
-      const described = describeFailoverError(new Error(terminalError));
-      return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
+      throw new Error(terminalError);
     }
     const text = extractAgentRunText(result)?.trim();
     if (!text) {
@@ -234,6 +234,7 @@ export async function runSetupInferenceTurn(params: {
     return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
   } finally {
     preparedRunAdmission.close();
+    clearAgentRunContext(runId);
     try {
       await (deps.removeTempDir ?? ((dir: string) => fs.rm(dir, { recursive: true, force: true })))(
         workspaceDir,

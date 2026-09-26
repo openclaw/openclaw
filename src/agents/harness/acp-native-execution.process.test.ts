@@ -125,20 +125,23 @@ it.each(policyCases)(
               agentDir: state.agentDir(),
               workspaceDir: state.workspaceDir,
             }),
-          ).toEqual([
-            {
-              provider: `acp-${agent}`,
-              id: "initial",
-              name: "Initial",
-              nativeRuntime: `acp-${agent}`,
-            },
-            {
-              provider: `acp-${agent}`,
-              id: "selected",
-              name: "Selected",
-              nativeRuntime: `acp-${agent}`,
-            },
-          ]);
+          ).toEqual({
+            entries: [
+              {
+                provider: `acp-${agent}`,
+                id: "initial",
+                name: "Initial",
+                nativeRuntime: `acp-${agent}`,
+              },
+              {
+                provider: `acp-${agent}`,
+                id: "selected",
+                name: "Selected",
+                nativeRuntime: `acp-${agent}`,
+              },
+            ],
+            outcomes: [{ provider: `acp-${agent}`, status: "ready" }],
+          });
           expect(await readVisibleSessionTranscriptMessageEntries(attempt.target)).toEqual(
             transcript,
           );

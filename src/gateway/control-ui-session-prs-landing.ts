@@ -24,7 +24,9 @@ type BranchLanding = {
 };
 
 /** Only ordinary file-backed refs bypass Git; unusual discovery/layouts retain its semantics. */
-export function readCheckoutHead(root: string): { sha: string; branch?: string | null } | null {
+export function readCheckoutHead(
+  root: string,
+): { sha: string; branch?: string | null; refsBase: string } | null {
   if (!canReadGitFilesystemRefs()) {
     return null;
   }
@@ -75,13 +77,13 @@ export function readCheckoutHead(root: string): { sha: string; branch?: string |
       return null;
     }
     if (branch === null) {
-      return { sha, branch };
+      return { sha, branch, refsBase };
     }
     // rev-parse uses a qualified name when another ref makes the short name ambiguous.
     const ambiguous =
       fs.existsSync(path.join(refsBase, branch)) ||
       branchAliases.some((ref) => aliases.get(ref) !== null);
-    return { sha, ...(ambiguous ? {} : { branch }) };
+    return { sha, refsBase, ...(ambiguous ? {} : { branch }) };
   } catch {
     return null;
   }
@@ -96,7 +98,37 @@ export async function gitOutput(cwd: string, args: string[]): Promise<string | n
   }
 }
 
-async function readRemoteRevisions(root: string, refs: string[]): Promise<Map<string, string>> {
+async function readRemoteRevisions(
+  root: string,
+  refs: string[],
+  head: ReturnType<typeof readCheckoutHead>,
+): Promise<Map<string, string>> {
+  if (head) {
+    try {
+      const values = readGitRefs(head.refsBase, refs);
+      if (
+        refs.every((ref) => {
+          const value = values.get(ref);
+          return (
+            !ref.split("/").includes("..") &&
+            !fs
+              .lstatSync(path.join(head.refsBase, ref), { throwIfNoEntry: false })
+              ?.isSymbolicLink() &&
+            (value === null ||
+              (typeof value === "string" &&
+                value.length === head.sha.length &&
+                /^[a-f0-9]+$/i.test(value)))
+          );
+        })
+      ) {
+        return new Map(
+          [...values].flatMap(([ref, value]) => (value ? [[ref, value.toLowerCase()]] : [])),
+        );
+      }
+    } catch {
+      // Symbolic, malformed, or unreadable refs retain Git's resolution semantics.
+    }
+  }
   try {
     // These fields read stored IDs without loading or lazily fetching partial-clone objects.
     const result = await runGit(
@@ -191,14 +223,15 @@ export async function resolveBranchLanding(
 ): Promise<BranchLanding> {
   const pushedRef = `refs/remotes/origin/${params.branch}`;
   const defaultRef = params.defaultBranch ? `refs/remotes/origin/${params.defaultBranch}` : null;
-  const revisions = await readRemoteRevisions(root, [
-    pushedRef,
-    ...(defaultRef ? [defaultRef] : []),
-  ]);
+  const checkoutHead = readCheckoutHead(root);
+  const revisions = await readRemoteRevisions(
+    root,
+    [pushedRef, ...(defaultRef ? [defaultRef] : [])],
+    checkoutHead,
+  );
   const pushedSha = revisions.get(pushedRef) ?? null;
   const headSha =
-    readCheckoutHead(root)?.sha ??
-    (await gitOutput(root, ["rev-parse", "--verify", "--quiet", "HEAD"]));
+    checkoutHead?.sha ?? (await gitOutput(root, ["rev-parse", "--verify", "--quiet", "HEAD"]));
   const defaultSha = defaultRef ? (revisions.get(defaultRef) ?? null) : null;
   const possibleLandings = params.mergedHeads.filter(
     (head) =>

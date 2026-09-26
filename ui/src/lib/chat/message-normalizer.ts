@@ -1,7 +1,4 @@
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
-/**
- * Message normalization utilities for chat rendering.
- */
 import {
   asFiniteNumber,
   asNonNegativeFiniteNumber,
@@ -368,17 +365,13 @@ function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem
   return merged.filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
-export function stripMessageDisplayMetadataText(text: string): string {
-  return stripInboundMetadata(text);
-}
-
 function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageContentItem[] {
   return items
     .map((item) => {
       if (item.type !== "text" || typeof item.text !== "string") {
         return item;
       }
-      return { ...item, text: stripMessageDisplayMetadataText(item.text) };
+      return { ...item, text: stripInboundMetadata(item.text) };
     })
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
@@ -458,15 +451,17 @@ function expandTextContent(
   };
 }
 
-/**
- * Normalize a raw message object into a consistent structure.
- */
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const m =
     asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
     {};
   const role = resolveMessageRole(m);
-  const contentRaw = m.content;
+  const contentRaw =
+    typeof m.content === "string" || Array.isArray(m.content)
+      ? m.content
+      : typeof m.text === "string"
+        ? m.text
+        : undefined;
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
   const isAssistantMessage = role === "assistant";
   const delivery = isAssistantMessage ? readMessageDelivery(m.openclawDelivery) : undefined;
@@ -477,19 +472,18 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     return preview ? [preview] : [];
   });
 
-  // Extract content
   let content: MessageContentItem[] = [];
   let audioAsVoice = false;
   let replyTarget: NormalizedMessage["replyTarget"] = null;
 
-  if (typeof m.content === "string") {
+  if (typeof contentRaw === "string") {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.content, delivery, projectedCanvasPreviews);
+      const expanded = expandTextContent(contentRaw, delivery, projectedCanvasPreviews);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
     } else {
-      content = [{ type: "text", text: m.content }];
+      content = [{ type: "text", text: contentRaw }];
     }
   } else if (contentItems) {
     content = contentItems.flatMap((value) => {
@@ -581,15 +575,6 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         },
       ];
     });
-  } else if (typeof m.text === "string") {
-    if (isAssistantMessage) {
-      const expanded = expandTextContent(m.text, delivery, projectedCanvasPreviews);
-      content = expanded.content;
-      audioAsVoice = expanded.audioAsVoice;
-      replyTarget = expanded.replyTarget;
-    } else {
-      content = [{ type: "text", text: m.text }];
-    }
   }
 
   const timestamp = asFiniteNumber(m.timestamp) ?? Date.now();

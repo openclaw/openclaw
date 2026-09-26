@@ -92,6 +92,13 @@ successful run started at or after that day's closing UTC midnight and includes
 that day. A completed manual run after close also satisfies catch-up, including
 one that finishes during the startup delay or deferred wait. A successful run
 that started while the day was still open does not satisfy closed-day catch-up.
+When retrying a partially failed run, catch-up reuses healthy closed daily reports
+from the same organization scope and collects the remaining days. Manual generation
+still refreshes the requested day. Week and month reports use stored daily activity.
+Collection and aggregation run in workers, with bounded batches staged in the
+plugin's SQLite connection. Scratch activity disappears when that connection closes;
+accepted report history and retention are unchanged.
+
 Status shows the run, stored periods, next scheduled times, and source warnings.
 To request a report immediately, use:
 
@@ -439,7 +446,8 @@ Use `generate --intraday` for today's partial report. `/latest/` requires at
 least one closed daily report.
 
 **A source has warnings or reports look incomplete.** Read the warnings in
-status and the report. Check GitHub token access, organization/team names,
+status and the report. Failed-run errors name each affected period and source
+(for example, `day/2026-08-20/github`). Check GitHub token access, organization/team names,
 excluded repositories, and Discord bot access to each configured channel and
 its history. Rate limits can delay a run. Regenerate affected days once access
 or rate limits recover, then refresh aggregates. After rotating a file, exec, or

@@ -123,43 +123,6 @@ describe("session discussion gateway methods", () => {
     },
   );
 
-  it("passes the session key to info and returns its result", async () => {
-    const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
-
-    const response = await invoke("session.discussion.info", {
-      sessionKey: "agent:main:thread",
-    });
-
-    expect(registered.info).toHaveBeenCalledWith({
-      sessionKey: "agent:main:thread",
-      agentId: "main",
-    });
-    expect(response).toMatchObject({
-      ok: true,
-      payload: {
-        state: "open",
-        embedUrl: "https://chat.example/embed/thread",
-        openUrl: "https://chat.example/thread",
-      },
-    });
-  });
-
-  it("passes the session key to open and returns its result", async () => {
-    const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
-
-    const response = await invoke("session.discussion.open", {
-      sessionKey: "agent:main:thread",
-    });
-
-    expect(registered.open).toHaveBeenCalledWith({
-      sessionKey: "agent:main:thread",
-      agentId: "main",
-    });
-    expect(response).toMatchObject({ ok: true, payload: { state: "available" } });
-  });
-
   it("admits bare fixed-store keys only through their persisted owner", async () => {
     const registered = provider();
     mocks.getProvider.mockReturnValue(registered.value);
@@ -211,7 +174,11 @@ describe("session discussion gateway methods", () => {
     const registered = provider();
     mocks.getProvider.mockReturnValue(registered.value);
 
-    await invoke("session.discussion.open", { sessionKey });
+    expect(await invoke("session.discussion.open", { sessionKey })).toMatchObject({
+      ok: true,
+      payload: { state: "available" },
+    });
+    expect(registered.open).toHaveBeenCalledWith({ sessionKey, agentId: "main" });
 
     expect(mocks.maybeGenerateSessionTitle).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -325,16 +292,23 @@ describe("session discussion gateway methods", () => {
     await vi.advanceTimersByTimeAsync(0);
   });
 
-  it("never generates a title for discussion info", async () => {
+  it("returns discussion info without loading or titling the session", async () => {
     mockSession({ sessionId: "session-1", updatedAt: 1 });
     const registered = provider();
     mocks.getProvider.mockReturnValue(registered.value);
 
-    await invoke("session.discussion.info", { sessionKey });
+    expect(await invoke("session.discussion.info", { sessionKey })).toMatchObject({
+      ok: true,
+      payload: {
+        state: "open",
+        embedUrl: "https://chat.example/embed/thread",
+        openUrl: "https://chat.example/thread",
+      },
+    });
 
     expect(mocks.loadSessionTarget).not.toHaveBeenCalled();
     expect(mocks.maybeGenerateSessionTitle).not.toHaveBeenCalled();
-    expect(registered.info).toHaveBeenCalledOnce();
+    expect(registered.info).toHaveBeenCalledExactlyOnceWith({ sessionKey, agentId: "main" });
   });
 
   it.each(["session.discussion.info", "session.discussion.open"] as const)(

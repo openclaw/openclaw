@@ -146,77 +146,71 @@ describe("AgentSession loop correctness", () => {
     }
   });
 
-  it.each([2, 3])(
-    "confirms each of %i identical queued messages only after its own transcript commit",
-    async (waiterCount) => {
-      const { session, sessionManager } = await createTestSession();
-      type QueuedMessage = Parameters<SessionManager["appendMessage"]>[0];
-      const queuedMessages = (
-        session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }
-      ).steeringQueue.messages;
-      const handleAgentEvent = Reflect.get(session, "handleAgentEvent") as (event: {
-        type: "message_start" | "message_end";
-        message: QueuedMessage;
-      }) => Promise<void>;
-      const confirmed: number[] = [];
-      const waits = Array.from({ length: waiterCount }, (_, index) =>
-        steerActiveSessionWithOptionalDeliveryWait(session, "same queued message", {
-          deliveryTimeoutMs: 10_000,
-          waitForTranscriptCommit: true,
-        }).then(() => confirmed.push(index + 1)),
-      );
+  it("confirms identical queued messages only after their own transcript commits", async () => {
+    const waiterCount = 3;
+    const { session, sessionManager } = await createTestSession();
+    type QueuedMessage = Parameters<SessionManager["appendMessage"]>[0];
+    const queuedMessages = (
+      session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }
+    ).steeringQueue.messages;
+    const handleAgentEvent = Reflect.get(session, "handleAgentEvent") as (event: {
+      type: "message_start" | "message_end";
+      message: QueuedMessage;
+    }) => Promise<void>;
+    const confirmed: number[] = [];
+    const waits = Array.from({ length: waiterCount }, (_, index) =>
+      steerActiveSessionWithOptionalDeliveryWait(session, "same queued message", {
+        deliveryTimeoutMs: 10_000,
+        waitForTranscriptCommit: true,
+      }).then(() => confirmed.push(index + 1)),
+    );
 
-      await vi.waitFor(() => expect(queuedMessages).toHaveLength(waiterCount));
-      const originalMessages = [...queuedMessages];
+    await vi.waitFor(() => expect(queuedMessages).toHaveLength(waiterCount));
+    const originalMessages = [...queuedMessages];
 
-      try {
-        for (let index = 0; index < waiterCount; index += 1) {
-          const message = queuedMessages.shift();
-          expect(message).toBeDefined();
-          if (!message) {
-            return;
-          }
-          await handleAgentEvent({ type: "message_start", message });
-          await handleAgentEvent({ type: "message_end", message });
-          await vi.waitFor(() =>
-            expect(confirmed).toEqual(
-              Array.from({ length: index + 1 }, (_, position) => position + 1),
-            ),
-          );
+    try {
+      for (let index = 0; index < waiterCount; index += 1) {
+        const message = queuedMessages.shift();
+        expect(message).toBeDefined();
+        if (!message) {
+          return;
         }
-        await Promise.all(waits);
-
-        const identities = originalMessages.map(getSteeringMessageIdentity);
-        expect(identities.every((identity) => typeof identity === "string")).toBe(true);
-        expect(new Set(identities).size).toBe(waiterCount);
-        for (const message of originalMessages) {
-          const identitySymbol = Object.getOwnPropertySymbols(message).find(
-            (symbol) => symbol === Symbol.for("openclaw.steeringMessageIdentity"),
-          );
-          expect(identitySymbol).toBeDefined();
-          if (identitySymbol) {
-            expect(Object.getOwnPropertyDescriptor(message, identitySymbol)?.enumerable).toBe(
-              false,
-            );
-          }
-          expect(JSON.stringify(message)).not.toContain(getSteeringMessageIdentity(message));
-        }
-        const persistedMessages = sessionManager
-          .getEntries()
-          .filter((entry) => entry.type === "message")
-          .map((entry) => entry.message);
-        expect(persistedMessages).toHaveLength(waiterCount);
-        expect(persistedMessages.every((message) => !getSteeringMessageIdentity(message))).toBe(
-          true,
+        await handleAgentEvent({ type: "message_start", message });
+        await handleAgentEvent({ type: "message_end", message });
+        await vi.waitFor(() =>
+          expect(confirmed).toEqual(
+            Array.from({ length: index + 1 }, (_, position) => position + 1),
+          ),
         );
-      } finally {
-        for (const message of queuedMessages.splice(0)) {
-          await handleAgentEvent({ type: "message_end", message });
-        }
-        await Promise.allSettled(waits);
       }
-    },
-  );
+      await Promise.all(waits);
+
+      const identities = originalMessages.map(getSteeringMessageIdentity);
+      expect(identities.every((identity) => typeof identity === "string")).toBe(true);
+      expect(new Set(identities).size).toBe(waiterCount);
+      for (const message of originalMessages) {
+        const identitySymbol = Object.getOwnPropertySymbols(message).find(
+          (symbol) => symbol === Symbol.for("openclaw.steeringMessageIdentity"),
+        );
+        expect(identitySymbol).toBeDefined();
+        if (identitySymbol) {
+          expect(Object.getOwnPropertyDescriptor(message, identitySymbol)?.enumerable).toBe(false);
+        }
+        expect(JSON.stringify(message)).not.toContain(getSteeringMessageIdentity(message));
+      }
+      const persistedMessages = sessionManager
+        .getEntries()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message);
+      expect(persistedMessages).toHaveLength(waiterCount);
+      expect(persistedMessages.every((message) => !getSteeringMessageIdentity(message))).toBe(true);
+    } finally {
+      for (const message of queuedMessages.splice(0)) {
+        await handleAgentEvent({ type: "message_end", message });
+      }
+      await Promise.allSettled(waits);
+    }
+  });
 
   it("snapshots ordinary event listeners before self-removal and late subscription", async () => {
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
@@ -279,9 +273,8 @@ describe("AgentSession loop correctness", () => {
     const assistant = createAssistant(testModel, [{ type: "text", text: "same answer" }]);
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    sessionManager.appendMessage({ ...assistant });
+    const priorAssistantEntryId = sessionManager.appendMessage({ ...assistant });
     streamMocks.streamSimple.mockImplementation(() => createAssistantResultStream(assistant));
-    const appendMessage = vi.spyOn(sessionManager, "appendMessage");
     const { session } = await createTestSession({ sessionManager });
     const order: string[] = [];
     let releaseFirst: (() => void) | undefined;
@@ -321,10 +314,12 @@ describe("AgentSession loop correctness", () => {
     releaseFirst?.();
     await prompt;
 
-    const persistedAssistantCall = appendMessage.mock.results.findLast(
-      (result) => result.type === "return",
-    );
-    expect(terminalEntryId).toBe(persistedAssistantCall?.value);
+    const persistedAssistant = sessionManager
+      .getEntries()
+      .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+    expect(persistedAssistant).toMatchObject({ type: "message", message: assistant });
+    expect(persistedAssistant?.id).not.toBe(priorAssistantEntryId);
+    expect(terminalEntryId).toBe(persistedAssistant?.id);
     expect(order).toEqual(["first:start", "first:end", "second"]);
   });
 

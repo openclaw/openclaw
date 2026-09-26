@@ -6,14 +6,6 @@ import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 
-export const expectedNpmProbes = [
-  ["npm", "--version"],
-  expect.toBeOneOf([
-    ["npm", "prefix", "-g"],
-    [process.execPath, expect.stringMatching(/[/\\]npm-cli\.js$/u), "prefix", "-g"],
-  ]),
-];
-
 export const alreadyCurrentConvergenceCases = [
   { restart: true, running: true, failure: undefined },
   { restart: false, running: true, failure: undefined },

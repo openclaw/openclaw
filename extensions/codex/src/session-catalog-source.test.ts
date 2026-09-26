@@ -195,6 +195,8 @@ describe("Codex catalog physical status sources", () => {
     active(b, "source-b");
     inventory[0] = thread({ cwd: "/workspace/fresh", status: { type: "notLoaded" } });
     await vi.advanceTimersByTimeAsync(15 * 60_000);
+    await index.list({});
+    await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
     await readNative.mock.results[1]!.value;
     await vi.waitFor(async () => {
       expect((await index.list({})).sessions[0]?.cwd).toBe("/workspace/fresh");

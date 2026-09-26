@@ -1,11 +1,13 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   PICKED,
   WORKSPACE,
   captureNewSessionComposerUiProof,
   captureProjectUiProof,
   captureUiProofEnabled,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
@@ -348,9 +350,15 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await mobileModelSettings.click();
       await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
+      const capturedModelOption = page
+        .locator(".chat-controls__model-picker[open] [data-chat-model-option]")
+        .first();
+      if (captureUiProofEnabled) {
+        await revealChatModelOption(capturedModelOption);
+      }
       await captureProjectUiProof(suite, page, "mobile-new-session-model-open.png", {
         surface: page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
-        content: [page.locator("[data-chat-model-option]").first()],
+        content: [capturedModelOption],
       });
       expect(
         await page
@@ -363,7 +371,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
       await captureProjectUiProof(suite, page, "mobile-new-session-effort-open.png", {
         surface: page.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
-        content: [page.locator('[data-chat-thinking-slider="true"]')],
+        content: [fastMode],
       });
       await page.keyboard.press("Escape");
       await page.setViewportSize({ width: 1280, height: 900 });
@@ -401,7 +409,7 @@ suite.define(() => {
       await expect.poll(() => localEnvironment.isVisible()).toBe(true);
       expect(await localEnvironment.getAttribute("aria-pressed")).toBe("true");
       await captureProjectUiProof(suite, page, "new-session-environment-search.png", {
-        surface: whereSelect.locator('wa-popup [part="popup"]'),
+        surface: whereSelect.locator('wa-popup.popover > [part="popup"]'),
         content: [environmentSearch],
       });
       await page.keyboard.press("Escape");
@@ -424,7 +432,7 @@ suite.define(() => {
         "Projects",
       );
       await captureProjectUiProof(suite, page, "new-session-project-menu-label.png", {
-        surface: projectSelect.locator('wa-popup [part="popup"]'),
+        surface: projectSelect.locator('wa-popup.popover > [part="popup"]'),
         content: [projectSelect.getByRole("button", { name: "Browse folders" })],
       });
       await projectSelect.getByRole("button", { name: "Browse folders" }).click();
@@ -454,7 +462,7 @@ suite.define(() => {
         "Checkout",
       );
       await captureProjectUiProof(suite, page, "new-session-checkout-menu-label.png", {
-        surface: checkoutSelect.locator('wa-popup [part="popup"]'),
+        surface: checkoutSelect.locator('wa-popup.popover > [part="popup"]'),
         content: [checkoutSelect.locator(".new-session-page__menu-title").first()],
       });
       const currentCheckout = checkoutSelect.locator('[data-value="checkout"]');
@@ -471,7 +479,7 @@ suite.define(() => {
       await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
         "New worktree",
       );
-      await checkoutSelect.getByLabel("From", { exact: true }).waitFor();
+      await checkoutBaseRefInput(checkoutSelect).waitFor();
       await checkoutSelect.getByLabel("Name", { exact: true }).waitFor();
       await checkoutSelect
         .getByText("Creates a branch from the session title in a separate checkout.", {
@@ -599,7 +607,7 @@ suite.define(() => {
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
       await captureProjectUiProof(suite, page, "project-selected.png", {
         surface: checkout.locator('wa-popup [part="popup"]'),
-        content: [checkout.getByLabel("From", { exact: true })],
+        content: [checkoutBaseRefInput(checkout)],
       });
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("inspect the project");

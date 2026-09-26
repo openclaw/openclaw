@@ -389,11 +389,15 @@ async function loadRestartSentinelStartupTask(params: {
   context: DeliveryQueueStateContext;
   shouldRun?: () => boolean;
   pendingUpdate?: PendingUpdateSentinelIdentity;
+  trackImport?: (work: Promise<unknown>) => void;
 }): Promise<StartupTask | null> {
   const noticeContext = params.context;
   const queueContext = noticeContext.workerContext;
   const env = queueContext.environment;
-  const snapshot = await readRestartSentinelStartupSnapshot(params);
+  const snapshot = await readRestartSentinelStartupSnapshot({
+    ...params,
+    warn: (message) => log.warn(message),
+  });
   if (!snapshot) {
     return null;
   }
@@ -702,6 +706,7 @@ async function scheduleRestartSentinelWakeAttempt(params: {
   context: DeliveryQueueStateContext;
   shouldRun?: () => boolean;
   pendingUpdate?: PendingUpdateSentinelIdentity;
+  trackImport?: (work: Promise<unknown>) => void;
 }) {
   if (params.shouldRun?.() === false) {
     return;
@@ -717,6 +722,7 @@ export async function scheduleRestartSentinelWake(params: {
   deps: CliDeps;
   context?: DeliveryQueueStateContext;
   shouldRun?: () => boolean;
+  trackImport?: (work: Promise<unknown>) => void;
 }) {
   await scheduleRestartSentinelWakeAttempt({
     ...params,

@@ -9,6 +9,7 @@ import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
@@ -53,19 +54,23 @@ export type ChatAttachment = {
 };
 
 // Shared payload contract: draft and outbox storage must not import each other's runtime.
-export type DurableComposerDraftAttachment = {
+export type DurableComposerDraftAttachment = Omit<
+  ChatAttachment,
+  "id" | "dataUrl" | "previewUrl"
+> & {
   blob: Blob;
-  mimeType: string;
-  origin?: "paste" | "file";
-  fileName?: string;
-  sizeBytes?: number;
-  browserAnnotation?: BrowserAnnotationAttachment;
-  selectionAnnotation?: ChatSelectionAnnotation;
 };
 
 export type ChatComposerDraftRetry = {
   expectedDraftRevision: number;
   draftRevision: number;
+};
+
+export type ChatReplyTarget = {
+  messageId: string;
+  text: string;
+  senderLabel?: string | null;
+  sourceMessageId?: string | null;
 };
 
 export type ChatGoalDraftMode = { sessionId?: string } & (
@@ -87,8 +92,10 @@ export type ChatGoalRecovery = {
 };
 
 export type ChatComposerMemoryFallback = {
+  incognito?: boolean;
   awaitingDefaults?: true;
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   message: string;
   mentions?: readonly HumanMention[];
   attachments: ChatAttachment[];
@@ -118,6 +125,8 @@ export type ToolApprovalReview = {
   rationale?: string;
 };
 
+export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true };
+
 export type ChatQueueItem = {
   id: string;
   /** UI question associated with this input; delivery and retry stay outbox-owned. */
@@ -127,7 +136,7 @@ export type ChatQueueItem = {
   text: string;
   mentions?: readonly HumanMention[];
   createdAt: number;
-  /** Operator-owned queue position; absent means "wherever arrival put it". */
+  /** Stable arrival position; only an explicit reorder moves an existing input. */
   orderKey?: number;
   /** Immutable bytes belong to this queued input; routing belongs to the outbox metadata. */
   attachmentPayload?: { key: string; recoveryScope: string; tabId: string };
@@ -170,7 +179,14 @@ export type ChatQueueItem = {
 
 /** Union type for items in the chat thread */
 export type ChatItem =
-  | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
+  | {
+      kind: "message";
+      key: string;
+      message: unknown;
+      duplicateCount?: number;
+      /** A distinct input remains a presentation boundary before execution starts. */
+      startsTurn?: true;
+    }
   | {
       kind: "notice";
       key: string;
@@ -440,27 +456,7 @@ export type ToolCard = {
   /** Tab actions can identify a route without a previewable page URL. */
   browserTab?: BrowserTabTarget;
   preview?:
-    | {
-        kind: "canvas";
-        surface: "assistant_message";
-        render: "url";
-        title?: string;
-        preferredHeight?: number;
-        url?: string;
-        viewId?: string;
-        className?: string;
-        style?: string;
-        sandbox?: "strict" | "scripts";
-        boardWidgetName?: string;
-        mcpApp?: {
-          viewId: string;
-          serverName?: string;
-          toolName?: string;
-          uiResourceUri?: string;
-          toolCallId?: string;
-          originSessionKey?: string;
-        };
-      }
+    | (NonNullable<ReturnType<typeof extractCanvasFromText>> & { surface: "assistant_message" })
     | (BrowserTabTarget & { kind: "browser-tab"; url: string; title?: string });
 };
 

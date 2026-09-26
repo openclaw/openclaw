@@ -39,7 +39,7 @@ it("does not promote a provisional task when replacement wins before admin admis
     sessionKey,
     defaultSessionId: "publication-admission-session",
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: "admission-b0",
     childSessionKey: sessionKey,
     requesterSessionKey: "agent:main:main",
@@ -101,10 +101,11 @@ it("does not promote a provisional task when replacement wins before admin admis
       terminalReply: { disposition: "visible", text: "follow-up completed" },
     });
     await completed.promise;
-    expect.soft(getTaskById(task.taskId)?.status).toBe("succeeded");
   } finally {
     followup.release();
     await pending;
     admin.mockRestore();
   }
+  await fixture.settle();
+  expect(getTaskById(task.taskId)?.status).toBe("succeeded");
 });

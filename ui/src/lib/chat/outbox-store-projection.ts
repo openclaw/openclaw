@@ -16,9 +16,46 @@ import {
   type StoredChatOutboxScope,
 } from "./outbox-store.ts";
 
-export { subscribeStoredChatOutboxChanges };
-
 export type StoredChatOutbox = StoredChatOutboxScope & { queue: ChatQueueItem[] };
+
+/** One reader per mounted consumer; canonical storage events retire its projection. */
+export function createStoredChatOutboxReader() {
+  let cached: {
+    inputs: readonly unknown[];
+    summary: ReturnType<typeof summarizeStoredChatOutboxes>;
+  } | null = null;
+  const invalidate = () => {
+    cached = null;
+  };
+  return {
+    invalidate,
+    subscribe(listener: () => void) {
+      return subscribeStoredChatOutboxChanges(() => {
+        invalidate();
+        listener();
+      });
+    },
+    read(state: ChatComposerScope) {
+      const inputs = [
+        state.settings?.gatewayUrl,
+        state.assistantAgentId,
+        state.agentsList,
+        state.hello,
+        state.client,
+        state.client?.recoveryScope,
+        state.client?.recoveryScopeReady,
+        state.connected,
+      ];
+      const previous = cached;
+      if (previous && inputs.every((value, index) => Object.is(value, previous.inputs[index]))) {
+        return previous.summary;
+      }
+      const summary = summarizeStoredChatOutboxes(state);
+      cached = { inputs, summary };
+      return summary;
+    },
+  };
+}
 
 function listStoredComposerRows(
   state: ChatComposerScope,
@@ -85,7 +122,7 @@ export function readStoredChatOutbox(
   );
 }
 
-export function summarizeStoredChatOutboxes(state: ChatComposerScope) {
+function summarizeStoredChatOutboxes(state: ChatComposerScope) {
   const idsByScope = new Map<string, { all: Set<string>; attention: Set<string> }>();
   const draftScopes = new Set<string>();
   for (const { scope, session } of listStoredComposerRows(state)) {

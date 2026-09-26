@@ -28,7 +28,7 @@ export function listTasksForSessionKeyForStatus(
   return listTasksForRelatedSessionKey(sessionKey, sessionAgentId);
 }
 
-export function listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey: string): TaskRecord[] {
+function listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey: string): TaskRecord[] {
   return listTaskRecords(
     (task) => task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey,
   );

@@ -26,6 +26,7 @@ import {
   buildMcpRequesterRuntimeCacheKey,
   partitionMcpServersByConnectionScope,
 } from "./mcp-connection-resolver.js";
+import { resetMcpStartupBackoff } from "./mcp-startup-backoff.js";
 
 type RuntimeAcquisitionParams = Parameters<SessionMcpRuntimeManager["acquire"]>[0];
 type PreparedAcquisitionParams = RuntimeAcquisitionParams & {
@@ -375,6 +376,7 @@ export function createSessionMcpRuntimeManager(
       return true;
     },
     async reloadConfig(reload) {
+      resetMcpStartupBackoff();
       store.configReload = {
         ...reload,
         pluginGeneration:
@@ -399,7 +401,10 @@ export function createSessionMcpRuntimeManager(
         }),
       );
     },
-    disposeAll: () => lifecycle.disposeManagedRuntimes(),
+    disposeAll: () => {
+      resetMcpStartupBackoff();
+      return lifecycle.disposeManagedRuntimes();
+    },
     sweepIdleRuntimes: lifecycle.sweepIdleRuntimes,
     listSessionIds() {
       return [

@@ -48,6 +48,12 @@ Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud 
 | Transcript and live session state  | Gateway, fed by the worker's replayable event stream | Gateway through the normal local harness path           |
 | Workspace file state               | Changed on the box; reconciled by the Gateway        | Changed remotely; reconciled by the Gateway             |
 
+Applications that make their own model API calls need a separate credential
+route. For an exclusively owned coordinator-backed Linux lease, use
+[`openclaw crabbox run`](/gateway/secrets/secret-store-and-egress#model-credentials-for-crabbox-commands)
+to keep the configured API key on the host while the application uses a protected
+egress bridge.
+
 The bundled Crabbox cloud provider advertises both `worker-turn` and `remote-exec` through its enrolled node transport, so the same cloud profile is available to both harnesses. Codex can also use an explicitly authorized paired device or a provider that retains an SSH-backed remote-execution carrier. A profile that advertises only one mode remains unavailable to the other runtime.
 
 After Crabbox setup, the cloud node dials the Gateway's public TLS endpoint over outbound WebSocket. Worker control, Codex remote execution, and workspace transfer use authenticated node or worker channels, not a Gateway-created reverse tunnel or rsync. Crabbox itself may still require SSH reachability while its CLI runs the provider-owned setup command. Outbound internet access and setup reachability follow the selected backend's network policy; configure them in Crabbox.

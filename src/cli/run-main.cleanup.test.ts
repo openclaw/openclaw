@@ -9,6 +9,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 
 const dispatch = vi.hoisted(() => ({
   run: async () => {},
@@ -48,7 +52,10 @@ vi.mock("../logging/console.js", async (importOriginal) => ({
   routeLogsToStderr() {},
 }));
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath() {} }));
-vi.mock("./dotenv.js", () => ({ loadCliDotEnv() {} }));
+vi.mock("./dotenv.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dotenv.js")>()),
+  loadCliDotEnv() {},
+}));
 vi.mock("../config/io.js", () => ({ readBestEffortConfig: async () => ({}) }));
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
   startProxy: async () => null,
@@ -214,6 +221,62 @@ async function runProcessEntry() {
 }
 
 describe("CLI process harness cleanup", () => {
+  it("reclaims earlier CLI captures and owns periodic cleanup until command exit", async () => {
+    const stateDir = temp.make("cli-capture-orphans-");
+    const source = path.join(stateDir, "fixture");
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 'retained';");
+    const { tryAcquireExclusiveSqliteCoordinator } = await import("../infra/sqlite-coordinator.js");
+    const prior = path.join(stateDir, "tmp", "plugin-captures", "previous-command");
+    fs.mkdirSync(path.join(prior, "captures"), { recursive: true });
+    fs.writeFileSync(path.join(prior, "captures", "source.js"), "retained source");
+    const lease = tryAcquireExclusiveSqliteCoordinator(path.join(prior, "owner.sqlite"));
+    if (!lease) {
+      throw new Error("Fixture capture lease was not acquired");
+    }
+    lease.release();
+    const aged = new Date(Date.now() - 2 * 60 * 60_000);
+    fs.utimesSync(prior, aged, aged);
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const schedulerModule = await import("../infra/gateway-scheduler.js");
+    const constructor = vi
+      .spyOn(schedulerModule, "GatewayScheduler")
+      .mockImplementation(function () {
+        return scheduler;
+      });
+    const { getPluginCache } = await import("../plugins/plugin-cache.js");
+    const { PluginInstance } = await import("../plugins/plugin-instance.js");
+    const { capturePluginGenerationArtifact } =
+      await import("../plugins/plugin-generation-artifact.js");
+    let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+    dispatch.run = async () => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      artifact = capturePluginGenerationArtifact(source);
+      const instance = new PluginInstance("orphan-recovery-fixture");
+      instance.onModuleDispose(artifact.disposeAsync);
+      getPluginCache().instances.add(instance);
+      expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 60 * 60_000);
+      expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toContain(
+        "retained",
+      );
+    };
+    try {
+      await runProcessEntry();
+      expect(constructor).toHaveBeenCalledOnce();
+      expect(fs.existsSync(prior)).toBe(false);
+      expect(scheduler.signal.aborted).toBe(true);
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      expect(artifact).toBeDefined();
+      expect(fs.existsSync(artifact!.boundaryRoot)).toBe(false);
+    } finally {
+      constructor.mockRestore();
+      await scheduler.stop();
+      await artifact?.disposeAsync();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each(["success", "failure", "gateway-adopted"])(
     "retires command captures unless their inventory is adopted (%s)",
     async (mode) => {
@@ -240,7 +303,7 @@ describe("CLI process harness cleanup", () => {
         instance.onModuleDispose(artifact.disposeAsync);
         cache.instances.add(instance);
         if (mode === "gateway-adopted") {
-          gateway = retainGatewayPluginMetadata();
+          gateway = retainGatewayPluginMetadata(createTestGatewayScheduler());
           adoptProcessPluginCache(cache);
           gateway.publish(undefined);
         }

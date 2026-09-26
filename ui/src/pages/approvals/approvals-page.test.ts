@@ -2,6 +2,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalHistoryResult } from "../../../../packages/gateway-protocol/src/schema/approvals.js";
+import type {
+  ExecApprovalGrantsListResult,
+  ExecApprovalStandingGrant,
+} from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -37,6 +42,7 @@ function createPage(
   page: TestApprovalsPage;
   emitGatewayEvent: (event: string, payload: unknown) => void;
   updateGateway: (next: Partial<ApplicationGatewaySnapshot>) => void;
+  replaceGatewaySource: () => void;
 } {
   const client = { request } as GatewayBrowserClient;
   let snapshot = {
@@ -59,15 +65,16 @@ function createPage(
       return () => eventListeners.delete(listener);
     },
   } as unknown as ApplicationContext["gateway"];
-  const provider = createApplicationContextProvider({
-    basePath: "",
-    gateway,
-  } as unknown as ApplicationContext);
+  const context = { basePath: "", gateway } as unknown as ApplicationContext;
+  const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-approvals-page") as TestApprovalsPage;
   provider.append(page);
   document.body.append(provider);
   return {
     page,
+    replaceGatewaySource() {
+      provider.setContext({ ...context, gateway: { ...gateway } });
+    },
     emitGatewayEvent(event, payload) {
       const frame = { event, payload, type: "event" } as GatewayEventFrame;
       for (const listener of eventListeners) {
@@ -107,6 +114,24 @@ function stubGrants(
     method === "exec.approval.grants.list"
       ? Promise.resolve({ grants: [] })
       : (history(method, params) as Promise<unknown>)) as GatewayBrowserClient["request"];
+}
+
+function standingGrant(name: string): ExecApprovalStandingGrant {
+  return {
+    grantId: "grant-1",
+    mintedByApprovalId: "approval-1",
+    agentId: "main",
+    cronJobId: "job-1",
+    cronJobName: name,
+    command: "id -un",
+    cwd: null,
+    createdAtMs: 1_000,
+    expiresAtMs: null,
+    revokedAtMs: null,
+    revokedBy: null,
+    lastUsedAtMs: null,
+    useCount: 3,
+  };
 }
 
 describe("ApprovalsPage", () => {
@@ -150,6 +175,7 @@ describe("ApprovalsPage", () => {
 
     const body = page.querySelector(".approval-history-table tbody")?.textContent ?? "";
     expect(body).not.toContain("No resolved approvals");
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain("boom");
   });
 
   it("shows the empty message only after a successful zero-row load", async () => {
@@ -295,6 +321,111 @@ describe("ApprovalsPage", () => {
     expect(page.querySelector(".approval-history-table")?.textContent).not.toContain("echo stale");
   });
 
+  it.each(["client", "source"] as const)(
+    "clears standing grants while a replacement %s loads its ledger",
+    async (replacement) => {
+      const nextGrants = createDeferred<ExecApprovalGrantsListResult>();
+      let replaced = false;
+      const request = vi.fn((method: string) => {
+        if (method === "exec.approval.grants.list") {
+          return replaced
+            ? nextGrants.promise
+            : Promise.resolve({ grants: [standingGrant("Old Gateway automation")] });
+        }
+        return Promise.resolve({ items: [] });
+      });
+      const { page, updateGateway, replaceGatewaySource } = createPage(
+        request as GatewayBrowserClient["request"],
+      );
+      await settle(page);
+      await settle(page);
+      expect(page.querySelector(".standing-grants-table")?.textContent).toContain(
+        "Old Gateway automation",
+      );
+
+      replaced = true;
+      if (replacement === "source") {
+        replaceGatewaySource();
+      } else {
+        updateGateway({ client: { request } as unknown as GatewayBrowserClient });
+      }
+      await settle(page);
+      expect(page.querySelector(".standing-grants-table")?.textContent).not.toContain(
+        "Old Gateway automation",
+      );
+      expect(page.querySelector(".standing-grants-table button")).toBeNull();
+
+      nextGrants.resolve({ grants: [standingGrant("Current Gateway automation")] });
+      await settle(page);
+      expect(page.querySelector(".standing-grants-table")?.textContent).toContain(
+        "Current Gateway automation",
+      );
+    },
+  );
+
+  it.each([
+    { replacement: "source", outcome: "resolve" },
+    { replacement: "client", outcome: "reject" },
+  ] as const)(
+    "retires a previous $replacement revoke that later $outcome without settling the current revoke",
+    async ({ replacement, outcome }) => {
+      const oldRevoke = createDeferred<{ outcome: string }>();
+      const currentRevoke = createDeferred<{ outcome: string }>();
+      let replaced = false;
+      const request = vi.fn((method: string) => {
+        if (method === "exec.approval.grants.list") {
+          return Promise.resolve({
+            grants: [
+              standingGrant(replaced ? "Current Gateway automation" : "Old Gateway automation"),
+            ],
+          });
+        }
+        if (method === "exec.approval.grants.revoke") {
+          return replaced ? currentRevoke.promise : oldRevoke.promise;
+        }
+        return Promise.resolve({ items: [] });
+      });
+      const { page, updateGateway, replaceGatewaySource } = createPage(
+        request as GatewayBrowserClient["request"],
+      );
+      await settle(page);
+      await settle(page);
+      page.querySelector<HTMLButtonElement>(".standing-grants-table button")!.click();
+      await settle(page);
+
+      replaced = true;
+      if (replacement === "source") {
+        replaceGatewaySource();
+      } else {
+        updateGateway({ client: { request } as unknown as GatewayBrowserClient });
+      }
+      await settle(page);
+      await settle(page);
+      const currentButton = page.querySelector<HTMLButtonElement>(".standing-grants-table button")!;
+      expect(currentButton.disabled).toBe(false);
+      currentButton.click();
+      await settle(page);
+      expect(currentButton.disabled).toBe(true);
+      expect(currentButton.textContent).toContain("Revoking");
+
+      if (outcome === "resolve") {
+        oldRevoke.resolve({ outcome: "revoked" });
+      } else {
+        oldRevoke.reject(new Error("Old Gateway revoke failed"));
+      }
+      await settle(page);
+      expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Until revoked");
+      expect(page.textContent).not.toContain("Old Gateway revoke failed");
+      expect(currentButton.disabled).toBe(true);
+      expect(currentButton.textContent).toContain("Revoking");
+
+      currentRevoke.resolve({ outcome: "revoked" });
+      await settle(page);
+      expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Revoked");
+      expect(page.querySelector(".standing-grants-table button")).toBeNull();
+    },
+  );
+
   it("renders the standing-grant ledger and revokes through the gateway", async () => {
     const history = vi.fn().mockResolvedValue({ items: [] });
     const grant = {
@@ -333,6 +464,8 @@ describe("ApprovalsPage", () => {
     const revoke = [...page.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Revoke"),
     );
+    expect(revoke?.getAttribute("aria-label")).toBe("Revoke: Nightly backup — id -un");
+    expect(ledger?.querySelector("th:last-child")?.textContent?.trim()).toBe("Revoke");
     revoke?.click();
     await settle(page);
 

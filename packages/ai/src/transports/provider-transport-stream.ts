@@ -40,9 +40,9 @@ function createProviderOwnedGoogleTransportStreamFn(
   model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
-  const streamFn =
+  const resolveStream = (provider: string) =>
     getAiTransportHost().plugin.resolveProviderStream({
-      provider: model.provider,
+      provider,
       config: ctx?.cfg,
       workspaceDir: ctx?.workspaceDir,
       env: ctx?.env,
@@ -54,22 +54,8 @@ function createProviderOwnedGoogleTransportStreamFn(
         modelId: model.id,
         model,
       },
-    }) ??
-    getAiTransportHost().plugin.resolveProviderStream({
-      provider: "google",
-      config: ctx?.cfg,
-      workspaceDir: ctx?.workspaceDir,
-      env: ctx?.env,
-      context: {
-        config: ctx?.cfg,
-        agentDir: ctx?.agentDir,
-        workspaceDir: ctx?.workspaceDir,
-        provider: model.provider,
-        modelId: model.id,
-        model,
-      },
-    }) ??
-    undefined;
+    });
+  const streamFn = resolveStream(model.provider) ?? resolveStream("google") ?? undefined;
   return streamFn
     ? (requestModel, context, options) =>
         streamFn(requestModel, context, {
@@ -100,15 +86,6 @@ function createSupportedTransportStreamFn(
   }
 }
 
-function hasOpenClawTransportRequirement(model: Model): boolean {
-  return getAiTransportHost().requiresManagedTransport(model);
-}
-
-/** Returns whether OpenClaw has a managed transport implementation for this API. */
-function isTransportAwareApiSupported(api: Api): boolean {
-  return SUPPORTED_TRANSPORT_APIS.has(api);
-}
-
 /** Maps public model APIs to the internal transport API id used by simple runtime dispatch. */
 export function resolveTransportAwareSimpleApi(api: Api): Api | undefined {
   if (OPENAI_RESPONSES_APIS.has(api)) {
@@ -123,10 +100,10 @@ export function createTransportAwareStreamFnForModel(
   model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
-  if (!hasOpenClawTransportRequirement(model)) {
+  if (!getAiTransportHost().requiresManagedTransport(model)) {
     return undefined;
   }
-  if (!isTransportAwareApiSupported(model.api)) {
+  if (!SUPPORTED_TRANSPORT_APIS.has(model.api)) {
     throw new Error(
       `Model-provider request.proxy/request.tls/localService is not yet supported for api "${model.api}"`,
     );
@@ -147,7 +124,7 @@ export function createOpenClawTransportStreamFnForModel(
   // transport semantics regardless of the default embedded-runner strategy.
   // Native OpenAI HTTP still depends on this path for strict tool shaping,
   // attribution, cache-boundary stripping, and runtime credential injection.
-  if (!isTransportAwareApiSupported(model.api)) {
+  if (!SUPPORTED_TRANSPORT_APIS.has(model.api)) {
     return undefined;
   }
   return createSupportedTransportStreamFn(model, ctx);
@@ -159,7 +136,7 @@ export function createBoundaryAwareStreamFnForModel(
 ): StreamFn | undefined {
   // Default embedded-runner fallback. Keep OpenAI-family APIs here while native
   // HTTP streams preserve the same OpenClaw request contract.
-  if (!isTransportAwareApiSupported(model.api)) {
+  if (!SUPPORTED_TRANSPORT_APIS.has(model.api)) {
     return undefined;
   }
   return createSupportedTransportStreamFn(model, ctx);

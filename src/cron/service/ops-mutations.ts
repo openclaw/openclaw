@@ -15,6 +15,7 @@ import {
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { withCronMutationCommitHook } from "../mutation-completion.js";
+import { normalizeCronRunJobId } from "../run-history.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
@@ -22,7 +23,6 @@ import {
   isSystemMonitorDeclaration,
   systemOwnedDeclarationKeyNamespace,
 } from "../system-owned-declaration.js";
-import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import {
   resolveCronAuthenticatedCallerOrigin,
   resolveCronAuthenticatedChannelRequester,
@@ -220,7 +220,7 @@ export async function add(
       throw new Error("cron job id must not be blank");
     }
     if (normalizedId) {
-      normalizeCronTaskRunJobId(normalizedId);
+      normalizeCronRunJobId(normalizedId);
       pendingSessionCleanup = getPendingCronSessionCleanup(state, normalizedId);
       if (pendingSessionCleanup) {
         throw RETRY_ADD_AFTER_SESSION_CLEANUP;
@@ -382,8 +382,7 @@ export async function removeStaleJobFamily(
 ): Promise<number> {
   return await locked(state, async () => {
     await ensureLoadedForOperation(state);
-    opts?.commitGuard?.();
-    return removeStaleCronJobFamilyRows(state.deps.storePath, family);
+    return await removeStaleCronJobFamilyRows(state.deps.storePath, family, opts);
   });
 }
 

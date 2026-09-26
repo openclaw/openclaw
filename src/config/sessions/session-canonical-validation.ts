@@ -149,7 +149,7 @@ export function validateCanonicalSessionValidationBatch(
 ): ValidatedCanonicalSessionValidationBatch {
   const rows = batch.rows.map((row) => {
     const snapshot = { ...row };
-    validateCanonicalSessionRow(snapshot, batch.mainKey);
+    validateCanonicalSessionRow(snapshot);
     return Object.freeze(snapshot);
   });
   const validated: ValidatedCanonicalSessionValidationBatch = {
@@ -283,7 +283,7 @@ export function certifyCanonicalSessionValidationRow(
   // Validate stored metadata after native TEXT binding; saved prompts are not canonical inputs.
   const row = queries.row(pending.session_key);
   if (row) {
-    validateCanonicalSessionRow(row, readCanonicalSessionMainKey(database));
+    validateCanonicalSessionRow(row);
   }
   // The row was just reread and validated without yielding under the same reservation.
   queries.certify(pending.session_key);

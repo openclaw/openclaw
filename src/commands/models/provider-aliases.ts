@@ -119,11 +119,3 @@ export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAli
     },
   };
 }
-
-/** Canonicalizes the provider field on a model reference. */
-export function canonicalizeModelCatalogProviderRef<TRef extends { provider: string }>(
-  ref: TRef,
-  params: ProviderAliasSource,
-): TRef {
-  return createModelCatalogProviderAliasCanonicalizer(params).ref(ref);
-}

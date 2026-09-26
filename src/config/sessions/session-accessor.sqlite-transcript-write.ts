@@ -42,7 +42,10 @@ import {
   type PreparedTranscriptMessageAppend,
 } from "./session-accessor.sqlite-transcript-message-append.js";
 import { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
-import { resolveTranscriptEventAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
+import {
+  readTranscriptVisibleTailEntryIdInTransaction,
+  resolveTranscriptEventAppendParent,
+} from "./session-accessor.sqlite-transcript-parent.js";
 import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequencesInTransaction,
@@ -85,6 +88,12 @@ export type TranscriptWriteSnapshot<T> = {
   lifecycleRevision?: string;
   before: SessionTranscriptContextVersion;
   after: SessionTranscriptContextVersion;
+};
+
+export type TranscriptMessageWriteSnapshot<TMessage> = TranscriptWriteSnapshot<
+  TranscriptMessageAppendResult<TMessage> | undefined
+> & {
+  visibleTail: { entryId: string | null; generation: string | null };
 };
 
 export type TranscriptEventAppendResult =
@@ -202,8 +211,7 @@ export async function rewriteTranscriptEventRowsExact(
   await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
   return await runExclusiveSqliteSessionWrite(
     resolved,
-    async () => {
-      let result: { generation: string } | null = null;
+    async () =>
       runOpenClawAgentWriteTransaction((database) => {
         const currentGeneration =
           readTranscriptGenerationInTransaction(database, resolved.sessionId) ?? null;
@@ -211,16 +219,12 @@ export async function rewriteTranscriptEventRowsExact(
           params.allowInitialGenerationMaterialization === true &&
           params.expectedGeneration === null;
         if (currentGeneration !== params.expectedGeneration && !initialGenerationMaterialized) {
-          return;
+          return null;
         }
         rewriteSqliteTranscriptEventRowsInTransaction(database, resolved, params.rows);
         const generation = readTranscriptGenerationInTransaction(database, resolved.sessionId);
-        if (generation) {
-          result = { generation };
-        }
-      }, toDatabaseOptions(resolved));
-      return result;
-    },
+        return generation ? { generation } : null;
+      }, toDatabaseOptions(resolved)),
     "session.transcript.rewrite-exact",
   );
 }
@@ -416,7 +420,7 @@ function runTranscriptWriteSnapshotSync<T>(
   >((database) => {
     beforeCommitInTransaction?.();
     assertOwnedTranscriptWriteCommit(fencedScope);
-    const fresh = readSessionEntryRow(database, resolved.sessionKey);
+    const fresh = readSessionEntryRow(database, resolved.sessionKey, "list");
     const refusal = resolveTranscriptAppendRefusal(fresh?.entry, resolved, fencedScope);
     if (refusal) {
       return err(refusal);
@@ -461,13 +465,11 @@ export async function appendTranscriptMessage<TMessage>(
   await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
   return await runExclusiveSqliteSessionWrite(
     resolved,
-    async () => {
-      let result: TranscriptMessageAppendResult<TMessage> | undefined;
-      runOpenClawAgentWriteTransaction((database) => {
-        result = appendTranscriptMessageInTransaction(database, resolved, options);
-      }, toDatabaseOptions(resolved));
-      return result;
-    },
+    async () =>
+      runOpenClawAgentWriteTransaction(
+        (database) => appendTranscriptMessageInTransaction(database, resolved, options),
+        toDatabaseOptions(resolved),
+      ),
     "session.transcript.message-append",
   );
 }
@@ -485,17 +487,49 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
-): Result<
-  TranscriptWriteSnapshot<TranscriptMessageAppendResult<TMessage> | undefined>,
-  TranscriptAppendRefusal
-> {
-  return runTranscriptWriteSnapshotSync(
+  workerOptions?: {
+    messageAlreadyRedacted?: true;
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
+  },
+): Result<TranscriptMessageWriteSnapshot<TMessage>, TranscriptAppendRefusal> {
+  const snapshot = runTranscriptWriteSnapshotSync(
     scope,
-    (database, resolved) =>
-      appendTranscriptMessageInTransaction(database, resolved, options, preparedMessage),
+    (database, resolved) => {
+      const result = appendTranscriptMessageInTransaction(
+        database,
+        resolved,
+        workerOptions?.messageAlreadyRedacted
+          ? { ...options, messageAlreadyRedacted: true }
+          : options,
+        preparedMessage,
+        workerOptions,
+      );
+      return {
+        result,
+        visibleTailEntryId: result
+          ? readTranscriptVisibleTailEntryIdInTransaction(
+              database,
+              resolved.sessionId,
+              result.messageId,
+            )
+          : null,
+      };
+    },
     undefined,
     options.expectedMutationAt,
   );
+  if (!snapshot.ok) {
+    return snapshot;
+  }
+  return ok({
+    ...snapshot.value,
+    result: snapshot.value.result.result,
+    visibleTail: {
+      entryId: snapshot.value.result.visibleTailEntryId,
+      generation: snapshot.value.after.generation,
+    },
+  });
 }
 
 /** Runs read/append transcript work under one SQLite writer-queue critical section. */

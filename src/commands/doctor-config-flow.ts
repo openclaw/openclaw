@@ -119,9 +119,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       ? await importShippedPluginInstallConfigForDoctor(preflight.snapshot)
       : undefined;
   if (pluginInstallConfigImport?.pluginInventoryChanged) {
-    const { readDoctorConfigPreflightSnapshot } =
-      await import("./doctor-config-preflight-plugin-index.js");
-    const refreshed = await readDoctorConfigPreflightSnapshot({
+    const { readConfigPreflightSnapshot } = await import("./config-preflight-snapshot.js");
+    const refreshed = await readConfigPreflightSnapshot({
       allowCurrentPluginMetadata: false,
       includePluginMetadata: true,
       preparePluginMetadataSnapshot: true,
@@ -138,6 +137,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const referenceSource = prepareDoctorConfigReferenceSource(snapshot);
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
     current: preflight.pluginMetadataSnapshot,
+    inventoryChanged: pluginInstallConfigImport?.pluginInventoryChanged,
   };
   const { createDoctorPluginMetadataSnapshotScope } =
     await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
@@ -508,6 +508,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     emitDoctorNotes({
       note,
       changeNotes: channelDoctorSequence.changeNotes,
+      infoNotes: channelDoctorSequence.infoNotes,
       warningNotes: channelDoctorSequence.warningNotes,
     });
 
@@ -687,6 +688,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const migrationResult = await finalizeMigrationResult({
     cfg,
     shouldWriteConfig,
+    pluginInventoryChanged: pluginMetadataSnapshotState.inventoryChanged,
     metadataSnapshot: pluginMetadataSnapshotState.current,
     runWithCurrentPluginMetadata,
   });

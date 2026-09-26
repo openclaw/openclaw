@@ -178,6 +178,13 @@ describe("startup recovery admission", () => {
       await writeCompletedToolTranscript(sessionsDir);
       const capacity = createMainSessionRecoveryCapacity({ limit: 1 });
       const releaseCapacity = await capacity.acquire(() => true);
+      const capacityEntered = createDeferred();
+      const acquire = capacity.acquire.bind(capacity);
+      const acquireSpy = vi.spyOn(capacity, "acquire").mockImplementation((...args) => {
+        const waiting = acquire(...args);
+        capacityEntered.resolve();
+        return waiting;
+      });
       let keepRunning = true;
       const recovery = recoverRestartAbortedMainSessions({
         stateDir: tmpDir,
@@ -185,11 +192,11 @@ describe("startup recovery admission", () => {
         shouldContinue: () => keepRunning,
       });
       try {
-        await waitForFast(() =>
-          expect(
-            loadSessionEntry({ sessionKey, storePath })?.mainRestartRecovery?.reservation,
-          ).toBeDefined(),
-        );
+        await Promise.race([capacityEntered.promise, recovery]);
+        expect(acquireSpy).toHaveBeenCalledOnce();
+        expect(
+          loadSessionEntry({ sessionKey, storePath })?.mainRestartRecovery?.reservation,
+        ).toBeDefined();
         const ownerReleased = getSessionWorkAdmissionOwnerRelease({
           scope: storePath,
           identities: [sessionKey, "main-session"],
@@ -230,6 +237,7 @@ describe("startup recovery admission", () => {
           }),
         ).toBeUndefined();
       } finally {
+        acquireSpy.mockRestore();
         keepRunning = false;
         releaseCapacity?.();
         dispatchSettlement.resolve();

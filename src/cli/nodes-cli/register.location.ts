@@ -7,8 +7,7 @@ import {
   buildNodeInvokeParams,
   callNodesGatewayCli,
   nodesCallOpts,
-  parseOptionalNodeNonNegativeInteger,
-  parseOptionalNodePositiveInteger,
+  parseOptionalNodeInteger,
   resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
@@ -41,15 +40,9 @@ export function registerNodesLocationCommands(nodes: Command) {
           if (opts.accuracy !== undefined && desiredAccuracy === undefined) {
             throw new Error("invalid --accuracy (use coarse|balanced|precise)");
           }
-          const maxAgeMs = parseOptionalNodeNonNegativeInteger(opts.maxAge, "--max-age");
-          const timeoutMs = parseOptionalNodePositiveInteger(
-            opts.locationTimeout,
-            "--location-timeout",
-          );
-          const invokeTimeoutMs = parseOptionalNodePositiveInteger(
-            opts.invokeTimeout,
-            "--invoke-timeout",
-          );
+          const maxAgeMs = parseOptionalNodeInteger(opts.maxAge, "--max-age", "non-negative");
+          const timeoutMs = parseOptionalNodeInteger(opts.locationTimeout, "--location-timeout");
+          const invokeTimeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
           const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
 
           const invokeParams = buildNodeInvokeParams({

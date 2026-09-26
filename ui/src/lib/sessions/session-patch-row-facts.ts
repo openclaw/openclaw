@@ -21,27 +21,21 @@ export function projectSessionPatchRowFields(
         : {}),
     });
   }
-  if (patch.thinkingLevel !== undefined) {
-    fields.push({
-      thinkingLevel:
-        result.resolved && Object.hasOwn(result.resolved, "thinkingLevel")
-          ? result.resolved.thinkingLevel
-          : entry.thinkingLevel,
-      ...(result.resolved?.thinkingLevels !== undefined
-        ? { thinkingLevels: result.resolved.thinkingLevels }
-        : {}),
-    });
-  }
-  if (patch.contextWindow !== undefined) {
-    fields.push({
-      contextWindow:
-        result.resolved && Object.hasOwn(result.resolved, "contextWindow")
-          ? result.resolved.contextWindow
-          : entry.contextWindow,
-      ...(result.resolved?.contextWindows !== undefined
-        ? { contextWindows: result.resolved.contextWindows }
-        : {}),
-    });
+  for (const [key, choices] of [
+    ["thinkingLevel", "thinkingLevels"],
+    ["contextWindow", "contextWindows"],
+  ] as const) {
+    if (patch[key] !== undefined) {
+      fields.push({
+        [key]:
+          result.resolved && Object.hasOwn(result.resolved, key)
+            ? result.resolved[key]
+            : entry[key],
+        ...(result.resolved?.[choices] !== undefined
+          ? { [choices]: result.resolved[choices] }
+          : {}),
+      });
+    }
   }
   if (patch.fastMode !== undefined) {
     fields.push({ fastMode: entry.fastMode });
@@ -49,14 +43,10 @@ export function projectSessionPatchRowFields(
   if (typeof patch.archived === "boolean") {
     fields.push(projectSessionArchiveFields(patch.archived, entry));
   }
-  if (patch.category !== undefined) {
-    fields.push({ category: entry.category });
-  }
-  if (patch.boardPresentation !== undefined) {
-    fields.push({ boardPresentation: entry.boardPresentation });
-  }
-  if (patch.boardFace !== undefined) {
-    fields.push({ boardFace: entry.boardFace });
+  for (const key of ["category", "boardPresentation", "boardFace"] as const) {
+    if (patch[key] !== undefined) {
+      fields.push({ [key]: entry[key] });
+    }
   }
   if (patch.pinned !== undefined || patch.unread === false) {
     const pin = { pinned: entry.pinnedAt !== undefined, pinnedAt: entry.pinnedAt };

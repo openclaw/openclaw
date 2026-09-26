@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { runNodeMain } from "../../../scripts/run-node.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
@@ -19,6 +21,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { createUpdateCommandFailureResult } from "./update-command-result.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { withGatewayRuntimeArtifactPublication } from "./update-command-service-maintenance.js";
 
@@ -97,9 +100,99 @@ async function withRuntimePublicationFixture(
   });
 }
 
-it.each([true, false])(
-  "parks the foreground Gateway before source runtime publication only when artifacts change: %s",
-  (changed) =>
+it("keeps Task Scheduler timeout details in the source-build failure report", () =>
+  withRuntimePublicationFixture(async ({ root, env, service }) => {
+    vi.mocked(service.readCommand).mockRejectedValue(
+      new ServiceInspectionError("windows-task-inspection-failed", {
+        kind: "timeout",
+        timeoutMs: 731,
+      }),
+    );
+    const spawn = vi.fn();
+    const error = await runNodeMain({ cwd: root, args: ["--version"], env, spawn }).catch(
+      (caughtError: unknown) => caughtError,
+    );
+    const result = createUpdateCommandFailureResult({
+      mode: "git",
+      root,
+      durationMs: 0,
+      failure: { cause: error },
+    });
+    expect(result.reason).toBe("runtime-artifact-publication");
+    expect(service.readCommand).toHaveBeenCalled();
+    expect(result.failedStep.failureFacts?.[0]?.message).toContain("timed out after 731 ms");
+    expect(spawn).not.toHaveBeenCalled();
+  }));
+
+it.each([undefined, "stale-profile"])(
+  "preserves the serving installation when a source command requests an automatic rebuild (profile=%s)",
+  (profile) =>
+    withRuntimePublicationFixture(async ({ root, env, service }) => {
+      vi.mocked(service.readRuntime).mockResolvedValue({
+        status: "running",
+        pid: 23456,
+        systemd: { managerUid: 2001 },
+      });
+      const entry = path.join(root, "dist", "entry.js");
+      const before = await fs.readFile(entry, "utf8");
+      const spawn = vi.fn(() => {
+        throw new Error("Automatic build started under the serving Gateway");
+      });
+      await expect(
+        runNodeMain({
+          cwd: root,
+          args: [...(profile ? ["--profile", profile] : []), "doctor"],
+          env: { ...env, OPENCLAW_RUNNER_LOG: "0" },
+          spawn,
+        }),
+      ).rejects.toThrow(/affected Gateway.*running/);
+      expect(spawn).not.toHaveBeenCalled();
+      expect(
+        vi
+          .mocked(service.readRuntime)
+          .mock.calls.some(([observedEnv]) => observedEnv?.OPENCLAW_PROFILE === profile),
+      ).toBe(true);
+      expect(await fs.readFile(entry, "utf8")).toBe(before);
+    }),
+);
+
+it("holds Gateway startup custody until the automatic source build exits", () =>
+  withRuntimePublicationFixture(async ({ root, env, coordinatorPath }) => {
+    let builds = 0;
+    const spawn = (_command: string, args: string[]) => {
+      if (args.some((arg) => arg.endsWith("scripts/build-all.mts"))) {
+        builds += 1;
+        const competingStartup = tryAcquireExclusiveSqliteCoordinator(coordinatorPath);
+        competingStartup?.release();
+        expect(competingStartup).toBeNull();
+      }
+      return {
+        on(event: string, listener: (code: number, signal: null) => void) {
+          if (event === "exit") {
+            queueMicrotask(() => listener(0, null));
+          }
+        },
+      };
+    };
+    expect(
+      await runNodeMain({
+        cwd: root,
+        args: ["doctor"],
+        env: { ...env, OPENCLAW_RUNNER_LOG: "0" },
+        spawn,
+      }),
+    ).toBe(0);
+    expect(builds).toBe(1);
+  }));
+
+it.each([
+  { changed: true, sourceRuntimePrepared: undefined },
+  { changed: false, sourceRuntimePrepared: undefined },
+  { changed: true, sourceRuntimePrepared: false },
+  { changed: true, sourceRuntimePrepared: true },
+])(
+  "parks before changed runtime publication (changed=$changed, prepared=$sourceRuntimePrepared)",
+  ({ changed, sourceRuntimePrepared }) =>
     withRuntimePublicationFixture(async ({ root, env, service }) => {
       vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("git");
       const scripts = path.join(root, "scripts");
@@ -109,6 +202,7 @@ it.each([true, false])(
         path.join(scripts, "stage-bundled-plugin-runtime.mts"),
         `import fs from "node:fs/promises";
 export function prepareBundledPluginRuntime() {
+  if (${sourceRuntimePrepared === true}) throw new Error("Prepared runtime must not be staged again");
   return {
     changed: ${changed},
     async publish(assertCurrent) {
@@ -122,7 +216,9 @@ export function prepareBundledPluginRuntime() {
       );
       await fs.writeFile(
         path.join(scripts, "lib", "dist-artifact-ownership.mts"),
-        "export async function withDistArtifactOwnership(_root, run) { return await run(); }\n",
+        sourceRuntimePrepared === false
+          ? "throw new Error('The admitted runtime must not load the legacy lock owner');\n"
+          : "export async function withDistArtifactOwnership(_root, run) { return await run(); }\n",
       );
       await fs.writeFile(artifact, "original");
       const lock = vi.mocked(gatewayLocks.readActiveGatewayLockIdentity);
@@ -138,15 +234,17 @@ export function prepareBundledPluginRuntime() {
           withPluginLifecycleLease({ env, waitMs: 0 }, (lease) =>
             completeSourceUpdateRuntime({
               root,
+              sourceRuntimePrepared,
               timeoutMs: 1_000,
               lease,
               beforePublication: park,
             }),
           ),
-        ).resolves.toEqual({ changed });
-        expect(park).toHaveBeenCalledTimes(changed ? 1 : 0);
-        expect(await fs.readFile(artifact, "utf8")).toBe(changed ? "candidate" : "original");
-        if (changed) {
+        ).resolves.toEqual({ changed: changed && sourceRuntimePrepared !== true });
+        const published = changed && sourceRuntimePrepared !== true;
+        expect(park).toHaveBeenCalledTimes(published ? 1 : 0);
+        expect(await fs.readFile(artifact, "utf8")).toBe(published ? "candidate" : "original");
+        if (published) {
           expect(lock).toHaveBeenCalled();
         } else {
           expect(service.readRuntime).not.toHaveBeenCalled();

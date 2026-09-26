@@ -49,6 +49,7 @@ type RequesterToolPolicyParams = {
   sessionKey?: string;
   subagentSessionKey?: string;
   preparedSessionEntry?: PreparedSessionCapabilityEntry;
+  preparedSessionCapabilityStore?: SessionCapabilityStore;
   spawnedBy?: string | null;
   messageProvider?: string | null;
   groupId?: string | null;
@@ -128,6 +129,7 @@ function resolveDelegatedPolicy(
       // children; the persisted envelope still has to prove lineage and depth.
       const completionStore = resolveSubagentCapabilityStore(currentSessionKey, {
         cfg: params.config,
+        store: params.preparedSessionCapabilityStore,
       });
       const envelope = resolvePersistedSubagentToolPolicyEnvelope(currentSessionKey, {
         cfg: params.config,
@@ -194,6 +196,7 @@ export function resolveRequesterToolPolicies(
   const subagentStore = resolveSubagentCapabilityStore(subagentSessionKey, {
     cfg: params.config,
     preparedSessionEntry: params.preparedSessionEntry,
+    store: params.preparedSessionCapabilityStore,
   });
   const delegatedPolicy = resolveDelegatedPolicy({ ...params, subagentSessionKey }, subagentStore);
   const subagentPolicy =

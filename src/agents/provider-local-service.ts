@@ -397,30 +397,22 @@ async function startAndWaitForLocalService(params: {
   managed.process = owned;
   diagnostics.pid = child.pid;
   managed.lastExit = undefined;
-  child.stdout?.setEncoding("utf8");
-  child.stderr?.setEncoding("utf8");
-  const captureStdout = (chunk: string) => {
-    diagnostics.stdoutTail = appendLocalServiceOutputTail(
-      diagnostics.stdoutTail,
-      chunk,
-      service.env,
-      process.env,
-      service.args,
-      healthHeaders,
-    );
-  };
-  const captureStderr = (chunk: string) => {
-    diagnostics.stderrTail = appendLocalServiceOutputTail(
-      diagnostics.stderrTail,
-      chunk,
-      service.env,
-      process.env,
-      service.args,
-      healthHeaders,
-    );
-  };
-  child.stdout?.on("data", captureStdout);
-  child.stderr?.on("data", captureStderr);
+  for (const [stream, tail] of [
+    [child.stdout, "stdoutTail"],
+    [child.stderr, "stderrTail"],
+  ] as const) {
+    stream?.setEncoding("utf8");
+    stream?.on("data", (chunk: string) => {
+      diagnostics[tail] = appendLocalServiceOutputTail(
+        diagnostics[tail],
+        chunk,
+        service.env,
+        process.env,
+        service.args,
+        healthHeaders,
+      );
+    });
+  }
   child.unref();
   child.once("exit", (code, signalLocal) => {
     const exit = { code, signal: signalLocal };

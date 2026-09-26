@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
+import * as recoveryStore from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import * as restartRecovery from "../../agents/main-session-recovery/main-session-restart-recovery.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as sessionEntryAccessor from "../../config/sessions/session-accessor.sqlite-entry.js";
@@ -15,7 +17,7 @@ import {
   runExclusiveSessionLifecycleMutation,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
+import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import {
   admitTestReplyTurn,
@@ -41,6 +43,143 @@ function createRecoveryGatewayContext() {
 describe("reply turn recovery admission", () => {
   afterEach(() => {
     testing.resetReplyRunRegistry();
+  });
+
+  it("settles a committed recovery claim without replay when preparation changes", async () => {
+    const sessionKey = "agent:main:recovery-claim-preparation";
+    const sessionId = "interrupted-session";
+    const storePath = createSessionStore({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 100,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    const predecessor = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    const claimed = createDeferred();
+    const release = createDeferred();
+    const claim = recoveryStore.claimMainSessionRecoveryOwner;
+    const claimSpy = vi
+      .spyOn(recoveryStore, "claimMainSessionRecoveryOwner")
+      .mockImplementation(async (params) => {
+        const result = await claim(params);
+        claimed.resolve();
+        await release.promise;
+        return result;
+      });
+    const pending = admitTestReplyTurn({ sessionKey, sessionId, storePath });
+    try {
+      await Promise.race([
+        claimed.promise,
+        pending.then(() => {
+          throw new Error("Admission completed before recovery claimed ownership");
+        }),
+      ]);
+      expect(loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery).toMatchObject({
+        foregroundClaims: { tokens: [expect.any(String)] },
+      });
+      predecessor.complete();
+      release.resolve();
+      await expect(pending).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      expect(claimSpy).toHaveBeenCalledOnce();
+      expect(
+        loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery?.foregroundClaims,
+      ).toBeUndefined();
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+    } finally {
+      release.resolve();
+      predecessor.complete();
+      const result = await pending.catch(() => undefined);
+      if (result?.status === "owned") {
+        result.operation.complete();
+      }
+      claimSpy.mockRestore();
+    }
+  });
+
+  it.each(["visible", "heartbeat", "queued_followup"] as const)(
+    "fences restart recovery from %s reply admission until the operation clears",
+    async (kind) => {
+      const sessionKey = `agent:main:telegram:topic:recovery-race:${kind}`;
+      const sessionId = "interrupted-session";
+      const storePath = createSessionStore({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 100,
+          status: "running",
+          abortedLastRun: true,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 1,
+            chargedAttempts: 2,
+          },
+        },
+      });
+      const admission = await admitTestReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+        kind,
+      });
+      expect(admission.status).toBe("owned");
+      if (admission.status !== "owned") {
+        return;
+      }
+
+      const claimedEntry = loadSessionEntry({ storePath, sessionKey });
+      admission.operation.complete();
+      await vi.waitFor(() => {
+        const entry = loadSessionEntry({ storePath, sessionKey });
+        expect(entry?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+      });
+
+      expect(claimedEntry?.mainRestartRecovery).toMatchObject({
+        foregroundClaims: {
+          tokens: [expect.any(String)],
+        },
+      });
+      expect(admission.sessionEntry).toMatchObject({
+        mainRestartRecovery: {
+          foregroundClaims: claimedEntry?.mainRestartRecovery?.foregroundClaims,
+        },
+      });
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+        sessionId,
+        status: "running",
+      });
+    },
+  );
+
+  it("admits a visible turn after clearing orphaned restart-recovery fences", async () => {
+    const sessionKey = "agent:main:telegram:topic:orphaned-recovery-fence";
+    const sessionId = "healthy-session";
+    const storePath = createSessionStore({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 100,
+        status: "running",
+        abortedLastRun: false,
+        restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "stale-generation" }],
+      },
+    });
+
+    const admission = await admitTestReplyTurn({
+      sessionKey,
+      sessionId,
+      expectedSessionId: sessionId,
+      storePath,
+    });
+    expect(admission.status).toBe("owned");
+    const persisted = loadSessionEntry({ storePath, sessionKey });
+    expect(persisted?.restartRecoveryRuns).toBeUndefined();
+    expect(persisted?.mainRestartRecovery).toBeUndefined();
+    if (admission.status === "owned") {
+      admission.operation.complete();
+      expect(admission.sessionEntry).toMatchObject({ sessionId });
+      expect(admission.sessionEntry?.restartRecoveryRuns).toBeUndefined();
+    }
   });
 
   it.each(["started", "concurrent winner"] as const)(
@@ -252,6 +391,7 @@ describe("reply turn recovery admission", () => {
         expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(entry);
         expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
         if (failed) {
+          await admission;
           expect(failure).toMatchObject({
             message: expect.stringMatching(/restart recovery failed/i),
           });

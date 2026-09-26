@@ -243,7 +243,7 @@ export function registerAgentTaskCancellationTests() {
         expect((await cancellation).payload).toMatchObject({
           found: true,
           cancelled: false,
-          reason: "Task cancellation settlement timed out after 10000ms",
+          reason: "Gateway cancellation settlement timed out after 10000ms",
         });
         expect(findTaskByRunId(runId)?.status).toBe("running");
       } finally {

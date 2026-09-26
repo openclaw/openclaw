@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import { itemNotification, rawItemCompleted } from "./protocol.test-helpers.js";
+import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import * as attemptActiveTurn from "./run-attempt-active-turn.js";
 import {
   createParams,
@@ -44,6 +44,75 @@ async function startCheckpointAttempt(params: ReturnType<typeof createParams>) {
 }
 
 describe("runCodexAppServerAttempt", () => {
+  it("persists completed commentary and final once when native item IDs change after streaming", async () => {
+    const params = createParams(
+      path.join(tempDir, "identity-drift.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "identity-drift-sessions.json"),
+      "identity-drift-session",
+    );
+    const { harness, run } = await startCheckpointAttempt(params);
+    // Captured from pinned rust-v0.154.0: deltas retain the started ID,
+    // item/completed has a new ID, and the terminal summary repeats that new ID.
+    for (const phase of ["commentary", "final_answer"] as const) {
+      const text = phase === "commentary" ? "Checking the workspace." : "The work is complete.";
+      await harness.notify(
+        itemNotification("item/started", {
+          type: "agentMessage",
+          id: `${phase}-preview`,
+          phase,
+          text: "",
+        }),
+      );
+      await harness.notify({
+        method: "item/agentMessage/delta",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: `${phase}-preview`, delta: text },
+      });
+      await harness.notify(
+        itemNotification("item/completed", {
+          type: "agentMessage",
+          id: `${phase}-completed`,
+          phase,
+          text,
+        }),
+      );
+    }
+    await harness.notify(
+      turnCompleted({
+        id: "turn-1",
+        status: "completed",
+        items: [
+          {
+            type: "agentMessage",
+            id: "final_answer-completed",
+            phase: "final_answer",
+            text: "The work is complete.",
+          },
+        ],
+      }),
+    );
+    await run;
+    const messages = await readTranscriptMessagesByIdentity(params);
+    expect(
+      messages.filter((message) => message.role === "assistant").map((message) => message.content),
+    ).toEqual([
+      [{ type: "text", text: "Checking the workspace." }],
+      [{ type: "text", text: "The work is complete." }],
+    ]);
+    expect(messages).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          __openclaw: expect.objectContaining({
+            mirrorIdentity: expect.stringContaining("preview"),
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("checkpoints the complete native response, not the earlier execution preview", async () => {
     const params = createParams(
       path.join(tempDir, "output.jsonl"),

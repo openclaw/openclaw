@@ -257,9 +257,6 @@ async function applyMappingToContext(
   ctx: HookMappingContext,
 ): Promise<HookMappingItemResult> {
   const base = buildActionFromMapping(mapping, ctx);
-  if (!base.ok) {
-    return base;
-  }
 
   let override: HookTransformResult = null;
   if (mapping.transform) {
@@ -270,10 +267,7 @@ async function applyMappingToContext(
     }
   }
 
-  if (!base.action) {
-    return { ok: true, action: null };
-  }
-  return mergeAction(base.action, override, mapping.action);
+  return mergeAction(base, override);
 }
 
 async function applyFanOutMapping(
@@ -382,58 +376,45 @@ function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
   return true;
 }
 
-function buildActionFromMapping(
-  mapping: HookMappingResolved,
-  ctx: HookMappingContext,
-): HookMappingItemResult {
+function buildActionFromMapping(mapping: HookMappingResolved, ctx: HookMappingContext): HookAction {
   if (mapping.action === "wake") {
     const text = renderTemplate(mapping.textTemplate ?? "", ctx);
     return {
-      ok: true,
-      action: {
-        kind: "wake",
-        mappingId: mapping.id,
-        text,
-        mode: mapping.wakeMode ?? "now",
-        agentId: mapping.agentId,
-        sessionKey: renderOptional(mapping.sessionKey, ctx),
-        sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
-      },
+      kind: "wake",
+      mappingId: mapping.id,
+      text,
+      mode: mapping.wakeMode ?? "now",
+      agentId: mapping.agentId,
+      sessionKey: renderOptional(mapping.sessionKey, ctx),
+      sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
     };
   }
   const message = renderTemplate(mapping.messageTemplate ?? "", ctx);
   return {
-    ok: true,
-    action: {
-      kind: "agent",
-      mappingId: mapping.id,
-      message,
-      name: renderOptional(mapping.name, ctx),
-      agentId: mapping.agentId,
-      wakeMode: mapping.wakeMode ?? "now",
-      sessionKey: renderOptional(mapping.sessionKey, ctx),
-      sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
-      sessionMode: mapping.sessionMode ?? "isolated",
-      deliver: mapping.deliver,
-      allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
-      channel: mapping.channel,
-      to: renderOptional(mapping.to, ctx),
-      model: renderOptional(mapping.model, ctx),
-      thinking: renderOptional(mapping.thinking, ctx),
-      timeoutSeconds: mapping.timeoutSeconds,
-    },
+    kind: "agent",
+    mappingId: mapping.id,
+    message,
+    name: renderOptional(mapping.name, ctx),
+    agentId: mapping.agentId,
+    wakeMode: mapping.wakeMode ?? "now",
+    sessionKey: renderOptional(mapping.sessionKey, ctx),
+    sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
+    sessionMode: mapping.sessionMode ?? "isolated",
+    deliver: mapping.deliver,
+    allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
+    channel: mapping.channel,
+    to: renderOptional(mapping.to, ctx),
+    model: renderOptional(mapping.model, ctx),
+    thinking: renderOptional(mapping.thinking, ctx),
+    timeoutSeconds: mapping.timeoutSeconds,
   };
 }
 
-function mergeAction(
-  base: HookAction,
-  override: HookTransformResult,
-  defaultAction: "wake" | "agent",
-): HookMappingItemResult {
+function mergeAction(base: HookAction, override: HookTransformResult): HookMappingItemResult {
   if (!override) {
     return validateAction(base);
   }
-  const kind = override.kind ?? base.kind ?? defaultAction;
+  const kind = override.kind ?? base.kind;
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
@@ -562,13 +543,6 @@ function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): 
   return candidate;
 }
 
-function resolvePath(baseDir: string, target: string): string {
-  if (!target) {
-    return path.resolve(baseDir);
-  }
-  return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
-}
-
 function safeRealpathSync(candidate: string): string | null {
   try {
     // Hook containment prefers native canonicalization when Node exposes it.
@@ -600,7 +574,8 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
   if (!trimmed) {
     throw new Error(`${label} module path is required`);
   }
-  const resolved = resolvePath(base, trimmed);
+  // Drive-less rooted Windows paths resolve on the process drive, not the hook root's drive.
+  const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(base, trimmed);
   if (!isPathInside(base, resolved)) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }

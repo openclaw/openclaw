@@ -65,6 +65,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         return createSessionRowProjection({
           cfg: getRuntimeConfig(),
           getConfig: getRuntimeConfig,
+          getPolicyConfig: gatewayRequestContext.getCommittedRuntimeConfig ?? getRuntimeConfig,
           getModelCatalog: () =>
             readPreparedServerMethodModelCatalogs(
               gatewayRequestContext,
@@ -100,6 +101,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   bindApprovalPublicationContext(gatewayRequestContext);
   if (!runtime.opts.updateCanary) {
     await attachInitialGatewayLifetimeSidecars({
+      scheduler: runtime.scheduler,
       chatMetadataLifecycle,
       gatewayRequestContext,
       flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,

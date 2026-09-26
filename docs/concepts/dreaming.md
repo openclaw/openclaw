@@ -18,7 +18,8 @@ Dreaming is enabled by default. Set
 When the cron scheduler is disabled (`cron.enabled: false` or
 `OPENCLAW_SKIP_CRON=1`), dreaming defers automatic job creation and updates while
 preserving existing jobs. Startup cleanup of historical dreaming artifacts still
-runs. Explicitly disabling dreaming still removes its managed jobs.
+runs. Explicitly disabling dreaming removes jobs carrying its canonical
+declaration key in the active cron store.
 
 ## What dreaming writes
 
@@ -171,6 +172,28 @@ Light and REM phase hits recorded in SQLite-backed plugin state add a small rece
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep, deduped across the primary runtime workspace and any configured agent workspaces so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+
+Runtime reconciliation owns only jobs declared as
+`memory-core:memory-dreaming-promotion`. It uses Doctor's read-only classifier
+on the active jobs already listed to report historical rows. Recognized legacy
+or phase jobs require Doctor repair before runtime creates or updates the managed
+job. Declared jobs with retired payload formats also require Doctor repair.
+Jobs with historical tags and authored
+payloads remain untouched and produce a manual-review warning; they do not block
+creation or updates of the declared dreaming job. Disabling dreaming still removes
+only explicitly declared jobs and reports any remaining historical work.
+
+Run `openclaw doctor --fix` to adopt
+historical dreaming jobs identified by ownership metadata and known generated
+payloads. A historical tag on a custom prompt produces a manual-review warning.
+Doctor first saves a verified SQLite backup, then adopts one unified
+job in each persisted cron store partition without changing its ID, ordering,
+or runtime state. If only legacy light/REM jobs exist, it promotes the oldest
+valid phase job in place. It removes recognized duplicates only after that
+partition has a valid survivor. When dreaming is disabled, Doctor retires the
+recognized managed rows instead. Jobs with a different declaration key and
+unrelated operator jobs remain unchanged; malformed or ambiguous rows produce
+a repair warning and remain in place.
 
 Dreaming completions share the [background work budget](/concepts/queue#background-work) with Skill Workshop and other plugin completions: at most three runs in total, with up to three available to `memory-core`. The sweep coordinator does not consume a completion slot while it waits for phase work. System busyness shows these runs together in the `background` row.
 

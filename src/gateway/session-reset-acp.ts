@@ -16,15 +16,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { listTasksForRelatedSessionKey } from "../tasks/task-registry-query.js";
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
-async function runAcpCleanupStep(params: {
-  op: () => Promise<void>;
-}): Promise<{ status: "ok" } | { status: "timeout" } | { status: "error"; error: unknown }> {
+async function runAcpCleanupStep(
+  op: () => Promise<void>,
+): Promise<{ status: "ok" } | { status: "timeout" } | { status: "error"; error: unknown }> {
   let timer: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<{ status: "timeout" }>((resolve) => {
     timer = setTimeout(() => resolve({ status: "timeout" }), ACP_RUNTIME_CLEANUP_TIMEOUT_MS);
   });
-  const opPromise = params
-    .op()
+  const opPromise = op()
     .then(() => ({ status: "ok" as const }))
     .catch((error: unknown) => ({ status: "error" as const, error }));
   const outcome = await Promise.race([opPromise, timeoutPromise]);
@@ -81,15 +80,13 @@ export async function closeAcpRuntimeForSession(params: {
     agentId: params.agentId,
   });
   try {
-    const cancelOutcome = await runAcpCleanupStep({
-      op: async () => {
-        await acpManager.cancelSession({
-          cfg: params.cfg,
-          sessionKey: acpSessionKey,
-          agentId: params.agentId,
-          reason: params.reason,
-        });
-      },
+    const cancelOutcome = await runAcpCleanupStep(async () => {
+      await acpManager.cancelSession({
+        cfg: params.cfg,
+        sessionKey: acpSessionKey,
+        agentId: params.agentId,
+        reason: params.reason,
+      });
     });
     if (params.shouldCleanup && !params.shouldCleanup()) {
       return undefined;
@@ -121,18 +118,16 @@ export async function closeAcpRuntimeForSession(params: {
     const closeOutcome =
       cancelOutcome.status === "timeout"
         ? ({ status: "ok" } as const)
-        : await runAcpCleanupStep({
-            op: async () => {
-              await acpManager.closeSession({
-                cfg: params.cfg,
-                sessionKey: acpSessionKey,
-                agentId: params.agentId,
-                reason: params.reason,
-                discardPersistentState: true,
-                requireAcpSession: false,
-                allowBackendUnavailable: true,
-              });
-            },
+        : await runAcpCleanupStep(async () => {
+            await acpManager.closeSession({
+              cfg: params.cfg,
+              sessionKey: acpSessionKey,
+              agentId: params.agentId,
+              reason: params.reason,
+              discardPersistentState: true,
+              requireAcpSession: false,
+              allowBackendUnavailable: true,
+            });
           });
     if (params.shouldCleanup && !params.shouldCleanup()) {
       return undefined;
@@ -282,19 +277,16 @@ export async function closeChildAcpRuntimesForParent(params: {
 
 export function buildPendingAcpMeta(base: SessionAcpMeta, now: number): SessionAcpMeta {
   const currentIdentity = base.identity;
-  const nextIdentity = currentIdentity
-    ? {
-        state: "pending" as const,
-        ...(currentIdentity.acpxRecordId ? { acpxRecordId: currentIdentity.acpxRecordId } : {}),
-        source: currentIdentity.source,
-        lastUpdatedAt: now,
-      }
-    : { state: "pending" as const, source: "ensure" as const, lastUpdatedAt: now };
   return {
     backend: base.backend,
     agent: base.agent,
     runtimeSessionName: base.runtimeSessionName,
-    ...(nextIdentity ? { identity: nextIdentity } : {}),
+    identity: {
+      state: "pending",
+      ...(currentIdentity?.acpxRecordId ? { acpxRecordId: currentIdentity.acpxRecordId } : {}),
+      source: currentIdentity ? currentIdentity.source : "ensure",
+      lastUpdatedAt: now,
+    },
     mode: base.mode,
     ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
     ...(base.cwd ? { cwd: base.cwd } : {}),

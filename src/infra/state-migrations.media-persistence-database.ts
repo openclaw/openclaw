@@ -35,7 +35,7 @@ function forEachMediaEventBatch(params: {
   database: DatabaseSync;
   table: "trajectory_runtime_events" | "transcript_events";
   legacyTextStorage?: boolean;
-  visit: (rows: Array<{ event_json: string; seq: number; session_id: string }>) => void;
+  visit: (rows: Array<{ event_json: string; seq: number; session_id: string }>) => "stop" | void;
 }): void {
   const db = getNodeSqliteKysely<MediaMigrationDatabase>(params.database);
   const eventJson =
@@ -68,7 +68,9 @@ function forEachMediaEventBatch(params: {
     if (!last) {
       return;
     }
-    params.visit(rows);
+    if (params.visit(rows) === "stop") {
+      return;
+    }
     cursor = { seq: last.seq, sessionId: last.session_id };
   }
 }
@@ -88,7 +90,7 @@ export function scanTranscriptRows(params: {
     database,
     table: "transcript_events",
     legacyTextStorage: params.legacyTextStorage,
-    visit: (rows) => {
+    visit: (rows): "stop" | void => {
       const sessionIds = [...new Set(rows.map((row) => row.session_id))];
       const sessionKeys = new Map(
         executeSqliteQuerySync(
@@ -122,6 +124,10 @@ export function scanTranscriptRows(params: {
           lastChangedSessionId = row.session_id;
           changedSessions += 1;
           params.onChangedSession?.(row.session_id);
+        }
+        // Detection only selects the repair path; that transaction validates every row.
+        if (!writer) {
+          return "stop";
         }
         const rewrites = rewritesBySession.get(row.session_id) ?? [];
         rewrites.push({
@@ -189,7 +195,7 @@ export function scanTrajectoryRows(params: {
   forEachMediaEventBatch({
     database,
     table: "trajectory_runtime_events",
-    visit: (rows) => {
+    visit: (rows): "stop" | void => {
       for (const row of rows) {
         const rewrittenEventJson = rewriteTrajectoryEventJson(
           row.event_json,
@@ -199,16 +205,17 @@ export function scanTrajectoryRows(params: {
           continue;
         }
         changedRows += 1;
-        if (rewrite) {
-          executeSqliteQuerySync(
-            database,
-            db
-              .updateTable("trajectory_runtime_events")
-              .set({ event_json: rewrittenEventJson })
-              .where("session_id", "=", row.session_id)
-              .where("seq", "=", row.seq),
-          );
+        if (!rewrite) {
+          return "stop";
         }
+        executeSqliteQuerySync(
+          database,
+          db
+            .updateTable("trajectory_runtime_events")
+            .set({ event_json: rewrittenEventJson })
+            .where("session_id", "=", row.session_id)
+            .where("seq", "=", row.seq),
+        );
       }
     },
   });
@@ -218,49 +225,37 @@ export function scanTrajectoryRows(params: {
 export function readMediaSourceVersion(database: DatabaseSync, legacyTextStorage: boolean) {
   const dataVersion = readSqliteDataVersion(database);
   const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
-  const counts = executeSqliteQueryTakeFirstSync(
-    database,
-    db.selectNoFrom((eb) => [
-      eb
-        .selectFrom("transcript_events")
-        .select((row) => row.fn.countAll<number>().as("count"))
-        .as("transcript_rows"),
-      eb
-        .selectFrom("transcript_events")
-        .select((row) =>
-          row.fn
-            .coalesce(
-              row.fn.sum<number>(
-                legacyTextStorage
-                  ? row.fn<number>("octet_length", ["event_json"])
-                  : transcriptEventReadBytesSql(),
-              ),
-              row.val(0),
-            )
-            .as("bytes"),
+  const transcripts = db
+    .selectFrom("transcript_events")
+    .select((row) => [
+      row.fn.countAll<number>().as("transcript_rows"),
+      row.fn
+        .coalesce(
+          row.fn.sum<number>(
+            legacyTextStorage
+              ? row.fn<number>("octet_length", ["event_json"])
+              : transcriptEventReadBytesSql(),
+          ),
+          row.val(0),
         )
         .as("transcript_bytes"),
-      eb
-        .selectFrom("transcript_events")
-        .select((row) =>
-          row
-            .cast<string>(row.fn.coalesce(row.fn.sum<number>("created_at"), row.val(0)), "text")
-            .as("created_at"),
-        )
+      row
+        .cast<string>(row.fn.coalesce(row.fn.sum<number>("created_at"), row.val(0)), "text")
         .as("transcript_created_at"),
-      eb
-        .selectFrom("trajectory_runtime_events")
-        .select((row) => row.fn.countAll<number>().as("count"))
-        .as("trajectory_rows"),
-      eb
-        .selectFrom("trajectory_runtime_events")
-        .select((row) =>
-          row.fn
-            .coalesce(row.fn.sum<number>(row.fn<number>("length", ["event_json"])), row.val(0))
-            .as("bytes"),
-        )
+    ])
+    .as("transcripts");
+  const trajectories = db
+    .selectFrom("trajectory_runtime_events")
+    .select((row) => [
+      row.fn.countAll<number>().as("trajectory_rows"),
+      row.fn
+        .coalesce(row.fn.sum<number>(row.fn<number>("length", ["event_json"])), row.val(0))
         .as("trajectory_bytes"),
-    ]),
+    ])
+    .as("trajectories");
+  const counts = executeSqliteQueryTakeFirstSync(
+    database,
+    db.selectFrom(transcripts).crossJoin(trajectories).selectAll(),
   );
   const number = (value: unknown): number =>
     typeof value === "bigint" ? Number(value) : typeof value === "number" ? value : 0;

@@ -11,19 +11,6 @@ import {
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { MODELS_PARENT_BOOLEAN_FLAGS, MODELS_PARENT_VALUE_FLAGS } from "../parent-command-path.js";
 
-type OptionalFlagParse = {
-  ok: boolean;
-  value?: string;
-};
-
-function parseOptionalFlagValue(argv: string[], name: string): OptionalFlagParse {
-  const value = getFlagValue(argv, name);
-  if (value === null) {
-    return { ok: false };
-  }
-  return { ok: true, value };
-}
-
 function parseRepeatedFlagValues(argv: string[], name: string): string[] | null {
   const values: string[] = [];
   const args = argv.slice(2);
@@ -118,8 +105,8 @@ export function parseStatusRouteArgs(argv: string[]) {
   if (timeoutMs === null) {
     return null;
   }
-  const agent = parseOptionalFlagValue(argv, "--agent");
-  if (!agent.ok) {
+  const agent = getFlagValue(argv, "--agent");
+  if (agent === null) {
     return null;
   }
   return {
@@ -127,7 +114,7 @@ export function parseStatusRouteArgs(argv: string[]) {
     deep: hasFlag(argv, "--deep"),
     all: hasFlag(argv, "--all"),
     usage: hasFlag(argv, "--usage"),
-    ...(agent.value !== undefined ? { agent: agent.value } : {}),
+    ...(agent !== undefined ? { agent } : {}),
     verbose: getVerboseFlag(argv, { includeDebug: true }),
     timeoutMs,
   };
@@ -143,29 +130,20 @@ export function parseGatewayStatusRouteArgs(argv: string[]) {
   if (!positionals || positionals.length !== 0) {
     return null;
   }
-  const url = parseOptionalFlagValue(argv, "--url");
-  if (!url.ok) {
+  const url = getFlagValue(argv, "--url");
+  const token = getFlagValue(argv, "--token");
+  const password = getFlagValue(argv, "--password");
+  const timeout = getFlagValue(argv, "--timeout");
+  if (url === null || token === null || password === null || timeout === null) {
     return null;
   }
-  const token = parseOptionalFlagValue(argv, "--token");
-  if (!token.ok) {
-    return null;
-  }
-  const password = parseOptionalFlagValue(argv, "--password");
-  if (!password.ok) {
-    return null;
-  }
-  const timeout = parseOptionalFlagValue(argv, "--timeout");
-  if (!timeout.ok) {
-    return null;
-  }
-  const ssh = parseOptionalFlagValue(argv, "--ssh");
-  if (!ssh.ok || ssh.value !== undefined) {
+  const ssh = getFlagValue(argv, "--ssh");
+  if (ssh !== undefined) {
     // SSH probe options need the full command because they resolve host aliases and identity files.
     return null;
   }
-  const sshIdentity = parseOptionalFlagValue(argv, "--ssh-identity");
-  if (!sshIdentity.ok || sshIdentity.value !== undefined) {
+  const sshIdentity = getFlagValue(argv, "--ssh-identity");
+  if (sshIdentity !== undefined) {
     return null;
   }
   if (hasFlag(argv, "--ssh-auto")) {
@@ -173,10 +151,10 @@ export function parseGatewayStatusRouteArgs(argv: string[]) {
   }
   return {
     rpc: {
-      url: url.value,
-      token: token.value,
-      password: password.value,
-      timeout: timeout.value,
+      url,
+      token,
+      password,
+      timeout,
     },
     deep: hasFlag(argv, "--deep"),
     json: hasFlag(argv, "--json"),
@@ -198,21 +176,21 @@ export function parseGatewayHealthRouteArgs(argv: string[]) {
   if (!positionals || positionals.length !== 0) {
     return null;
   }
-  const url = parseOptionalFlagValue(argv, "--url");
-  const token = parseOptionalFlagValue(argv, "--token");
-  const password = parseOptionalFlagValue(argv, "--password");
-  const timeout = parseOptionalFlagValue(argv, "--timeout");
-  const port = parseOptionalFlagValue(argv, "--port");
-  if (!url.ok || !token.ok || !password.ok || !timeout.ok || !port.ok) {
+  const url = getFlagValue(argv, "--url");
+  const token = getFlagValue(argv, "--token");
+  const password = getFlagValue(argv, "--password");
+  const timeout = getFlagValue(argv, "--timeout");
+  const port = getFlagValue(argv, "--port");
+  if (url === null || token === null || password === null || timeout === null || port === null) {
     return null;
   }
-  if (timeout.value !== undefined && parseStrictPositiveInteger(timeout.value) === undefined) {
+  if (timeout !== undefined && parseStrictPositiveInteger(timeout) === undefined) {
     return null;
   }
   let localPortOverride: number | undefined;
-  if (port.value !== undefined) {
+  if (port !== undefined) {
     try {
-      localPortOverride = parseGatewayPortOption(port.value);
+      localPortOverride = parseGatewayPortOption(port);
     } catch {
       return null;
     }
@@ -220,15 +198,15 @@ export function parseGatewayHealthRouteArgs(argv: string[]) {
       return null;
     }
   }
-  if (url.value && localPortOverride !== undefined) {
+  if (url && localPortOverride !== undefined) {
     return null;
   }
   return {
     rpc: {
-      url: url.value,
-      token: token.value,
-      password: password.value,
-      timeout: timeout.value ?? "10000",
+      url,
+      token,
+      password,
+      timeout: timeout ?? "10000",
       expectFinal: hasFlag(argv, "--expect-final"),
       json: true as const,
     },
@@ -246,50 +224,33 @@ export function parseSessionsRouteArgs(argv: string[]) {
   if (!positionals || positionals.length !== 0) {
     return null;
   }
-  const agent = parseOptionalFlagValue(argv, "--agent");
-  if (!agent.ok) {
-    return null;
-  }
-  const store = parseOptionalFlagValue(argv, "--store");
-  if (!store.ok) {
-    return null;
-  }
-  const active = parseOptionalFlagValue(argv, "--active");
-  if (!active.ok) {
-    return null;
-  }
-  const limit = parseOptionalFlagValue(argv, "--limit");
-  if (!limit.ok) {
+  const agent = getFlagValue(argv, "--agent");
+  const store = getFlagValue(argv, "--store");
+  const active = getFlagValue(argv, "--active");
+  const limit = getFlagValue(argv, "--limit");
+  if (agent === null || store === null || active === null || limit === null) {
     return null;
   }
   return {
     json: hasFlag(argv, "--json"),
     allAgents: hasFlag(argv, "--all-agents"),
-    agent: agent.value,
-    store: store.value,
-    active: active.value,
-    limit: limit.value,
+    agent,
+    store,
+    active,
+    limit,
   };
 }
 
 /** Parse `openclaw agents list` display switches for route-first execution. */
 export function parseAgentsListRouteArgs(argv: string[]) {
-  const listPositionals = getRoutedCommandPositionals(argv, {
-    commandPath: ["agents", "list"],
-    booleanFlags: ["--json", "--bindings", "--tree"],
-  });
-  if (listPositionals && listPositionals.length === 0) {
-    return {
-      json: hasFlag(argv, "--json"),
-      bindings: hasFlag(argv, "--bindings"),
-      tree: hasFlag(argv, "--tree"),
-    };
-  }
-  const aliasPositionals = getRoutedCommandPositionals(argv, {
-    commandPath: ["agents"],
-    booleanFlags: ["--json", "--bindings", "--tree"],
-  });
-  return aliasPositionals?.length === 0
+  const matches = [["agents", "list"], ["agents"]].some(
+    (commandPath) =>
+      getRoutedCommandPositionals(argv, {
+        commandPath,
+        booleanFlags: ["--json", "--bindings", "--tree"],
+      })?.length === 0,
+  );
+  return matches
     ? {
         json: hasFlag(argv, "--json"),
         bindings: hasFlag(argv, "--bindings"),
@@ -342,12 +303,12 @@ export function parseModelsListRouteArgs(argv: string[]) {
   if (!positionals || positionals.length !== 0) {
     return null;
   }
-  const provider = parseOptionalFlagValue(argv, "--provider");
-  if (!provider.ok) {
+  const provider = getFlagValue(argv, "--provider");
+  if (provider === null) {
     return null;
   }
   return {
-    provider: provider.value,
+    provider,
     all: hasFlag(argv, "--all"),
     local: hasFlag(argv, "--local"),
     json: hasFlag(argv, "--json"),
@@ -364,12 +325,12 @@ function parseModelsRootStatusRouteArgs(argv: string[]) {
   if (!positionals || positionals.length !== 0) {
     return null;
   }
-  const agent = parseOptionalFlagValue(argv, "--agent");
-  if (!agent.ok) {
+  const agent = getFlagValue(argv, "--agent");
+  if (agent === null) {
     return null;
   }
   return {
-    agent: agent.value,
+    agent,
     json: hasFlag(argv, "--json") || hasFlag(argv, "--status-json"),
     plain: hasFlag(argv, "--status-plain"),
   };
@@ -396,24 +357,18 @@ export function parseModelsStatusRouteArgs(argv: string[]) {
   if (!positionals || positionals.length !== 0) {
     return null;
   }
-  const probeProvider = parseOptionalFlagValue(argv, "--probe-provider");
-  if (!probeProvider.ok) {
-    return null;
-  }
-  const probeTimeout = parseOptionalFlagValue(argv, "--probe-timeout");
-  if (!probeTimeout.ok) {
-    return null;
-  }
-  const probeConcurrency = parseOptionalFlagValue(argv, "--probe-concurrency");
-  if (!probeConcurrency.ok) {
-    return null;
-  }
-  const probeMaxTokens = parseOptionalFlagValue(argv, "--probe-max-tokens");
-  if (!probeMaxTokens.ok) {
-    return null;
-  }
-  const agent = parseOptionalFlagValue(argv, "--agent");
-  if (!agent.ok) {
+  const probeProvider = getFlagValue(argv, "--probe-provider");
+  const probeTimeout = getFlagValue(argv, "--probe-timeout");
+  const probeConcurrency = getFlagValue(argv, "--probe-concurrency");
+  const probeMaxTokens = getFlagValue(argv, "--probe-max-tokens");
+  const agent = getFlagValue(argv, "--agent");
+  if (
+    probeProvider === null ||
+    probeTimeout === null ||
+    probeConcurrency === null ||
+    probeMaxTokens === null ||
+    agent === null
+  ) {
     return null;
   }
   const probeProfileValues = parseRepeatedFlagValues(argv, "--probe-profile");
@@ -427,11 +382,11 @@ export function parseModelsStatusRouteArgs(argv: string[]) {
         ? probeProfileValues[0]
         : probeProfileValues;
   return {
-    probeProvider: probeProvider.value,
-    probeTimeout: probeTimeout.value,
-    probeConcurrency: probeConcurrency.value,
-    probeMaxTokens: probeMaxTokens.value,
-    agent: agent.value,
+    probeProvider,
+    probeTimeout,
+    probeConcurrency,
+    probeMaxTokens,
+    agent,
     probeProfile,
     json: hasFlag(argv, "--json"),
     plain: hasFlag(argv, "--plain"),
@@ -465,19 +420,16 @@ export function parseChannelsStatusRouteArgs(argv: string[]) {
   if (!positionals || positionals.length !== 0) {
     return null;
   }
-  const timeout = parseOptionalFlagValue(argv, "--timeout");
-  const channel = parseOptionalFlagValue(argv, "--channel");
-  if (!timeout.ok) {
-    return null;
-  }
-  if (!channel.ok) {
+  const timeout = getFlagValue(argv, "--timeout");
+  const channel = getFlagValue(argv, "--channel");
+  if (timeout === null || channel === null) {
     return null;
   }
   return {
-    channel: channel.value,
+    channel,
     json: hasFlag(argv, "--json"),
     probe: hasFlag(argv, "--probe"),
-    timeout: timeout.value,
+    timeout,
   };
 }
 
@@ -509,18 +461,15 @@ function parseTasksListRouteArgsForCommandPath(argv: string[], commandPath: stri
   if (!positionals || positionals.length !== 0) {
     return null;
   }
-  const runtime = parseOptionalFlagValue(argv, "--runtime");
-  if (!runtime.ok) {
-    return null;
-  }
-  const status = parseOptionalFlagValue(argv, "--status");
-  if (!status.ok) {
+  const runtime = getFlagValue(argv, "--runtime");
+  const status = getFlagValue(argv, "--status");
+  if (runtime === null || status === null) {
     return null;
   }
   return {
     json: true as const,
-    runtime: runtime.value,
-    status: status.value,
+    runtime,
+    status,
   };
 }
 
@@ -545,16 +494,10 @@ export function parseTasksAuditRouteArgs(argv: string[]) {
   if (!positionals || positionals.length !== 0) {
     return null;
   }
-  const severity = parseOptionalFlagValue(argv, "--severity");
-  if (!severity.ok) {
-    return null;
-  }
-  const code = parseOptionalFlagValue(argv, "--code");
-  if (!code.ok) {
-    return null;
-  }
+  const severity = getFlagValue(argv, "--severity");
+  const code = getFlagValue(argv, "--code");
   const rawLimit = getFlagValue(argv, "--limit");
-  if (rawLimit === null) {
+  if (severity === null || code === null || rawLimit === null) {
     return null;
   }
   const limit = rawLimit === undefined ? undefined : parseStrictPositiveInteger(rawLimit);
@@ -563,8 +506,8 @@ export function parseTasksAuditRouteArgs(argv: string[]) {
   }
   return {
     json: true as const,
-    severity: severity.value,
-    code: code.value,
+    severity,
+    code,
     limit,
   };
 }

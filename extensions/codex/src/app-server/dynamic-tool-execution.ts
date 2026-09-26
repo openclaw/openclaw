@@ -1,7 +1,3 @@
-/**
- * Timeout, terminal-release, and diagnostic helpers for Codex dynamic tool
- * calls.
- */
 import {
   embeddedAgentLog,
   formatToolExecutionErrorMessage,
@@ -25,6 +21,7 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createFailedDynamicToolResponse,
+  failedToolResult,
   type CodexDynamicToolRuntimeResponse,
 } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -39,9 +36,7 @@ import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 
 export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
-/** Default timeout for Codex dynamic tool calls. */
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
-/** Hard cap for ordinary per-call Codex dynamic tool timeout overrides. */
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 // timeoutSeconds is an inner tool budget. Keep enough outer-watchdog headroom
 // for bounded setup RPCs and the tool's structured timeout result to complete.
@@ -49,9 +44,7 @@ const CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS = 30_000;
 const CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_DYNAMIC_COMPUTER_GATEWAY_TIMEOUT_MS = 30_000;
 const CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS = 30_000;
-/** Timeout for image-understanding style dynamic tool calls. */
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
-/** Timeout for message-delivery dynamic tool calls. */
 const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 600_000;
 /** Outer default for collector waits: full swarm budget plus completion grace. */
 const CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS =
@@ -252,10 +245,7 @@ async function executeDynamicToolCallWithTimeout(
   ) => {
     notifyAgentToolResult({
       toolName: params.call.tool,
-      result: {
-        content: [{ type: "text", text: message }],
-        details: { status: terminalReason, error: message },
-      },
+      result: failedToolResult(message, terminalReason),
       isError: true,
     });
   };
@@ -404,22 +394,15 @@ export function toCodexDynamicToolProgressResponse(
   const mcpAppPreview = isJsonObject(transcriptDetails?.mcpAppPreview)
     ? transcriptDetails.mcpAppPreview
     : undefined;
-  const progressDetails = mcpAppPreview ? { mcpAppPreview } : undefined;
-  if (response.asyncStarted !== true && progressDetails === undefined) {
+  if (response.asyncStarted !== true && !mcpAppPreview) {
     return protocolResponse;
   }
   return {
     ...protocolResponse,
-    ...(progressDetails ? { details: progressDetails } : {}),
-    ...(response.asyncStarted === true
-      ? {
-          details: {
-            ...progressDetails,
-            async: true as const,
-            status: "started" as const,
-          },
-        }
-      : {}),
+    details:
+      response.asyncStarted === true
+        ? { ...(mcpAppPreview ? { mcpAppPreview } : {}), async: true, status: "started" }
+        : { mcpAppPreview },
   };
 }
 
@@ -438,7 +421,6 @@ type TerminalDynamicToolReleaseState = {
   pendingOpenClawDynamicToolCompletionIdsCount: number;
 };
 
-/** Decides whether a terminal dynamic tool response can release the Codex turn. */
 export function shouldReleaseTurnAfterTerminalDynamicTool(
   state: TerminalDynamicToolReleaseState,
 ): boolean {
@@ -453,14 +435,12 @@ export function shouldReleaseTurnAfterTerminalDynamicTool(
   );
 }
 
-/** Returns true when a non-async result should block terminal-release shortcuts. */
 export function shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(
   response: CodexDynamicToolRuntimeResponse,
 ): boolean {
   return response.asyncStarted !== true;
 }
 
-/** Action chosen after checking terminal dynamic-tool diagnostics. */
 type TerminalDynamicToolBatchAction =
   | "idle"
   | "wait"
@@ -475,7 +455,6 @@ type TerminalDynamicToolBatchState = {
   hasPendingTerminalDynamicToolRelease: boolean;
 };
 
-/** Resolves whether terminal diagnostic state should release, wait, or stay idle. */
 export function resolveTerminalDynamicToolBatchAction(
   state: TerminalDynamicToolBatchState,
 ): TerminalDynamicToolBatchAction {
@@ -495,7 +474,6 @@ export function resolveTerminalDynamicToolBatchAction(
   return "idle";
 }
 
-/** Returns true for diagnostic events that terminate a dynamic tool call. */
 export function isDynamicToolTerminalDiagnosticEvent(
   event: DiagnosticEventPayload,
 ): event is TerminalToolExecutionDiagnostic {
@@ -506,7 +484,6 @@ export function isDynamicToolTerminalDiagnosticEvent(
   );
 }
 
-/** Matches terminal diagnostics to a specific dynamic tool call id/name. */
 export function isMatchingDynamicToolTerminalDiagnostic(params: {
   event: TerminalToolExecutionDiagnostic;
   call: CodexDynamicToolCallParams;
@@ -536,7 +513,6 @@ export function isMatchingDynamicToolTerminalDiagnostic(params: {
   );
 }
 
-/** Checks pending diagnostics for a terminal event matching a tool call. */
 export function hasPendingDynamicToolTerminalDiagnostic(params: {
   call: CodexDynamicToolCallParams;
   runId?: string;
@@ -557,7 +533,6 @@ export function hasPendingDynamicToolTerminalDiagnostic(params: {
   });
 }
 
-/** Resolves per-tool timeout, applying media/message defaults and hard caps. */
 export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];

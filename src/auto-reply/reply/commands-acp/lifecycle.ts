@@ -12,6 +12,7 @@ import {
   resolveAcpDispatchPolicyError,
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
+import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import {
   closeAdmittedRunDelegatedAuthority,
@@ -42,7 +43,6 @@ import {
 } from "./bindings.js";
 import {
   ACP_STEER_OUTPUT_LIMIT,
-  collectAcpErrorText,
   parseSpawnInput,
   parseSteerInput,
   resolveCommandRequestId,
@@ -119,7 +119,7 @@ export async function handleAcpSpawnAction(
   const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, spawn.agentId);
   if (agentPolicyError) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error: agentPolicyError,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "ACP target agent is not allowed by policy.",
@@ -143,7 +143,7 @@ export async function handleAcpSpawnAction(
     });
   } catch (error) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not resolve ACP session workspace.",
@@ -171,7 +171,7 @@ export async function handleAcpSpawnAction(
     initializedMeta = initialized.meta;
   } catch (err) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error: err,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not initialize ACP session runtime.",
@@ -280,7 +280,7 @@ function resolveAcpSessionForCommandOrStop(params: {
   const error = resolveAcpSessionResolutionError(resolved);
   if (error) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: error.message,
@@ -427,7 +427,7 @@ export async function handleAcpSteerAction(
   const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
   if (dispatchPolicyError) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error: dispatchPolicyError,
         fallbackCode: "ACP_DISPATCH_DISABLED",
         fallbackMessage: dispatchPolicyError.message,
@@ -501,7 +501,7 @@ export async function handleAcpCloseAction(
         runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
       } catch (error) {
         return commandReply(
-          collectAcpErrorText({
+          toAcpRuntimeErrorText({
             error,
             fallbackCode: "ACP_TURN_FAILED",
             fallbackMessage: "ACP close failed before completion.",

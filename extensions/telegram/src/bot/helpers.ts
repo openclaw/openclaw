@@ -1,5 +1,6 @@
 // Telegram helper module supports helpers behavior.
 import type { Chat, Message } from "grammy/types";
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import type {
   OpenClawConfig,
@@ -17,14 +18,12 @@ import {
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
 import {
-  firstDefined,
   isSenderAllowed,
   normalizeAllowFrom,
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
-import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
 import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
@@ -43,7 +42,9 @@ import {
   type TelegramMediaKind,
   type TelegramTextEntity,
 } from "./body-helpers.js";
-import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
+import type { TelegramGetChat } from "./types.js";
+
+export { resolveTelegramPreviewStreamMode as resolveTelegramStreamMode } from "../preview-streaming.js";
 
 export type {
   TelegramForwardedContext,
@@ -392,15 +393,7 @@ export function resolveTelegramForumThreadId(params: {
   isForum?: boolean;
   messageThreadId?: number | null;
 }) {
-  // Non-forum groups: ignore message_thread_id (reply threads are not real topics)
-  if (!params.isForum) {
-    return undefined;
-  }
-  // Forum groups: use the topic ID, defaulting to General topic
-  if (params.messageThreadId == null) {
-    return TELEGRAM_GENERAL_TOPIC_ID;
-  }
-  return params.messageThreadId;
+  return params.isForum ? (params.messageThreadId ?? TELEGRAM_GENERAL_TOPIC_ID) : undefined;
 }
 
 export function resolveTelegramThreadSpec(params: {
@@ -537,12 +530,6 @@ export function buildTypingThreadParams(messageThreadId?: number) {
     return undefined;
   }
   return { message_thread_id: Math.trunc(messageThreadId) };
-}
-
-export function resolveTelegramStreamMode(telegramCfg?: {
-  streaming?: unknown;
-}): TelegramStreamMode {
-  return resolveTelegramPreviewStreamMode(telegramCfg);
 }
 
 export function buildTelegramGroupPeerId(

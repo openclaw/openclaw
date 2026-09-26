@@ -236,10 +236,18 @@ function resolveRuntimePreferredWebSearchProviderId(params: {
     return runtimeProviderId;
   }
   const provider = params.providers?.find((entry) => entry.id === runtimeProviderId);
-  return provider &&
-    hasImplicitProviderSelectionSignal(provider, params.config, params.search, params.agentDir)
-    ? provider.id
-    : undefined;
+  if (
+    !provider ||
+    !hasImplicitProviderSelectionSignal(provider, params.config, params.search, params.agentDir)
+  ) {
+    return undefined;
+  }
+  // The secrets snapshot cannot see OAuth profiles. Let the credential-aware
+  // order choose ahead of its env-keyed winner, which remains eligible for fallback.
+  if (params.runtimeWebSearch?.selectedProviderKeySource === "env") {
+    return undefined;
+  }
+  return provider.id;
 }
 
 type WebSearchRequestContext = {

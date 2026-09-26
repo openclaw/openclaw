@@ -15,7 +15,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DEFAULT_E2E_BARE_IMAGE,
   DEFAULT_E2E_FUNCTIONAL_IMAGE,
-  DEFAULT_LIVE_RETRIES,
   DEFAULT_PARALLELISM,
   DEFAULT_PROFILE,
   DEFAULT_RESOURCE_LIMITS,
@@ -309,7 +308,7 @@ function resourceLimitsSummary(resourceLimits: Record<string, number>) {
     .join(" ");
 }
 
-export function describeDockerSchedulerLimits(parallelism: number, options: SchedulerLimits) {
+function describeDockerSchedulerLimits(parallelism: number, options: SchedulerLimits) {
   return `parallelism=${parallelism} weightLimit=${options.weightLimit} resources=${resourceLimitsSummary(
     options.resourceLimits,
   )}`;
@@ -1537,7 +1536,6 @@ async function runLane(
         `==> [${name}] cache dir: ${env.OPENCLAW_DOCKER_CACHE_HOME_DIR}`,
         `==> [${name}] timeout: ${timeoutMs}ms`,
         `==> [${name}] no output timeout: ${noOutputTimeoutMs ?? 0}ms`,
-        `==> [${name}] retries: ${lane.retries ?? 0}`,
         `==> [${name}] e2e image kind: ${lane.e2eImageKind ?? "none"}`,
         `==> [${name}] e2e image: ${env.OPENCLAW_DOCKER_E2E_IMAGE ?? ""}`,
         `==> [${name}] trusted harness: ${HARNESS_ROOT_DIR}`,
@@ -1549,34 +1547,15 @@ async function runLane(
   console.log(`==> [${name}] start`);
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
-  let result: ShellCommandResult;
-  const attempts: ReturnType<typeof laneAttempt>[] = [];
-  const maxAttempts = 1 + Math.max(0, lane.retries ?? 0);
-  for (let attempt = 1; ; attempt += 1) {
-    const attemptStartedAt = Date.now();
-    if (attempt > 1) {
-      await fs.promises
-        .appendFile(logFile, `\n==> [${name}] retry attempt ${attempt}\n`)
-        .catch(recordPublicationFailure);
-      console.log(`==> [${name}] retry ${attempt}/${maxAttempts}`);
-    }
-    result = await runShellCommand({
-      command,
-      env,
-      label: name,
-      logFile,
-      timeoutMs,
-      noOutputTimeoutMs,
-    });
-    attempts.push(laneAttempt(attempt, attemptStartedAt, result));
-    if (activeChildrenShutdownPromise || result.status === 0 || attempt >= maxAttempts) {
-      break;
-    }
-    // An exhausted lane deadline alone does not diagnose a transient failure.
-    if (!(await laneLogMatchesRetryPattern(logFile, lane.retryPatterns))) {
-      break;
-    }
-  }
+  const result = await runShellCommand({
+    command,
+    env,
+    label: name,
+    logFile,
+    timeoutMs,
+    noOutputTimeoutMs,
+  });
+  const attempts = [laneAttempt(1, startedAt, result)];
   const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
   if (result.status === 0) {
     console.log(`==> [${name}] pass ${elapsedSeconds}s`);
@@ -1814,14 +1793,6 @@ export async function tailFile(file: string, lines: number, maxBytes = LOG_TAIL_
   }
   const tail = content.split(/\r?\n/).slice(-lines).join("\n");
   return tail.trimEnd();
-}
-
-async function laneLogMatchesRetryPattern(logFile: string, patterns: RegExp[]) {
-  if (!patterns || patterns.length === 0) {
-    return false;
-  }
-  const tail = await tailFile(logFile, 160);
-  return patterns.some((pattern) => pattern.test(tail));
 }
 
 async function printFailureSummary(failures: LaneResult[], tailLines: number) {
@@ -2098,11 +2069,6 @@ async function main() {
     throw new Error("OPENCLAW_DOCKER_ALL_LANES must include at least one lane name");
   }
   const liveMode = parseLiveMode(process.env.OPENCLAW_DOCKER_ALL_LIVE_MODE);
-  const liveRetries = parseNonNegativeInt(
-    process.env.OPENCLAW_DOCKER_ALL_LIVE_RETRIES,
-    DEFAULT_LIVE_RETRIES,
-    "OPENCLAW_DOCKER_ALL_LIVE_RETRIES",
-  );
   const timingsFile = path.resolve(
     process.env.OPENCLAW_DOCKER_ALL_TIMINGS_FILE || DEFAULT_TIMINGS_FILE,
   );
@@ -2142,7 +2108,6 @@ async function main() {
     resolveDockerE2ePlan({
       includeOpenWebUI,
       liveMode,
-      liveRetries,
       orderLanes,
       planReleaseAll: planJson && planReleaseAll,
       profile,
@@ -2244,7 +2209,6 @@ async function main() {
   console.log(`==> Tail parallelism: ${tailParallelism}`);
   console.log(`==> Lane timeout: ${laneTimeoutMs}ms`);
   console.log(`==> Live mode: ${liveMode}`);
-  console.log(`==> Live retries: ${liveRetries}`);
   console.log(`==> Lane start stagger: ${laneStartStaggerMs}ms`);
   console.log(`==> Status interval: ${statusIntervalMs}ms`);
   console.log(`==> Fail fast: ${failFast ? "yes" : "no"}`);

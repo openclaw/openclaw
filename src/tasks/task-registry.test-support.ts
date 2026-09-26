@@ -123,11 +123,12 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }): void {
 }
 
 export function configureInMemoryTaskStoresForTests() {
-  configureTaskRegistryRuntime({
-    store: createInMemoryTaskRegistryStore(),
-  });
+  const flowStore = createInMemoryTaskFlowRegistryStore();
   configureTaskFlowRegistryRuntime({
-    store: createInMemoryTaskFlowRegistryStore(),
+    store: flowStore,
+  });
+  configureTaskRegistryRuntime({
+    store: createInMemoryTaskRegistryStore(undefined, flowStore),
   });
 }
 

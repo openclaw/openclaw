@@ -165,18 +165,19 @@ it.each([
           },
         });
       }
-      // The failed run already attempted canonical cleanup. Client close only
-      // releases its borrow; the canonical resource retains the failed retirement.
-      const failed = worker;
+      // The client can borrow a fresh executor after native retirement; a stale
+      // hash proves admission without replaying the uncertain delete.
       await expect(
-        Promise.resolve().then(() =>
-          failed.run(
-            async () => undefined,
-            () => undefined,
-          ),
+        worker.run(
+          (scope) =>
+            scope.execute({
+              ...command,
+              input: { ...command.input, expectedHash: "not-current" },
+            }),
+          () => undefined,
         ),
-      ).rejects.toThrow("admission is closed");
-      await failed.close();
+      ).resolves.toEqual({ ok: true, value: false });
+      await worker.close();
       worker = undefined;
       await closeOpenClawAgentDatabasesAsync(state.stateDir);
       const recovered = openOpenClawAgentDatabase(options);

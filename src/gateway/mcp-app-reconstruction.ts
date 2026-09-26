@@ -15,6 +15,7 @@ import {
 } from "../agents/mcp-ui-resource.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { visitSessionMessagesAsync } from "./session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
@@ -232,19 +233,6 @@ async function findMcpAppReconstructionDataByVisit(
   return { ...reconstruction, toolInput };
 }
 
-function getRestoreInFlight(): Map<string, Promise<ReconstructionResult | undefined>> {
-  const state = globalThis as Record<PropertyKey, unknown>;
-  const existing = state[MCP_APP_RESTORE_IN_FLIGHT_KEY] as
-    | Map<string, Promise<ReconstructionResult | undefined>>
-    | undefined;
-  if (existing) {
-    return existing;
-  }
-  const created = new Map<string, Promise<ReconstructionResult | undefined>>();
-  state[MCP_APP_RESTORE_IN_FLIGHT_KEY] = created;
-  return created;
-}
-
 async function reconstructMcpAppView(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -357,7 +345,9 @@ export async function restoreMcpAppView(params: {
   viewId: string;
 }): Promise<ReconstructionResult | undefined> {
   const key = `${params.agentId ?? ""}\0${params.sessionKey}\0${params.viewId}`;
-  const inFlight = getRestoreInFlight();
+  const inFlight = resolveGlobalMap<string, Promise<ReconstructionResult | undefined>>(
+    MCP_APP_RESTORE_IN_FLIGHT_KEY,
+  );
   return await getOrCreatePromise(inFlight, key, () => restoreMcpAppViewOnce(params), {
     evictOnSettled: true,
   });

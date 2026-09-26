@@ -10,7 +10,10 @@ import type { PreparedGatewayModelCatalogSnapshot } from "../gateway/server-mode
 import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
+import { MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   HARNESS_ID,
@@ -25,17 +28,88 @@ import {
   writeUnrelatedFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
+import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeCatalog,
 } from "./prepared-model-runtime.js";
+import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const { makeTempDir, retireAfterTest, waitForMarker, waitForWorkers } =
   usePreparedCatalogWorkerFixtures();
 
+const createStaticSnapshot = createStaticCatalogSnapshotFixture({ makeTempDir, retireAfterTest });
+
 describe("prepared model catalog worker plugin scope", () => {
+  it("retains refreshed CLI auth while acquiring an unrelated provider catalog", async () => {
+    vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
+    const cliHome = makeTempDir("openclaw-catalog-cli-auth-home-");
+    const fixture = await createStaticSnapshot(0, { HOME: cliHome });
+    const provider = "minimax-portal";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [MINIMAX_CLI_PROFILE_ID]: {
+            type: "oauth",
+            provider,
+            access: "expired-cli-access-not-real",
+            refresh: "same-cli-login-not-real",
+            expires: 1,
+          },
+        },
+        order: { [provider]: [MINIMAX_CLI_PROFILE_ID] },
+      },
+      fixture.agentDir,
+    );
+    const cliCredentials = path.join(cliHome, ".minimax", "oauth_creds.json");
+    fs.mkdirSync(path.dirname(cliCredentials), { recursive: true });
+    fs.writeFileSync(
+      cliCredentials,
+      JSON.stringify({
+        access_token: "refreshed-cli-access-not-real",
+        refresh_token: "same-cli-login-not-real",
+        expiry_date: Date.now() + 3_600_000,
+      }),
+    );
+
+    const refreshed = await fixture.snapshot.loadFullModelCatalog!({
+      refresh: true,
+      providerIds: [provider],
+    });
+    const expected = getPreparedModelFullCatalogAuth(refreshed)!;
+    expect(expected.credentials?.[provider]).toMatchObject({
+      access: "refreshed-cli-access-not-real",
+    });
+    expect(expected.authStore.profiles[MINIMAX_CLI_PROFILE_ID]).toMatchObject({
+      access: "refreshed-cli-access-not-real",
+    });
+    const expectedStore: RuntimeAuthProfileStore = expected.authStore;
+    expect(expectedStore.runtimeLocalProfileIds).toContain(MINIMAX_CLI_PROFILE_ID);
+    expect(expectedStore.runtimeLocalOrderProviderIds).toContain(provider);
+
+    const unrelated = await fixture.snapshot.loadFullModelCatalog!({
+      refresh: true,
+      providerIds: [PROVIDER_ID],
+    });
+    expect(unrelated.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+    );
+    const retained = getPreparedModelFullCatalogAuth(unrelated)!;
+    expect(retained.credentials?.[provider]).toEqual(expected.credentials?.[provider]);
+    expect(retained.authStore.profiles[MINIMAX_CLI_PROFILE_ID]).toEqual(
+      expected.authStore.profiles[MINIMAX_CLI_PROFILE_ID],
+    );
+    const retainedStore: RuntimeAuthProfileStore = retained.authStore;
+    expect(retainedStore.runtimeLocalProfileIds).toContain(MINIMAX_CLI_PROFILE_ID);
+    expect(retainedStore.runtimeLocalOrderProviderIds).toContain(provider);
+    expect(retainedStore.runtimePersistedProfileIds ?? []).not.toContain(MINIMAX_CLI_PROFILE_ID);
+    expect(retainedStore.order?.[provider]).toEqual(expectedStore.order?.[provider]);
+    expect(fixture.snapshot.isCurrent()).toBe(true);
+  });
+
   it.each([
     { first: "full", slot: "memory", asyncSyntheticAuth: false, syntheticAuthAvailable: true },
     {

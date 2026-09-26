@@ -31,6 +31,10 @@ merge_outcome_stop() {
     echo "Confirmed pre-dispatch abort: no merge request was sent by this attempt. Next: lock-recover, then rerun merge-run (use the exact lock-recover command after verifying no child tools remain)." >&2
   else
     echo 'Next: investigate; see scripts/AGENTS.md merge-outcome doctrine and `scripts/pr merge-recover`. No automatic merge retry.' >&2
+    if [ -n "${MERGE_OUTCOME_OID:-}" ] && printf '%s\n' "${MERGE_OUTCOME_RECORD:-null}" |
+      jq -e '.phase == "intent" and .route == "auto"' >/dev/null; then
+      echo "After investigation, retire the auto request: scripts/pr merge-recover ${MERGE_OUTCOME_REF##*/} $MERGE_OUTCOME_OID --confirmed-operator-recovery --cancel-auto" >&2
+    fi
   fi
   return 1
 }
@@ -164,7 +168,7 @@ merge_outcome_load_local() {
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
         (if has("localHead") then (.localHead | oid) else true end) and
         (.attempt | attempt) and recovery and
-        (if has("cancellation") then .accepted == true and .route == "auto" and
+        (if has("cancellation") then .route == "auto" and
           (.cancellation | keys == ["actor","outcome","state"] and (.outcome | oid) and
             (.actor | type == "string" and length > 0) and (.state | IN("requested","confirmed")))
          else true end) and
@@ -213,7 +217,7 @@ merge_outcome_load_local() {
           .phase == "intent" and
           ((.accepted == false and (.route == "immediate" or
              (.route == "auto" and $next.recovery.preDispatchRefusal != null))) or
-           (.accepted == true and .route == "auto" and .cancellation.state == "confirmed")) and
+           (.route == "auto" and .cancellation.state == "confirmed")) and
           .repo == $next.repo and .pr == $next.pr and .prId == $next.prId and
           .base == $next.base and .method == $next.method and .attempt == $next.recovery.attempt and
           $next.route == "immediate" and (.head == $next.head or $next.recovery.replacementHead == $next.head)
@@ -234,7 +238,8 @@ merge_outcome_load_local() {
       retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .cancellation.outcome)
       if ! GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" ||
         ! GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json" | jq -e --argjson next "$MERGE_OUTCOME_RECORD" '
-          .phase == "intent" and .accepted == true and .route == "auto" and (has("cancellation") | not) and
+          .phase == "intent" and .route == "auto" and (has("cancellation") | not) and
+          .accepted == $next.accepted and
           .repo == $next.repo and .pr == $next.pr and .prId == $next.prId and
           .base == $next.base and .head == $next.head and .main == $next.main and
           .method == $next.method and .attempt == $next.attempt
@@ -496,6 +501,16 @@ merge_outcome_reconcile() {
   fi
   landed=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.mergeCommit.oid)
   pr_git merge-base --is-ancestor "$landed" "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" || {
+    local observed_main main_local=false landed_local=false
+    observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main) || return 1
+    if GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$observed_main^{commit}" 2>/dev/null; then
+      main_local=true
+    fi
+    if GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$landed^{commit}" 2>/dev/null; then
+      landed_local=true
+    fi
+    printf 'Merge receipt objects: main=%s main_local=%s landed=%s landed_local=%s\n' \
+      "$observed_main" "$main_local" "$landed" "$landed_local" >&2
     merge_outcome_stop "reported landed commit is unavailable or not reachable from authoritative main"; return 1;
   }
   method=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .method)
@@ -539,9 +554,9 @@ merge_outcome_cancel_auto() {
   local pr="$1" expected_oid="$2" actor root capture
   if [ "$expected_oid" != "$MERGE_OUTCOME_OID" ] ||
     ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '
-      .phase == "intent" and .accepted == true and .route == "auto"
+      .phase == "intent" and .route == "auto"
     ' >/dev/null; then
-    merge_outcome_stop "auto cancellation requires the exact retained accepted auto intent"; return 1
+    merge_outcome_stop "auto cancellation requires the exact retained auto intent"; return 1
   fi
   merge_outcome_observe "$pr" || return 1
   if [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.state)" = MERGED ]; then
@@ -551,8 +566,8 @@ merge_outcome_cancel_auto() {
   if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
     .pr.id == $record.prId and .pr.headRefOid == $record.head and .pr.baseRefName == $record.base and
     .pr.state == "OPEN" and .pr.isInMergeQueue == false and .pr.isMergeQueueEnabled == false and
-    (if $record | has("cancellation") then true else
-       .pr.autoMergeRequest.mergeMethod == ($record.method | ascii_upcase) end)
+    (.pr.autoMergeRequest == null or
+     .pr.autoMergeRequest.mergeMethod == ($record.method | ascii_upcase))
   ' >/dev/null; then
     merge_outcome_stop "auto cancellation requires the original open PR/head/base and matching non-queue request"; return 1
   fi
@@ -567,17 +582,20 @@ merge_outcome_cancel_auto() {
       captures+=("$capture")
     done
     merge_outcome_stable "$pr" || return 1
-    # Retain cancellation before dispatch. A lost reply is observation-only on retry.
+    # Retain retirement intent without rewriting the original acknowledgment.
+    # A lost cancellation reply remains observation-only on retry.
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c --arg actor "$actor" --arg outcome "$expected_oid" \
       '.cancellation={actor:$actor,outcome:$outcome,state:"requested"}')" ${captures[@]+"${captures[@]}"} || return 1
-    pr_gh_plain api graphql --hostname "$MERGE_REPO_HOST" \
-      -f "id=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .prId)" \
-      -f 'query=mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){pullRequest{id}}}' ||
-      echo "Auto cancellation response uncertain; reconciling without another cancellation request." >&2
-    merge_outcome_observe "$pr" || return 1
-    if [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.state)" = MERGED ]; then
-      merge_outcome_resume "$pr"
-      return
+    if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.autoMergeRequest != null' >/dev/null; then
+      pr_gh_plain api graphql --hostname "$MERGE_REPO_HOST" \
+        -f "id=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .prId)" \
+        -f 'query=mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){pullRequest{id}}}' ||
+        echo "Auto cancellation response uncertain; reconciling without another cancellation request." >&2
+      merge_outcome_observe "$pr" || return 1
+      if [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.state)" = MERGED ]; then
+        merge_outcome_resume "$pr"
+        return
+      fi
     fi
   fi
   if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
@@ -591,7 +609,7 @@ merge_outcome_cancel_auto() {
   if [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .cancellation.state)" != confirmed ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.cancellation.state="confirmed"')" || return 1
   fi
-  echo "Auto cancellation confirmed for PR #$pr; no merge requested. Retained outcome: $MERGE_OUTCOME_OID"
+  echo "Auto request retirement confirmed for PR #$pr; no merge requested. Retained outcome: $MERGE_OUTCOME_OID"
   echo "Repair, review, and prepare the intended head before explicit merge-recover with this outcome OID."
 }
 

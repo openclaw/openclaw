@@ -1,4 +1,3 @@
-/** Keyed routing for all turn traffic on one shared Codex app-server client. */
 import { AsyncResource } from "node:async_hooks";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -129,7 +128,6 @@ export function hasCodexAppServerSiblingRouteWork(
   return routers.get(client)?.hasSiblingWork(threadId) ?? false;
 }
 
-/** Returns the sole router installed on a physical app-server client. */
 export function getCodexAppServerTurnRouter(
   client: CodexAppServerClient,
 ): CodexAppServerTurnRouter {
@@ -236,20 +234,15 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     this.assertActive();
     const threadId = requireId(options.threadId, "thread id");
     const turnId = requireId(options.turnId, "turn id");
-    if (options.signal?.aborted) {
-      return {
-        completion: Promise.resolve(false),
-        state: "unconfirmed",
-        settledSignal: AbortSignal.abort(),
-        cancel: () => {},
-      };
-    }
     // Resume discovers the active turn only after its route starts buffering;
     // preserve an exact completion that arrived before the watcher could exist.
-    if (this.routes.get(threadId)?.completedNativeTurnIds.has(turnId)) {
+    const confirmed =
+      !options.signal?.aborted &&
+      this.routes.get(threadId)?.completedNativeTurnIds.has(turnId) === true;
+    if (options.signal?.aborted || confirmed) {
       return {
-        completion: Promise.resolve(true),
-        state: "confirmed",
+        completion: Promise.resolve(confirmed),
+        state: confirmed ? "confirmed" : "unconfirmed",
         settledSignal: AbortSignal.abort(),
         cancel: () => {},
       };

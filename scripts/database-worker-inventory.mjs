@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { format } from "oxfmt";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = "docs/reference/database-schemas/worker-access-inventory.md";
@@ -106,6 +107,8 @@ const reviewed = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/channels/message/ingress-queue-health.kernel.ts",
+  "src/channels/message/ingress-queue.kernel.ts",
   "src/state/openclaw-state-worker-runtime.ts",
   "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
   "src/infra/session-cost-usage-worker.ts",
@@ -169,11 +172,7 @@ function ownerOf(file) {
   return parts.slice(0, depth).join("/");
 }
 
-function findCalls(file, text) {
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  if (source.parseDiagnostics.length > 0) {
-    throw new Error(`Cannot inventory invalid syntax in ${file}`);
-  }
+function findCalls(source) {
   const names = new Map([...primitives.keys()].map((name) => [name, name]));
   for (const statement of source.statements) {
     const bindings = ts.isImportDeclaration(statement)
@@ -205,13 +204,14 @@ function findCalls(file, text) {
         calls.push({ primitive, line: line + 1, column: character + 1 });
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
   visit(source);
   return calls;
 }
 
 function inventory() {
+  using parser = createNativeTypeScriptParser({ cwd: root });
   const candidates = execFileSync(
     "rg",
     [
@@ -240,10 +240,23 @@ function inventory() {
   )
     .trim()
     .split("\n");
-  return candidates
-    .filter((file) => !excluded.test(file))
-    .flatMap((file) => {
-      const calls = findCalls(file, fs.readFileSync(path.join(root, file), "utf8"));
+  const files = candidates.filter((file) => !excluded.test(file));
+  const sources = parser.parseSourceFiles(
+    files.map((fileName) => ({
+      fileName,
+      text: fs.readFileSync(path.join(root, fileName), "utf8"),
+    })),
+  );
+  const invalidSource = parser.getSyntacticDiagnostics()[0];
+  if (invalidSource) {
+    throw new Error(
+      `Cannot inventory invalid syntax in ${path.relative(root, invalidSource.fileName ?? root)}`,
+    );
+  }
+  return sources
+    .flatMap((source, index) => {
+      const file = files[index];
+      const calls = findCalls(source);
       return calls.length ? [{ file, owner: ownerOf(file), calls, ...classify(file) }] : [];
     })
     .toSorted(
@@ -296,6 +309,8 @@ function render(rows) {
     }),
     "",
     "## Profile priority and current cutover status",
+    "",
+    "Channel ingress `listPending`, `listClaims`, `listFailed`, `listUnsettled`, and claim/recovery preparation share the write broker's FIFO with mutations. They must observe earlier committed writes and retain read-write database admission. Explicit read-only inspection remains noncreating inside that broker. Failed-health, pressure, and account-discovery diagnostics use the read-only worker, where bounded staleness is acceptable.",
     "",
     "The 2026-09-20 five-second Gateway profile on build `ddb31b38a88c` attributed **47% of main-thread time in aggregate** to synchronous state write coordination, including profile creation and exec-approval updates. No separate per-site timing was captured for the read paths below. Their order follows the reported profile triage, not invented individual costs. The T1 table puts these known owners first; all other owners follow alphabetically.",
     "",

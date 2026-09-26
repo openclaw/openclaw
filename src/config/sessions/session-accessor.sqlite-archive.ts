@@ -16,6 +16,8 @@ import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archi
 import type {
   MaterializedSessionStateDeletePlan,
   SessionStateDeletePlan,
+  TranscriptArchivePagePlan,
+  TranscriptArchivePageResult,
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
   TranscriptArchiveReadPlan,
@@ -240,11 +242,12 @@ function runSqliteTranscriptArchiveWorker(
 
 export function runSqliteTranscriptArchivePublishWorker(
   plans: readonly TranscriptArchivePublishPlan[],
+  signal?: AbortSignal,
 ): Promise<TranscriptArchivePublishResult[]> {
   const scoped = runScopedSqliteArchiveOperation(
     { operation: "publish", plans },
     createSqliteTranscriptArchiveWorker,
-    runExclusiveSqliteTranscriptArchiveWorker,
+    (run) => runExclusiveSqliteTranscriptArchiveWorker(run, signal),
   );
   if (scoped) {
     return scoped.then((result) => {
@@ -255,9 +258,29 @@ export function runSqliteTranscriptArchivePublishWorker(
     });
   }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchivePublishResult>({
+    signal,
     expectedMessageType: "published",
     workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
   });
+}
+
+/** Probe pending publication without creating a writable database or archive schema. */
+export async function readPendingSqliteTranscriptArchivesInWorker(
+  plan: {
+    agentId: string;
+    databasePath: string;
+    env: NodeJS.ProcessEnv;
+  },
+  signal: AbortSignal,
+): Promise<boolean> {
+  signal.throwIfAborted();
+  const { withSessionHistoryWorkerDatabase } =
+    await import("./session-transcript-worker-runtime.js");
+  signal.throwIfAborted();
+  return withSessionHistoryWorkerDatabase(
+    { agentId: plan.agentId, path: plan.databasePath, env: plan.env },
+    (reader) => reader.readPendingArchives({ env: plan.env }, signal),
+  );
 }
 
 export async function runSqliteTranscriptArchiveReadWorker(
@@ -273,6 +296,24 @@ export async function runSqliteTranscriptArchiveReadWorker(
   }
   const result = await scoped;
   if (result.type !== "final-read") {
+    throw new Error("SQLite archive Worker returned another operation's result");
+  }
+  return result.results;
+}
+
+export async function runSqliteTranscriptArchivePageWorker(
+  plans: readonly TranscriptArchivePagePlan[],
+): Promise<Array<TranscriptArchivePageResult | undefined>> {
+  const scoped = runScopedSqliteArchiveOperation(
+    { operation: "read-page", plans },
+    createSqliteTranscriptArchiveWorker,
+    runExclusiveSqliteTranscriptArchiveWorker,
+  );
+  if (!scoped) {
+    throw new Error("SQLite archive reads require their captured database scope");
+  }
+  const result = await scoped;
+  if (result.type !== "page-read") {
     throw new Error("SQLite archive Worker returned another operation's result");
   }
   return result.results;

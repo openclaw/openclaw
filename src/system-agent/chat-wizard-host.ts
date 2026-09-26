@@ -46,29 +46,22 @@ export type ChatWizardAnswerResult = ChatWizardResult & {
   userHistoryText: string;
 };
 
+type HostedSetupWizard = (
+  prompter: WizardPrompter,
+  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+) => Promise<void | HostedSetupCompletion>;
+
 export type ChatWizardHostDependencies = {
   runChannelSetupWizard?: (
     channel: string,
     prompter: WizardPrompter,
     beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+    assertPersistentEffectCurrent?: () => void,
   ) => Promise<void | HostedSetupCompletion>;
-  runSkillsSetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runSearchSetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runGatewaySetupWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void | HostedSetupCompletion>;
-  runMemoryImportWizard?: (
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-    onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
-  ) => Promise<HostedMemoryImportOutcome>;
+  runSkillsSetupWizard?: HostedSetupWizard;
+  runSearchSetupWizard?: HostedSetupWizard;
+  runGatewaySetupWizard?: HostedSetupWizard;
+  runMemoryImportWizard?: HostedRuntime["runHostedMemoryImport"];
   appendAuditEntry?: typeof import("./audit.js").appendSystemAgentAuditEntry;
 };
 
@@ -358,12 +351,24 @@ export class ChatWizardHost {
       kind: "channel",
       label: channel,
       autoSelectChannel: channel,
-      run: async (prompter) =>
-        run
-          ? await run(channel, prompter, this.options.beforePersistentApply)
+      run: async (prompter, assertPersistentEffectCurrent) => {
+        const beforePersistentApply = async (runtime: RuntimeEnv) => {
+          assertPersistentEffectCurrent();
+          await this.options.beforePersistentApply(runtime);
+          assertPersistentEffectCurrent();
+        };
+        return run
+          ? await run(channel, prompter, beforePersistentApply, assertPersistentEffectCurrent)
           : await (
               await loadHostedRuntime()
-            ).runHostedChannelSetup(channel, prompter, this.options.beforePersistentApply),
+            ).runHostedChannelSetup(
+              channel,
+              prompter,
+              beforePersistentApply,
+              undefined,
+              assertPersistentEffectCurrent,
+            );
+      },
     });
   }
 
@@ -373,11 +378,10 @@ export class ChatWizardHost {
       kind: "skills",
       label: "skills",
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedSkillsSetup(prompter, this.options.beforePersistentApply),
+        await (run ?? (await loadHostedRuntime()).runHostedSkillsSetup)(
+          prompter,
+          this.options.beforePersistentApply,
+        ),
     });
   }
 
@@ -387,11 +391,10 @@ export class ChatWizardHost {
       kind: "search",
       label: "web search",
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedSearchSetup(prompter, this.options.beforePersistentApply),
+        await (run ?? (await loadHostedRuntime()).runHostedSearchSetup)(
+          prompter,
+          this.options.beforePersistentApply,
+        ),
     });
   }
 
@@ -401,11 +404,10 @@ export class ChatWizardHost {
       kind: "gateway",
       label: "gateway",
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedGatewaySetup(prompter, this.options.beforePersistentApply),
+        await (run ?? (await loadHostedRuntime()).runHostedGatewaySetup)(
+          prompter,
+          this.options.beforePersistentApply,
+        ),
     });
     if (this.options.surface !== "gateway" || !this.bridge) {
       return result;
@@ -425,15 +427,11 @@ export class ChatWizardHost {
       label: "memory import",
       memoryImportProviders: providers,
       run: async (prompter) =>
-        run
-          ? await run(prompter, this.options.beforePersistentApply, (value) =>
-              providers.push(value),
-            )
-          : await (
-              await loadHostedRuntime()
-            ).runHostedMemoryImport(prompter, this.options.beforePersistentApply, (value) =>
-              providers.push(value),
-            ),
+        await (run ?? (await loadHostedRuntime()).runHostedMemoryImport)(
+          prompter,
+          this.options.beforePersistentApply,
+          (value) => providers.push(value),
+        ),
     });
   }
 
@@ -442,7 +440,10 @@ export class ChatWizardHost {
     label: string;
     autoSelectChannel?: string;
     memoryImportProviders?: MemoryImportProviderOutcome[];
-    run: (prompter: WizardPrompter) => Promise<HostedWizardRunResult>;
+    run: (
+      prompter: WizardPrompter,
+      assertPersistentEffectCurrent: () => void,
+    ) => Promise<HostedWizardRunResult>;
   }): Promise<ChatWizardResult> {
     const completion: ActiveWizardBridge["completion"] = {
       status: "applied",
@@ -450,8 +451,16 @@ export class ChatWizardHost {
         ? { memoryImportProviders: params.memoryImportProviders }
         : {}),
     };
-    const session = new WizardSession(async (prompter) => {
-      const result = await params.run(prompter);
+    const session = new WizardSession(async (prompter, _signal, owner) => {
+      // Publish the bridge before a setup callback can use its retained authority.
+      await Promise.resolve();
+      const assertPersistentEffectCurrent = () => {
+        owner.assertPersistentEffectCurrent();
+        if (this.bridge?.session !== owner) {
+          throw new Error("Setup session is no longer active");
+        }
+      };
+      const result = await params.run(prompter, assertPersistentEffectCurrent);
       if (typeof result === "string") {
         completion.status = result;
       } else if (result) {

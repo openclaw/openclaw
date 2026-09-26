@@ -48,7 +48,7 @@ describe("config cli integration", () => {
       async ({ configPath, tempDir }) => {
         await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(tempDir, "state") }, async () => {
           try {
-            recordDeferredPluginMigrations({
+            await recordDeferredPluginMigrations({
               pending: [
                 {
                   pluginId: "sample",
@@ -488,6 +488,10 @@ describe("config cli integration", () => {
             code: 1,
           });
           const diagnostic = registeredRuntimeErrors.join("\n");
+          if (args[1] === "validate") {
+            expect(diagnostic).toContain("Config needs correction:");
+            expect(diagnostic).toContain("openclaw config schema");
+          }
           expect(diagnostic).toContain(`openclaw.json:9 — ${displayPath}:`);
           expect(diagnostic).toContain("expected string");
           expect(diagnostic).not.toContain(`${issuePath}:`);

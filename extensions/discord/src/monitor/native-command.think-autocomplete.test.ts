@@ -331,7 +331,7 @@ describe("discord native /think autocomplete", () => {
   });
 
   it.each([
-    { sessionRuntime: undefined, expectedRuntime: "codex", supportsUltra: false },
+    { sessionRuntime: undefined, expectedRuntime: "codex", supportsUltra: true },
     { sessionRuntime: "openclaw", expectedRuntime: "openclaw", supportsUltra: true },
   ])(
     "uses the effective $expectedRuntime runtime for Luna choices",

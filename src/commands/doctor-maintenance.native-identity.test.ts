@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
+import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -17,6 +18,10 @@ const native = vi.hoisted(() => ({
   busctl: vi.fn<typeof import("../daemon/systemd-exec.js").execBusctlSystem>(),
   systemctl: vi.fn<typeof import("../daemon/systemd-exec.js").execSystemctl>(),
   open: vi.fn<typeof import("../daemon/systemd-peer-native.js").openSystemdBroker>(),
+}));
+// The manager identity fixture runs Doctor outside its synthetic Gateway's service.
+vi.mock("../daemon/service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: () => "outside",
 }));
 vi.mock("../gateway/call.js", async (original) => {
   const { gatewayMaintenanceResponse } = await import("../gateway/health-response.test-support.js");
@@ -120,7 +125,12 @@ async function repair(scenario: Scenario) {
     readFile(file === unitFile ? fixtureUnit : file, options),
   );
   let running = true;
-  const pid = 12345;
+  // The synthetic Gateway must not be this test process or one of its ancestors.
+  const ancestors = getSelfAndAncestorPidsSync();
+  let pid = 12345;
+  while (ancestors.has(pid)) {
+    pid += 1;
+  }
   native.resident.mockImplementation(() => (running ? { pid } : undefined));
   let stopped = false;
   let diagnosticFailure = false;
@@ -184,6 +194,7 @@ async function repair(scenario: Scenario) {
         KillMode: { type: "s", data: "control-group" },
         TasksCurrent: { type: "t", data: running ? 1 : 0 },
         MemoryCurrent: { type: "t", data: 0 },
+        ControlGroup: { type: "s", data: "/system.slice/openclaw-gateway.service" },
         ExecStart: {
           type: "a(sasbttttuii)",
           data: [[command[0], command, false, 0, 0, 0, 0, 0, 0, 0]],

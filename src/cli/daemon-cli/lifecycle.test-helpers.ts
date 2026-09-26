@@ -1,5 +1,23 @@
+import { expect } from "vitest";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
+
+export function createGatewayProcessExpectations(
+  listeners: typeof import("../../infra/gateway-processes.js").findVerifiedGatewayListenerPidsOnPortSync,
+  signalPid: typeof import("../../infra/gateway-processes.js").signalVerifiedGatewayPidSync,
+) {
+  return {
+    listeners(port: number, env?: NodeJS.ProcessEnv) {
+      expect(listeners).toHaveBeenCalledWith(port, { env });
+    },
+    signal(pid: number, signal: "SIGTERM" | "SIGUSR1", port: number, env?: NodeJS.ProcessEnv) {
+      expect(signalPid).toHaveBeenCalledWith(pid, signal, { env, port });
+    },
+    noSignal(pid: number, signal: "SIGTERM" | "SIGUSR1", port: number, env?: NodeJS.ProcessEnv) {
+      expect(signalPid).not.toHaveBeenCalledWith(pid, signal, { env, port });
+    },
+  };
+}
 
 type RestartPostCheckContext = {
   activationAccepted: boolean;

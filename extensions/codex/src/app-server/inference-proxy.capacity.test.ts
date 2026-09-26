@@ -771,26 +771,41 @@ describe("inference relay capacity", () => {
     },
   );
 
-  it("expires admission during DNS and cancels a late dial without leaking the permit", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const started = createDeferred<void>();
-    const dns = createDeferred<{ lookup: undefined }>();
-    transport.resolve.mockImplementationOnce(() => {
-      started.resolve();
-      return dns.promise;
-    });
-    const stalled = connect();
-    const closed = new Promise<void>((resolve) => {
-      stalled.once("close", () => resolve());
-    });
-    await started.promise;
-    await vi.advanceTimersByTimeAsync(10_000);
-    await closed;
-    dns.resolve({ lookup: undefined });
-    const streams = await holdUploads();
-    expect(upstreams).toHaveLength(16);
-    expect(streams.every(({ client }) => client.readyState === WebSocket.OPEN)).toBe(true);
-  });
+  it.each(["timer", "clock"])(
+    "expires admission during DNS by %s without leaking the permit",
+    async (expiry) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const started = createDeferred<void>();
+      const dns = createDeferred<{ lookup: undefined }>();
+      transport.resolve.mockImplementationOnce(() => {
+        started.resolve();
+        return dns.promise;
+      });
+      const stalled = connect();
+      const rejected = once(stalled, "unexpected-response");
+      await started.promise;
+      if (expiry === "timer") {
+        await vi.advanceTimersByTimeAsync(10_000);
+      } else {
+        // DNS can settle after the deadline before the queued timer callback runs.
+        vi.setSystemTime(Date.now() + 10_000);
+        dns.resolve({ lookup: undefined });
+      }
+      const [, response] = await rejected;
+      const chunks: Buffer[] = [];
+      for await (const chunk of response) {
+        chunks.push(Buffer.from(chunk));
+      }
+      expect(response.statusCode).toBe(504);
+      expect(Buffer.concat(chunks).toString()).toBe(
+        "Codex parent-local inference transport failed; retry on a fresh connection.",
+      );
+      dns.resolve({ lookup: undefined });
+      const streams = await holdUploads();
+      expect(upstreams).toHaveLength(16);
+      expect(streams.every(({ client }) => client.readyState === WebSocket.OPEN)).toBe(true);
+    },
+  );
 
   it("bounds queued frame bytes and recovers after disconnect", async () => {
     const large = await open();
@@ -812,14 +827,19 @@ describe("inference relay capacity", () => {
     expect((await post()).status).toBe(200);
   });
 
-  it.each(["upgrade", "error body"])(
-    "expires a stalled upstream %s and reclaims admission",
-    async (phase) => {
+  it.each([
+    { phase: "upgrade", expiry: "timer" },
+    { phase: "error body", expiry: "timer" },
+    { phase: "error body", expiry: "clock" },
+  ])(
+    "expires a stalled upstream $phase by $expiry and reclaims admission",
+    async ({ phase, expiry }) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const handlers = server.listeners("upgrade");
       server.removeAllListeners("upgrade");
       const received = createDeferred<void>();
       const disconnected = createDeferred<void>();
+      let finishBody = () => {};
       server.once("upgrade", (_request, socket) => {
         socket.once("close", () => disconnected.resolve());
         // Raw HTTP-upgrade sockets retain a writable half after peer FIN.
@@ -827,15 +847,32 @@ describe("inference relay capacity", () => {
         socket.on("error", (error) => expect(error).toMatchObject({ code: "ECONNRESET" }));
         if (phase === "error body") {
           socket.write("HTTP/1.1 401 Unauthorized\r\nContent-Length: 1000\r\n\r\nx");
+          finishBody = () => socket.end("x".repeat(999));
         }
         received.resolve();
       });
       const stalled = connect();
+      const rejected = once(stalled, "unexpected-response");
       const closed = new Promise<void>((resolve) => {
         stalled.once("close", () => resolve());
       });
       await received.promise;
-      await vi.advanceTimersByTimeAsync(10_000);
+      if (expiry === "timer") {
+        await vi.advanceTimersByTimeAsync(10_000);
+      } else {
+        vi.setSystemTime(Date.now() + 10_000);
+        finishBody();
+      }
+      const [, response] = await rejected;
+      const chunks: Buffer[] = [];
+      for await (const chunk of response) {
+        chunks.push(Buffer.from(chunk));
+      }
+      expect(response.statusCode).toBe(504);
+      expect(Buffer.concat(chunks).toString()).toBe(
+        "Codex parent-local inference transport failed; retry on a fresh connection.",
+      );
+      stalled.terminate();
       await Promise.all([closed, disconnected.promise]);
       for (const handler of handlers) {
         server.on("upgrade", handler);
@@ -843,6 +880,38 @@ describe("inference relay capacity", () => {
       expect(await holdUploads()).toHaveLength(16);
     },
   );
+
+  it("flushes a timely provider rejection after the handshake deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    server.removeAllListeners("upgrade");
+    server.once("upgrade", (_request, socket) => {
+      socket.on("error", () => {});
+      socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Length: 6\r\n\r\ndenied");
+    });
+    const upgrade = once(relayServer(), "upgrade");
+    const client = connect();
+    const rejected = once(client, "unexpected-response");
+    const [, downstream] = await upgrade;
+    const selected = createDeferred<void>();
+    const end = downstream.end.bind(downstream);
+    let flush = () => {};
+    vi.spyOn(downstream, "end").mockImplementation((...args) => {
+      flush = () => end(...args);
+      selected.resolve();
+      return downstream;
+    });
+    await selected.promise;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(downstream.destroyed).toBe(false);
+    flush();
+    const [, response] = await rejected;
+    const chunks: Buffer[] = [];
+    for await (const chunk of response) {
+      chunks.push(Buffer.from(chunk));
+    }
+    expect(response.statusCode).toBe(401);
+    expect(Buffer.concat(chunks).toString()).toBe("denied");
+  });
 
   it("expires only proven idle connections, not active streams, then admits their replacements", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

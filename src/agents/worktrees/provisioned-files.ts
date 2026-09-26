@@ -29,17 +29,16 @@ async function copyProvisionedFile(params: {
   assertCurrent?: () => void;
   signal?: AbortSignal;
 }): Promise<boolean> {
-  const normalized = normalizeProvisionedRelativePath(params.relativePath);
+  const relativePath = params.relativePath;
   // Eligibility checks preserve skip behavior; copyIn guards the later mutation.
   if (
-    !normalized ||
-    !(await hasSafeParentDirectories(params.sourceRoot.rootReal, normalized)) ||
-    !(await hasSafeParentDirectories(params.destinationRoot.rootReal, normalized))
+    !(await hasSafeParentDirectories(params.sourceRoot.rootReal, relativePath)) ||
+    !(await hasSafeParentDirectories(params.destinationRoot.rootReal, relativePath))
   ) {
     return false;
   }
-  const source = resolveGitPath(params.sourceRoot.rootReal, normalized);
-  const destination = resolveGitPath(params.destinationRoot.rootReal, normalized);
+  const source = resolveGitPath(params.sourceRoot.rootReal, relativePath);
+  const destination = resolveGitPath(params.destinationRoot.rootReal, relativePath);
   const sourceStat = await fs.lstat(source).catch(() => undefined);
   if (!sourceStat?.isFile() || sourceStat.isSymbolicLink()) {
     return false;
@@ -353,7 +352,7 @@ export async function restoreProvisionedFiles(
     try {
       await validateDirectoryIdentities(parentIdentities);
       for (let chunkIndex = 0; chunkIndex < state.chunks; chunkIndex += 1) {
-        const chunk = getRegistryWorktreeProvisionedChunk(env, {
+        const chunk = await getRegistryWorktreeProvisionedChunk(env, {
           worktreeId,
           path: state.path,
           chunkIndex,
@@ -361,6 +360,7 @@ export async function restoreProvisionedFiles(
         if (!chunk) {
           throw new Error(`provisioned snapshot chunk missing: ${state.path}:${chunkIndex}`);
         }
+        commitGuard?.();
         await writeFileWindowFully(handle, chunk, null, { assertBeforeMutation: commitGuard });
       }
       commitGuard?.();

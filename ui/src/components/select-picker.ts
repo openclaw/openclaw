@@ -6,6 +6,7 @@ import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { configureAnchoredPopup } from "./anchored-overlay.ts";
 import { icons } from "./icons.ts";
+import { revealInScrollRegion } from "./scroll-state.ts";
 import "../styles/select-picker.css";
 
 export type PickerOption = {
@@ -25,6 +26,8 @@ export type PickerParams<Option extends PickerOption> = {
   value: string | null;
   options: readonly Option[];
   disabled?: boolean;
+  invalid?: boolean;
+  describedBy?: string;
   className?: string;
   title?: string;
   placement?: "top" | "bottom";
@@ -169,13 +172,7 @@ export class SelectPicker<
     const menu = this.querySelector<HTMLElement>(".picker-select__options");
     const active = menu?.querySelector<HTMLElement>("[data-active]");
     if (menu && active) {
-      const bounds = menu.getBoundingClientRect();
-      const row = active.getBoundingClientRect();
-      if (row.top < bounds.top) {
-        menu.scrollTop -= bounds.top - row.top;
-      } else if (row.bottom > bounds.bottom) {
-        menu.scrollTop += row.bottom - bounds.bottom;
-      }
+      revealInScrollRegion(menu, active);
     }
   }
 
@@ -353,6 +350,8 @@ export class SelectPicker<
           aria-haspopup="listbox"
           aria-expanded=${String(open)}
           aria-controls=${controls}
+          aria-invalid=${this.params.invalid ? "true" : nothing}
+          aria-describedby=${this.params.describedBy ?? nothing}
           title=${this.params.title ?? nothing}
           ?disabled=${this.params.disabled}
           @click=${() => (open ? this.closeMenu() : this.openMenu())}
@@ -387,6 +386,8 @@ export class SelectPicker<
                     aria-autocomplete="list"
                     aria-expanded="true"
                     aria-controls=${controls}
+                    aria-invalid=${this.params.invalid ? "true" : nothing}
+                    aria-describedby=${this.params.describedBy ?? nothing}
                     aria-activedescendant=${active >= 0 ? `${this.listboxId}-${active}` : nothing}
                     .value=${live(this.query)}
                     @input=${(event: InputEvent) => {

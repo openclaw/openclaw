@@ -5,8 +5,6 @@ import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 
 registerBackgroundTasksEnglish();
 
-export { newestTaskSnapshot } from "../../../lib/tasks/data.ts";
-
 // Status tone drives the meta line's colored word and the running pulse dot;
 // pill chips read too heavy at rail width, so tone is typographic only.
 // Shared with the status row's hover preview.

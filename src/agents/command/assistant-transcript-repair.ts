@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
+import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { loadTranscriptAppendRuntime } from "./runtime-loaders.js";
 
@@ -18,20 +19,7 @@ type AssistantTranscriptRepairContext = {
   config: OpenClawConfig;
 };
 
-const EMPTY_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-} as const;
+const EMPTY_USAGE = buildUsageWithNoCost({});
 
 /** Records a final whose canonical transcript append failed. */
 export async function persistAssistantTranscriptRepairRecord(params: {

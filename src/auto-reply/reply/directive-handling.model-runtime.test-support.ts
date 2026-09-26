@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 
 type RuntimeDirectiveTestHarness = {
+  setOpenAiRuntimeScopedUltraProvider: () => void;
   createSessionEntry: (overrides?: Partial<InternalSessionEntry>) => InternalSessionEntry;
   createGptAliasIndex: () => ModelAliasIndex;
   persistModelDirectiveForTest: (params: {
@@ -31,6 +32,7 @@ type RuntimeDirectiveTestHarness = {
 
 export function registerModelRuntimeDirectiveTests(harness: RuntimeDirectiveTestHarness): void {
   const {
+    setOpenAiRuntimeScopedUltraProvider,
     createSessionEntry,
     createGptAliasIndex,
     persistModelDirectiveForTest,
@@ -147,4 +149,32 @@ export function registerModelRuntimeDirectiveTests(harness: RuntimeDirectiveTest
     expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
     expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
+  it.each(["openclaw", "codex"])(
+    "commits %s selection while keeping supported mixed thinking on its turn",
+    async (runtime) => {
+      setOpenAiRuntimeScopedUltraProvider();
+      const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
+      const { persisted, result } = await persistModelDirectiveForTest({
+        command: `/model openai/gpt-5.6-luna --runtime ${runtime} /think ultra please solve`,
+        allowedModelKeys: ["openai/gpt-5.6-luna"],
+        sessionEntry,
+      });
+
+      expect(persisted.errorText).toBeUndefined();
+      expect(result).toMatchObject({
+        kind: "continue",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        directives: { thinkLevel: "ultra" },
+        directiveAck: { text: expect.stringContaining("Thinking level set to ultra.") },
+      });
+      expect(sessionEntry).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-luna",
+        modelOverrideSource: "user",
+        agentRuntimeOverride: runtime,
+        thinkingLevel: "high",
+      });
+    },
+  );
 }

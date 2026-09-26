@@ -64,6 +64,7 @@ export type SessionListFilterParams = {
   now: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
   configuredAgentIds?: ReadonlySet<string>;
+  identityNames?: ReadonlyMap<string, string>;
   getRowContext: SessionListRowContextProvider;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
   restrictProfileReferences?: boolean;
@@ -291,6 +292,7 @@ export function* filterSessionEntries(
     ? createSessionListSearchMatcher({
         cfg,
         search,
+        identityNames: params.identityNames,
         now,
         getTarget: params.getTarget,
         modelCatalog: params.modelCatalog instanceof Map ? params.modelCatalog : undefined,

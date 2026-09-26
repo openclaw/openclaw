@@ -1,13 +1,14 @@
 // Pure grouping helpers for the sessions table "Group by" modes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { moveArrayEntry } from "../array-order.ts";
 import { resolveSessionDisplayKind } from "../session-display.ts";
 import {
   checkoutDisplayName,
   foldWorktreeCheckoutPath,
   sessionActorGroupId,
 } from "./catalog-project-grouping.ts";
-import { moveSessionOrderEntry, normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
+import { normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
 
 export const SESSION_GROUP_MODES = [
@@ -120,14 +121,7 @@ export function normalizeSessionSectionOrder(
   return order;
 }
 
-export function moveSessionSection(
-  order: readonly string[],
-  source: string,
-  target: string,
-  position: "before" | "after",
-): string[] {
-  return moveSessionOrderEntry(order, source, target, position);
-}
+export const moveSessionSection = moveArrayEntry<string>;
 
 export function normalizeSessionsGroupBy(raw: unknown): SessionsGroupBy {
   return SESSION_GROUP_MODES.includes(raw as SessionsGroupBy) ? (raw as SessionsGroupBy) : "none";

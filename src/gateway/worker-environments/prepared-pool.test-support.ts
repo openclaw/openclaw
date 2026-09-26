@@ -188,7 +188,7 @@ export function usePreparedPoolFixture() {
     const executionMode = "worker-turn";
     const identity = { sessionId, sessionKey, agentId: "main", executionMode } as const;
     const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-    const requested = placements.startDispatch(identity);
+    const requested = await placements.startDispatch(identity);
     const assigned = record.preparation
       ? placements.bindPreparedEnvironment({
           ...identity,
@@ -287,7 +287,7 @@ export function usePreparedPoolFixture() {
       store,
       getConfig: () => config,
       resolveProvider: () => provider,
-      prepareRetention: async () => ({ assertCurrent: () => {} }),
+      prepareRetention: async () => ({ isCurrent: () => true }),
       prepareIntent: async (_profileId, { projectPath }) => ({
         providerId: provider.id,
         profileSnapshot: profile(path.basename(projectPath!)),

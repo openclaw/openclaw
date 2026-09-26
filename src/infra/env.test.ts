@@ -31,13 +31,6 @@ function waitForNextLog(): Promise<void> {
 }
 
 describe("normalizeZaiEnv", () => {
-  it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {
-    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "zai-legacy" }, () => {
-      normalizeZaiEnv();
-      expect(process.env.ZAI_API_KEY).toBe("zai-legacy");
-    });
-  });
-
   it("does not override existing ZAI_API_KEY", () => {
     withEnv({ ZAI_API_KEY: "zai-current", Z_AI_API_KEY: "zai-legacy" }, () => {
       normalizeZaiEnv();

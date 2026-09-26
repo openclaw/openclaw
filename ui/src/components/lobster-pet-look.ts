@@ -13,12 +13,7 @@ import type {
 } from "./lobster-pet-contract.ts";
 import { lobsterPaletteName, lobsterRandomName } from "./lobster-pet-lore.ts";
 import { moonPhaseFraction } from "./lobster-pet-moon.ts";
-import {
-  CANONICAL_CHIMERA_PARTS,
-  LOBSTER_PALETTE_WEIGHTS,
-  chimeraBodyClaw,
-  rollChimeraParts,
-} from "./lobster-pet-palettes.ts";
+import { LOBSTER_PALETTE_WEIGHTS, LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 import {
   ACTUAL_LOBSTER,
   ASCII_LOBSTER,
@@ -55,6 +50,44 @@ const PALETTE_FRAME_CLASSES: Partial<Record<LobsterPetPaletteId, string>> = {
   cryptid: "lob-cryptid-frame",
   balloon: "lob-balloon-frame",
 };
+
+const PALETTE_GEOMETRY: Partial<Record<LobsterPetPaletteId, typeof PIXEL_LOBSTER>> = {
+  flatpack: FLATPACK_LOBSTER,
+  loading: LOADING_LOBSTER,
+  actual: ACTUAL_LOBSTER,
+  balloon: BALLOON_LOBSTER,
+  ascii: ASCII_LOBSTER,
+  portal: PORTAL_LOBSTER,
+  pixel: PIXEL_LOBSTER,
+};
+
+const CHIMERA_DONOR_IDS = ["crimson", "blue", "gold", "banana", "watermelon"] as const;
+
+const CANONICAL_CHIMERA_PARTS: NonNullable<LobsterPetLook["chimeraParts"]> = {
+  body: "#ff4f40",
+  clawLeft: "#4a7dfc",
+  clawRight: "#f4b840",
+  antennae: "#3f9d63",
+};
+
+function rollChimeraParts(rng: () => number): NonNullable<LobsterPetLook["chimeraParts"]> {
+  const remaining = CHIMERA_DONOR_IDS.map((id) =>
+    expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === id),
+      `chimera donor palette ${id}`,
+    ),
+  );
+  const pick = (): LobsterPetPalette => {
+    const index = Math.floor(rng() * remaining.length);
+    return expectDefined(remaining.splice(index, 1)[0], "distinct chimera donor");
+  };
+  return {
+    body: pick().shell,
+    clawLeft: pick().shell,
+    clawRight: pick().shell,
+    antennae: pick().shell,
+  };
+}
 
 // A neutral look used to render catalog minis outside the pet lifecycle.
 export function canonicalLobsterLook(palette: LobsterPetPalette): LobsterPetLook {
@@ -154,7 +187,10 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-export function pickWeighted<T>(rng: () => number, entries: Array<[T, number]>): T {
+export function pickWeighted<T>(
+  rng: () => number,
+  entries: ReadonlyArray<readonly [T, number]>,
+): T {
   const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
   let roll = rng() * total;
   for (const [value, weight] of entries) {
@@ -176,7 +212,7 @@ const GLINT_TINTS = ["#ffd166", "#ff8ac2", "#b79bff"] as const;
 
 export function createLobsterPetLook(seed: number, now: Date = new Date()): LobsterPetLook {
   const rng = mulberry32(seed);
-  const palette = pickWeighted(rng, LOBSTER_PALETTE_WEIGHTS);
+  const palette = pickWeighted<LobsterPetPalette>(rng, LOBSTER_PALETTE_WEIGHTS);
   const scale = pickWeighted(rng, SCALES);
   const accessory = pickWeighted(rng, [...ACCESSORIES, ...seasonalAccessories(now)]);
   const antennae: LobsterPetAntennae = rng() < 0.6 ? "perky" : "droopy";
@@ -283,14 +319,8 @@ export function renderLobsterSvg(
     reading?: boolean;
   } = {},
 ) {
-  const isPixel = look.palette.id === "pixel";
   const isFlatpack = look.palette.id === "flatpack";
-  const isLoading = look.palette.id === "loading";
-  const isActual = look.palette.id === "actual";
-  const isBalloon = look.palette.id === "balloon";
-  const isAscii = look.palette.id === "ascii";
-  const isPortal = look.palette.id === "portal";
-  const isNewReplacementGeometry = isBalloon || isAscii || isPortal;
+  const paletteGeometry = PALETTE_GEOMETRY[look.palette.id];
   const hasRetroGeometry = RETRO_GEOMETRY_PALETTES.has(look.palette.id);
   const eyesClosed = options.shell || (options.sleeping && !options.reading);
   const openEyeStyle = eyesClosed ? "display:none" : "";
@@ -309,21 +339,9 @@ export function renderLobsterSvg(
     >
       <g class=${PALETTE_FRAME_CLASSES[look.palette.id] ?? ""}>
         ${
-          isFlatpack
-            ? FLATPACK_LOBSTER(openEyeStyle, closedEyeStyle)
-            : isLoading
-              ? LOADING_LOBSTER(openEyeStyle, closedEyeStyle)
-              : isActual
-                ? ACTUAL_LOBSTER(openEyeStyle, closedEyeStyle)
-                : isBalloon
-                  ? BALLOON_LOBSTER(openEyeStyle, closedEyeStyle)
-                  : isAscii
-                    ? ASCII_LOBSTER(openEyeStyle, closedEyeStyle)
-                    : isPortal
-                      ? PORTAL_LOBSTER(openEyeStyle, closedEyeStyle)
-                      : isPixel
-                        ? PIXEL_LOBSTER(openEyeStyle, closedEyeStyle)
-                        : svg`
+          paletteGeometry
+            ? paletteGeometry(openEyeStyle, closedEyeStyle)
+            : svg`
               ${hasRetroGeometry ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
               ${look.tailFan ? TAIL_FAN : nothing}
               <g class="lob-claw lob-claw--l">
@@ -371,12 +389,7 @@ export function renderLobsterSvg(
           : nothing
       }
       ${
-        options.grumpy &&
-        !hasRetroGeometry &&
-        !isFlatpack &&
-        !isLoading &&
-        !isActual &&
-        !isNewReplacementGeometry
+        options.grumpy && !hasRetroGeometry && (!paletteGeometry || look.palette.id === "pixel")
           ? GRUMPY_FACE
           : nothing
       }
@@ -412,11 +425,14 @@ const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 // twin, stranger passer). The seeded glint rides
 // --lob-glint-seed instead of --lob-glint so the class-driven palette and
 // offline overrides in lobster-pet.css still out-cascade it.
-function lobsterLookStyleVars(look: LobsterPetLook): string[] {
+export function lobsterLookStyle(look: LobsterPetLook): string {
   const crusher = look.crusherSide;
   const paletteHash = fnv1aUtf16(look.palette.id);
   const breatheDelayS = ((paletteHash >>> 8) % 34) / 10;
-  const bodyDonorClaw = look.chimeraParts ? chimeraBodyClaw(look.chimeraParts.body) : undefined;
+  const chimeraParts = look.chimeraParts;
+  const bodyDonorClaw = chimeraParts
+    ? LOBSTER_PET_PALETTES.find((palette) => palette.shell === chimeraParts.body)?.claw
+    : undefined;
   const clawMul = (side: "left" | "right") =>
     crusher === null
       ? LOBSTER_PET_CLAW_MULS[look.clawSize]
@@ -438,9 +454,5 @@ function lobsterLookStyleVars(look: LobsterPetLook): string[] {
         ]
       : []),
     ...(look.glint ? [`--lob-glint-seed:${look.glint}`] : []),
-  ];
-}
-
-export function lobsterLookStyle(look: LobsterPetLook): string {
-  return lobsterLookStyleVars(look).join(";");
+  ].join(";");
 }

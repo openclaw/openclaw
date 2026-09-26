@@ -1,9 +1,14 @@
 {
   "name": "@openclaw/cua-computer",
-  "version": "2026.9.5",
+  "version": "2026.9.6",
   "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
+    "@openclaw/fs-safe": "0.20.0",
     "@trycua/cua-driver": "0.28.2",
     "rastermill": "0.3.3",
     "zod": "4.6.5"
@@ -43,6 +48,23 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/cua-computer",
+      "npmSpec": "@openclaw/cua-computer",
+      "defaultChoice": "clawhub",
+      "minHostVersion": ">=2026.9.6"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.6"
+    },
+    "build": {
+      "bundledDist": true,
+      "openclawVersion": "2026.9.6"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": false
+    }
   }
 }

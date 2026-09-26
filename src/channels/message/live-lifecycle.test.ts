@@ -227,6 +227,75 @@ describe("live preview delivery ownership", () => {
     expect(lifecycle.finalFailed).toBe(false);
   });
 
+  it("retains native progress until final acceptance, including accepted error policy", async () => {
+    const { posts, draft } = createPreviewHarness();
+    const onFinalDelivered = vi.fn();
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({
+      draft,
+      cleanupUndelivered: true,
+      retainOnError: true,
+      onFinalDelivered,
+    });
+    lifecycle.beginFinalDelivery();
+    await lifecycle.cleanup();
+    expect([...posts.values()]).toEqual(["Working"]);
+
+    posts.set("native-final", "The task failed.");
+    await lifecycle.observeDelivery(
+      { visibleReplySent: true, messageIds: ["native-final"] },
+      { isError: true },
+    );
+    lifecycle.observeFailure();
+    await lifecycle.cleanup();
+    expect([...posts.values()]).toEqual(["Working", "The task failed."]);
+    expect(lifecycle.finalDelivered).toBe(true);
+    expect(lifecycle.finalSucceeded).toBe(false);
+    expect(lifecycle.finalFailed).toBe(false);
+    expect(onFinalDelivered).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "does not suppress or clean a failed native final (partial=%s)",
+    async (partial) => {
+      const { posts, draft } = createPreviewHarness();
+      const lifecycle = createLivePreviewLifecycle<Payload, string>({
+        draft,
+        cleanupUndelivered: true,
+      });
+      lifecycle.beginFinalDelivery();
+      if (partial) {
+        posts.set("native-prefix", "Accepted answer prefix");
+      }
+      lifecycle.observeFailure(
+        partial ? { visibleReplySent: true, messageIds: ["native-prefix"] } : undefined,
+      );
+      lifecycle.observeSuppression();
+      await lifecycle.cleanup();
+      expect(posts.get("preview")).toBe("Working");
+      expect(posts.get("native-prefix")).toBe(partial ? "Accepted answer prefix" : undefined);
+      expect(lifecycle.finalDelivered).toBe(partial);
+      expect(lifecycle.finalFailed).toBe(true);
+      expect(lifecycle.finalSuppressed).toBe(false);
+    },
+  );
+
+  it("settles explicit native suppression without claiming a visible final", async () => {
+    const { posts, draft } = createPreviewHarness();
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({
+      draft,
+      cleanupUndelivered: true,
+    });
+    lifecycle.beginFinalDelivery();
+    lifecycle.observeSuppression();
+    await lifecycle.cleanup();
+    expect([...posts.values()]).toEqual([]);
+    expect(lifecycle.finalDelivered).toBe(false);
+    expect(lifecycle.finalSuppressed).toBe(true);
+    lifecycle.reset();
+    expect(lifecycle.finalStarted).toBe(false);
+    expect(lifecycle.finalSuppressed).toBe(false);
+  });
+
   it.each(["send", "edit"] as const)(
     "does not apply a stale final %s receipt or observer to the next admitted turn",
     async (operation) => {

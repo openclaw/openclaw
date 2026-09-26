@@ -154,7 +154,16 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         });
       };
       const upstream = http.createServer();
-      const wss = new WebSocketServer({ server: upstream });
+      const wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
+      let disconnectNextHandshake = false;
+      upstream.on("upgrade", (request, socket, head) => {
+        if (disconnectNextHandshake) {
+          disconnectNextHandshake = false;
+          socket.destroy();
+          return;
+        }
+        wss.handleUpgrade(request, socket, head, (accepted) => wss.emit("connection", accepted));
+      });
       const held = new Map<string, WebSocket>();
       const metadata = new Map<string, JsonObject>();
       let responseSequence = 0;
@@ -366,6 +375,17 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         });
         return { threadId: thread.id, turnId: turn.id, controller };
       };
+      disconnectNextHandshake = true;
+      const recovered = await begin();
+      await waitFor(() => (held.has(recovered.threadId) ? true : undefined));
+      finish(recovered.threadId);
+      expect(await waitFor(() => terminals.get(recovered.threadId))).toBe("completed");
+      expect(transport.rejected).toContainEqual({
+        status: 502,
+        connected: true,
+        threadId: recovered.threadId,
+      });
+      transport.rejected = [];
       const roots = [];
       for (let index = 0; index < 16; index++) {
         roots.push(await begin());

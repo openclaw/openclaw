@@ -23,13 +23,6 @@ describe("restoreEnvVarRefs", () => {
     MY_TOKEN: "tok-12345",
   };
 
-  it("restores a simple ${VAR} reference when value matches", () => {
-    const incoming = { apiKey: "sk-ant-api03-real-key" };
-    const parsed = { apiKey: "${ANTHROPIC_API_KEY}" };
-    const result = restoreEnvVarRefs(incoming, parsed, env);
-    expect(result).toEqual({ apiKey: "${ANTHROPIC_API_KEY}" });
-  });
-
   it("keeps new value when caller intentionally changed it", () => {
     const incoming = { apiKey: "sk-ant-new-different-key" };
     const parsed = { apiKey: "${ANTHROPIC_API_KEY}" };
@@ -72,13 +65,6 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual({ apiKey: "${ANTHROPIC_API_KEY}", newField: "hello" });
   });
 
-  it("handles non-env-var strings (no restoration needed)", () => {
-    const incoming = { name: "my-config" };
-    const parsed = { name: "my-config" };
-    const result = restoreEnvVarRefs(incoming, parsed, env);
-    expect(result).toEqual({ name: "my-config" });
-  });
-
   it("handles arrays", () => {
     const incoming = ["sk-ant-api03-real-key", "literal"];
     const parsed = ["${ANTHROPIC_API_KEY}", "literal"];
@@ -118,6 +104,50 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual({ value: "${API_TOKEN}:${OPTIONAL_SUFFIX}" });
   });
 
+  it("restores a ${VAR:-default} template that resolved from its fallback", () => {
+    // Without this, an authored fallback is inlined into openclaw.json on the next write
+    // and the operator's template is lost: the value resolves to "60", the writer sees a
+    // plain string, and nothing links it back to what was authored.
+    const incoming = { env: { NAUTOBOT_TIMEOUT: "60" } };
+    const parsed = { env: { NAUTOBOT_TIMEOUT: "${NAUTOBOT_TIMEOUT:-60}" } };
+
+    const result = restoreEnvVarRefs(incoming, parsed, {});
+
+    expect(result).toEqual({ env: { NAUTOBOT_TIMEOUT: "${NAUTOBOT_TIMEOUT:-60}" } });
+  });
+
+  it("restores a ${VAR:-default} template that resolved from the environment", () => {
+    const incoming = { timeout: "90" };
+    const parsed = { timeout: "${NAUTOBOT_TIMEOUT:-60}" };
+
+    const result = restoreEnvVarRefs(incoming, parsed, { NAUTOBOT_TIMEOUT: "90" });
+
+    expect(result).toEqual({ timeout: "${NAUTOBOT_TIMEOUT:-60}" });
+  });
+
+  it("keeps a deliberate edit over a ${VAR:-default} template", () => {
+    const incoming = { timeout: "120" };
+    const parsed = { timeout: "${NAUTOBOT_TIMEOUT:-60}" };
+
+    const result = restoreEnvVarRefs(incoming, parsed, {});
+
+    expect(result).toEqual({ timeout: "120" });
+  });
+
+  it("restores composite and escaped ${VAR:-default} templates", () => {
+    expect(
+      restoreEnvVarRefs(
+        { url: "https://api.example.com/v1" },
+        { url: "https://${API_HOST:-api.example.com}/v1" },
+        {},
+      ),
+    ).toEqual({ url: "https://${API_HOST:-api.example.com}/v1" });
+
+    expect(restoreEnvVarRefs({ literal: "${VAR:-x}" }, { literal: "$${VAR:-x}" }, {})).toEqual({
+      literal: "$${VAR:-x}",
+    });
+  });
+
   it("rejects structural changes to arrays containing environment references", () => {
     const duplicateEnv = {
       PLUGIN_A: "same-plugin",
@@ -127,6 +157,25 @@ describe("restoreEnvVarRefs", () => {
     expect(() =>
       restoreEnvVarRefs(["same-plugin"], ["${PLUGIN_A}", "${PLUGIN_B}"], duplicateEnv),
     ).toThrow("Config write would reorder or modify an array containing environment references");
+  });
+
+  it("rejects activating an escaped literal as a ${VAR:-default} reference", () => {
+    // Rewriting an entry the operator deliberately escaped into a live env read must fail
+    // closed. Write-back accounting keys refs by bare variable name so ${VAR:-x} is caught
+    // here; keying on the authored text would let this through.
+    expectEnvRefArrayMutationError(() =>
+      restoreEnvVarRefs([{ v: "${VAR:-x}" }, { v: "other" }], [{ v: "$${VAR}" }, { v: "other" }], {
+        VAR: "from-env",
+      }),
+    );
+
+    // The unchanged round trip is not an activation: the incoming value is exactly what the
+    // escape resolves to, so the authored escape is restored rather than rejected.
+    expect(
+      restoreEnvVarRefs([{ v: "${VAR}" }, { v: "other" }], [{ v: "$${VAR}" }, { v: "other" }], {
+        VAR: "from-env",
+      }),
+    ).toEqual([{ v: "$${VAR}" }, { v: "other" }]);
   });
 
   it("allows array edits when placeholders are escaped literals", () => {
@@ -777,16 +826,6 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual({ key: "original-value" });
   });
 
-  it("correctly restores when env var value hasn't changed", () => {
-    const stableEnv = { MY_VAR: "stable-value" };
-    const incoming = { key: "stable-value" };
-    const parsed = { key: "${MY_VAR}" };
-
-    const result = restoreEnvVarRefs(incoming, parsed, stableEnv);
-    // Env value matches incoming — safe to restore
-    expect(result).toEqual({ key: "${MY_VAR}" });
-  });
-
   it("does not restore when env snapshot differs from live env (TOCTOU fix)", () => {
     // With env snapshots: at read time MY_VAR was "old-value", so incoming is "old-value".
     // Caller changed it to "new-value". Live env also changed to "new-value".
@@ -799,19 +838,6 @@ describe("restoreEnvVarRefs", () => {
     // Using read-time snapshot: ${MY_VAR} resolves to "old-value", doesn't match "new-value"
     // → correctly keeps caller's new value
     expect(result).toEqual({ key: "new-value" });
-  });
-
-  // Edge case: $${VAR} escape sequence
-  it("handles $${VAR} escape sequence (literal ${VAR} in output)", () => {
-    // In the config file: $${ANTHROPIC_API_KEY}
-    // substituteString resolves this to literal "${ANTHROPIC_API_KEY}"
-    // So incoming would be "${ANTHROPIC_API_KEY}" (the literal text)
-    const incoming = { note: "${ANTHROPIC_API_KEY}" };
-    const parsed = { note: "$${ANTHROPIC_API_KEY}" };
-
-    const result = restoreEnvVarRefs(incoming, parsed, env);
-    // Should restore the $${} escape, not try to resolve ${} inside it
-    expect(result).toEqual({ note: "$${ANTHROPIC_API_KEY}" });
   });
 
   it("does not confuse $${VAR} escape with ${VAR} substitution", () => {

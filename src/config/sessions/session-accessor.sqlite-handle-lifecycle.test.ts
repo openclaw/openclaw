@@ -1,11 +1,14 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -81,44 +84,41 @@ describe("SQLite session handle lifecycle", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
-  it.each([0, 1])(
-    "releases a transcript read after JSON parsing fails at row %i",
-    async (index) => {
-      const events = [
-        { type: "message", id: "first", message: { role: "user", content: "first" } },
-        { type: "message", id: "second", message: { role: "assistant", content: "second" } },
-        { type: "message", id: "third", message: { role: "user", content: "third" } },
-      ];
-      await replaceTranscriptEvents(scope, events);
-      const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-      const row = database.db
-        .prepare(
-          "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT 1 OFFSET ?",
-        )
-        .get(scope.sessionId, index) as { seq: number; event_json: string };
-      const update = database.db.prepare(
-        "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = ?",
-      );
-      update.run("{malformed", scope.sessionId, row.seq);
+  it("releases a transcript read after JSON parsing fails mid-stream", async () => {
+    const events = [
+      { type: "message", id: "first", message: { role: "user", content: "first" } },
+      { type: "message", id: "second", message: { role: "assistant", content: "second" } },
+      { type: "message", id: "third", message: { role: "user", content: "third" } },
+    ];
+    await replaceTranscriptEvents(scope, events);
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const row = database.db
+      .prepare(
+        "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT 1 OFFSET ?",
+      )
+      .get(scope.sessionId, 1) as { seq: number; event_json: string };
+    const update = database.db.prepare(
+      "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = ?",
+    );
+    update.run("{malformed", scope.sessionId, row.seq);
 
-      expect(() => loadTranscriptEventsSync(scope)).toThrow(SyntaxError);
-      expect(database.db.isTransaction).toBe(false);
-      // A leaked iterator can retain a read lock even after the transaction rolls back.
-      expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
-        busy: 0,
-      });
+    expect(() => loadTranscriptEventsSync(scope)).toThrow(SyntaxError);
+    expect(database.db.isTransaction).toBe(false);
+    // A leaked iterator can retain a read lock even after the transaction rolls back.
+    expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+      busy: 0,
+    });
 
-      update.run(row.event_json, scope.sessionId, row.seq);
-      expect(loadTranscriptEventsSync(scope)).toEqual(events);
-      await appendTranscriptMessage(scope, {
-        message: { role: "assistant", content: "after failure" },
-      });
-      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-        ...events,
-        expect.objectContaining({ message: expect.objectContaining({ content: "after failure" }) }),
-      ]);
-    },
-  );
+    update.run(row.event_json, scope.sessionId, row.seq);
+    expect(loadTranscriptEventsSync(scope)).toEqual(events);
+    await appendTranscriptMessage(scope, {
+      message: { role: "assistant", content: "after failure" },
+    });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      ...events,
+      expect.objectContaining({ message: expect.objectContaining({ content: "after failure" }) }),
+    ]);
+  });
 
   it("reads complete mirror facts across key batches without per-message selections", async () => {
     const messages = Array.from({ length: 1_000 }, (_, index) => ({
@@ -312,7 +312,7 @@ describe("SQLite session handle lifecycle", () => {
       sessionKeys: [scope.sessionKey],
       includeLabelOwners: "Renamed",
       update: async ([snapshot]) => {
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         return {
           result: undefined,
           replacements: [
@@ -339,7 +339,8 @@ describe("SQLite session handle lifecycle", () => {
     startSessionTranscriptIndexReconcile(databaseOptions);
     try {
       const ready = waitForSessionTranscriptProjection(scope);
-      expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+      closeCachedOpenClawAgentDatabase(database);
+      expect(database.db.isOpen).toBe(false);
       await ready;
       expect(
         readSessionTranscriptMessageEventPage(scope, { maxMessages: 0, offset: 0 }).totalMessages,
@@ -358,34 +359,39 @@ describe("SQLite session handle lifecycle", () => {
     const database = openOpenClawAgentDatabase(databaseOptions);
     database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
     let stalledWorker: Worker | undefined;
+    const workerStarted = createDeferred();
     observer.beforeCreate = (filename, options) =>
       stalledWorker
         ? { filename, options }
         : { filename: "setInterval(() => {}, 1_000)", options: { eval: true } };
     observer.onTask = ({ worker }) => {
       stalledWorker ??= worker;
+      workerStarted.resolve();
     };
     startSessionTranscriptIndexReconcile(databaseOptions);
     const controller = new AbortController();
     const abortReason = new Error("cancel stalled projection wait");
 
     try {
-      const ready = waitForSessionTranscriptProjection(scope, controller.signal);
-      await vi.waitFor(() => expect(stalledWorker).toBeDefined());
+      const ready = waitForSessionTranscriptProjection(scope, controller.signal).then(
+        () => ({ kind: "resolved" as const }),
+        (error: unknown) => ({ kind: "rejected" as const, error }),
+      );
+      await workerStarted.promise;
       controller.abort(abortReason);
       const outcome = await Promise.race([
-        ready.then(
-          () => ({ kind: "resolved" as const }),
-          (error: unknown) => ({ kind: "rejected" as const, error }),
-        ),
+        ready,
         new Promise<{ kind: "still-waiting" }>((resolve) => {
           setTimeout(() => resolve({ kind: "still-waiting" }), 250);
         }),
       ]);
-      expect(outcome).toMatchObject({
-        kind: "rejected",
-        error: { name: "AbortError", cause: abortReason },
-      });
+      assert(outcome.kind === "rejected", "Projection wait must reject after cancellation");
+      // Status reads keep the reason; native timer cancellation wraps it.
+      if (outcome.error !== abortReason) {
+        assert(outcome.error instanceof Error);
+        expect(outcome.error.name).toBe("AbortError");
+        expect(outcome.error.cause).toBe(abortReason);
+      }
     } finally {
       await stalledWorker?.terminate();
       await waitForSessionTranscriptIndexReconcile(databaseOptions);

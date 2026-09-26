@@ -107,6 +107,50 @@ describe("managed Crabbox", () => {
     },
   );
 
+  it("keeps a supported configured binary through startup contention", async () => {
+    const test = await fixture("0.64.0");
+    const started = createDeferred<void>();
+    const delayedRunner: CrabboxCommandRunner = async (argv, options) => {
+      const result = await runCommand(argv, options);
+      if (argv[0] !== test.candidate) {
+        return result;
+      }
+      const deadline = buildTimeoutAbortSignal({
+        timeoutMs: options.timeoutMs,
+        signal: options.signal,
+      });
+      const completed = createDeferred<typeof result>();
+      const timer = setTimeout(() => completed.resolve(result), 7_000);
+      const onAbort = () =>
+        completed.resolve({ ...result, stdout: "", code: 124, termination: "timeout" });
+      deadline.signal?.addEventListener("abort", onAbort, { once: true });
+      started.resolve();
+      try {
+        return await completed.promise;
+      } finally {
+        clearTimeout(timer);
+        deadline.signal?.removeEventListener("abort", onAbort);
+        deadline.cleanup();
+      }
+    };
+    vi.useFakeTimers();
+    const pending = ensureManagedCrabboxBinary({
+      binary: test.candidate,
+      env: test.env,
+      runCommand: delayedRunner,
+    });
+    const result = pending.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(7_000);
+    vi.useRealTimers();
+    await expect(result).resolves.toEqual({ value: { binary: test.candidate, version: "0.64.0" } });
+    expect(test.fetch).not.toHaveBeenCalled();
+    await expect(fs.access(test.env.OPENCLAW_STATE_DIR)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("upgrades an old candidate, preserves its complete distribution, and reuses it offline", async () => {
     const test = await fixture();
     const params = { binary: test.candidate, env: test.env, runCommand };

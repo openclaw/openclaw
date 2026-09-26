@@ -154,6 +154,8 @@ export function createHostThawRecovery(deps: HostThawDeps): { tick: () => Promis
       try {
         await activeRecovery;
       } finally {
+        lastTickAtMs = deps.nowMs();
+        lastCpuUsage = process.cpuUsage();
         activeRecovery = undefined;
       }
     },

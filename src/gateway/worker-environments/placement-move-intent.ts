@@ -25,6 +25,7 @@ import {
 } from "./placement-record.js";
 import { getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 const MOVE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (";
@@ -596,7 +597,9 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
         if (intent.target.kind === "gateway") {
           deleteExactMove(db, intent);
         }
-        return getRequired(db, intent.sessionId);
+        const record = getRequired(db, intent.sessionId);
+        publishPlacementTurnClaimState(db, record);
+        return record;
       });
     },
 
@@ -642,7 +645,9 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           throw new Error(`Session ${intent.sessionId} changed during abandoned placement move`);
         }
         deleteExactMove(db, intent);
-        return getRequired(db, intent.sessionId);
+        const record = getRequired(db, intent.sessionId);
+        publishPlacementTurnClaimState(db, record);
+        return record;
       });
     },
 

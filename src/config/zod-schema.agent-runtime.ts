@@ -145,13 +145,11 @@ const ToolPolicyBaseSchema = z
   .strict();
 
 export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) => {
-  if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message:
-        "tools policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-    });
-  }
+  addAllowAlsoAllowConflictIssue(
+    value,
+    ctx,
+    "tools policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
+  );
 }).optional();
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
@@ -330,21 +328,15 @@ function addAllowAlsoAllowConflictIssue(
   }
 }
 
-const ToolPolicyWithProfileSchema = z
-  .object({
-    allow: z.array(z.string()).optional(),
-    alsoAllow: z.array(z.string()).optional(),
-    deny: z.array(z.string()).optional(),
-    profile: ToolProfileSchema,
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    addAllowAlsoAllowConflictIssue(
-      value,
-      ctx,
-      "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-    );
-  });
+const ToolPolicyWithProfileSchema = ToolPolicyBaseSchema.extend({
+  profile: ToolProfileSchema,
+}).superRefine((value, ctx) => {
+  addAllowAlsoAllowConflictIssue(
+    value,
+    ctx,
+    "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
+  );
+});
 
 // Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
 export const ElevatedAllowFromSchema = z
@@ -621,15 +613,24 @@ export const AgentSandboxSchema = z
 const CommonToolPolicyFields = {
   /** Base tool profile applied before allow/deny lists. */
   profile: ToolProfileSchema,
-  allow: z.array(z.string()).optional(),
-  /** Additional allowlist entries merged into allow and/or profile allowlist. */
-  alsoAllow: z.array(z.string()).optional(),
-  deny: z.array(z.string()).optional(),
+  ...ToolPolicyBaseSchema.shape,
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
   /** Per-sender tool policy overrides keyed by sender identity. */
   toolsBySender: ToolPolicyBySenderSchema,
 };
+
+const NestedToolPolicySchema = z.object({ tools: ToolPolicySchema }).strict().optional();
+
+const ElevatedToolsSchema = z
+  .object({
+    /** Enable or disable elevated mode (default: true). */
+    enabled: z.boolean().optional(),
+    /** Approved senders for /elevated (per-provider allowlists). */
+    allowFrom: ElevatedAllowFromSchema,
+  })
+  .strict()
+  .optional();
 
 const MessageToolConfigSchema = z
   .object({
@@ -698,15 +699,7 @@ const AgentToolsSchema = z
     /** Per-agent swarm override; merges over the top-level tools.swarm config. */
     swarm: SwarmSchema,
     /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
-    elevated: z
-      .object({
-        /** Enable or disable elevated mode for this agent (default: true). */
-        enabled: z.boolean().optional(),
-        /** Approved senders for /elevated (per-provider allowlists). */
-        allowFrom: ElevatedAllowFromSchema,
-      })
-      .strict()
-      .optional(),
+    elevated: ElevatedToolsSchema,
     /** Exec tool defaults for this agent. */
     exec: ToolExecSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
@@ -717,12 +710,7 @@ const AgentToolsSchema = z
     loopDetection: ToolLoopDetectionSchema,
     /** Message tool configuration for this agent. */
     message: MessageToolConfigSchema,
-    sandbox: z
-      .object({
-        tools: ToolPolicySchema,
-      })
-      .strict()
-      .optional(),
+    sandbox: NestedToolPolicySchema,
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -801,31 +789,14 @@ export const ToolsSchema = z
       .strict()
       .optional(),
     /** Elevated exec permissions for the host machine. */
-    elevated: z
-      .object({
-        /** Enable or disable elevated mode (default: true). */
-        enabled: z.boolean().optional(),
-        allowFrom: ElevatedAllowFromSchema,
-      })
-      .strict()
-      .optional(),
+    elevated: ElevatedToolsSchema,
     /** Exec tool defaults. */
     exec: ToolExecSchema,
     fs: ToolFsSchema,
     /** Sub-agent tool policy defaults (deny wins; progress_card is always denied). */
-    subagents: z
-      .object({
-        tools: ToolPolicySchema,
-      })
-      .strict()
-      .optional(),
+    subagents: NestedToolPolicySchema,
     /** Sandbox tool policy defaults (deny wins). */
-    sandbox: z
-      .object({
-        tools: ToolPolicySchema,
-      })
-      .strict()
-      .optional(),
+    sandbox: NestedToolPolicySchema,
     /** sessions_spawn tool configuration. */
     sessions_spawn: z
       .object({

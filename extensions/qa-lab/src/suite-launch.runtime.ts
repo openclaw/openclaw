@@ -4,7 +4,6 @@ import path from "node:path";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import { toRepoRelativePath } from "./cli-paths.js";
-import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
 import { captureQaEvidenceLaunchIdentity } from "./evidence-environment.js";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
 import { resolveQaEvidenceContainment } from "./evidence-summary-schema.js";
@@ -27,7 +26,7 @@ import {
   prepareQaTransportAdapterFactories,
   type QaTransportDriver,
 } from "./qa-transport-registry.js";
-import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
+import { renderQaMarkdownReport } from "./report.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./run-config.js";
 import {
   readQaBootstrapScenarioCatalog,
@@ -42,6 +41,11 @@ import {
   publishQaSuiteArtifactFiles,
 } from "./suite-artifacts.js";
 import { rebaseQaSuiteEvidence } from "./suite-evidence.js";
+import {
+  QA_SUITE_INFRA_RETRY_LIMIT,
+  isQaSuiteInfraRetryableError,
+  runQaSuiteWithInfraRetry,
+} from "./suite-infra-retry.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -112,14 +116,6 @@ const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
 // Raising it risks cleanup overlap and shared port/listener contention.
 const MAX_PARALLEL_SCRIPT_CONCURRENCY = 3;
 const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
-const QA_SUITE_INFRA_RETRY_LIMIT = 1;
-const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "EPIPE",
-  "ETIMEDOUT",
-  "UND_ERR_SOCKET",
-]);
 const CREDENTIAL_POOL_UNAVAILABLE_CODES = new Set(["NO_CREDENTIAL_AVAILABLE", "POOL_EXHAUSTED"]);
 
 type QaUnifiedPartitionResult = {
@@ -480,6 +476,7 @@ function summarizeQaEvidenceChannel(
 type QaFlowChannelGroup = {
   channel: string | undefined;
   channelId: string | undefined;
+  exclusiveKey?: string;
   isolatesAdapterInstances?: boolean;
   scenarios: QaSeedScenarioWithSource[];
 };
@@ -512,59 +509,10 @@ function groupQaScenariosByExecutionCell(
   return groups;
 }
 
-function hasQaSuiteRetryableNetworkCode(error: unknown) {
-  let current: unknown = error;
-  for (let depth = 0; depth < 4 && current; depth += 1) {
-    if (typeof current !== "object") {
-      return false;
-    }
-    const record = current as { cause?: unknown; code?: unknown };
-    if (
-      typeof record.code === "string" &&
-      QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES.has(record.code.toUpperCase())
-    ) {
-      return true;
-    }
-    current = record.cause;
-  }
-  return false;
-}
-
-function isQaSuiteInfraRetryableError(error: unknown) {
-  if (error instanceof QaSuiteArtifactError || error instanceof QaSuiteInfraError) {
-    return true;
-  }
-  return hasQaSuiteRetryableNetworkCode(error);
-}
-
-export async function runQaSuiteWithInfraRetry<Result>(
-  run: (attempt: number) => Promise<Result>,
-  maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
-) {
-  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    try {
-      return await run(attempt);
-    } catch (error) {
-      if (!isQaSuiteInfraRetryableError(error) || attempt >= maxRetries) {
-        throw error;
-      }
-      process.stderr.write(
-        `[qa-suite] infra retry ${attempt + 1}/${maxRetries}: ${formatErrorMessage(error)}\n`,
-      );
-    }
-  }
-  throw new Error("unreachable qa suite retry state");
-}
-
-async function loadQaLabServerRuntime() {
-  const { startQaLabServer } = await import("./lab-server.js");
-  return startQaLabServer;
-}
-
 async function loadQaFlowSuiteRuntime() {
-  const [{ runQaFlowSuite }, startLab] = await Promise.all([
+  const [{ runQaFlowSuite }, { startQaLabServer: startLab }] = await Promise.all([
     import("./suite.js"),
-    loadQaLabServerRuntime(),
+    import("./lab-server.js"),
   ]);
   return async (params: QaSuiteRunParams | undefined) =>
     await runQaFlowSuite({
@@ -705,6 +653,19 @@ async function resolveSuiteExecutionPlan(
   const channelGroups = (await resolveQaFlowChannelGroups(params, flowScenarios)).filter(
     (group) => group.scenarios.length > 0,
   );
+  for (const group of channelGroups) {
+    const channelId = group.channelId;
+    const usesContributedChannelDriver =
+      params?.channelDriver === "live" &&
+      channelId !== undefined &&
+      params.adapterFactories?.some((factory) => factory.matches({ channelId, driver: "live" }));
+    if (
+      (params?.channelDriver === "crabline" || usesContributedChannelDriver) &&
+      !group.isolatesAdapterInstances
+    ) {
+      group.exclusiveKey = `channel:${group.channel ?? group.channelId ?? "default"}`;
+    }
+  }
   const expectedCells = [
     ...channelGroups.flatMap((group) =>
       expandQaScenarioExecutionCells({
@@ -722,6 +683,7 @@ async function resolveSuiteExecutionPlan(
   ];
   const requiresFlowPartitions =
     channelGroups.length > 1 ||
+    channelGroups.some((group) => group.exclusiveKey !== undefined && group.scenarios.length > 1) ||
     channelGroups.some(
       (group) => group.channelId !== undefined && group.channelId !== params?.channelId,
     ) ||
@@ -955,7 +917,6 @@ function testFileScenarioResultToSuiteScenario(
 ): QaSuiteScenarioResult {
   const suiteStatus =
     result.status === "pass" ? "pass" : result.status === "skipped" ? "skip" : "fail";
-  const stepStatus = suiteStatus;
   const logPath = toRepoRelativePath(repoRoot, result.logPath);
   const details = [
     `execution.kind=${result.scenario.execution.kind}`,
@@ -971,30 +932,11 @@ function testFileScenarioResultToSuiteScenario(
     steps: [
       {
         name: `Run ${result.scenario.execution.kind} test file`,
-        status: stepStatus,
+        status: suiteStatus,
         details,
       },
     ],
   };
-}
-
-function renderUnifiedQaSuiteReport(params: {
-  finishedAt: Date;
-  scenarios: readonly QaSuiteScenarioResult[];
-  startedAt: Date;
-}) {
-  return renderQaMarkdownReport({
-    title: "OpenClaw QA Scenario Suite",
-    startedAt: params.startedAt,
-    finishedAt: params.finishedAt,
-    checks: [],
-    scenarios: params.scenarios.map((scenario) => ({
-      name: scenario.name,
-      status: scenario.status,
-      details: scenario.details,
-      steps: scenario.steps,
-    })) satisfies QaReportScenario[],
-  });
 }
 
 async function writeUnifiedQaSuiteArtifacts(params: {
@@ -1016,25 +958,15 @@ async function writeUnifiedQaSuiteArtifacts(params: {
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
-  const report = renderUnifiedQaSuiteReport({
+  const report = renderQaMarkdownReport({
+    title: "OpenClaw QA Scenario Suite",
     finishedAt: params.finishedAt,
-    scenarios: params.scenarios,
+    scenarios: [...params.scenarios],
     startedAt: params.startedAt,
   });
   const summary = buildQaSuiteSummaryJson({
-    alternateModel: params.alternateModel,
-    channel: params.channel,
-    channelDriver: params.channelDriver,
-    concurrency: params.concurrency,
-    evidence: params.evidence,
-    fastMode: params.fastMode,
-    finishedAt: params.finishedAt,
-    primaryModel: params.primaryModel,
-    providerMode: params.providerMode,
-    runtimePair: params.runtimePair,
-    scenarioIds: params.scenarioIds,
+    ...params,
     scenarios: [...params.scenarios],
-    startedAt: params.startedAt,
   }) satisfies QaSuiteSummaryJson;
   await publishQaSuiteArtifactFiles({
     outputDir: params.outputDir,
@@ -1185,34 +1117,24 @@ async function runUnifiedQaSuite(params: {
       const ordinaryIsolatedFlowScenarios = isolatedFlowScenarios.filter(
         (scenario) => !runtimeScenarioSet.has(scenario),
       );
-      const channelId = channelGroup.channelId;
-      const usesContributedChannelDriver = Boolean(
-        channelId &&
-        params.runParams?.channelDriver === "live" &&
-        adapterFactories?.find((factory) => factory.matches({ channelId, driver: "live" })),
-      );
+      const flowExclusiveKey = channelGroup.exclusiveKey;
       // Isolated adapters may use the caller's full suite budget; every partition
       // still has weight one in the global scheduler below.
       // A rejected worker cannot return its completed prefix or active scenario.
       // Single-scenario fail-fast tasks keep retries and failure evidence attributable.
       const sharedFlowPartitions = failFast
         ? sharedFlowScenarios.map((scenario) => [scenario])
-        : partitionSharedFlowScenarios(
-            sharedFlowScenarios,
-            usesContributedChannelDriver && !channelGroup.isolatesAdapterInstances
-              ? 1
-              : concurrency,
-            channelGroup.isolatesAdapterInstances ? concurrency : MAX_SHARED_FLOW_PARTITIONS,
-          );
+        : flowExclusiveKey
+          ? [sharedFlowScenarios]
+          : partitionSharedFlowScenarios(
+              sharedFlowScenarios,
+              concurrency,
+              channelGroup.isolatesAdapterInstances ? concurrency : MAX_SHARED_FLOW_PARTITIONS,
+            );
       // Channel-driver flow workers each launch a gateway plus transport harness.
       // Serializing their isolated workers keeps state-mutating smoke checks from
       // flaking under concurrent child gateways while preserving non-driver speed.
-      const channelDriverFlowRequiresExclusiveWorkers =
-        (params.runParams?.channelDriver === "crabline" || usesContributedChannelDriver) &&
-        !channelGroup.isolatesAdapterInstances;
-      const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
-        ? 1
-        : MAX_ISOLATED_FLOW_CONCURRENCY;
+      const isolatedFlowConcurrencyLimit = flowExclusiveKey ? 1 : MAX_ISOLATED_FLOW_CONCURRENCY;
       const isolatedFlowConcurrency = Math.min(
         concurrency,
         isolatedFlowConcurrencyLimit,
@@ -1283,9 +1205,7 @@ async function runUnifiedQaSuite(params: {
           channelId: taskChannelId,
           // One channel's credential and Gateway state stay serial unless each adapter create()
           // owns an isolated runtime. Distinct channels may always run together.
-          exclusiveKey: channelDriverFlowRequiresExclusiveWorkers
-            ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
-            : undefined,
+          exclusiveKey: flowExclusiveKey,
           scenarios: partition.scenarios,
           evidenceOwners: [owner],
           weight: partition.concurrency,
@@ -1336,7 +1256,7 @@ async function runUnifiedQaSuite(params: {
               // Preserve other channels' evidence, but keep the suite failed: maturity
               // docs must not publish until every required channel can run.
               const details = `channel credential unavailable: ${formatErrorMessage(error)}`;
-              if (channelDriverFlowRequiresExclusiveWorkers && channelGroup.channelId) {
+              if (flowExclusiveKey && channelGroup.channelId) {
                 unavailableChannelCredentialDetails.set(channelGroup.channelId, details);
               }
               return buildCredentialUnavailableResult(details);

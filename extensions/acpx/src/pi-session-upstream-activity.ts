@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import process from "node:process";
 import { readFileRangeAsync } from "openclaw/plugin-sdk/file-access-runtime";
+import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   isExternalUserText,
   type SessionCatalogContinueProviderResult,
@@ -9,7 +10,6 @@ import {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readPiSessionFileBaseline } from "./pi-session-store.js";
-import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const MAX_PI_UPSTREAM_SCAN_BYTES = 1024 * 1024;
 
@@ -142,8 +142,8 @@ async function checkPiSessionUpstreamActivity(
       humanTurns += 1;
       occurredAt = Math.max(
         occurredAt ?? 0,
-        parsePiSessionTimestampMs(entry.message.timestamp) ??
-          parsePiSessionTimestampMs(entry.timestamp) ??
+        parseDateFirstTimestampMs(entry.message.timestamp) ??
+          parseDateFirstTimestampMs(entry.timestamp) ??
           stat.mtimeMs,
       );
     }

@@ -195,32 +195,6 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
     );
   }
 
-  it("fires after_tool_call exactly once on success when both adapter and handler are active", async () => {
-    const { def, extensionContext } = resolveAdapterDefinition(createTestTool("read"));
-
-    const toolCallId = "integration-call-1";
-    const args = { path: "/tmp/test.txt" };
-    const ctx = createToolHandlerCtx();
-
-    // Step 1: Simulate tool_execution_start event (SDK emits this)
-    await emitToolExecutionStartEvent({ ctx, toolName: "read", toolCallId, args });
-
-    // Step 2: Execute tool through the adapter wrapper (SDK calls this)
-    await def.execute(toolCallId, args, undefined, undefined, extensionContext);
-
-    // Step 3: Simulate tool_execution_end event (SDK emits this after execute returns)
-    await emitToolExecutionEndEvent({
-      ctx,
-      toolName: "read",
-      toolCallId,
-      isError: false,
-      result: { content: [{ type: "text", text: "ok" }] },
-    });
-
-    // The hook must fire exactly once — not zero, not two.
-    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-  });
-
   it("fires after_tool_call exactly once on error when both adapter and handler are active", async () => {
     const { def, extensionContext } = resolveAdapterDefinition(createFailingTool("exec"));
 

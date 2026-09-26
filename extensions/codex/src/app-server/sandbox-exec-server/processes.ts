@@ -1,7 +1,3 @@
-/**
- * Manages subprocess lifecycle, streaming output buffers, stdin writes, and
- * termination for Codex sandbox exec-server process RPCs.
- */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -21,7 +17,6 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const RETAINED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const CLOSED_PROCESS_EVICTION_MS = 60_000;
 
-/** Starts a sandbox-backed process and registers it in the connection-local process table. */
 export async function startProcess(
   execServer: OpenClawExecServer,
   processes: Map<string, ManagedProcess>,
@@ -331,7 +326,6 @@ function limitProcessChunks(chunks: ProcessChunk[], maxBytes: number | undefined
   return retained;
 }
 
-/** Reads buffered process output, optionally waiting for new output or process close. */
 export async function readProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
@@ -359,7 +353,6 @@ export async function readProcess(
   };
 }
 
-/** Writes base64 stdin data to a running process when stdin is still open. */
 export function writeProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
@@ -501,26 +494,14 @@ function buildEnvFromPolicy(value: unknown): Record<string, string> {
   const inheritedEnv = readEnv(policy.set);
   const includeOnly = readStringList(policy.includeOnly);
   if (includeOnly.length > 0) {
-    filterEnvKeys(inheritedEnv, includeOnly, true);
-  }
-  return inheritedEnv;
-}
-
-function filterEnvKeys(
-  env: Record<string, string>,
-  patterns: string[],
-  keepMatches: boolean,
-): void {
-  if (patterns.length === 0) {
-    return;
-  }
-  const regexes = patterns.map((pattern) => wildcardPatternToRegex(pattern));
-  for (const key of Object.keys(env)) {
-    const matches = regexes.some((regex) => regex.test(key));
-    if (matches !== keepMatches) {
-      delete env[key];
+    const regexes = includeOnly.map(wildcardPatternToRegex);
+    for (const key of Object.keys(inheritedEnv)) {
+      if (!regexes.some((regex) => regex.test(key))) {
+        delete inheritedEnv[key];
+      }
     }
   }
+  return inheritedEnv;
 }
 
 function wildcardPatternToRegex(pattern: string): RegExp {

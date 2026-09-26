@@ -16,10 +16,7 @@ function extractTextContent(content: string | ContentPart[]): string {
   }
   return content
     .map((part) => {
-      if (part.type === "input_text") {
-        return part.text;
-      }
-      if (part.type === "output_text") {
+      if (part.type === "input_text" || part.type === "output_text") {
         return part.text;
       }
       return "";
@@ -28,19 +25,14 @@ function extractTextContent(content: string | ContentPart[]): string {
     .join("\n");
 }
 
-function hasImageContent(content: string | ContentPart[]): boolean {
-  return typeof content !== "string" && content.some((part) => part.type === "input_image");
-}
-
-function hasFileContent(content: string | ContentPart[]): boolean {
-  return typeof content !== "string" && content.some((part) => part.type === "input_file");
-}
-
 function placeholderForActiveTurn(content: string | ContentPart[]): string {
-  if (hasImageContent(content)) {
+  if (typeof content === "string") {
+    return "";
+  }
+  if (content.some((part) => part.type === "input_image")) {
     return IMAGE_ONLY_USER_MESSAGE;
   }
-  if (hasFileContent(content)) {
+  if (content.some((part) => part.type === "input_file")) {
     return FILE_ONLY_USER_MESSAGE;
   }
   return "";

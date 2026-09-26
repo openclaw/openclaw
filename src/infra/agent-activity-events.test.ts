@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, expectTypeOf, test } from "vitest";
+import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
   emitAgentActivityEvent,
+  projectAgentHistoryActivity,
   projectAgentToolActivity,
   type AgentCommandOutputEventData,
   type AgentItemEventData,
@@ -16,6 +18,85 @@ import {
 describe("agent activity events", () => {
   beforeEach(() => {
     resetAgentEventsForTest();
+  });
+
+  test.each([
+    { outcome: "completed", hidden: true },
+    { outcome: "failed", hidden: false },
+    { outcome: "execution-failed", hidden: false },
+    { outcome: "blocked", hidden: false },
+    { outcome: "missing", hidden: false },
+    { outcome: "unlinked", hidden: false },
+    { outcome: "other-run", hidden: false },
+    { outcome: "no-run", hidden: false },
+    { outcome: "duplicate", hidden: false },
+    { outcome: "result-only", hidden: true },
+    { outcome: "no-call-id", hidden: false },
+  ])("keeps recorded child failures with a $outcome wrapper", ({ outcome, hidden }) => {
+    const runId = outcome === "other-run" ? "other" : outcome === "no-run" ? undefined : "run";
+    const wrapper = {
+      messageId: "wrapper",
+      message: {
+        role: "assistant",
+        __openclaw: { runId },
+        content: [
+          {
+            type: "toolCall",
+            id: outcome === "no-call-id" ? undefined : "outer",
+            name: "exec",
+            arguments: {},
+          },
+        ],
+      },
+    };
+    const messages: Array<{ messageId: string; message: unknown }> =
+      outcome === "result-only" ? [] : [wrapper];
+    if (outcome === "duplicate") {
+      messages.push({ ...wrapper, messageId: "duplicate-wrapper" });
+    }
+    messages.push({
+      messageId: "child",
+      message: createNestedToolActivity({
+        runId: "run",
+        scopeId: "scope",
+        afterEntryId: "wrapper",
+        startOrder: 1,
+        ...(outcome === "unlinked" ? {} : { parentToolCallId: "outer" }),
+        toolCallId: "child",
+        toolName: "read",
+        input: { path: "missing.txt" },
+        result: { content: [{ type: "text", text: "Missing file" }] },
+        isError: true,
+        startedAt: 1,
+        timestamp: 2,
+      }),
+    });
+    if (outcome !== "missing") {
+      messages.push({
+        messageId: "wrapper-result",
+        message: {
+          role: "toolResult",
+          __openclaw: { runId },
+          toolCallId: outcome === "no-call-id" ? undefined : "outer",
+          toolName: "exec",
+          isError: outcome === "failed",
+          content: [{ type: "text", text: "Finished" }],
+          ...(outcome === "blocked" ? { details: { status: "approval-pending" } } : {}),
+          ...(outcome === "execution-failed" ? { details: { status: "failed" } } : {}),
+        },
+      });
+    }
+    const projected = projectAgentHistoryActivity(messages);
+    expect(projected.find((entry) => entry.messageId === "child")?.items).toEqual([
+      expect.objectContaining({ toolCallId: "child", status: "failed" }),
+    ]);
+    const outer = projected.find(
+      (entry) => entry.messageId === (outcome === "result-only" ? "wrapper-result" : "wrapper"),
+    )?.items;
+    expect(outer).toEqual(hidden ? [] : [expect.objectContaining({ name: "exec" })]);
+    if (outcome === "execution-failed") {
+      expect(outer).toEqual([expect.objectContaining({ status: "failed" })]);
+    }
   });
 
   test.each([true, false])(

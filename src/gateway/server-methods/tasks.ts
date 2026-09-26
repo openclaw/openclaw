@@ -24,6 +24,7 @@ import {
   listTaskRecordPage,
   prepareTaskRegistryRead,
 } from "../../tasks/runtime-internal.js";
+import { withTaskCancellationContext } from "../../tasks/task-cancellation-context.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -31,15 +32,21 @@ import {
   canAccessTaskRequesterSession,
   prepareTaskSessionReadFilter,
 } from "../task-session-access.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { taskHistoryHandler } from "./task-history.js";
 import { mapTaskSummary } from "./task-summary.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
 const TASKS_LIST_MAX_ATTEMPTS = 3;
 const TASKS_LIST_CURSOR_VERSION = "1";
+const TASKS_LIST_CURSOR_REJECTION_MESSAGES = {
+  "access-changed": "access changed",
+  "tasks-changed": "task data changed",
+  "page-invalid": "page is no longer valid",
+} as const;
 
 type TaskListCursor = {
   offset: number;
@@ -126,15 +133,54 @@ function parseTaskListCursor(value: string | undefined): TaskListCursor | undefi
 
 function invalidTaskListCursor(
   respond: Parameters<GatewayRequestHandlers["tasks.list"]>[0]["respond"],
+  reason?: keyof typeof TASKS_LIST_CURSOR_REJECTION_MESSAGES,
 ) {
   respond(
     false,
     undefined,
     errorShape(
       ErrorCodes.INVALID_REQUEST,
-      "invalid or expired tasks.list cursor; restart pagination without a cursor",
+      reason
+        ? `tasks.list cursor ${TASKS_LIST_CURSOR_REJECTION_MESSAGES[reason]}; restart pagination without a cursor`
+        : "invalid or expired tasks.list cursor; restart pagination without a cursor",
+      reason ? { details: { reason } } : undefined,
     ),
   );
+}
+
+function createTaskRecoveryHandler(method: "tasks.retry" | "tasks.dismiss"): GatewayRequestHandler {
+  return async ({ params, respond, context, client }) => {
+    if (!assertValidParams(params, validateTasksRecoveryParams, method, respond)) {
+      return;
+    }
+    let recover = retrySubagentCompletionDelivery;
+    if (method === "tasks.dismiss") {
+      const { discardSubagentTerminalDelivery } =
+        await import("../../agents/subagents/registry/subagent-registry.js");
+      recover = (taskId) =>
+        dismissSubagentCompletionDelivery(taskId, {
+          discardTerminalDelivery: discardSubagentTerminalDelivery,
+        });
+    }
+    const results = [];
+    const cfg = context.getRuntimeConfig();
+    for (const taskId of params.taskIds) {
+      const task = getTaskById(taskId);
+      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
+        results.push({ taskId, ok: false, reason: "task not found" });
+        continue;
+      }
+      const result = await recover(taskId);
+      results.push({
+        taskId,
+        ok: result.ok,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(method === "tasks.retry" && result.duplicateRisk ? { duplicateRisk: true } : {}),
+        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+      });
+    }
+    respond(true, { results });
+  };
 }
 
 // Control UI task methods expose the stable gateway protocol shape; helpers
@@ -223,7 +269,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     for (let attempt = 0; attempt < TASKS_LIST_MAX_ATTEMPTS; attempt += 1) {
       const accessRevision = readGatewayAccessRevision();
       if (cursor && cursor.accessRevision !== accessRevision) {
-        invalidTaskListCursor(respond);
+        invalidTaskListCursor(respond, "access-changed");
         return;
       }
       const pageResult = await listTaskRecordPage(pageParams);
@@ -231,7 +277,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
         // A cursor bound to an older revision can never succeed on retry, so it
         // restarts the caller. Transient registry churn gets another attempt.
         if (pageResult.error === "cursor_stale") {
-          invalidTaskListCursor(respond);
+          invalidTaskListCursor(respond, "tasks-changed");
           return;
         }
         continue;
@@ -245,7 +291,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
         !page.tasks.every(prepareFilter(page.tasks))
       ) {
         if (cursor) {
-          invalidTaskListCursor(respond);
+          invalidTaskListCursor(respond, "page-invalid");
           return;
         }
         continue;
@@ -307,79 +353,65 @@ export const tasksHandlers: GatewayRequestHandlers = {
     respond(true, { task: mapTaskSummary(task, { includePrompt: true }) });
   },
   "tasks.history": taskHistoryHandler,
-  "tasks.cancel": async ({ params, respond, context, client }) => {
+  "tasks.cancel": async (options) => {
+    const { params, respond, context, client, sessionMutationAuthorization } = options;
     if (!assertValidParams(params, validateTasksCancelParams, "tasks.cancel", respond)) {
       return;
     }
+    const authority = readGatewayRequestMutationAuthority(options);
+    const assertRequestCurrent = () => {
+      authority.assertCurrent();
+      sessionMutationAuthorization?.assertCurrent();
+    };
+    assertRequestCurrent();
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
     const { cancelDetachedTaskRunByIdCore } =
       await import("../../tasks/task-executor-cancel.runtime.js");
+    assertRequestCurrent();
     const cfg = context.getRuntimeConfig();
     const task = getTaskById(taskId);
     if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
       respond(true, { found: false, cancelled: false });
       return;
     }
-    const result = await cancelDetachedTaskRunByIdCore({
-      cfg,
-      taskId,
-      ...(reason ? { reason } : {}),
-    });
+    const cancel = () =>
+      cancelDetachedTaskRunByIdCore({ cfg, taskId, ...(reason ? { reason } : {}) });
+    const result = task
+      ? await withTaskCancellationContext(
+          () => {
+            assertRequestCurrent();
+            const current = getTaskById(taskId);
+            if (
+              !current ||
+              current.requesterSessionKey !== task.requesterSessionKey ||
+              current.requesterAgentId !== task.requesterAgentId ||
+              !canAccessTaskRequesterSession({
+                access: "write",
+                cfg: context.getRuntimeConfig(),
+                client,
+                task: current,
+              })
+            ) {
+              throw new Error("Task cancellation authority changed.");
+            }
+          },
+          cancel,
+          { selectedTask: task },
+        )
+      : await cancel();
+    assertRequestCurrent();
+    const responseTask = result.task && getTaskById(result.task.taskId);
     respond(true, {
       found: result.found,
       cancelled: result.cancelled,
       ...(result.reason ? { reason: result.reason } : {}),
-      ...(result.task ? { task: mapTaskSummary(result.task) } : {}),
+      ...(responseTask &&
+      canAccessTaskRequesterSession({ cfg: context.getRuntimeConfig(), client, task: responseTask })
+        ? { task: mapTaskSummary(responseTask) }
+        : {}),
     });
   },
-  "tasks.retry": async ({ params, respond, context, client }) => {
-    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.retry", respond)) {
-      return;
-    }
-    const results = [];
-    const cfg = context.getRuntimeConfig();
-    for (const taskId of params.taskIds) {
-      const task = getTaskById(taskId);
-      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
-        results.push({ taskId, ok: false, reason: "task not found" });
-        continue;
-      }
-      const result = await retrySubagentCompletionDelivery(taskId);
-      results.push({
-        taskId,
-        ok: result.ok,
-        ...(result.reason ? { reason: result.reason } : {}),
-        ...(result.duplicateRisk ? { duplicateRisk: true } : {}),
-        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
-      });
-    }
-    respond(true, { results });
-  },
-  "tasks.dismiss": async ({ params, respond, context, client }) => {
-    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.dismiss", respond)) {
-      return;
-    }
-    const { discardSubagentTerminalDelivery } =
-      await import("../../agents/subagents/registry/subagent-registry.js");
-    const results = [];
-    const cfg = context.getRuntimeConfig();
-    for (const taskId of params.taskIds) {
-      const task = getTaskById(taskId);
-      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
-        results.push({ taskId, ok: false, reason: "task not found" });
-        continue;
-      }
-      const result = await dismissSubagentCompletionDelivery(taskId, {
-        discardTerminalDelivery: discardSubagentTerminalDelivery,
-      });
-      results.push({
-        taskId,
-        ok: result.ok,
-        ...(result.reason ? { reason: result.reason } : {}),
-        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
-      });
-    }
-    respond(true, { results });
-  },
+  "tasks.retry": createTaskRecoveryHandler("tasks.retry"),
+  "tasks.dismiss": createTaskRecoveryHandler("tasks.dismiss"),
 };

@@ -1112,12 +1112,6 @@
   max-height: none;
 }
 
-/* Standalone work uses the same summary-to-reply gap as an inline run frame.
-   The preceding turn already owns the separation above the summary. */
-.chat-group--work {
-  padding-block: 0 var(--chat-run-block-gap);
-}
-
 @keyframes chat-work-settle-in {
   from {
     opacity: 0;
@@ -1137,12 +1131,6 @@
 
 .chat-work-group .chat-activity-group__label {
   color: inherit;
-}
-
-.chat-activity-group__duration {
-  flex: none;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
 }
 
 .chat-group--activity .chat-activity-group__label {

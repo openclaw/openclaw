@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import "./chat-attribution.css";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatSenderLabel, type SenderIdentity } from "../../../lib/chat/sender-label.ts";

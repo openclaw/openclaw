@@ -105,6 +105,18 @@ describe("resolve-fs-safe-native-contract", () => {
     expect(resolveContract(root, ref)).toBe("required");
   });
 
+  it("recognizes the frozen 0.5 bundled-native package contract", () => {
+    const { root, ref } = commitSource(
+      "0.5.6",
+      'import { configureFsSafeNative } from "@openclaw/fs-safe/config";\n',
+      "extended-stable/2026.8.33",
+      "2026.8.33",
+    );
+    expect(resolveContract(root, ref)).toBe("bundled");
+    expect(resolveContract(root, ref, false)).toBe("required");
+    expect(resolveContract(root, ref, true, ref)).toBe("required");
+  });
+
   it("keeps current, unapproved, unauthorized, or sibling-native source contracts strict", () => {
     const unapproved = commitSource("0.3.0", legacyDefaults);
     expect(resolveContract(unapproved.root, unapproved.ref)).toBe("required");

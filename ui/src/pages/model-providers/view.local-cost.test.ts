@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import {
   appendSessionUsageRollupContribution,
   buildSessionCostSummaryFromRollup,
@@ -15,13 +14,6 @@ import { mount, props, text } from "./view.test-support.ts";
 
 beforeEach(async () => {
   await i18n.setLocale("en");
-});
-
-afterEach(() => {
-  for (const container of document.body.querySelectorAll("div")) {
-    render(nothing, container);
-  }
-  document.body.replaceChildren();
 });
 
 it.each([

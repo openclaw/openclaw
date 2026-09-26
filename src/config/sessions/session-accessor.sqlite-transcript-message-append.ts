@@ -26,13 +26,13 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import {
   isTranscriptEntryOnActivePathInTransaction,
   resolveTranscriptMessageAppendParent,
 } from "./session-accessor.sqlite-transcript-parent.js";
 import {
   appendTranscriptEventInTransaction,
-  ensureTranscriptHeader,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
@@ -144,6 +144,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     appendMode?: "side";
   },
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
+  projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
 ): TranscriptMessageAppendResult<TMessage> | undefined {
   const pending = resolveSessionPendingInputAppend(database, resolved, options.message);
   if (
@@ -241,7 +242,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     // must still belong to its captured owner before any transcript write.
     options.beforeFreshMessageCommit?.();
   }
-  ensureTranscriptHeader(database, resolved, options.cwd);
+  ensureTranscriptHeader(database, resolved, options.cwd, projection);
   const parentId = resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
   const event = {
     type: "message" as const,
@@ -258,6 +259,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     eventJson = serializePreparedMessageEvent(envelope, preparedMessage.messageJson);
   }
   const appended = appendTranscriptEventInTransaction(database, resolved, event, {
+    ...projection,
     eventJson,
     preparedPayload: preparedMessage?.physicalPayload,
     idempotencyKeyMode:
@@ -267,25 +269,16 @@ export function appendTranscriptMessageInTransaction<TMessage>(
           ? "preserve-owner"
           : "dedupe",
   });
-  if (!appended && idempotencyKey && options.idempotencyLookup !== "caller-checked") {
-    const existing = readTranscriptMessageByScopedIdempotencyKey(
-      database,
-      resolved,
-      idempotencyKey,
-      options.idempotencyLookup,
-    );
-    if (existing) {
-      if (
-        !options.prepareMessageAfterIdempotencyCheck &&
-        !messagesMatchForIdempotentReplay(existing.message, finalMessage)
-      ) {
-        throw new TranscriptTurnAdmissionConflictError(idempotencyKey);
-      }
-      return existingAppendResult(existing);
-    }
-  }
   if (!appended) {
-    const existing = readTranscriptMessageByEventId(database, resolved, messageId);
+    const existing =
+      (idempotencyKey && options.idempotencyLookup !== "caller-checked"
+        ? readTranscriptMessageByScopedIdempotencyKey(
+            database,
+            resolved,
+            idempotencyKey,
+            options.idempotencyLookup,
+          )
+        : undefined) ?? readTranscriptMessageByEventId(database, resolved, messageId);
     if (existing) {
       if (
         !options.prepareMessageAfterIdempotencyCheck &&
@@ -295,8 +288,6 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       }
       return existingAppendResult(existing);
     }
-  }
-  if (!appended) {
     throw new Error(`SQLite transcript append did not insert message ${messageId}.`);
   }
   const persistedMessage =

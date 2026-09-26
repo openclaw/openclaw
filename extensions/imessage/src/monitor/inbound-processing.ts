@@ -202,6 +202,21 @@ function resolveInboundEchoMessageIds(message: IMessagePayload): string[] {
   return uniqueStrings(values.filter((value): value is string => Boolean(value)));
 }
 
+function classifyIMessageSelfChat(
+  message: IMessagePayload,
+  isGroup: boolean,
+  senderNormalized: string,
+) {
+  const chatIdentifier = normalizeIMessageHandle(message.chat_identifier ?? "") || undefined;
+  const destination = normalizeIMessageHandle(message.destination_caller_id ?? "") || undefined;
+  const matchesThread = !isGroup && chatIdentifier != null && senderNormalized === chatIdentifier;
+  // A missing destination is ambiguous: ordinary DM rows can also match their sender (#63980).
+  return {
+    isSelfChat: matchesThread && destination != null && destination === senderNormalized,
+    isAmbiguousSelfThread: matchesThread && destination == null,
+  };
+}
+
 export function rememberIMessageSkippedFromMeForSelfChatDedupe(params: {
   accountId: string;
   message: IMessagePayload;
@@ -217,11 +232,6 @@ export function rememberIMessageSkippedFromMeForSelfChatDedupe(params: {
   }
   const chatId = params.message.chat_id ?? undefined;
   const isGroup = Boolean(params.message.is_group);
-  const chatIdentifierNormalized =
-    normalizeIMessageHandle(params.message.chat_identifier ?? "") || undefined;
-  const destinationCallerIdNormalized =
-    normalizeIMessageHandle(params.message.destination_caller_id ?? "") || undefined;
-  const senderNormalized = normalizeIMessageHandle(sender);
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const lookup = {
     accountId: params.accountId,
@@ -231,18 +241,11 @@ export function rememberIMessageSkippedFromMeForSelfChatDedupe(params: {
     text: params.bodyText.trim(),
     createdAt,
   };
-  const matchesSelfChatDestination =
-    destinationCallerIdNormalized != null && destinationCallerIdNormalized === senderNormalized;
-  const isSelfChat =
-    !isGroup &&
-    chatIdentifierNormalized != null &&
-    senderNormalized === chatIdentifierNormalized &&
-    matchesSelfChatDestination;
-  const isAmbiguousSelfThread =
-    !isGroup &&
-    chatIdentifierNormalized != null &&
-    senderNormalized === chatIdentifierNormalized &&
-    destinationCallerIdNormalized == null;
+  const { isSelfChat, isAmbiguousSelfThread } = classifyIMessageSelfChat(
+    params.message,
+    isGroup,
+    normalizeIMessageHandle(sender),
+  );
   if (isSelfChat) {
     params.selfChatCache?.remember({ ...lookup, allowCreatedAtSkew: true });
   } else if (isAmbiguousSelfThread) {
@@ -417,7 +420,6 @@ export async function resolveIMessageInboundDecision(params: {
   const chatId = params.message.chat_id ?? undefined;
   const chatGuid = params.message.chat_guid ?? undefined;
   const chatIdentifier = params.message.chat_identifier ?? undefined;
-  const destinationCallerId = params.message.destination_caller_id ?? undefined;
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const messageText = params.messageText.trim();
   const bodyText = params.bodyText.trim();
@@ -459,24 +461,11 @@ export async function resolveIMessageInboundDecision(params: {
     text: bodyText,
     createdAt,
   };
-  const chatIdentifierNormalized = normalizeIMessageHandle(chatIdentifier ?? "") || undefined;
-  const destinationCallerIdNormalized =
-    normalizeIMessageHandle(destinationCallerId ?? "") || undefined;
-  // Require an explicit destination handle that matches the sender. When
-  // destination_caller_id is missing, sender === chat_identifier is ambiguous:
-  // it is true for some DM SQLite rows as well as true self-chat (#63980).
-  const matchesSelfChatDestination =
-    destinationCallerIdNormalized != null && destinationCallerIdNormalized === senderNormalized;
-  const isSelfChat =
-    !isGroup &&
-    chatIdentifierNormalized != null &&
-    senderNormalized === chatIdentifierNormalized &&
-    matchesSelfChatDestination;
-  const isAmbiguousSelfThread =
-    !isGroup &&
-    chatIdentifierNormalized != null &&
-    senderNormalized === chatIdentifierNormalized &&
-    destinationCallerIdNormalized == null;
+  const { isSelfChat, isAmbiguousSelfThread } = classifyIMessageSelfChat(
+    params.message,
+    isGroup,
+    senderNormalized,
+  );
   let skipSelfChatHasCheck = false;
   const inboundMessageIds = resolveInboundEchoMessageIds(params.message);
   const inboundMessageId = inboundMessageIds[0];
@@ -525,7 +514,7 @@ export async function resolveIMessageInboundDecision(params: {
   const groupAllowFromForAccess = isGroup
     ? groupAllowFromWithLegacyChatTargets
     : params.groupAllowFrom;
-  const { route, bindingResolution } = resolveIMessageConversationRoute({
+  const { route, bindingResolution } = await resolveIMessageConversationRoute({
     cfg: params.cfg,
     accountId: params.accountId,
     isGroup,

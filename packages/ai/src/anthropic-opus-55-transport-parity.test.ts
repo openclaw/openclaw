@@ -60,6 +60,16 @@ describe("Anthropic Opus 5.5 transport parity", () => {
     }
   });
 
+  it("honors omitted thinking display in both request paths", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const { payload } = await captureAnthropicRequest(implementation, {
+        model: { id: "claude-opus-5-5" },
+        thinkingDisplay: "omitted",
+      });
+      expect(payload.thinking).toMatchObject({ type: "adaptive", display: "omitted" });
+    }
+  });
+
   it.each([
     { source: "claude-opus-5-5", target: "claude-opus-5-5", preserve: true },
     { source: "claude-fable-5-1", target: "claude-opus-5-5", preserve: false },

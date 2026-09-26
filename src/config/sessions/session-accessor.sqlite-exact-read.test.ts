@@ -36,6 +36,45 @@ afterEach(() => {
 });
 
 describe("exact SQLite session batches", () => {
+  it.each(["full", "list"] as const)(
+    "decodes a selected %s row once for its entry and canonical validation",
+    (projection) => {
+      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-decode-") };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:decode-once" };
+      const skillsSnapshot = { prompt: "saved prompt", skills: [] };
+      replaceSessionEntrySync(scope, { sessionId: "decode-once", updatedAt: 1, skillsSnapshot });
+      assignSessionOwner(scope, {
+        owner: { type: "agent", id: "column-owner" },
+        assignedBy: { type: "agent", id: "assigner" },
+        assignedAt: 2,
+      });
+      recordSessionParticipant(scope, {
+        identity: { type: "profile", id: "participant" },
+        promptedAt: 3,
+      });
+      loadExactSessionEntryReadOnly({ ...scope, projection });
+      const parse = vi.spyOn(JSON, "parse");
+      try {
+        const selected = loadExactSessionEntryReadOnly({ ...scope, projection });
+        expect(selected?.entry).toMatchObject({
+          sessionId: "decode-once",
+          updatedAt: 1,
+          owner: { actor: { type: "agent", id: "column-owner" } },
+          participants: [{ identity: { type: "profile", id: "participant" } }],
+          participantCount: 1,
+        });
+        expect(selected?.entry.skillsSnapshot).toEqual(
+          projection === "full" ? skillsSnapshot : undefined,
+        );
+        expect(
+          parse.mock.calls.filter(([text]) => text.includes('"sessionId":"decode-once"')),
+        ).toHaveLength(1);
+      } finally {
+        parse.mockRestore();
+      }
+    },
+  );
+
   it.each(
     (["single", "batch"] as const).flatMap((reader) =>
       (["cold", "warm", "policy", "receipt"] as const).map((admission) => ({
@@ -44,7 +83,7 @@ describe("exact SQLite session batches", () => {
       })),
     ),
   )(
-    "uses an admission snapshot only when the $reader exact reader requires it ($admission)",
+    "keeps the $reader exact lookup coherent across a concurrent commit ($admission)",
     ({ reader, admission }) => {
       const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-snapshot-") };
       const scope = { agentId: "main", env, sessionKey: "agent:main:snapshot" };
@@ -81,7 +120,8 @@ describe("exact SQLite session batches", () => {
         const statement = prepare(sql);
         if (
           selectedInTransaction === undefined &&
-          /^select \* from "session_nodes" where "session_key" (?:=|in) /i.test(sql)
+          /from "session_nodes"/i.test(sql) &&
+          /where (?:"session_nodes"\.)?"session_key" (?:=|in) /i.test(sql)
         ) {
           selectedInTransaction = database.db.isTransaction;
           external
@@ -96,8 +136,10 @@ describe("exact SQLite session batches", () => {
         return statement;
       });
       try {
-        expect(read()?.entry.label).toBe(admission === "warm" ? "after" : "before");
-        expect(selectedInTransaction).toBe(admission !== "warm");
+        // Single-row validation shares the selected statement; only batch admission pins earlier.
+        const pinnedBeforeSelection = reader === "batch" && admission !== "warm";
+        expect(read()?.entry.label).toBe(pinnedBeforeSelection ? "before" : "after");
+        expect(selectedInTransaction).toBe(pinnedBeforeSelection);
         expect(database.db.isTransaction).toBe(false);
         expect(read()?.entry.label).toBe("after");
       } finally {

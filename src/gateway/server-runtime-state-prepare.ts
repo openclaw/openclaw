@@ -6,6 +6,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
@@ -19,7 +20,7 @@ import {
 } from "../state/agent-database-admission.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
@@ -36,7 +37,9 @@ import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.j
 import { createGatewayTransportBridge } from "./server-transport-bridge.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
+import { getHealthVersion, incrementPresenceVersion } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
+import { createPresencePublisher } from "./server/presence-events.js";
 import { createReadinessChecker, createStartupChecker } from "./server/readiness.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -48,6 +51,7 @@ type ChannelRuntime = ReturnType<
 
 export async function prepareGatewayKernelState(params: {
   bootstrap: GatewayBootstrap;
+  scheduler: GatewayScheduler;
   bootId: string;
   pluginRegistryOwner: ReturnType<typeof createPluginRegistryOwner>;
   getPluginReloadStatus: () => GatewayPluginReloadStatus | undefined;
@@ -68,6 +72,7 @@ export async function prepareGatewayKernelState(params: {
 }) {
   const {
     bootstrap,
+    scheduler,
     bootId,
     port,
     opts,
@@ -129,6 +134,7 @@ export async function prepareGatewayKernelState(params: {
     ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
         const workerModule = await loadWorkerEnvironmentStartupModule();
         return await workerModule.createGatewayWorkerEnvironmentRuntime({
+          scheduler,
           getPluginRegistry: () => pluginRuntime.registry,
           getPortalRuntime: () => pluginGatewayContext.current,
           resolveGatewayContext: resolvePluginGatewayContext,
@@ -185,6 +191,7 @@ export async function prepareGatewayKernelState(params: {
     workerPlacementModule
       ? await startupTrace.measure("worker-environments.placement-runtime", async () =>
           workerPlacementModule.createGatewayWorkerPlacementRuntime({
+            scheduler,
             placements: workerEnvironmentStartup.placementStore,
             getCommittedRuntimeConfig,
             environments: workerEnvironmentService,
@@ -351,9 +358,9 @@ export async function prepareGatewayKernelState(params: {
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
-  const authRateLimiter = createAuthRateLimiter(rateLimitConfig);
+  const authRateLimiter = createGatewayAuthRateLimiter(rateLimitConfig);
   // Browser-origin attempts are throttled even when local CLI clients are exempt.
-  const browserAuthRateLimiter = createAuthRateLimiter({
+  const browserAuthRateLimiter = createGatewayAuthRateLimiter({
     ...rateLimitConfig,
     exemptLoopback: false,
   });
@@ -389,7 +396,7 @@ export async function prepareGatewayKernelState(params: {
     loadGatewayTlsServerRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
   const serverStartedAt = Date.now();
-  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
+  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor({ scheduler });
   const startupState = {
     sidecarsReady: minimalTestGateway,
     pendingReason: "startup-sidecars",
@@ -441,7 +448,7 @@ export async function prepareGatewayKernelState(params: {
     ...startupCheckerDeps,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     getStateDatabaseFailure: () =>
-      openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(resolveDatabasePath()),
+      openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(resolveDatabasePath()),
     getAgentDatabaseAdmissionRefusals: () => {
       const cfg = getRuntimeConfig();
       return listAgentDatabaseAdmissionRefusals().filter(
@@ -460,12 +467,22 @@ export async function prepareGatewayKernelState(params: {
   log.info("starting HTTP server...");
   const connectionState = await startupTrace.measure("runtime.state", () =>
     createGatewayConnectionState({
+      scheduler,
       bootId,
       cfg: cfgAtStart,
       getRuntimeConfig,
     }),
   );
   const transportBridge = createGatewayTransportBridge();
+  const presencePublisher = createPresencePublisher({
+    broadcast: connectionState.broadcast,
+    incrementPresenceVersion,
+    getHealthVersion,
+    prepare: () => {
+      const projection = connectionState.getSessionRowProjection();
+      return projection?.needsMembershipPreparation() ? projection.prepareMembership() : undefined;
+    },
+  });
   const createHttpTransportOptions = () => ({
     cfg: cfgAtStart,
     getRuntimeConfig,
@@ -530,6 +547,7 @@ export async function prepareGatewayKernelState(params: {
 
   return {
     ...bootstrap,
+    scheduler,
     bootId,
     pluginRuntime,
     workerEnvironmentService,
@@ -590,6 +608,8 @@ export async function prepareGatewayKernelState(params: {
     createHttpTransportOptions,
     transportBridge,
     connectionWork: connectionState.connectionWork,
+    publishPresence: presencePublisher.publish,
+    stopPresencePublications: presencePublisher.stop,
     getSessionRowProjection: connectionState.getSessionRowProjection,
     attachSessionRowProjection: connectionState.attachSessionRowProjection,
     clients,

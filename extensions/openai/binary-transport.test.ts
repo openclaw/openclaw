@@ -2,12 +2,11 @@ import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-tes
 // Reject ambiguous provider media before it becomes a user-visible artifact.
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import {
-  createDebugProxyCaptureReader,
-  finalizeDebugProxyCapture,
-  getDebugProxyCaptureStore,
-  initializeDebugProxyCapture,
+  createDebugProxyCaptureReaderAsync,
+  finalizeDebugProxyCaptureAsync,
+  initializeDebugProxyCaptureAsync,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
@@ -291,7 +290,7 @@ describe("production OpenAI binary transport", () => {
   });
 
   it.each(["audio", "video"] as const)(
-    "persists %s capture and closes its SQLite store and rejected upstream socket",
+    "persists %s capture through finalization and closes the rejected upstream socket",
     async (kind) => {
       proxyReset.captureProxyEnv();
       const state = await createOpenClawTestState({ layout: "state-only", prefix: "binary-tcp-" });
@@ -300,8 +299,7 @@ describe("production OpenAI binary transport", () => {
       let closed = false;
       let mediaResponses = 0;
       try {
-        initializeDebugProxyCapture("test");
-        const store = getDebugProxyCaptureStore();
+        await initializeDebugProxyCaptureAsync("test");
         await withServer(
           (request, response) => {
             request.resume();
@@ -328,24 +326,17 @@ describe("production OpenAI binary transport", () => {
             );
             await expect(requestMedia(baseUrl, kind)).rejects.toThrow(`malformed ${kind} response`);
             await vi.waitFor(() => expect(closed).toBe(true));
-            await vi.waitFor(() => {
-              const events = store.getSessionEvents(`binary-${kind}`, 20);
-              expect(events.some((event) => event.kind === "request")).toBe(true);
-              expect(events.some((event) => event.kind === "response")).toBe(true);
-              expect(events).toHaveLength(kind === "audio" ? 4 : 8);
-            });
-            finalizeDebugProxyCapture();
-            expect(store.isClosed).toBe(true);
-            closeOpenClawStateDatabaseForTest();
-            const reader = createDebugProxyCaptureReader({ env: process.env });
-            const persisted = reader.getSessionEvents(`binary-${kind}`, 20);
+            await finalizeDebugProxyCaptureAsync();
+            await closeOpenClawStateDatabaseAsync();
+            const reopened = createDebugProxyCaptureReaderAsync({ env: process.env });
+            const persisted = await reopened.getSessionEvents(`binary-${kind}`, 20);
             expect(persisted.some((event) => event.kind === "request")).toBe(true);
             expect(persisted.some((event) => event.kind === "response")).toBe(true);
             expect(persisted).toHaveLength(kind === "audio" ? 4 : 8);
           },
         );
       } finally {
-        finalizeDebugProxyCapture();
+        await finalizeDebugProxyCaptureAsync();
         vi.unstubAllEnvs();
         await state.cleanup();
       }

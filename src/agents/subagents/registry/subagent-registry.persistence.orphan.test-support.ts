@@ -134,16 +134,19 @@ export function registerSubagentOrphanTaskCases({
     configureTaskRegistryRuntime({
       store: {
         ...store,
-        upsertTaskWithDeliveryState(params) {
+        async runInitialMutationAsync(context, command, assertCurrent, onGranted) {
           if (
-            params.task.taskId === task?.taskId &&
-            params.task.status === "failed" &&
+            command.type === "tasks.transitionRunRow" &&
+            "kind" in command.input &&
+            command.input.kind === "state" &&
+            command.input.taskId === task?.taskId &&
+            command.input.params.status === "failed" &&
             rejectTerminalWrites
           ) {
             rejectedWrites += 1;
             throw new Error("injected task settlement failure");
           }
-          store.upsertTaskWithDeliveryState(params);
+          return store.runInitialMutationAsync(context, command, assertCurrent, onGranted);
         },
       },
     });

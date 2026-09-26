@@ -4,6 +4,7 @@ import { isNixMode } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { GatewayDiscovery } from "./server-discovery-runtime.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
@@ -17,6 +18,7 @@ const loadRemoteSkillsRuntimeModule = async () => await import("../skills/runtim
 
 /** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
+  scheduler: GatewayScheduler;
   minimalTestGateway: boolean;
   isClosing: () => boolean;
   updateCanary?: boolean;
@@ -117,7 +119,7 @@ export async function startGatewayEarlyRuntime(params: {
     taskRegistryMaintenance.configureTaskRegistryMaintenance({
       runtimeAuthoritative: true,
     });
-    taskRegistryMaintenance.startTaskRegistryMaintenance();
+    taskRegistryMaintenance.startTaskRegistryMaintenance(params.scheduler);
     getActiveTaskCount = () =>
       taskRegistryMaintenance.getInspectableActiveTaskRestartBlockers().length;
   }
@@ -130,6 +132,10 @@ export async function startGatewayEarlyRuntime(params: {
         const { closeSkillsWatchers, registerSkillsChangeListener } = await skillsRuntimePromise;
         const { refreshRemoteBinsForConnectedNodes } = await remoteSkillsRuntimePromise;
         const unregister = registerSkillsChangeListener((event) => {
+          if (event.reason === "watch-available") {
+            // Coverage recovery has no new content revision to probe or broadcast.
+            return;
+          }
           if (event.reason === "remote-node") {
             // The snapshot invalidation runs after remote descriptors/bins change;
             // clients can now refetch authoritative skills.status without racing the probe.
@@ -176,6 +182,7 @@ export async function startGatewayEarlyRuntime(params: {
         return null;
       }
       return startGatewayMaintenanceTimers({
+        scheduler: params.scheduler,
         broadcast: params.broadcast,
         nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
         getPresenceVersion: params.getPresenceVersion,

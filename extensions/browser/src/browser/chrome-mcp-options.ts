@@ -1,7 +1,10 @@
 // Normalizes Chrome MCP profile options and subprocess arguments.
 import { createRequire } from "node:module";
 import { resolveNodeRuntimeExecutable } from "openclaw/plugin-sdk/process-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  hasNonEmptyString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import parseArgs from "yargs-parser";
 import type {
   ChromeMcpOptionsInput,
@@ -18,14 +21,6 @@ const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
 ];
 const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
 
-function normalizeChromeMcpStringList(values?: string[]): string[] {
-  return Array.isArray(values)
-    ? values.filter(
-        (value): value is string => typeof value === "string" && value.trim().length > 0,
-      )
-    : [];
-}
-
 export function normalizeChromeMcpOptions(
   input?: ChromeMcpOptionsInput,
 ): NormalizedChromeMcpProfileOptions {
@@ -36,7 +31,7 @@ export function normalizeChromeMcpOptions(
   const customCommand = normalizeOptionalString(options.mcpCommand);
   // Explicit npx has always selected OpenClaw's pinned server, including its package prefix.
   const managedServer = customCommand === undefined || customCommand === "npx";
-  const extraArgs = normalizeChromeMcpStringList(options.mcpArgs);
+  const extraArgs = Array.isArray(options.mcpArgs) ? options.mcpArgs.filter(hasNonEmptyString) : [];
   // Match Chrome MCP's Yargs grammar, including short groups and camel-case
   // aliases. Policy and direct CDP operations must use the endpoint it launches.
   const { argv, error } = parseArgs.detailed(extraArgs, {

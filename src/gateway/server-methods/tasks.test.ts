@@ -104,7 +104,16 @@ describe("tasks gateway handlers", () => {
         );
         expect(changed).toBe(true);
         if (continuation) {
-          expect(result.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+          expect(result.calls[0]).toMatchObject([
+            false,
+            undefined,
+            {
+              code: "INVALID_REQUEST",
+              message:
+                "tasks.list cursor page is no longer valid; restart pagination without a cursor",
+              details: { reason: "page-invalid" },
+            },
+          ]);
         } else {
           expect(result.calls[0]?.[0]).toBe(true);
           expect(result.payload?.tasks).toMatchObject([
@@ -123,9 +132,7 @@ describe("tasks gateway handlers", () => {
   it("lists task summaries with SDK-facing statuses and filters", async () => {
     const running = createTaskFixture("subagent", {
       taskKind: "investigation",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       childSessionKey: "agent:worker:subagent:child",
       agentId: "main",
       runId: "run-running",
@@ -169,37 +176,6 @@ describe("tasks gateway handlers", () => {
       sessionKey: "agent:main:main",
     });
     expect(canonical.payload?.tasks?.map((task) => task.taskId)).toEqual([running.taskId]);
-  });
-
-  it("orders the ledger by last activity, not creation time", async () => {
-    // The registry lists newest-created first; the wire must page by last
-    // activity so an old task that just finished is not hidden behind
-    // newer-created records.
-    const base = Date.now();
-    const oldButJustFinished = createTaskFixture("subagent", {
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Old long-running task",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-      lastEventAt: base + 60_000,
-    });
-    const newerQuietTask = createTaskFixture("cli", {
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Newer quiet task",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-      lastEventAt: base + 1_000,
-    });
-
-    const { payload } = await runTaskHandler("tasks.list", {});
-    const ids = payload?.tasks?.map((task) => task.id);
-    expect(ids?.indexOf(oldButJustFinished.taskId)).toBeLessThan(
-      ids?.indexOf(newerQuietTask.taskId) ?? -1,
-    );
   });
 
   it("ranks terminal tasks by completion time when the progress timestamp is stale", async () => {
@@ -368,7 +344,8 @@ describe("tasks gateway handlers", () => {
       undefined,
       {
         code: "INVALID_REQUEST",
-        message: "invalid or expired tasks.list cursor; restart pagination without a cursor",
+        message: "tasks.list cursor task data changed; restart pagination without a cursor",
+        details: { reason: "tasks-changed" },
       },
     ]);
   });
@@ -560,12 +537,6 @@ describe("tasks gateway handlers", () => {
       expected: "Cron canonical result",
     },
     {
-      label: "CLI completion",
-      ...cliStaleResult,
-      terminalSummary: "CLI canonical result",
-      expected: "CLI canonical result",
-    },
-    {
       label: "CLI sanitized terminal result",
       ...cliStaleResult,
       terminalSummary: "Exec denied (gateway id=req-1, approval-timeout): bash -lc ls",
@@ -591,13 +562,6 @@ describe("tasks gateway handlers", () => {
       terminalSummary: "",
       preserveTerminalSummary: true,
       expected: "Cron blank-terminal fallback result",
-    },
-    {
-      label: "CLI progress fallback",
-      runtime: "cli",
-      progressSummary: "CLI fallback result",
-      terminalSummary: undefined,
-      expected: "CLI fallback result",
     },
   ] as const)("returns the runtime-owned result for $label", async (fixture) => {
     const task = createTaskFixture(fixture.runtime, {

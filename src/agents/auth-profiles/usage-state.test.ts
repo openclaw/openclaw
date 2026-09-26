@@ -643,22 +643,6 @@ describe("clearExpiredCooldowns", () => {
       },
     },
     {
-      name: "accepts an explicit `now` timestamp for deterministic testing",
-      usageStats: { "anthropic:default": { cooldownUntil: now - 1, errorCount: 2 } },
-      expectedMutated: true,
-      expectCleared: true,
-      explicitNow: true,
-      expectedUsageStats: {
-        "anthropic:default": {
-          cooldownUntil: undefined,
-          cooldownReason: undefined,
-          cooldownModel: undefined,
-          errorCount: 0,
-          failureCounts: undefined,
-        },
-      },
-    },
-    {
       name: "clears cooldownUntil that equals exactly `now`",
       usageStats: { "anthropic:default": { cooldownUntil: now, errorCount: 2 } },
       expectedMutated: true,

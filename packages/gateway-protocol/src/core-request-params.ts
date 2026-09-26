@@ -3,6 +3,7 @@ import type * as AgentSchema from "./schema/agent.js";
 import type * as BoardSchema from "./schema/board.js";
 import type { CanvasDocumentPreviewParams, CanvasDocumentViewParams } from "./schema/canvas.js";
 import type { CommandsListParams } from "./schema/commands.js";
+import type { CronHistoryParams } from "./schema/cron.js";
 import type {
   EnvironmentsSessionCreateParams,
   EnvironmentsSessionStatusParams,
@@ -11,7 +12,7 @@ import type {
 } from "./schema/environments.js";
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
-import type { PortalCloseParams, PortalListParams, PortalOpenParams } from "./schema/portals.js";
+import type * as PortalSchema from "./schema/portals.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
 import type {
   ThemesListParams,
@@ -25,6 +26,9 @@ import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "cron.history": CronHistoryParams;
+  "users.personalFile.get": UsersSchema.UsersPersonalFileGetParams;
+  "users.personalFile.set": UsersSchema.UsersPersonalFileSetParams;
   "canvas.document.preview": CanvasDocumentPreviewParams;
   "canvas.document.view": CanvasDocumentViewParams;
   "board.action": BoardSchema.BoardActionParams;
@@ -48,9 +52,12 @@ export type GatewayCoreRequestParams = {
   "logs.tail": LogsTailParams;
   "mentions.list": HumanMentionsSchema.MentionsListParams;
   "mentions.dismiss": HumanMentionsSchema.MentionsDismissParams;
-  "portal.close": PortalCloseParams;
-  "portal.list": PortalListParams;
-  "portal.open": PortalOpenParams;
+  "portal.close": PortalSchema.PortalCloseParams;
+  "portal.list": PortalSchema.PortalListParams;
+  "portal.open": PortalSchema.PortalOpenParams;
+  "portal.session.close": Static<typeof PortalSchema.SessionPortalCloseParamsSchema>;
+  "portal.session.list": Static<typeof PortalSchema.SessionPortalListParamsSchema>;
+  "portal.session.open": Static<typeof PortalSchema.SessionPortalOpenParamsSchema>;
   "sessions.github.publish": GitHubSchema.SessionGitHubPublishParams;
   "sessions.github.options": Static<typeof GitHubSchema.SessionGitHubOptionsParamsSchema>;
   "sessions.github.status": Static<typeof GitHubSchema.SessionGitHubStatusParamsSchema>;

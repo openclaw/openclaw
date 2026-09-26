@@ -29,9 +29,8 @@ export function createTaskRecordInDatabase(
   write: <T>(operation: () => T) => T,
   options: TaskCreateOptions,
 ): TaskCreateResult {
-  const { params } = input;
   return runTaskCreateOperation(input, {
-    readSelection: (identity) => {
+    readSelection: (identity, params) => {
       const parentFlowId = params.parentFlowId?.trim();
       assertParentFlowRecordLinkAllowed(
         { ...identity, parentFlowId },
@@ -39,10 +38,10 @@ export function createTaskRecordInDatabase(
           ? readTaskFlowRecord(db, parentFlowId)
           : undefined,
       );
+      // Creation reuses an exact run; sibling-session discovery belongs to publication readback.
       const snapshot = readTaskRegistryMutationSnapshotInDatabase(db, {
         taskId: input.taskId,
         runId: params.runId,
-        childSessionKey: params.childSessionKey,
       });
       const existing = selectExistingTaskForCreate({
         ...params,

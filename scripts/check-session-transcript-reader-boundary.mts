@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
@@ -66,7 +66,7 @@ const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-subscriptions.ts",
 ];
 
-export const migratedSessionTranscriptReaderFiles = new Set([
+const migratedSessionTranscriptReaderFiles = new Set([
   "src/agents/main-session-recovery/main-session-restart-recovery-store.ts",
   "src/agents/subagents/announce/subagent-announce-output.test.ts",
   "src/agents/subagents/announce/subagent-announce-output.ts",
@@ -115,7 +115,7 @@ function bindingName(node: ts.BindingElement) {
   if (node.propertyName && ts.isIdentifier(node.propertyName)) {
     return node.propertyName.text;
   }
-  if (ts.isIdentifier(node.name)) {
+  if (node.name && ts.isIdentifier(node.name)) {
     return node.name.text;
   }
   return null;
@@ -138,8 +138,11 @@ function destructuresLegacyNamespace(node: ts.BindingElement, legacyNamespaces: 
   return ts.isIdentifier(initializer) && legacyNamespaces.has(initializer.text);
 }
 
-export function findSessionTranscriptReaderBoundaryViolations(content: string, file = "source.ts") {
-  const sourceFile = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true);
+export function findSessionTranscriptReaderBoundaryViolations(
+  _content: string,
+  _file: string,
+  sourceFile: ts.SourceFile,
+) {
   const violations: Array<{ line: number; reason: string }> = [];
   const legacyNamespaces = new Set<string>();
 
@@ -242,7 +245,7 @@ export function findSessionTranscriptReaderBoundaryViolations(content: string, f
       }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);

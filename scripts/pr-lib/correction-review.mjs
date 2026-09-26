@@ -61,6 +61,8 @@ function candidateMetadata(prMeta, incoming, head) {
   // derived in memory; the live incoming-head metadata is never rewritten.
   const changed = execFileSync(gitExecutable, ["diff", "--name-only", "-z", incoming, head], {
     encoding: "utf8",
+    // The complete path set is required; a fixed capture cap rejects large corrections.
+    maxBuffer: Infinity,
   })
     .split("\0")
     .filter(Boolean);

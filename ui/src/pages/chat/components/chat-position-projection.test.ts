@@ -41,7 +41,7 @@ describe("chat position projection", () => {
     const props = threadProps("rail-projection", "agent:main:projection", messages);
     const transcript = createTestTranscript();
     let landmarks: readonly unknown[] = [];
-    transcript.renderSession(props.paneId, props.sessionKey, (session) => {
+    transcript.renderSession(props.sessionKey, (session) => {
       landmarks = projectChatTranscript(props, session).positionIndex.markers.map(
         (marker) => marker.message,
       );
@@ -78,7 +78,7 @@ describe("chat position projection", () => {
     };
     const transcript = createTestTranscript();
     let landmarks: readonly unknown[] = [];
-    transcript.renderSession(props.paneId, props.sessionKey, (session) => {
+    transcript.renderSession(props.sessionKey, (session) => {
       landmarks = projectChatTranscript(props, session).positionIndex.markers.map(
         (marker) => marker.message,
       );
@@ -152,7 +152,7 @@ describe("chat position projection", () => {
     props.showToolCalls = true;
     const transcript = createTestTranscript();
     try {
-      transcript.renderSession(props.paneId, props.sessionKey, (session) => {
+      transcript.renderSession(props.sessionKey, (session) => {
         const index = projectChatTranscript(props, session).positionIndex;
         expect(index.markers.filter((marker) => marker.role === "assistant")).toHaveLength(
           assistantMarkers,
@@ -174,7 +174,7 @@ describe("chat position projection", () => {
     ]);
     const transcript = createTestTranscript();
     try {
-      transcript.renderSession(props.paneId, props.sessionKey, (session) => {
+      transcript.renderSession(props.sessionKey, (session) => {
         const anchors = () =>
           projectChatTranscript(props, session).positionIndex.markers.map(
             (marker) => marker.anchorId,
@@ -207,7 +207,7 @@ describe("chat position projection", () => {
     const props = threadProps("rail-steer", "agent:main:main", messages);
     const transcript = createTestTranscript();
     try {
-      transcript.renderSession(props.paneId, props.sessionKey, (session) => {
+      transcript.renderSession(props.sessionKey, (session) => {
         const index = projectChatTranscript(props, session).positionIndex;
         expect(index.markers.map((marker) => marker.message)).toEqual([
           messages[0],

@@ -224,6 +224,7 @@ export function createSqliteWorkerOperationAdmission(
 
 export type SqliteWorkerOperationContext = {
   port: MessagePort;
+  refusal?: SqliteWorkerError;
   committed?: { facts: unknown };
   settled?: true;
 };
@@ -313,7 +314,9 @@ export function requestSqliteWorkerOperationAdmission(
     Atomics.wait(decision, 0, REQUESTED);
   }
   if (Atomics.load(decision, 0) !== GRANTED) {
-    throw new SqliteWorkerError("SQLite transaction admission was refused", "closed");
+    const refusal = new SqliteWorkerError("SQLite transaction admission was refused", "closed");
+    scope.owner.refusal = refusal;
+    throw refusal;
   }
 }
 

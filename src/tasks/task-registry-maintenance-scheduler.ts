@@ -1,3 +1,4 @@
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import {
   isGatewayRestartDrainError,
   runWithGatewayIndependentRootWorkAdmission,
@@ -9,15 +10,15 @@ export function createTaskMaintenanceScheduler(
   run: () => Promise<void>,
   onError: (error: unknown) => void,
 ) {
-  let sweeper: NodeJS.Timeout | null = null;
-  let deferredSweep: NodeJS.Timeout | null = null;
+  let sweepJob: GatewayScheduledJob | undefined;
   let scheduledSweep: { completion: Promise<void>; cancelAdmission: () => void } | null = null;
 
-  function startScheduledSweep() {
-    if (!sweeper || scheduledSweep) {
-      return;
+  function startScheduledSweep(schedulerSignal: AbortSignal) {
+    if (scheduledSweep) {
+      return scheduledSweep.completion;
     }
     const admission = new AbortController();
+    const signal = AbortSignal.any([admission.signal, schedulerSignal]);
     let admitted = false;
     const completion = runWithGatewayIndependentRootWorkAdmission(
       async () => {
@@ -25,11 +26,11 @@ export function createTaskMaintenanceScheduler(
         await run();
       },
       "tasks:maintenance",
-      admission.signal,
+      signal,
     )
       .catch((error: unknown) => {
         // A restart can refuse the tick before a sweep starts; admitted failures still need reporting.
-        if (admitted || (!admission.signal.aborted && !isGatewayRestartDrainError(error))) {
+        if (admitted || (!signal.aborted && !isGatewayRestartDrainError(error))) {
           onError(error);
         }
       })
@@ -37,30 +38,24 @@ export function createTaskMaintenanceScheduler(
         scheduledSweep = null;
       });
     scheduledSweep = { completion, cancelAdmission: () => admission.abort() };
+    return completion;
   }
 
   return {
-    start() {
-      if (sweeper) {
+    start(scheduler: GatewayScheduler) {
+      if (sweepJob) {
         return;
       }
-      deferredSweep = setTimeout(() => {
-        deferredSweep = null;
-        startScheduledSweep();
-      }, 5_000);
-      deferredSweep.unref?.();
-      sweeper = setInterval(startScheduledSweep, TASK_SWEEP_INTERVAL_MS);
-      sweeper.unref?.();
+      sweepJob = scheduler.schedule({
+        id: "task-registry-maintenance",
+        atMs: scheduler.now() + 5_000,
+        everyMs: TASK_SWEEP_INTERVAL_MS,
+        run: () => startScheduledSweep(scheduler.signal),
+      });
     },
     async stop(): Promise<void> {
-      if (deferredSweep) {
-        clearTimeout(deferredSweep);
-        deferredSweep = null;
-      }
-      if (sweeper) {
-        clearInterval(sweeper);
-        sweeper = null;
-      }
+      sweepJob?.cancel();
+      sweepJob = undefined;
       const pending = scheduledSweep;
       pending?.cancelAdmission();
       // Admission cancellation leaves already-started work owned until it settles.

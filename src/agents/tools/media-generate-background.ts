@@ -1,5 +1,7 @@
 /** Owns image, music, and video preflight, task admission, and detached completion. */
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CapabilityProviderFor } from "../../plugins/capability-provider-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
@@ -9,6 +11,7 @@ import {
   VIDEO_GENERATION_TASK_KIND,
 } from "../media-generation-task-status.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { ToolInputError, readToolStringParam } from "./common.js";
 import {
   buildMediaGenerationStartedToolResult,
@@ -25,11 +28,12 @@ import type { MediaGenerateActionResult } from "./media-generate-tool-actions-sh
 import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 import {
   hasExplicitMediaModel,
+  hasGenerationToolAvailability,
   resolveCapabilityModelConfigForTool,
+  resolveMediaToolSandboxConfig,
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
 import { applyAgentDefaultModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
-import type { ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 export type MediaGenerateToolOptions = {
   config?: OpenClawConfig;
@@ -46,6 +50,45 @@ export type MediaGenerateToolOptions = {
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
 };
+
+const GENERATION_LABELS = {
+  imageGenerationProviders: "image",
+  musicGenerationProviders: "music",
+  videoGenerationProviders: "video",
+} as const;
+
+export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATION_LABELS>(
+  providerKey: K,
+  options?: MediaGenerateToolOptions,
+) {
+  const cfg = options?.config ?? getRuntimeConfig();
+  const knownProviders:
+    | { [P in keyof typeof GENERATION_LABELS]?: readonly CapabilityProviderFor<P>[] }
+    | undefined = options?.preparedModelRuntime?.mediaCapabilityProviders;
+  const known = knownProviders?.[providerKey];
+  const preparedProviders = known ? [...known] : undefined;
+  if (
+    !hasGenerationToolAvailability({
+      cfg,
+      agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
+      modelConfig: cfg.agents?.defaults?.mediaModels?.[GENERATION_LABELS[providerKey]],
+      providerKey,
+      providers: preparedProviders,
+    })
+  ) {
+    return null;
+  }
+  return {
+    cfg,
+    preparedProviders,
+    sandboxConfig: resolveMediaToolSandboxConfig(
+      options?.sandbox,
+      options?.fsPolicy?.workspaceOnly,
+    ),
+  };
+}
 
 /** Transferred resources belong to queued work through actual generation and persistence. */
 export type MediaGenerationTaskResources = {

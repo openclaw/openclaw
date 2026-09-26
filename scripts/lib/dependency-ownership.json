@@ -11,6 +11,21 @@
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network"]
     },
+    "@babel/generator": {
+      "owner": "core:plugin-loader",
+      "class": "core-runtime",
+      "risk": ["compiler-api"]
+    },
+    "@babel/parser": {
+      "owner": "core:typescript-analysis",
+      "class": "core-runtime",
+      "risk": ["parser", "compiler-api"]
+    },
+    "@babel/traverse": {
+      "owner": "core:typescript-analysis",
+      "class": "core-runtime",
+      "risk": ["compiler-api"]
+    },
     "@clack/core": {
       "owner": "core:cli",
       "class": "core-runtime",
@@ -104,6 +119,11 @@
       "class": "core-runtime",
       "risk": ["filesystem-watch"]
     },
+    "chrome-devtools-mcp": {
+      "owner": "plugin:browser",
+      "class": "plugin-runtime",
+      "risk": ["browser-control", "protocol-client"]
+    },
     "commander": {
       "owner": "core:cli",
       "class": "core-runtime",
@@ -128,6 +148,11 @@
       "owner": "core:html-entities",
       "class": "core-runtime",
       "risk": ["parser", "untrusted-html"]
+    },
+    "esbuild": {
+      "owner": "core:plugin-loader",
+      "class": "core-runtime",
+      "risk": ["native", "compiler-api"]
     },
     "execa": {
       "owner": "core:process-execution",
@@ -173,6 +198,11 @@
       "owner": "core:proxy",
       "class": "core-runtime",
       "risk": ["network", "proxy"]
+    },
+    "import-meta-resolve": {
+      "owner": "core:plugin-loader",
+      "class": "core-runtime",
+      "risk": ["module-resolution"]
     },
     "jiti": {
       "owner": "core:plugin-loader",
@@ -291,11 +321,6 @@
       "owner": "core:logging",
       "class": "core-runtime",
       "risk": ["logging"]
-    },
-    "typescript": {
-      "owner": "core:typescript-analysis",
-      "class": "core-runtime",
-      "risk": ["compiler-api"]
     },
     "typebox": {
       "owner": "core:json-schema-contracts",

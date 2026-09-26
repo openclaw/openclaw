@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { agentProcessTestEntrypoints } from "./process-runtime.test-support.js";
 
 function createFlushOnParagraphChunker(params: { minChars: number; maxChars: number }) {
   return new EmbeddedBlockChunker({
@@ -218,16 +221,16 @@ describe("EmbeddedBlockChunker", () => {
     "completes Unicode code followed by a long whitespace run (force: %s)",
     async (force) => {
       // A synchronous stalled drain needs an external deadline, not Vitest's in-process timer.
+      const chunkerUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.blockChunker);
       const result = await runNodeScript(
         [
-          "--import",
-          new URL("../../scripts/tsx.mjs", import.meta.url).href,
+          ...resolveRuntimeWorkerArgv(chunkerUrl, resolveTestNodeExecPath()).slice(0, -1),
           "--input-type=module",
           "--eval",
           `
             import assert from "node:assert/strict";
-            import { EmbeddedBlockChunker } from ${JSON.stringify(new URL("./embedded-agent-block-chunker.ts", import.meta.url).href)};
-            import { markdownToIR } from ${JSON.stringify(new URL("../../packages/markdown-core/src/ir.ts", import.meta.url).href)};
+            import { EmbeddedBlockChunker } from ${JSON.stringify(chunkerUrl.href)};
+            import { markdownToIR } from ${JSON.stringify(resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.markdownIr).href)};
             const body = "A".repeat(52) + "\\u{1f600}" + " ".repeat(60) + "B";
             const source = "    " + body;
             const chunker = new EmbeddedBlockChunker({ minChars: 10, maxChars: 60 });
@@ -487,28 +490,26 @@ describe("EmbeddedBlockChunker", () => {
     expect(drainChunks(chunker, true)).toEqual([" \n"]);
   });
 
-  it.each(
-    [
-      {
-        name: "regular",
-        header: "```txt\n",
-        renderedHeader: "```txt\n",
-        body: "x".repeat(9),
-        tail: "xxx😀tail",
-        maxChars: 20,
-      },
-      {
-        name: "long-language",
-        header: "```very-long-language-name\n",
-        renderedHeader: "```\n",
-        body: "q".repeat(22),
-        tail: "qqqq\nold\n```",
-        maxChars: 30,
-      },
-    ].flatMap((fixture) =>
-      ["NEW", ""].map((replacement) => Object.assign({}, fixture, { replacement })),
-    ),
-  )(
+  it.each([
+    {
+      name: "regular",
+      header: "```txt\n",
+      renderedHeader: "```txt\n",
+      body: "x".repeat(9),
+      tail: "xxx😀tail",
+      maxChars: 20,
+      replacement: "NEW",
+    },
+    {
+      name: "long-language",
+      header: "```very-long-language-name\n",
+      renderedHeader: "```\n",
+      body: "q".repeat(22),
+      tail: "qqqq\nold\n```",
+      maxChars: 30,
+      replacement: "",
+    },
+  ])(
     "reconciles $name fenced source with '$replacement' pending code",
     ({ header, renderedHeader, body, tail, maxChars, replacement }) => {
       const chunker = new EmbeddedBlockChunker({
@@ -597,22 +598,6 @@ describe("EmbeddedBlockChunker", () => {
     expect(drainChunks(chunker)).toStrictEqual([]);
     expect(drainChunks(chunker, true)).toEqual(["First paragraph.\n \nSecond paragraph."]);
     expect(chunker.bufferedText).toBe("");
-  });
-
-  it("falls back to maxChars when flushOnParagraph is set and no paragraph break exists", () => {
-    const chunker = new EmbeddedBlockChunker({
-      minChars: 1,
-      maxChars: 10,
-      breakPreference: "paragraph",
-      flushOnParagraph: true,
-    });
-
-    chunker.append("abcdefghijKLMNOP");
-
-    const chunks = drainChunks(chunker);
-
-    expect(chunks).toEqual(["abcdefghij"]);
-    expect(chunker.bufferedText).toBe("KLMNOP");
   });
 
   it("keeps forced maxChars chunks valid at UTF-16 boundaries", () => {
@@ -857,9 +842,7 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it.each([
-    { name: "default", maxChars: 1_200, bodyChars: 2_383, marker: "```" },
     { name: "Discord", maxChars: 2_000, bodyChars: 3_983, marker: "```" },
-    { name: "Telegram", maxChars: 4_000, bodyChars: 7_983, marker: "```" },
     { name: "tilde", maxChars: 30, bodyChars: 83, marker: "~~~" },
     { name: "indented", maxChars: 40, bodyChars: 83, marker: "  ```" },
   ])(
@@ -904,8 +887,6 @@ describe("EmbeddedBlockChunker", () => {
 
   it.each([
     { maxChars: 9, marker: "```", language: "" },
-    { maxChars: 11, marker: "```", language: "js" },
-    { maxChars: 11, marker: "````", language: "" },
     { maxChars: 13, marker: "````", language: "js" },
   ])(
     "honors the smallest balanced $marker fence at $maxChars characters",

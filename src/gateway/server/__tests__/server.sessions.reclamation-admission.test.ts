@@ -14,10 +14,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { retainSessionListForegroundWork } from "../../session-projection-work.js";
 import { rpcReq, writeSessionStore } from "../../test-helpers.js";
 import {
@@ -119,7 +116,6 @@ afterEach(async () => {
   reclamation.exits = [];
   reclamation.exitCodes = [];
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
 });
 
 function holdReclamationValidation() {
@@ -311,9 +307,11 @@ test("sessions.delete rejects revoked authority before repairing the same databa
     await expect(loadSeededTranscriptEvents(transcriptScope)).resolves.toEqual(originalTranscript);
     expect(Atomics.load(validation.gate, 2)).toBeGreaterThan(0);
     expect(Atomics.load(validation.gate, 3)).toBeGreaterThan(0);
-    expect(reclamation.exitCodes).toHaveLength(1);
+    expect(reclamation.exitCodes).toEqual([]);
     expect(readLeases()).toEqual(originalLeases);
     expect(readRepairIndex()).toBeUndefined();
+    await closeOpenClawAgentDatabasesAsync();
+    expect(reclamation.exitCodes).toEqual([0]);
   } finally {
     await validation.close();
   }

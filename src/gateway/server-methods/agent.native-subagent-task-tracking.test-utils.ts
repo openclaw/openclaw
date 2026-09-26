@@ -1,11 +1,13 @@
 // Registered in agent.test.ts's existing handler suite and cleanup lifetime.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { findTaskByRunId } from "../../tasks/task-registry.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
+import { findTaskByRunId, listTaskRecords } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
 import {
   mockSpawnedChildSessionEntry,
   spyDetachedCreateRunningTaskRun,
+  withPluginSubagentTestState,
 } from "./agent-task-tracking.test-helpers.js";
 import { nativeSubagentClient } from "./agent.spawned-child.test-support.js";
 import {
@@ -16,17 +18,51 @@ import {
   makeContext,
   mockCallArg,
   resetAgentTaskRegistryForTests,
-  useTestStateDir,
   waitForAgentCommandCall,
 } from "./agent.test-harness.js";
 
 const mocks = getAgentTestMocks();
 
+export function registerHostOwnedSubagentTaskTrackingTest() {
+  it("keeps a host-owned subagent run to its pre-registered task row", async () => {
+    await withPluginSubagentTestState("openclaw-gateway-subagent-owner-", async (state) => {
+      const root = state.stateDir;
+      // The Gateway worker must read the same durable task that the host registered.
+      resetTaskRegistryForTests({ persist: false });
+      const childSessionKey = "agent:main:subagent:owned";
+      const runId = "host-owned-subagent-run";
+      mockSpawnedChildSessionEntry(childSessionKey, root);
+      getDetachedTaskLifecycleRuntime().createRunningTaskRun({
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey,
+        runId,
+        task: "Run one owned subagent",
+        deliveryStatus: "pending",
+      });
+      const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+      await invokeAgent(
+        { message: "host-owned child turn", sessionKey: childSessionKey, idempotencyKey: runId },
+        { reqId: runId, client: backendGatewayClient() },
+      );
+      await waitForAgentCommandCall();
+
+      expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
+      expect(listTaskRecords().filter((task) => task.runId === runId)).toEqual([
+        expect.objectContaining({ runtime: "subagent", childSessionKey }),
+      ]);
+    });
+  });
+}
+
 export function registerNativeSubagentTaskTrackingTests() {
   describe("native subagent child run task tracking", () => {
     it("suppresses the gateway CLI task row for native subagent child runs", async () => {
-      await withTestDir({ prefix: "openclaw-gateway-native-subagent-" }, async (root) => {
-        useTestStateDir(root);
+      await withPluginSubagentTestState("openclaw-gateway-native-subagent-", async (state) => {
+        const root = state.stateDir;
         resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:subagent:native-child";
         const runId = "native-subagent-run";
@@ -72,29 +108,32 @@ export function registerNativeSubagentTaskTrackingTests() {
     });
 
     it("keeps CLI tracking for an unmarked backend turn on a subagent session", async () => {
-      await withTestDir({ prefix: "openclaw-gateway-native-subagent-unmarked-" }, async (root) => {
-        useTestStateDir(root);
-        resetAgentTaskRegistryForTests();
-        const childSessionKey = "agent:main:subagent:unmarked-child";
-        const runId = "native-subagent-unmarked";
-        mockSpawnedChildSessionEntry(childSessionKey, root);
-        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+      await withPluginSubagentTestState(
+        "openclaw-gateway-native-subagent-unmarked-",
+        async (state) => {
+          const root = state.stateDir;
+          resetAgentTaskRegistryForTests();
+          const childSessionKey = "agent:main:subagent:unmarked-child";
+          const runId = "native-subagent-unmarked";
+          mockSpawnedChildSessionEntry(childSessionKey, root);
+          const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
 
-        // An operator follow-up to a subagent session owns no registry row, so
-        // suppressing here would lose the run from the tasks rail entirely.
-        await invokeAgent(
-          { message: "operator follow-up", sessionKey: childSessionKey, idempotencyKey: runId },
-          { reqId: runId, client: backendGatewayClient() },
-        );
-        await waitForAgentCommandCall();
+          // An operator follow-up to a subagent session owns no registry row, so
+          // suppressing here would lose the run from the tasks rail entirely.
+          await invokeAgent(
+            { message: "operator follow-up", sessionKey: childSessionKey, idempotencyKey: runId },
+            { reqId: runId, client: backendGatewayClient() },
+          );
+          await waitForAgentCommandCall();
 
-        expect(createRunningTaskRunSpy).toHaveBeenCalledTimes(1);
-        expectRecordFields(mockCallArg(createRunningTaskRunSpy), {
-          runtime: "cli",
-          runId,
-          childSessionKey,
-        });
-      });
+          expect(createRunningTaskRunSpy).toHaveBeenCalledTimes(1);
+          expectRecordFields(mockCallArg(createRunningTaskRunSpy), {
+            runtime: "cli",
+            runId,
+            childSessionKey,
+          });
+        },
+      );
     });
   });
 }

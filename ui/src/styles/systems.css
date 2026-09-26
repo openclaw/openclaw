@@ -496,6 +496,9 @@ openclaw-systems-page {
   color: var(--muted);
   white-space: nowrap;
 }
+.systems-machine[aria-pressed="true"] .systems-machine__meta {
+  color: var(--text);
+}
 .systems-machine__desktop {
   display: inline-flex;
   flex: 0 0 auto;

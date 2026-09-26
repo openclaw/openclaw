@@ -11,6 +11,18 @@ import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
 type ManagedUpdateOwner = NonNullable<GatewayRestartIntent["successorOwner"]>;
 type GatewayStart = Parameters<typeof import("./run-loop.js").runGatewayLoop>[0]["start"];
 type ExitRuntime = { log: Mock; error: Mock; exit: Mock<(code: number) => void> };
+
+export function createGatewayLogger() {
+  return {
+    isEnabled: vi.fn(() => false),
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+}
+
 export type UpdateRespawnFixtures = {
   spawnProcess: Mock<typeof import("node:child_process").spawn>;
   hostedStopPrepare: Mock<typeof import("../../daemon/hosted-stop.js").prepareHostedGatewayStop>;

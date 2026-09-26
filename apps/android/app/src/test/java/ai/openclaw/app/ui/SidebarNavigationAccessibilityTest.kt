@@ -108,7 +108,7 @@ class SidebarNavigationAccessibilityTest {
     assertActions("Settings", "Move down")
     assertActions("Home", "Move up", "Move down")
     assertActions("Threads", "Move up")
-    composeRule.onNodeWithText("Work").assertDoesNotExist()
+    composeRule.onNodeWithText("Overview").assertDoesNotExist()
     composeRule.onNodeWithText("Skills").assertDoesNotExist()
     val home = composeRule.onNodeWithText("Home").assertIsSelected()
     // Keyboard focus is unavailable in touch mode; TalkBack node identity is checked separately.
@@ -135,27 +135,27 @@ class SidebarNavigationAccessibilityTest {
     composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
     composeRule.onNodeWithText("Edit pinned items").performClick()
     editing = true
+    capture("editor", popup = true)
     assertActions("Settings", "Move down")
-    assertActions("Work", "Move up", "Move down")
+    assertActions("Overview", "Move up", "Move down")
     assertActions("Threads", "Move up")
-    invokeMove("Work", "Move up")
+    invokeMove("Overview", "Move up")
     assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("home"))
-    assertActions("Work", "Move down")
-    row("Work").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Not pinned"))
-    row("Work").performClick()
+    assertActions("Overview", "Move down")
+    row("Overview").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Not pinned"))
+    row("Overview").performClick()
     assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("work", "home"))
-    row("Work").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Pinned"))
-    row("Work").performClick()
+    row("Overview").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Pinned"))
+    row("Overview").performClick()
     row("Home").performClick()
     assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("home"))
     composeRule.runOnIdle { assertTrue(selections.isEmpty()) }
-    capture("editor", popup = true)
   }
 
   @Test
   fun retainedActionRechecksLatestOrderAndVisibilityBeforeReportingHandled() {
     showSidebar()
-    val moveUp = actions("Work").single { it.label == "Move up" }
+    val moveUp = actions("Overview").single { it.label == "Move up" }
     composeRule.runOnIdle {
       assertTrue(moveUp.action())
       assertFalse("Already at the boundary; stale action must not report success", moveUp.action())

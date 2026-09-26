@@ -29,6 +29,12 @@ beforeEach(() => {
             this as unknown as IntersectionObserver,
           ),
         );
+        // These fixtures place thumbnails inside the explicitly admitted row.
+        queueMicrotask(() => {
+          if (target.matches(".chat-image-frame")) {
+            observers.get(target)?.(true);
+          }
+        });
       }
       disconnect() {
         if (this.target) {

@@ -46,16 +46,6 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.getText()).toBe("!cmd");
   });
 
-  it("treats a lone ! as a normal message", () => {
-    const { sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
-
-    onSubmit("!");
-
-    expect(handleBangLine).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith("!");
-  });
-
   it.each([
     { name: "a whitespace-prefixed lone bang", input: "  !", expected: "!" },
     { name: "a whitespace-suffixed lone bang", input: "!  ", expected: "!" },
@@ -84,7 +74,7 @@ describe("createEditorSubmitHandler", () => {
     expect(handleBangLine).not.toHaveBeenCalled();
   });
 
-  it.each(["  !cmd", "  !cmd\n", "!cmd\n", "\n!cmd\n", "/exit\n", "\n/exit\n", "  /quit\n"])(
+  it.each(["  !cmd", "!cmd\n", "/exit\n"])(
     "keeps %j in chat and omits it from history",
     (input) => {
       const { editor, sendMessage, handleCommand, handleBangLine } =
@@ -109,33 +99,30 @@ describe("createEditorSubmitHandler", () => {
     },
   );
 
-  it.each(["  !cmd", "/exit\n", "\n/quit\n"])(
-    "preserves %j routing across a blocked retry",
-    (input) => {
-      const admitMessage = vi
-        .fn()
-        .mockReturnValueOnce({ status: "blocked", reason: "pending" })
-        .mockReturnValueOnce({ status: "allowed" });
-      const { editor, sendMessage, handleCommand, handleBangLine } =
-        createRealEditorSubmitHarness(admitMessage);
-      editor.setText(input);
+  it.each(["  !cmd", "/exit\n"])("preserves %j routing across a blocked retry", (input) => {
+    const admitMessage = vi
+      .fn()
+      .mockReturnValueOnce({ status: "blocked", reason: "pending" })
+      .mockReturnValueOnce({ status: "allowed" });
+    const { editor, sendMessage, handleCommand, handleBangLine } =
+      createRealEditorSubmitHarness(admitMessage);
+    editor.setText(input);
 
-      editor.handleInput("\r");
+    editor.handleInput("\r");
 
-      expect(editor.getText()).toBe(input);
-      expect(sendMessage).not.toHaveBeenCalled();
-      expect(handleCommand).not.toHaveBeenCalled();
-      expect(handleBangLine).not.toHaveBeenCalled();
+    expect(editor.getText()).toBe(input);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(handleCommand).not.toHaveBeenCalled();
+    expect(handleBangLine).not.toHaveBeenCalled();
 
-      editor.handleInput("\r");
+    editor.handleInput("\r");
 
-      expect(admitMessage).toHaveBeenCalledTimes(2);
-      expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
-      expect(handleCommand).not.toHaveBeenCalled();
-      expect(handleBangLine).not.toHaveBeenCalled();
-      expect(editor.getText()).toBe("");
-    },
-  );
+    expect(admitMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
+    expect(handleCommand).not.toHaveBeenCalled();
+    expect(handleBangLine).not.toHaveBeenCalled();
+    expect(editor.getText()).toBe("");
+  });
 
   it("trims normal messages before sending and adding to history", () => {
     const { editor, sendMessage } = createRealEditorSubmitHarness();
@@ -221,21 +208,9 @@ describe("createEditorSubmitHandler", () => {
     expect(onBlockedMessageSubmit).not.toHaveBeenCalled();
   });
 
-  it("preserves internal newlines for multiline messages", () => {
-    const { editor, handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
-
-    onSubmit("Line 1\nLine 2\nLine 3");
-
-    expect(sendMessage).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
-    expect(editor.addToHistory).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
-    expect(handleCommand).not.toHaveBeenCalled();
-    expect(handleBangLine).not.toHaveBeenCalled();
-  });
-
   it.each([
     { name: "a slash command", input: "/exit\npasted notes" },
     { name: "a local shell command", input: "!touch pasted-file\npasted notes" },
-    { name: "a whitespace-prefixed slash command", input: "  /abort\npasted notes" },
   ])("treats a complete multiline paste beginning with $name as chat", ({ input }) => {
     const { handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
 

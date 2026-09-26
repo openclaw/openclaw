@@ -174,27 +174,6 @@ export function readRawResponseToolCallId(
   }
 }
 
-/** Maps Codex item types to the tool name shown in execution progress. */
-export function codexExecutionToolName(item: CodexThreadItem): string | undefined {
-  if (item.type === "dynamicToolCall" && typeof item.tool === "string") {
-    return item.tool;
-  }
-  if (item.type === "mcpToolCall" && typeof item.tool === "string") {
-    const server = typeof item.server === "string" && item.server ? item.server : undefined;
-    return server ? `${server}.${item.tool}` : item.tool;
-  }
-  if (item.type === "commandExecution") {
-    return "bash";
-  }
-  if (item.type === "fileChange") {
-    return "apply_patch";
-  }
-  if (item.type === "webSearch") {
-    return "web_search";
-  }
-  return undefined;
-}
-
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }

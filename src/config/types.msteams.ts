@@ -8,7 +8,7 @@ import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type MSTeamsWebhookConfig = {
-  /** Port for the webhook server. Default: 3978. */
+  /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.port. */
   port?: number;
   /** Path for the messages endpoint. Default: /api/messages. */
   path?: string;
@@ -59,14 +59,7 @@ export type MSTeamsChannelConfig = {
 };
 
 /** Team-level config for MS Teams. */
-export type MSTeamsTeamConfig = {
-  /** Default requireMention for channels in this team. */
-  requireMention?: boolean;
-  /** Default tool policy for channels in this team. */
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
-  /** Default reply style for channels in this team. */
-  replyStyle?: MSTeamsReplyStyle;
+export type MSTeamsTeamConfig = MSTeamsChannelConfig & {
   /** Per-channel overrides. Key is conversation ID (e.g., "19:...@thread.tacv2"). */
   channels?: Record<string, MSTeamsChannelConfig>;
 };
@@ -103,8 +96,10 @@ export type MSTeamsConfig = Omit<
     useManagedIdentity?: boolean;
     /** User-assigned managed-identity client ID. When omitted with `useManagedIdentity: true`, system-assigned identity is used. */
     managedIdentityClientId?: string;
-    /** Webhook server configuration. */
+    /** Gateway webhook route configuration. */
     webhook?: MSTeamsWebhookConfig;
+    /** Compatibility listener; omitted retains wildcard port 3978, false disables it. */
+    legacyWebhook?: false | { port: number; host?: string };
     /** Send native Teams typing indicator before replies. Default: true for groups/channels; DMs use informative stream status. */
     typingIndicator?: boolean;
     /**

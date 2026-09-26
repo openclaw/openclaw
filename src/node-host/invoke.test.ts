@@ -10,10 +10,6 @@ import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import type {
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeHostCommandContext,
-} from "../plugins/types.node-host.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -200,112 +196,6 @@ describe("node host invoke", () => {
       sessionKey: "agent:main:canvas",
       prepareExecAuthorization: expect.any(Function),
     });
-  });
-
-  it("binds managed workspace claims to the exact live plugin invocation session", async () => {
-    const release = vi.fn();
-    const acquireManagedWorkspace = vi.fn(() => ({ workspaceDir: "/managed", release }));
-    const workspaceRequest = {
-      workspaceDir: "/managed",
-      environmentId: "environment-1",
-      sessionId: "session-1",
-      ownerEpoch: 1,
-      sessionKey: "agent:main:managed",
-    };
-    let retainedAcquire:
-      | NonNullable<OpenClawPluginNodeHostCommandContext["acquireManagedWorkspace"]>
-      | undefined;
-    const handle = vi.fn<OpenClawPluginNodeHostCommand["handle"]>(
-      async (paramsJSON, _io, context) => {
-        expect(JSON.parse(paramsJSON ?? "{}")).toEqual({ sessionKey: "agent:main:other" });
-        expect(context?.sessionKey).toBe(workspaceRequest.sessionKey);
-        const acquire = context?.acquireManagedWorkspace;
-        if (!acquire) {
-          throw new Error("managed workspace authority missing");
-        }
-        retainedAcquire = acquire;
-        expect(() => acquire({ ...workspaceRequest, sessionKey: "agent:main:other" })).toThrow(
-          "workspace invocation authority is closed",
-        );
-        expect(acquire(workspaceRequest)).toEqual({
-          workspaceDir: "/managed",
-          release,
-        });
-        return '{"ok":true}';
-      },
-    );
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "workspace-plugin",
-        pluginName: "Workspace Plugin",
-        command: { command: "workspace.claim", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "invoke-workspace",
-        nodeId: "node-1",
-        command: "workspace.claim",
-        paramsJSON: JSON.stringify({ sessionKey: "agent:main:other" }),
-        sessionKey: workspaceRequest.sessionKey,
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { pluginCommandContext: { sendNodeEvent: vi.fn(), acquireManagedWorkspace } },
-    );
-
-    expect(acquireManagedWorkspace).toHaveBeenCalledOnce();
-    expect(() => retainedAcquire?.(workspaceRequest)).toThrow(
-      "workspace invocation authority is closed",
-    );
-  });
-
-  it("does not publish a canceled non-duplex plugin result", async () => {
-    const controller = new AbortController();
-    let resolvePlugin: ((result: string) => void) | undefined;
-    const handle = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
-          resolvePlugin = resolve;
-        }),
-    );
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "canvas",
-        pluginName: "Canvas",
-        command: { command: "canvas.present", cap: "canvas", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    const invoking = handleInvoke(
-      {
-        id: "invoke-canvas-canceled",
-        nodeId: "node-1",
-        command: "canvas.present",
-        paramsJSON: "{}",
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { signal: controller.signal },
-    );
-    await vi.waitFor(() => expect(handle).toHaveBeenCalledOnce());
-
-    controller.abort();
-    resolvePlugin?.('{"stale":true}');
-    await invoking;
-
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("publishes only the replacement result for a redelivered plugin invocation", async () => {

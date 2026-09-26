@@ -14,7 +14,34 @@ export type PluginDoctorStateMigrationDetection = {
   preview: string[];
 };
 
+export type PluginDoctorCronJob = {
+  storeKey: string;
+  id: string;
+  sortOrder: number;
+  /** Exact persisted definition; runtime state remains host-owned. */
+  definitionJson: string;
+  definition: Record<string, unknown> | null;
+  invalidReason?: string;
+};
+
+export type PluginDoctorCronInventory = {
+  jobs: PluginDoctorCronJob[];
+};
+
+export type PluginDoctorCronChange = {
+  job: PluginDoctorCronJob;
+  /** null retires the row; replacements preserve its ID, order, and runtime state. */
+  definition: Record<string, unknown> | null;
+};
+
 export type PluginDoctorStateMigrationContext = {
+  /** Trusted plugins only; non-creating inspection includes inactive cron partitions. */
+  inspectCronJobs?: () => Promise<PluginDoctorCronInventory>;
+  /** Offline repair only. Backs up first, then compares inspected rows before one commit. */
+  repairCronJobs?: (
+    inventory: PluginDoctorCronInventory,
+    changes: readonly PluginDoctorCronChange[],
+  ) => Promise<{ changed: number; backupPath?: string }>;
   /** Non-creating canonical ACP claims for this backend, including incomplete evidence. */
   inspectAcpSessionClaims?: () => Promise<{
     claims: PluginDoctorAcpSessionClaim[];
@@ -113,12 +140,36 @@ type PluginDoctorStateMigrationResult = {
   warningDisposition?: "recoverable";
 };
 
+export type PluginDoctorMigrationBackupResource = {
+  /** Absolute source or destination path, including destinations not created yet. */
+  path: string;
+  kind: "sqlite" | "file" | "directory";
+};
+
+export type PluginDoctorMigrationBackupWarning = {
+  kind: "undeclared-migration-resources";
+  pluginId: string;
+  message: string;
+};
+
 export type PluginDoctorStateMigration = {
   id: string;
   label: string;
   /** Import retired file state only during explicit `doctor --fix` repair. */
   doctorOnly?: boolean;
   phase?: "after-session-repair";
+  /** Read-only recovery inventory. Never open or migrate a writable store here. */
+  collectBackupResources?: (
+    params: Pick<
+      PluginDoctorStateMigrationInput,
+      "config" | "env" | "stateDir" | "serviceWorkspaceDir"
+    > & {
+      /** Rehearsal admission must reject remote or otherwise unlisted migration data. */
+      requireLocalResources?: boolean;
+    },
+  ) =>
+    | readonly PluginDoctorMigrationBackupResource[]
+    | Promise<readonly PluginDoctorMigrationBackupResource[]>;
   detectLegacyState: (
     params: PluginDoctorStateMigrationInput,
   ) =>
@@ -128,6 +179,18 @@ export type PluginDoctorStateMigration = {
   migrateLegacyState: (
     params: PluginDoctorStateMigrationInput,
   ) => Promise<PluginDoctorStateMigrationResult> | PluginDoctorStateMigrationResult;
+};
+
+export type PluginDoctorStateMigrationEntry = {
+  pluginId: string;
+  channelIds: string[];
+  /**
+   * Mirrors the runtime proxy's durable-store gate: only bundled plugins and trusted
+   * official installs may reach channel ingress queues. Doctor must not become a way
+   * around that for an activated workspace plugin.
+   */
+  trustedForDurableStores?: boolean;
+  migration: PluginDoctorStateMigration;
 };
 
 export type PluginDoctorContractModule = {
@@ -207,6 +270,7 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
     label: migration.label.trim(),
     doctorOnly: migration.doctorOnly === true ? true : undefined,
     phase: migration.phase === "after-session-repair" ? migration.phase : undefined,
+    collectBackupResources: migration.collectBackupResources,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));

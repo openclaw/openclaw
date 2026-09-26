@@ -11,10 +11,10 @@ import { createNextAcpTaskBackingDetail } from "./task-backing-authority.js";
 import { createAcpTaskBackingDetailForTest } from "./task-backing-authority.test-support.js";
 import { createTaskFlowForTask } from "./task-flow-registry.js";
 import { recordTaskActivityEvent } from "./task-registry-activity.js";
+import { applyTaskRegistryMaintenanceRetention } from "./task-registry-maintenance-retention.js";
 import { updateTask } from "./task-registry-mutation.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import {
-  deleteTaskRecordById,
   findTaskByRunId,
   getTaskById,
   hasActiveTaskForChildSessionKey,
@@ -105,7 +105,12 @@ it("publishes requester membership through create, update, restore, atomic publi
     task.taskId,
   ]);
 
-  const published = { ...task, requesterSessionKey: "agent:main:published" };
+  const published = {
+    ...task,
+    requesterSessionKey: "agent:main:published",
+    status: "succeeded" as const,
+    cleanupAfter: 0,
+  };
   const deliveryState = store.loadSnapshot().deliveryStates.get(task.taskId);
   upsertTaskWithDeliveryStateToSqlite({
     task: published,
@@ -114,7 +119,9 @@ it("publishes requester membership through create, update, restore, atomic publi
   publishTaskRecordAfterAtomicStore(published);
   expect(await taskIds({ sessionKey: published.requesterSessionKey })).toEqual([task.taskId]);
   expect(await taskIds({ sessionKey: task.ownerKey })).toEqual([task.taskId]);
-  expect(deleteTaskRecordById(task.taskId)).toBe(true);
+  expect(
+    await applyTaskRegistryMaintenanceRetention(published, Date.now(), new Map(), () => {}),
+  ).toBe("pruned");
   await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
   for (const sessionKey of [
     originalKey,
@@ -175,7 +182,13 @@ it("preserves owner-or-child ACP generation history when requester candidates ar
   expect(
     createNextAcpTaskBackingDetail({ childSessionKey: key, instanceId: "after-restore" }),
   ).toMatchObject({ generation: 9 });
-  expect(deleteTaskRecordById(records[0]!.taskId)).toBe(true);
+  const expired = expectDefined(
+    updateTask(records[0]!.taskId, { status: "succeeded", cleanupAfter: 0 }),
+    "expired child task",
+  );
+  expect(
+    await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Map(), () => {}),
+  ).toBe("pruned");
   expect(hasActiveTaskForChildSessionKey({ sessionKey: key })).toBe(false);
 });
 
@@ -238,8 +251,10 @@ it.each(["native update", "store readback"] as const)(
     };
     upsertTaskWithDeliveryStateToSqlite({ task: published });
     publishTaskRecordAfterAtomicStore(published);
-    const unrelated = createTask({ runId: "run-unrelated" });
-    expect(deleteTaskRecordById(unrelated.taskId)).toBe(true);
+    const unrelated = createTask({ runId: "run-unrelated", status: "succeeded", cleanupAfter: 0 });
+    expect(
+      await applyTaskRegistryMaintenanceRetention(unrelated, Date.now(), new Map(), () => {}),
+    ).toBe("pruned");
     expect(getTasksByRunId("run-shared").map((task) => task.taskId)).toEqual(expectedIds);
     expect(findTaskByRunId("run-shared")?.taskId).toBe(first.taskId);
 
@@ -305,9 +320,13 @@ it.each(["native update", "atomic publication"] as const)(
   },
 );
 
-it("preserves run membership across rejected deletion and enclosing transaction rollback", () => {
+it("preserves run membership across rejected retention and enclosing update rollback", async () => {
   const { first, second } = createEqualTimeRunTasks();
   expect(updateTask(first.taskId, { runId: "run-shared" })).not.toBeNull();
+  const expired = expectDefined(
+    updateTask(first.taskId, { status: "succeeded", cleanupAfter: 0 }),
+    "expired indexed task",
+  );
   const expectedIds = [first.taskId, second.taskId];
   const store = getTaskRegistryStore();
   const before = store.loadSnapshot();
@@ -323,11 +342,13 @@ it("preserves run membership across rejected deletion and enclosing transaction 
     },
   });
   database.db.exec(`
-    CREATE TEMP TRIGGER task_index_reject_delete BEFORE DELETE ON task_runs
+    CREATE TRIGGER task_index_reject_delete BEFORE DELETE ON task_runs
     BEGIN SELECT RAISE(ABORT, 'synthetic delete rejection'); END;
   `);
   try {
-    expect(deleteTaskRecordById(first.taskId)).toBe(false);
+    expect(
+      await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Map(), () => {}),
+    ).toBeUndefined();
     expect(deleted).toEqual([]);
     expect(getTasksByRunId("run-shared").map((task) => task.taskId)).toEqual(expectedIds);
     expect(store.loadSnapshot()).toEqual(before);
@@ -339,11 +360,12 @@ it("preserves run membership across rejected deletion and enclosing transaction 
   expect(() =>
     runOpenClawStateWriteTransaction(() => {
       expect(updateTask(first.taskId, { runId: "run-rolled-back" })).not.toBeNull();
-      expect(deleteTaskRecordById(second.taskId)).toBe(true);
+      expect(updateTask(second.taskId, { runId: "second-rolled-back" })).not.toBeNull();
       throw failure;
     }),
   ).toThrow(failure);
   expect(findTaskByRunId("run-rolled-back")).toBeUndefined();
+  expect(findTaskByRunId("second-rolled-back")).toBeUndefined();
   expect(getTasksByRunId("run-shared").map((task) => task.taskId)).toEqual(expectedIds);
   expect(findTaskByRunId("run-shared")?.taskId).toBe(first.taskId);
   expect(store.loadSnapshot()).toEqual(before);

@@ -84,7 +84,7 @@ describe("conversation position rail", () => {
         message: message(`message-${index}`, "user", `Checkpoint ${index}`, index + 1),
       }));
       render(
-        transcript.renderSession("rail-publication", "agent:main:rail-publication", (session) => {
+        transcript.renderSession("agent:main:rail-publication", (session) => {
           vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
           return html`<div class="chat-thread" tabindex="0">
             <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
@@ -198,17 +198,13 @@ describe("conversation position rail", () => {
         ),
       };
       render(
-        transcript.renderSession(
-          "rail-scroll-policy",
-          "agent:main:rail-scroll-policy",
-          (session) => {
-            vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
-            return html`<div class="chat-thread" tabindex="0">
-              <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
-              ${renderChatPositionRail({ positions, transcript: session, requestUpdate: () => {} })}
-            </div>`;
-          },
-        ),
+        transcript.renderSession("agent:main:rail-scroll-policy", (session) => {
+          vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
+          return html`<div class="chat-thread" tabindex="0">
+            <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
+            ${renderChatPositionRail({ positions, transcript: session, requestUpdate: () => {} })}
+          </div>`;
+        }),
         container,
       );
       const root = container.querySelector<HTMLElement>(".chat-thread")!;
@@ -544,12 +540,15 @@ describe("conversation position rail", () => {
   it("publishes consecutive reader offsets even when the virtual row range is unchanged", async () => {
     transcriptDomState.measuredRowHeight = 120;
     const requestUpdate = vi.fn();
-    const transcript = new ChatTranscriptController({
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate,
-      updateComplete: Promise.resolve(true),
-    });
+    const transcript = new ChatTranscriptController(
+      {
+        addController: () => undefined,
+        removeController: () => undefined,
+        requestUpdate,
+        updateComplete: Promise.resolve(true),
+      },
+      () => "rail-notification",
+    );
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
       kind: "content",
       key: `row-${index}`,

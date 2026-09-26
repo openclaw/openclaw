@@ -53,6 +53,8 @@ export type LeaseHeartbeatWorkerData = {
   heartbeatMs: number;
   processOwner?: { identity: StateLeaseProcessOwner; env: NodeJS.ProcessEnv };
   shared: SharedArrayBuffer;
+  /** Odd while native renewal is in flight; progress is never lease authority. */
+  renewalProgress: SharedArrayBuffer;
 };
 
 export type LeaseHeartbeatRequest = {

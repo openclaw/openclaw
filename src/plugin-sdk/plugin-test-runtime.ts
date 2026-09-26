@@ -1,9 +1,11 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
-import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 
 type AgentHarnessHostTestAttempt = Omit<
-  EmbeddedRunAttemptParams,
+  Parameters<
+    typeof import("../agents/harness/host-capability.js").createAgentHarnessHostCapabilities
+  >[0]["attempt"],
   "admittedRunContext" | "hostCapabilities" | "disableToolSearch" | "sessionReadScopeKey"
 >;
 
@@ -11,13 +13,24 @@ type AgentHarnessHostTestAttempt = Omit<
 export async function createAgentHarnessHostCapabilitiesForTest(params: {
   attempt: AgentHarnessHostTestAttempt;
   pluginId: string;
+  nativeModelPolicySupport?: "exact";
+  operatorSource?: Pick<
+    AdmittedRunOperatorAuthority,
+    "profileId" | "scopes" | "assertCurrent" | "modelPolicy" | "onModelPolicyChanged"
+  >;
 }) {
-  const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
-    await import("../agents/admitted-run-context.js");
+  const {
+    createAdmittedRunOperatorAuthority,
+    createOperationalRunInstanceRef,
+    prepareAgentRunAdmission,
+  } = await import("../agents/admitted-run-context.js");
   const { createAgentHarnessHostCapabilities } =
     await import("../agents/harness/host-capability.js");
   const admission = prepareAgentRunAdmission({
     cfg: params.attempt.config ?? {},
+    operatorAuthority: params.operatorSource
+      ? createAdmittedRunOperatorAuthority(params.operatorSource)
+      : undefined,
     facts: {
       runId: params.attempt.runId,
       agentId: params.attempt.agentId ?? "main",
@@ -29,6 +42,7 @@ export async function createAgentHarnessHostCapabilitiesForTest(params: {
   const host = createAgentHarnessHostCapabilities({
     attempt: { ...params.attempt, admittedRunContext },
     pluginId: params.pluginId,
+    nativeModelPolicySupport: params.nativeModelPolicySupport,
   });
   return {
     capabilities: host.capabilities,

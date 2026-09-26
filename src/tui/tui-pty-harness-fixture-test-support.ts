@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { transform } from "esbuild";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { TUI_PTY_FALLBACK_FIXTURE } from "./tui-fallback-fixture-test-support.js";
 import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
@@ -93,20 +94,21 @@ export async function startTuiFixture(
 }
 
 export async function writeTuiPtyFixtureScript(dir: string) {
-  // Temp files sit outside the repo package scope; .mts preserves the ESM contract under tsx.
-  const scriptPath = path.join(dir, "run-tui-pty-fixture.mts");
-  const tuiModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.tui).href;
+  const tuiUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.tui);
+  const prepared = tuiUrl.pathname.endsWith(".js");
+  // Direct source runs retain TSX; prepared runs compile this final generated fixture before launch.
+  const scriptPath = path.join(dir, `run-tui-pty-fixture.${prepared ? "mjs" : "mts"}`);
+  const tuiModuleUrl = tuiUrl.href;
   const payloadsModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.embeddedPayloads).href;
   const replyPayloadModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.replyPayload).href;
   const outboundPayloadsModuleUrl = resolveRuntimeWorkerUrl(
     tuiPtyRuntimeEntrypoints.outboundPayloads,
   ).href;
   const tuiBackendTypeUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui-backend.ts")).href;
-  await writeFile(
-    scriptPath,
-    `
+  const source = `
       import { appendFileSync, existsSync, watch, watchFile, unwatchFile } from "node:fs";
-      import { dirname } from "node:path";
+      import { dirname, join } from "node:path";
+      import { DatabaseSync } from "node:sqlite";
       import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
       import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
       import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
@@ -681,13 +683,17 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           title: "openclaw tui pty fixture",
           ${TUI_PTY_RESET_FIXTURE.options}
         });
+        ${TUI_PTY_STARTUP_SESSION_FIXTURE.returnedState}
       }
 
       main().catch((error) => {
         console.error(error);
         process.exitCode = 1;
       });
-    `,
+    `;
+  await writeFile(
+    scriptPath,
+    prepared ? (await transform(source, { loader: "ts", format: "esm" })).code : source,
     "utf8",
   );
   return scriptPath;

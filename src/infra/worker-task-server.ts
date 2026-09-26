@@ -1,6 +1,7 @@
 import { parentPort, type MessagePort, type Transferable } from "node:worker_threads";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
+import { serveWorkerMemorySamples } from "./worker-memory.js";
 import {
   createWorkerTaskControl,
   observeWorkerTaskCancellation,
@@ -54,6 +55,7 @@ export function serveOwnedWorkerTasks<Output>(
   if (!port) {
     return;
   }
+  let memorySamplesStarted = false;
   let active: WorkerConversation | undefined;
   let execution = Promise.resolve();
   let resourceClosures = Promise.resolve();
@@ -69,7 +71,12 @@ export function serveOwnedWorkerTasks<Output>(
       closeResource?: true;
       key?: string;
       resourcePort?: MessagePort;
+      sampleMemory?: boolean;
     }) => {
+      if (message.sampleMemory && !memorySamplesStarted) {
+        memorySamplesStarted = true;
+        serveWorkerMemorySamples(port);
+      }
       cancelWorkerIdleGc();
       if (message.closeResource && message.resourcePort) {
         const receipt = message.resourcePort;

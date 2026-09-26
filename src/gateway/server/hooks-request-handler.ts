@@ -7,7 +7,7 @@ import { resolveHookExternalContentSource as resolveHookExternalContentSourceFro
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
-  createAuthRateLimiter,
+  createGatewayAuthRateLimiter,
   normalizeRateLimitClientIp,
 } from "../auth-rate-limit.js";
 import { applyHookMappings, HOOK_MAPPING_FAN_OUT_MAX_ITEMS } from "../hooks-mapping.js";
@@ -108,7 +108,7 @@ export function createHooksRequestHandler(
   const fanoutResponseDeadlineMs =
     opts.fanoutResponseDeadlineMs ?? HOOK_FAN_OUT_RESPONSE_DEADLINE_MS;
   const hookReplayCache = new Map<string, HookReplayEntry>();
-  const hookAuthLimiter = createAuthRateLimiter({
+  const hookAuthLimiter = createGatewayAuthRateLimiter({
     maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
     windowMs: HOOK_AUTH_FAILURE_WINDOW_MS,
     lockoutMs: HOOK_AUTH_FAILURE_WINDOW_MS,

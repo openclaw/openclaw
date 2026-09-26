@@ -66,6 +66,7 @@ internal sealed class ChatTimelineItem {
     val key: String,
     val durationMs: Long?,
     val expanded: Boolean,
+    val outcomes: Map<WorkedToolOutcome, Int>,
   ) : ChatTimelineItem()
 
   data class TurnRecapSummary(
@@ -165,16 +166,8 @@ internal fun PreparedChatHistory.buildTimeline(
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val visibleSubagents = visibleSubagentActivities(subagentActivities.values)
   val latestTurnLive = pendingRunCount > 0 || pendingToolCalls.any { !it.isComplete } || stream != null
-  var latestUserIndex: Int? = null
   val sourceItems =
     buildList {
-      fun appendHistoryRow(item: ChatTimelineItem) {
-        if (latestUserIndex == null && item is ChatTimelineItem.Message && item.message.id == latestUserMessageId) {
-          latestUserIndex = size
-        }
-        add(item)
-      }
-
       // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
       questions.asReversed().forEach { prompt -> add(ChatTimelineItem.QuestionPrompt(prompt)) }
       outboxItems.asReversed().forEach { item -> add(ChatTimelineItem.OutboxCommand(item)) }
@@ -200,21 +193,21 @@ internal fun PreparedChatHistory.buildTimeline(
             (span.inLatestTurn && latestTurnLive) || (span.inLatestRunChain && pendingRunCount > 0) ||
               activeRunId?.let { (span.runLastTurnIndexes[it] ?: -1) >= span.turnIndex } == true
           if (live) {
-            for (index in rowIndex downTo span.start) appendHistoryRow(rows[index])
+            for (index in rowIndex downTo span.start) add(rows[index])
           } else {
-            span.preservedRowIndexes.asReversed().forEach { appendHistoryRow(rows[it]) }
-            if (span.key in expandedWorkKeys) span.workRowIndexes.asReversed().forEach { appendHistoryRow(rows[it]) }
-            add(ChatTimelineItem.WorkedSummary(span.key, span.durationMs, span.key in expandedWorkKeys))
+            span.preservedRowIndexes.asReversed().forEach { add(rows[it]) }
+            if (span.key in expandedWorkKeys) span.workRowIndexes.asReversed().forEach { add(rows[it]) }
+            add(ChatTimelineItem.WorkedSummary(span.key, span.durationMs, span.key in expandedWorkKeys, span.outcomes))
           }
           rowIndex = span.start - 1
           spanIndex--
         } else {
-          appendHistoryRow(rows[rowIndex--])
+          add(rows[rowIndex--])
         }
       }
     }
   val items = projectToolActivity(sourceItems, rows, pendingToolCalls, toolScope, toolScopesByRun)
-  latestUserIndex = items.indexOfFirst { it is ChatTimelineItem.Message && it.message.id == latestUserMessageId }.takeIf { it >= 0 }
+  val latestUserIndex = items.indexOfFirst { it is ChatTimelineItem.Message && it.message.id == latestUserMessageId }.takeIf { it >= 0 }
   if (items.isEmpty()) {
     return ChatTimeline(
       items = items,

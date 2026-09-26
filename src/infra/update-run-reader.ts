@@ -8,6 +8,7 @@ import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
+  readCurrentOpenClawStateDatabaseContentVersion,
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -110,6 +111,34 @@ export function listUpdateRuns(
       openStateSchemaReadAdmission,
     ) ?? []
   );
+}
+
+/** Reuse decoded rows only after a fresh observation of every authoritative source byte.
+ * The caller still evaluates admission on every invocation; no grant is cached.
+ * This closure owns only rows, never a native handle, child, or temporary snapshot.
+ */
+export function createUpdateRunAdmissionReader(
+  input: UpdateRunListInput,
+  options: OpenClawStateDatabaseOptions,
+  openStateSchemaReadAdmission: OpenClawStateSchemaReadAdmission,
+): () => UpdateRunRecord[] {
+  const query = { ...input };
+  let previous: { version: string; runs: UpdateRunRecord[] } | undefined;
+  return () => {
+    const version = readCurrentOpenClawStateDatabaseContentVersion(options);
+    if (version !== undefined && previous?.version === version) {
+      return structuredClone(previous.runs);
+    }
+    previous = undefined;
+    const runs = listUpdateRuns(query, options, openStateSchemaReadAdmission);
+    if (
+      version !== undefined &&
+      version === readCurrentOpenClawStateDatabaseContentVersion(options)
+    ) {
+      previous = { version, runs: structuredClone(runs) };
+    }
+    return runs;
+  };
 }
 
 /** The fixed two-row status projection reuses the live owner; cold reads prepare one snapshot. */

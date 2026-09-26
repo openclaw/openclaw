@@ -1,5 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayErrorDetails
+import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatTimelineItem
 import ai.openclaw.app.ui.chat.buildTimeline
 import ai.openclaw.app.ui.chat.prepareChatHistory
@@ -1267,6 +1270,72 @@ class ChatControllerStreamReplayTest {
         )
         assertNull(controller.errorText.value)
       }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun transcriptInvalidationSurvivesRepeatedWorkerOverloadWithoutAnotherEvent() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway)
+      var reads = 0
+      val updated = listOf(ReplayHistoryMessage("assistant", "committed elsewhere", 1_000))
+      gateway.respond("chat.history") {
+        reads += 1
+        if (reads <= 2) {
+          throw GatewayRequestRejected(
+            GatewaySession.ErrorShape(
+              "UNAVAILABLE",
+              "session history is busy; retry shortly",
+              GatewayErrorDetails(null, false, null, retryable = true),
+            ),
+          )
+        }
+        historyResponse("session-1", updated)
+      }
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+      assertEquals(1, reads)
+      advanceTimeBy(750)
+      runCurrent()
+      assertEquals(2, reads)
+      advanceTimeBy(750)
+      runCurrent()
+      assertEquals(updated.map { it.role to it.text }, transcript(controller))
+      assertEquals(3, reads)
+      advanceTimeBy(5_000)
+      runCurrent()
+      assertEquals("Successful history retires the refresh obligation", 3, reads)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun transcriptOverloadRefreshDoesNotFollowTheUserToAnotherSession() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway)
+      var refusedReads = 0
+      gateway.respond("chat.history") {
+        refusedReads += 1
+        throw GatewayRequestRejected(
+          GatewaySession.ErrorShape("UNAVAILABLE", "busy", GatewayErrorDetails(null, false, null, retryable = true)),
+        )
+      }
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+      assertEquals(1, refusedReads)
+      var newSessionReads = 0
+      gateway.respond("chat.history") {
+        newSessionReads += 1
+        historyResponse("other-session", emptyList())
+      }
+      controller.load("agent:main:other")
+      runCurrent()
+      val readsAfterSwitch = newSessionReads
+      advanceTimeBy(5_000)
+      runCurrent()
+      assertEquals(readsAfterSwitch, newSessionReads)
+      assertEquals(emptyList<Pair<String, String?>>(), transcript(controller))
     }
 
   @Test

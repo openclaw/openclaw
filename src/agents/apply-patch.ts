@@ -4,9 +4,9 @@
  * through guarded host or sandbox filesystem operations.
  */
 import path from "node:path";
+import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "@openclaw/fs-safe/advanced";
 import { Type } from "typebox";
 import { createAbortError } from "../infra/abort-signal.js";
-import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import {
   type ApplyPatchContainmentSource,
   withApplyPatchContainmentHint,
@@ -276,35 +276,18 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
 
         if (hunk.movePath && moveTarget) {
           await ensureDir(moveTarget.resolved, fileOps);
-          // Container aliases can name the same file; reuse the physical identity
-          // already held by the mutation queue instead of comparing spellings.
-          const moveResolvesToSource = moveTarget.queueKey === target.queueKey;
-          if (moveResolvesToSource) {
-            const existing = await fileOps.readFile(target.resolved);
-            if (normalizeUpdateComparison(existing) === normalizeUpdateComparison(applied)) {
-              noOpPaths.add(target.display);
-            } else {
-              noOpPaths.delete(target.display);
-              await fileOps.writeFile(target.resolved, applied);
-            }
-          } else {
-            noOpPaths.delete(target.display);
-            await createPatchTarget({
-              target: moveTarget,
-              contents: applied,
-              ops: fileOps,
-              hint: "Delete it earlier in the same patch to replace it.",
-            });
-            await fileOps.remove(target.resolved);
-          }
-          if (!noOpPaths.has(target.display)) {
-            recordSummary(
-              summary,
-              seen,
-              "modified",
-              moveResolvesToSource ? target.display : moveTarget.display,
-            );
-          }
+        }
+        // Container aliases can name the same file; use the physical queue identity.
+        if (moveTarget && moveTarget.queueKey !== target.queueKey) {
+          noOpPaths.delete(target.display);
+          await createPatchTarget({
+            target: moveTarget,
+            contents: applied,
+            ops: fileOps,
+            hint: "Delete it earlier in the same patch to replace it.",
+          });
+          await fileOps.remove(target.resolved);
+          recordSummary(summary, seen, "modified", moveTarget.display);
           return;
         }
         const existing = await fileOps.readFile(target.resolved);
@@ -675,15 +658,7 @@ function parseUpdateFileChunk(
     }
 
     const marker = line[0];
-    if (!marker) {
-      chunk.contextOldIndexes.push(chunk.oldLines.length);
-      chunk.oldLines.push("");
-      chunk.newLines.push("");
-      parsedLines += 1;
-      continue;
-    }
-
-    if (marker === " ") {
+    if (!marker || marker === " ") {
       const content = line.slice(1);
       chunk.contextOldIndexes.push(chunk.oldLines.length);
       chunk.oldLines.push(content);

@@ -1,3 +1,4 @@
+import { isIncognitoTask, projectTaskContentForPersistence } from "./task-content.js";
 import {
   appendTaskEvent,
   normalizeTaskStatus,
@@ -13,56 +14,37 @@ import {
 } from "./task-registry-records.js";
 import {
   isTerminalTaskStatus,
-  type JsonValue,
-  type TaskDeliveryStatus,
   type TaskEventRecord,
   type TaskRecord,
+  type TaskExecutionOwner,
   type TaskPersistenceReceipt,
-  type TaskRuntime,
-  type TaskStatus,
-  type TaskTerminalOutcome,
+  type TaskRunStateTransitionParams,
+  type TaskRunTransition,
 } from "./task-registry.types.js";
 
-export type TaskRunStateTransitionParams = {
-  runId: string;
-  taskId?: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  childSessionKey?: string | null;
-  status?: TaskStatus;
-  startedAt?: number;
-  endedAt?: number;
-  lastEventAt?: number;
-  error?: string;
-  clearError?: boolean;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  preserveTerminalSummary?: boolean;
-  terminalOutcome?: TaskTerminalOutcome | null;
-  detail?: JsonValue;
-  eventSummary?: string | null;
-  suppressDelivery?: boolean;
+export class TaskRunTransitionUnsettledError extends Error {}
+
+type TaskRunOwnerTransition = {
+  kind: "run-owner";
+  params: { runId: string; executionOwner?: TaskExecutionOwner; clearLastToolName?: true };
 };
 
-type TaskRunDeliveryTransitionParams = {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  deliveryStatus: TaskDeliveryStatus;
-  error?: string;
-};
-
-export type TaskRunTransition =
-  | { kind: "state"; params: TaskRunStateTransitionParams }
-  | { kind: "delivery"; params: TaskRunDeliveryTransitionParams };
-
-export type TaskRecordTransitionInput = TaskRunTransition & {
+type TaskRecordSelection = {
   taskId: string;
   now: number;
   expectedTask?: TaskPersistenceReceipt;
   /** Preserve an initial batch match across sibling writes; this is not live authority. */
   selection?: TaskPersistenceReceipt;
 };
+
+export type TaskRecordTransitionInput =
+  | (TaskRunTransition & TaskRecordSelection)
+  | (TaskRunOwnerTransition & {
+      taskId: string;
+      now: number;
+      expectedTask: TaskPersistenceReceipt;
+      selection?: never;
+    });
 
 type TaskRecordUpdate = {
   previous: TaskRecord;
@@ -106,10 +88,13 @@ export function prepareTaskRecordUpdate(
 }
 
 function prepareStateTransition(
-  current: TaskRecord,
-  params: TaskRunStateTransitionParams,
+  currentInput: TaskRecord,
+  transitionInput: TaskRunStateTransitionParams,
   now: number,
 ) {
+  const incognito = isIncognitoTask(currentInput) || isIncognitoTask(transitionInput);
+  const current = projectTaskContentForPersistence(incognito, currentInput);
+  const params = projectTaskContentForPersistence(incognito, transitionInput);
   const patch: Partial<TaskRecord> = {};
   const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
   if (
@@ -201,8 +186,28 @@ function prepareStateTransition(
 
 function prepareTaskRecordTransition(
   current: TaskRecord,
-  input: TaskRunTransition & { now: number },
+  input: (TaskRunTransition | TaskRunOwnerTransition) & { now: number },
 ): TaskRecordTransitionReceipt | null {
+  if (input.kind === "run-owner") {
+    return {
+      ...(current.status === "running" &&
+      (input.params.executionOwner || input.params.clearLastToolName)
+        ? prepareTaskRecordUpdate(
+            current,
+            {
+              ...(input.params.executionOwner
+                ? { executionOwner: input.params.executionOwner }
+                : {}),
+              ...(input.params.clearLastToolName
+                ? { lastToolName: undefined, lastEventAt: input.now }
+                : {}),
+            },
+            input.now,
+          )
+        : { previous: current, task: current, persisted: false, becomesTerminal: false }),
+      deliver: false,
+    };
+  }
   if (input.kind === "delivery") {
     return {
       ...prepareTaskRecordUpdate(
@@ -248,7 +253,8 @@ export function runTaskRecordTransitionOperation(
     const current = operations.readCurrent();
     if (
       !current ||
-      (input.selection &&
+      (input.kind !== "run-owner" &&
+        input.selection &&
         (!matchesTaskPersistenceReceipt(current, input.selection) ||
           current.runId?.trim() !== input.params.runId.trim() ||
           filterTasksByRunScope([current], input.params).length === 0)) ||

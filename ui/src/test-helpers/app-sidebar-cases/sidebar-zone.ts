@@ -226,7 +226,7 @@ describe("AppSidebar interleaved zone", () => {
     await sidebar.updateComplete;
 
     const labels = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-zone-entry")].map((entry) =>
-      entry.textContent?.trim(),
+      entry.querySelector(".nav-item__text, .sidebar-recent-session__name")?.textContent?.trim(),
     );
     expect(labels).toEqual(["Usage", "Alpha", "Plugins"]);
     expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();
@@ -382,11 +382,11 @@ describe("AppSidebar interleaved zone", () => {
 
   it("writes reordered entries after a route drop", async () => {
     const { sidebar } = await mountZone();
-    sidebar.sidebarEntries = ["route:usage", "route:plugins", "route:tasks"];
+    sidebar.sidebarEntries = ["route:usage", "route:plugins", "route:cron"];
     const onUpdate = vi.fn();
     sidebar.onUpdateSidebarEntries = onUpdate;
     await sidebar.updateComplete;
-    const source = zoneEntry(sidebar, "route:tasks");
+    const source = zoneEntry(sidebar, "route:cron");
     const target = zoneEntry(sidebar, "route:usage");
     vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
       top: 10,
@@ -398,7 +398,7 @@ describe("AppSidebar interleaved zone", () => {
     dispatchDragEvent(target, "dragover", dataTransfer, 11);
     dispatchDragEvent(target, "drop", dataTransfer, 11);
 
-    expect(onUpdate).toHaveBeenCalledWith(["route:tasks", "route:usage", "route:plugins"]);
+    expect(onUpdate).toHaveBeenCalledWith(["route:cron", "route:usage", "route:plugins"]);
   });
 
   it("pins and inserts a session dropped from Threads", async () => {

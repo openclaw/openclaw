@@ -152,6 +152,8 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         retained,
         retainedChild,
       } = resolveUpdateCommandChildBinding(grant, runId, root, identityWarnings.warn);
+      using readConnections = new DisposableStack();
+      readConnections.use(store.retainReadConnection());
       let active = true;
       const isLive = (identity: ManagedHandoffLease["executor"]) =>
         store.isProcessIdentityCurrent(identity);
@@ -337,6 +339,7 @@ export async function withUpdateCommandExecutor<T>(
       let entering = false;
       let databasePath: string | undefined;
       let store: ReturnType<typeof createManagedHandoffLeaseStore> | undefined;
+      using readConnections = new DisposableStack();
       let lease: ManagedHandoffParent | undefined;
       let borrowed = false;
       let managedHandoff = false;
@@ -565,6 +568,7 @@ export async function withUpdateCommandExecutor<T>(
               existingIdentity: authority,
               onProcessIdentityWarning: identityWarnings.warn,
             });
+            readConnections.use(store.retainReadConnection());
             if (
               borrowed &&
               !legacyChild &&
@@ -610,6 +614,7 @@ export async function withUpdateCommandExecutor<T>(
                   throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
                 }
                 lease = undefined;
+                readConnections.dispose();
               });
             }
             if (enterOptions?.activationTimeoutMs !== undefined) {

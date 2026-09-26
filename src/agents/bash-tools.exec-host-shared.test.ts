@@ -19,28 +19,25 @@ import {
   sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
 
-const mocks = vi.hoisted(() => ({
-  followupImports: 0,
-  resolveExecApprovals: vi.fn(async () => ({
-    defaults: {
-      security: "allowlist",
-      ask: "off",
-      askFallback: "deny",
-      autoAllowSkills: false,
-    },
-    agent: {
-      security: "allowlist",
-      ask: "off",
-      askFallback: "deny",
-      autoAllowSkills: false,
-    },
-    allowlist: [],
-    file: { version: 1, agents: {} },
-    hash: "approvals-hash",
-  })),
-  approvalRunAbortedError: new Error("approval owning run aborted"),
-  resolveRegisteredExecApprovalDecision: vi.fn(async (): Promise<string | null> => "allow-once"),
-}));
+const mocks = vi.hoisted(() => {
+  function approvals(security = "allowlist", ask = "off", askFallback = "deny") {
+    const policy = { security, ask, askFallback, autoAllowSkills: false };
+    return {
+      defaults: policy,
+      agent: { ...policy },
+      allowlist: [],
+      file: { version: 1, agents: {} },
+      hash: "approvals-hash",
+    };
+  }
+  return {
+    approvals,
+    followupImports: 0,
+    resolveExecApprovals: vi.fn(async () => approvals()),
+    approvalRunAbortedError: new Error("approval owning run aborted"),
+    resolveRegisteredExecApprovalDecision: vi.fn(async (): Promise<string | null> => "allow-once"),
+  };
+});
 
 vi.mock("./bash-tools.exec-approval-followup.js", async (importOriginal) => {
   mocks.followupImports += 1;
@@ -72,23 +69,7 @@ describe("sendExecApprovalFollowupResult", () => {
     sendExecApprovalFollowup.mockReset();
     logWarn.mockReset();
     mocks.resolveExecApprovals.mockReset();
-    mocks.resolveExecApprovals.mockResolvedValue({
-      defaults: {
-        security: "allowlist",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      },
-      agent: {
-        security: "allowlist",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      },
-      allowlist: [],
-      file: { version: 1, agents: {} },
-      hash: "approvals-hash",
-    });
+    mocks.resolveExecApprovals.mockResolvedValue(mocks.approvals());
   });
 
   function firstExecApprovalFollowupCall():
@@ -442,21 +423,8 @@ describe("isExecApprovalFollowupSessionRebound", () => {
 describe("resolveExecHostApprovalContext", () => {
   it("does not let exec-approvals.json broaden security beyond the requested policy", async () => {
     mocks.resolveExecApprovals.mockResolvedValue({
-      defaults: {
-        security: "allowlist",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      },
-      agent: {
-        security: "full",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      },
-      allowlist: [],
-      file: { version: 1, agents: {} },
-      hash: "approvals-hash",
+      ...mocks.approvals(),
+      agent: { ...mocks.approvals().agent, security: "full" },
     });
 
     const result = await resolveExecHostApprovalContext({
@@ -470,23 +438,7 @@ describe("resolveExecHostApprovalContext", () => {
   });
 
   it("does not let host ask=off suppress a stricter requested ask mode", async () => {
-    mocks.resolveExecApprovals.mockResolvedValue({
-      defaults: {
-        security: "full",
-        ask: "off",
-        askFallback: "full",
-        autoAllowSkills: false,
-      },
-      agent: {
-        security: "full",
-        ask: "off",
-        askFallback: "full",
-        autoAllowSkills: false,
-      },
-      allowlist: [],
-      file: { version: 1, agents: {} },
-      hash: "approvals-hash",
-    });
+    mocks.resolveExecApprovals.mockResolvedValue(mocks.approvals("full", "off", "full"));
 
     const result = await resolveExecHostApprovalContext({
       agentId: "agent-main",
@@ -499,23 +451,7 @@ describe("resolveExecHostApprovalContext", () => {
   });
 
   it("clamps askFallback to the effective host security", async () => {
-    mocks.resolveExecApprovals.mockResolvedValue({
-      defaults: {
-        security: "full",
-        ask: "always",
-        askFallback: "full",
-        autoAllowSkills: false,
-      },
-      agent: {
-        security: "full",
-        ask: "always",
-        askFallback: "full",
-        autoAllowSkills: false,
-      },
-      allowlist: [],
-      file: { version: 1, agents: {} },
-      hash: "approvals-hash",
-    });
+    mocks.resolveExecApprovals.mockResolvedValue(mocks.approvals("full", "always", "full"));
 
     const result = await resolveExecHostApprovalContext({
       agentId: "agent-main",

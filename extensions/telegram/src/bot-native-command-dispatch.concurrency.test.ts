@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi, type TestContext } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import {
+  apiCalls,
   createBot,
   from,
   groupCommand,
@@ -10,8 +11,16 @@ import {
 
 const DEBOUNCE_MS = 4321;
 
-function createDebouncedBot(native: boolean, commandSender = String(from.id)) {
-  return createBot(native, true, {
+function expectStopAcknowledged(threadId: number) {
+  // The real shared dispatcher handles /stop before calling the model resolver.
+  expect(apiCalls).toHaveBeenCalledWith(
+    "sendMessage",
+    expect.objectContaining({ text: "⚙️ Agent was aborted.", message_thread_id: threadId }),
+  );
+}
+
+async function createDebouncedBot(native: boolean, commandSender = String(from.id)) {
+  return await createBot(native, true, {
     commands: { native, text: true, allowFrom: { telegram: [commandSender] } },
     messages: { inbound: { byChannel: { telegram: DEBOUNCE_MS } } },
     channels: {
@@ -83,19 +92,16 @@ describe("Telegram commands during buffered message processing", () => {
       const started = createDeferred<void>();
       const release = createDeferred<void>();
       const controlEntered = createDeferred<void>();
-      const stopEntered = createDeferred<void>();
       harness.replySpy.mockImplementation(async (ctx) => {
         if (ctx.RawBody === "ordinary run") {
           started.resolve();
           await release.promise;
         } else if (ctx.RawBody === command) {
           controlEntered.resolve();
-        } else if (ctx.RawBody === "/stop") {
-          stopEntered.resolve();
         }
         return undefined;
       });
-      const bot = createDebouncedBot(native);
+      const bot = await createDebouncedBot(native);
       const timer = vi.spyOn(globalThis, "setTimeout");
       const work: Promise<unknown>[] = [];
       const flushes: Array<() => void> = [];
@@ -138,9 +144,9 @@ describe("Telegram commands during buffered message processing", () => {
         // control lane, including a stop targeting another topic.
         const control = dispatch(groupCommand(command, 99));
         const stop = dispatch(groupCommand("/stop", 100));
-        await lifetime.wait(Promise.all([controlEntered.promise, stopEntered.promise]));
+        await lifetime.wait(Promise.all([controlEntered.promise, stop]));
         expect(harness.replySpy.mock.calls.map(([ctx]) => ctx.RawBody ?? "").toSorted()).toEqual(
-          ["ordinary run", command, "/stop"].toSorted(),
+          ["ordinary run", command].toSorted(),
         );
         await lifetime.wait(Promise.all([control, stop]));
         expect(active.participant.isSettled()).toBe(false);
@@ -155,12 +161,7 @@ describe("Telegram commands during buffered message processing", () => {
           CommandAuthorized: true,
           MessageThreadId: 99,
         });
-        expect(
-          harness.replySpy.mock.calls.find(([ctx]) => ctx.RawBody === "/stop")?.[0],
-        ).toMatchObject({
-          CommandAuthorized: true,
-          MessageThreadId: 100,
-        });
+        expectStopAcknowledged(100);
 
         release.resolve();
         await expect(lifetime.wait(active.participant.task)).resolves.toEqual({
@@ -171,7 +172,7 @@ describe("Telegram commands during buffered message processing", () => {
           kind: "completed",
         });
         expect(harness.replySpy.mock.calls.map(([ctx]) => ctx.RawBody ?? "").toSorted()).toEqual(
-          ["ordinary run", command, "/stop", "same-topic follow-up"].toSorted(),
+          ["ordinary run", command, "same-topic follow-up"].toSorted(),
         );
       } finally {
         await lifetime.close();
@@ -183,7 +184,6 @@ describe("Telegram commands during buffered message processing", () => {
     const guest = { ...from, id: from.id + 1, first_name: "Guest" };
     const started = createDeferred<void>();
     const release = createDeferred<void>();
-    const stopEntered = createDeferred<void>();
     harness.replySpy.mockImplementation(async (ctx) => {
       if (ctx.RawBody === "ordinary run") {
         started.resolve();
@@ -192,12 +192,10 @@ describe("Telegram commands during buffered message processing", () => {
         // Core admission keeps unauthorized commands behind the active run.
         // Reproduce that downstream wait if Telegram fails to reject this command.
         await release.promise;
-      } else if (ctx.RawBody === "/stop") {
-        stopEntered.resolve();
       }
       return undefined;
     });
-    const bot = createBot(false, true, {
+    const bot = await createBot(false, true, {
       commands: { native: false, text: true, allowFrom: { telegram: [String(from.id)] } },
       messages: { inbound: { byChannel: { telegram: DEBOUNCE_MS } } },
       channels: {
@@ -239,32 +237,22 @@ describe("Telegram commands during buffered message processing", () => {
       work.push(help);
       const stop = bot.handleUpdate({ update_id: 6103, message: groupCommand("/stop", 100) });
       work.push(stop);
-      await lifetime.wait(stopEntered.promise);
-      expect(harness.replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
-        "ordinary run",
-        "/stop",
-      ]);
+      await lifetime.wait(stop);
+      expect(harness.replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["ordinary run"]);
       await lifetime.wait(Promise.all([help, stop]));
       expect(participant.isSettled()).toBe(false);
-      expect(harness.replySpy.mock.calls[1]?.[0]).toMatchObject({
-        CommandAuthorized: true,
-        SenderId: String(from.id),
-        MessageThreadId: 100,
-      });
+      expectStopAcknowledged(100);
 
       release.resolve();
       await expect(lifetime.wait(participant.task)).resolves.toEqual({ kind: "completed" });
-      expect(harness.replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
-        "ordinary run",
-        "/stop",
-      ]);
+      expect(harness.replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["ordinary run"]);
     } finally {
       await lifetime.close();
     }
   });
 
   it("does not let an unauthorized native stop cancel buffered input", async () => {
-    const bot = createDebouncedBot(true, "99999");
+    const bot = await createDebouncedBot(true, "99999");
     const timer = vi.spyOn(globalThis, "setTimeout");
     let flush: (() => void) | undefined;
     let sourceWork: Promise<unknown> | undefined;

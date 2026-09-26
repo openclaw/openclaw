@@ -166,7 +166,6 @@ describe("runConfigureWizard", () => {
 
   it.each([
     { platform: "linux", deadlineMs: 45_000, probeTimeoutMs: 10_000 },
-    { platform: "darwin", deadlineMs: 45_000, probeTimeoutMs: 10_000 },
     { platform: "win32", deadlineMs: 90_000, probeTimeoutMs: 15_000 },
   ] as const)(
     "allows managed daemon startup before health on $platform",

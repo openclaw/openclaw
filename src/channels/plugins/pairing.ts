@@ -1,8 +1,3 @@
-/**
- * Channel pairing registry facade.
- *
- * Lists pairing-capable channels and dispatches approval notifications through adapters.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ChannelId } from "./channel-id.types.js";

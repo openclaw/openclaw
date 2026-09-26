@@ -12,7 +12,7 @@ import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifec
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import { FakeChild, stubHealthyGateway } from "./update-candidate-canary.test-support.js";
 import * as rehearsals from "./update-candidate-rehearsal.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export function expectCanaryReadinessWarning(
   step: UpdateStepResult | undefined,

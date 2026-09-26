@@ -3,7 +3,6 @@ import {
   normalizeZaiEnv,
   resolveEnvNormalizationKeys,
 } from "../infra/env.js";
-// Defines environment-variable config metadata and preservation rules.
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -29,7 +28,8 @@ export function isConfigRuntimeEnvVarAllowed(key: string, value: string): boolea
   return Boolean(value.trim()) && !isBlockedConfigEnvVar(key) && !containsEnvVarReference(value);
 }
 
-function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, string> {
+/** Collects config env vars safe to inject into runtime process environments. */
+export function collectConfigRuntimeEnvVars(cfg?: OpenClawConfig): Record<string, string> {
   const envConfig = cfg?.env;
   if (!envConfig) {
     return {};
@@ -37,26 +37,11 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
 
   const entries: Record<string, string> = {};
 
-  if (envConfig.vars) {
-    for (const [rawKey, value] of Object.entries(envConfig.vars)) {
-      if (typeof value !== "string" || !value.trim()) {
-        continue;
-      }
-      const key = normalizeEnvVarKey(rawKey, { portable: true });
-      if (!key) {
-        continue;
-      }
-      if (!isConfigRuntimeEnvVarAllowed(key, value)) {
-        continue;
-      }
-      entries[key] = value;
-    }
-  }
-
-  for (const [rawKey, value] of Object.entries(envConfig)) {
-    if (rawKey === "shellEnv" || rawKey === "vars") {
-      continue;
-    }
+  const candidates = [
+    ...Object.entries(envConfig.vars ?? {}),
+    ...Object.entries(envConfig).filter(([key]) => key !== "shellEnv" && key !== "vars"),
+  ];
+  for (const [rawKey, value] of candidates) {
     if (typeof value !== "string" || !value.trim()) {
       continue;
     }
@@ -90,9 +75,7 @@ function envSnapshotKey(key: string): string {
   return process.platform === "win32" ? key.toUpperCase() : key;
 }
 
-function snapshotEnvByPlatformKey(
-  env: Readonly<Record<string, string | undefined>>,
-): Map<string, EnvSnapshotEntry> {
+function snapshotEnvByPlatformKey(env: Readonly<NodeJS.ProcessEnv>): Map<string, EnvSnapshotEntry> {
   // Windows has one logical slot per case-insensitive key. Retain its exact spelling so
   // publication and rollback can compare-and-swap the slot without losing the original key.
   const snapshot = new Map<string, EnvSnapshotEntry>();
@@ -231,15 +214,10 @@ export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.Pr
   return proxy;
 }
 
-/** Collects config env vars safe to inject into runtime process environments. */
-export function collectConfigRuntimeEnvVars(cfg?: OpenClawConfig): Record<string, string> {
-  return collectConfigEnvVarsByTarget(cfg);
-}
-
 /** Collects config env vars safe to persist into managed service environments. */
 export function collectConfigServiceEnvVars(cfg?: OpenClawConfig): Record<string, string> {
   // Runtime and service envs intentionally share filtering until a target-specific contract exists.
-  return collectConfigEnvVarsByTarget(cfg);
+  return collectConfigRuntimeEnvVars(cfg);
 }
 
 /** Builds a cloned environment with config env vars applied without mutating the base env. */
@@ -293,16 +271,24 @@ let publishedConfigRuntimeEnvEpoch = 0;
 // cannot retain superseded rollback state, while overlapping failures can still unwind in order.
 let pendingConfigRuntimeEnvPublication: PendingConfigRuntimeEnvPublication | null = null;
 
-function applyPublishedConfigRuntimeEnvRollback(
-  publication: PendingConfigRuntimeEnvPublication,
+function rollbackConfigRuntimeEnvChanges(
+  env: NodeJS.ProcessEnv,
+  changes: ReadonlyMap<string, PublishedConfigRuntimeEnvChange>,
 ): void {
-  for (const [key, change] of publication.changes) {
-    const currentEntry = snapshotEnvByPlatformKey(process.env).get(key);
+  let current: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
+  for (const [key, change] of changes) {
+    const currentEntry = (current ??= snapshotEnvByPlatformKey(env)).get(key);
     if (!envSnapshotEntriesEqual(currentEntry, change.after)) {
       continue;
     }
-    replaceEnvSnapshotEntry(process.env, currentEntry, change.before);
+    replaceEnvSnapshotEntry(env, currentEntry, change.before);
   }
+}
+
+function applyPublishedConfigRuntimeEnvRollback(
+  publication: PendingConfigRuntimeEnvPublication,
+): void {
+  rollbackConfigRuntimeEnvChanges(process.env, publication.changes);
   publishedConfigRuntimeEnvState = {
     generation: publishedConfigRuntimeEnvState.generation + 1,
     ownedEnv: publication.previousState.ownedEnv,
@@ -372,19 +358,24 @@ export function collectConfigRuntimeEnvOwnership(
   return ownedEnv;
 }
 
-function filterConfigRuntimeEnvOwnership(
-  sourceConfig: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-  ownedEnv: Readonly<Record<string, string>>,
-): Record<string, string> {
+function indexConfigRuntimeEnvValues(entries: Record<string, string>): Map<string, Set<string>> {
   const allowedValues = new Map<string, Set<string>>();
-  for (const [key, value] of Object.entries(collectConfigRuntimeEnvVars(sourceConfig))) {
+  for (const [key, value] of Object.entries(entries)) {
     for (const normalizedKey of resolveEnvNormalizationKeys(key)) {
       const values = allowedValues.get(normalizedKey) ?? new Set<string>();
       values.add(value);
       allowedValues.set(normalizedKey, values);
     }
   }
+  return allowedValues;
+}
+
+function filterConfigRuntimeEnvOwnership(
+  sourceConfig: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  ownedEnv: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const allowedValues = indexConfigRuntimeEnvValues(collectConfigRuntimeEnvVars(sourceConfig));
   const filtered: Record<string, string> = {};
   for (const [key, value] of Object.entries(ownedEnv)) {
     const normalizedKey = resolveEnvNormalizationKeys(key)[0] ?? key;
@@ -590,10 +581,11 @@ function prepareConfigRuntimeEnvPublication(params: {
         ...afterByPlatformKey.keys(),
         ...(previousPublication?.changes.keys() ?? []),
       ]);
+      let current: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
       for (const key of keys) {
         const beforeEntry = before.get(key);
         const afterEntry = afterByPlatformKey.get(key);
-        const currentEntry = snapshotEnvByPlatformKey(targetEnv).get(key);
+        const currentEntry = (current ??= snapshotEnvByPlatformKey(targetEnv)).get(key);
         const previousChange = previousPublication?.changes.get(key);
         const continuesPreviousPublication =
           previousChange !== undefined &&
@@ -614,16 +606,15 @@ function prepareConfigRuntimeEnvPublication(params: {
           replaceEnvSnapshotEntry(targetEnv, currentEntry, afterEntry);
         }
       }
-      const publicationGeneration = processPublication
-        ? publishedConfigRuntimeEnvState.generation + 1
-        : null;
+      const generation = processPublication ? publishedConfigRuntimeEnvState.generation + 1 : null;
       const publicationEpoch = publishedConfigRuntimeEnvEpoch;
       let processPublicationState: PendingConfigRuntimeEnvPublication | null = null;
-      if (publicationGeneration !== null) {
+      if (generation !== null) {
         const ownedEnv: Record<string, string> = {};
+        let owned: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
         for (const [key, value] of Object.entries(params.configState?.ownedEnv ?? {})) {
           const platformKey = envSnapshotKey(key);
-          const currentEntry = snapshotEnvByPlatformKey(targetEnv).get(platformKey);
+          const currentEntry = (owned ??= snapshotEnvByPlatformKey(targetEnv)).get(platformKey);
           const preparedEntry = afterByPlatformKey.get(platformKey);
           const previousOwnedKey = findCaseInsensitiveEnvKey(previousOwnedEnv, key);
           if (
@@ -636,7 +627,7 @@ function prepareConfigRuntimeEnvPublication(params: {
           }
         }
         publishedConfigRuntimeEnvState = {
-          generation: publicationGeneration,
+          generation,
           ownedEnv: params.configState ? ownedEnv : previousPublishedState.ownedEnv,
           sourceConfig: params.configState?.sourceConfig ?? previousPublishedState.sourceConfig,
         };
@@ -667,13 +658,7 @@ function prepareConfigRuntimeEnvPublication(params: {
           unwindRequestedConfigRuntimeEnvPublications();
           return;
         }
-        for (const [key, publication] of published) {
-          const currentEntry = snapshotEnvByPlatformKey(targetEnv).get(key);
-          if (!envSnapshotEntriesEqual(currentEntry, publication.after)) {
-            continue;
-          }
-          replaceEnvSnapshotEntry(targetEnv, currentEntry, publication.before);
-        }
+        rollbackConfigRuntimeEnvChanges(targetEnv, published);
       }) as ConfigRuntimeEnvPublication;
       rollback.commit = () => {
         if (!active) {
@@ -708,19 +693,11 @@ export function applyConfigEnvVars(
   const previousOwnedEnv = resolveAppliedConfigEnvOwnership(env);
   const entries = collectConfigRuntimeEnvVars(cfg);
   const lowerPrecedenceEntries = Object.entries(options.lowerPrecedenceEnv ?? {});
-  const normalizeKey = (key: string) => (process.platform === "win32" ? key.toUpperCase() : key);
   const lowerPrecedenceEnv = new Map(
-    lowerPrecedenceEntries.map(([key, value]) => [normalizeKey(key), value]),
+    lowerPrecedenceEntries.map(([key, value]) => [envSnapshotKey(key), value]),
   );
   const configEnvKeys = expandEnvNormalizationKeys(Object.keys(entries));
-  const configValuesByKey = new Map<string, Set<string>>();
-  for (const [key, value] of Object.entries(entries)) {
-    for (const normalizedKey of resolveEnvNormalizationKeys(key)) {
-      const values = configValuesByKey.get(normalizedKey) ?? new Set<string>();
-      values.add(value);
-      configValuesByKey.set(normalizedKey, values);
-    }
-  }
+  const configValuesByKey = indexConfigRuntimeEnvValues(entries);
   const higherPrecedenceValues = new Map<string, string>();
   for (const key of Object.keys(entries)) {
     const normalizedKeys = resolveEnvNormalizationKeys(key);
@@ -740,7 +717,7 @@ export function applyConfigEnvVars(
   }
   const replacedLowerPrecedenceKeys: string[] = [];
   for (const [key, value] of lowerPrecedenceEntries) {
-    if (configEnvKeys.has(normalizeKey(key)) && env[key] === value) {
+    if (configEnvKeys.has(envSnapshotKey(key)) && env[key] === value) {
       delete env[key];
       replacedLowerPrecedenceKeys.push(key);
     }
@@ -749,20 +726,13 @@ export function applyConfigEnvVars(
     options.onLowerPrecedenceKeysReplaced?.(replacedLowerPrecedenceKeys);
   }
   for (const [key, value] of Object.entries(entries)) {
-    const higherPrecedenceValue = higherPrecedenceValues.get(normalizeKey(key));
+    const higherPrecedenceValue = higherPrecedenceValues.get(envSnapshotKey(key));
     if (higherPrecedenceValue !== undefined) {
       env[key] = higherPrecedenceValue;
       continue;
     }
     const currentValue = env[key];
-    if (currentValue?.trim() && lowerPrecedenceEnv.get(normalizeKey(key)) !== currentValue) {
-      continue;
-    }
-    // Skip values containing unresolved ${VAR} references — applyConfigEnvVars runs
-    // before env substitution, so these would pollute process.env with literal placeholders
-    // (e.g. process.env.OPENCLAW_GATEWAY_TOKEN = "${VAULT_TOKEN}") which downstream auth
-    // resolution would accept as valid credentials.
-    if (containsEnvVarReference(value)) {
+    if (currentValue?.trim() && lowerPrecedenceEnv.get(envSnapshotKey(key)) !== currentValue) {
       continue;
     }
     env[key] = value;

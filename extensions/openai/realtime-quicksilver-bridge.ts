@@ -21,6 +21,7 @@ import {
   closeOpenAILiveSocket,
   openAIQuicksilverToolResultText,
 } from "./realtime-quicksilver-protocol.js";
+import { handleOpenAIQuicksilverProviderError } from "./realtime-quicksilver-provider-error.js";
 import { projectOpenAIQuicksilverErrorMessage } from "./realtime-quicksilver-redaction.js";
 import {
   connectOpenAIQuicksilverSideband,
@@ -562,18 +563,17 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     }
     const message = projectOpenAIQuicksilverErrorMessage("provider");
     const error = new Error(message);
-    if (!this.lifecycle.isReady()) {
-      failStartup(error, "session start failed");
-      return;
-    }
     const reportEvent = () =>
       this.config.onEvent?.({ direction: "server", type: "error", detail: message });
-    if (event.fatalAuth) {
-      this.fail(connection, error, "authentication failed", reportEvent);
-    } else {
-      reportEvent();
-      this.config.onError?.(error);
-    }
+    handleOpenAIQuicksilverProviderError({
+      fatalAuth: event.fatalAuth,
+      ready: this.lifecycle.isReady(),
+      failStartup: () => failStartup(error, "session start failed"),
+      failAuthentication: () => this.fail(connection, error, "authentication failed", reportEvent),
+      reportEvent,
+      reportError: () => this.config.onError?.(error),
+      logger: this.config.logger,
+    });
   }
 
   private startDelegation(

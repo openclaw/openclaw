@@ -241,7 +241,12 @@ type LiveSubagentContext = {
 };
 
 export async function runWithLiveSubagentGateway(
-  options: { children?: number; additionalTools?: string[]; peerSessions?: boolean },
+  options: {
+    children?: number;
+    maxConcurrent?: number;
+    additionalTools?: string[];
+    peerSessions?: boolean;
+  },
   body: (context: LiveSubagentContext) => Promise<void>,
 ): Promise<void> {
   expect(Boolean(process.env.OPENAI_API_KEY?.trim()), "OpenAI API key is present").toBe(true);
@@ -299,7 +304,9 @@ export async function runWithLiveSubagentGateway(
         },
         plugins: { enabled: false },
         tools: {
+          // These scenarios inspect direct tool calls in the transcript.
           codeMode: false,
+          toolSearch: false,
           ...(options.peerSessions
             ? { sessions: { visibility: "all" as const }, agentToAgent: { enabled: true } }
             : {}),
@@ -349,7 +356,7 @@ export async function runWithLiveSubagentGateway(
               allowAgents: ["*"],
               maxSpawnDepth: 2,
               maxChildrenPerAgent: Math.max(3, childrenPerBatch),
-              maxConcurrent: Math.max(3, childrenPerBatch),
+              maxConcurrent: options.maxConcurrent ?? childrenPerBatch,
               runTimeoutSeconds: 300,
               announceTimeoutMs: 300_000,
               archiveAfterMinutes: 60,

@@ -337,7 +337,10 @@ suite.define(() => {
 
         try {
           const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByText(expectedText, { exact: false }).first().waitFor();
+          await dialog
+            .locator(".update-run-view__details")
+            .getByText(expectedText, { exact: true })
+            .waitFor();
           expect(await dialog.locator('[data-oracle="version"]').getAttribute("data-state")).toBe(
             "fail",
           );

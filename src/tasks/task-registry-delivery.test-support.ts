@@ -1,4 +1,6 @@
 import { vi } from "vitest";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { observeAsyncWorkScopeRuns } from "../shared/async-work-scope.test-support.js";
 import * as notificationMutation from "./task-notification-mutation.async.js";
 import * as taskDeliveryAdmission from "./task-registry-delivery-admission.js";
 import { cloneTaskDeliveryState } from "./task-registry-records.js";
@@ -53,31 +55,77 @@ export function commitTaskDeliveryFixture(state: TaskDeliveryState): void {
 /** Join notifications admitted by synchronous fixture actions before releasing their stores. */
 export function captureTaskDeliveryWork() {
   const pending: Array<Promise<TaskRecord | null>> = [];
+  const deliverySignals = new Set<AbortSignal>();
+  const scopeRuns = observeAsyncWorkScopeRuns();
   const admit = taskDeliveryAdmission.runTaskDeliveryWithDetachedAdmission;
   const capture = vi
     .spyOn(taskDeliveryAdmission, "runTaskDeliveryWithDetachedAdmission")
     .mockImplementation((taskId, deliver) => {
-      const result = admit(taskId, deliver);
+      const result = admit(taskId, (assertCurrent) => {
+        const signal = getAsyncWorkSignal();
+        if (signal) {
+          deliverySignals.add(signal);
+        }
+        return deliver(assertCurrent);
+      });
       pending.push(result);
       return result;
     });
   return {
-    async settle() {
+    async settleResults() {
       const settled = await Promise.allSettled(pending);
-      const failures = settled.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
+      throwTaskDeliveryFailures(
+        settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
       );
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Task delivery fixture work failed");
-      }
+    },
+    async settle() {
+      const failures: unknown[] = [];
+      let deliveryPosition = 0;
+      let scopePosition = scopeRuns.startIndex;
+      do {
+        const results = pending.slice(deliveryPosition);
+        deliveryPosition = pending.length;
+        const settled = await Promise.allSettled(results);
+        failures.push(
+          ...settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        );
+        // Admission returns before the enclosing scope drains and releases its root.
+        // Only captured delivery scopes belong to this fixture; callers may hold other roots.
+        const lifetimes: unknown[] = [];
+        while (scopePosition < scopeRuns.mock.results.length) {
+          const index = scopePosition++;
+          const scope = scopeRuns.mock.contexts[index];
+          const result = scopeRuns.mock.results[index]!;
+          if (!(scope instanceof AsyncWorkScope) || !deliverySignals.has(scope.signal)) {
+            continue;
+          }
+          if (result.type === "throw") {
+            failures.push(result.value);
+          } else {
+            lifetimes.push(result.value);
+          }
+        }
+        const drained = await Promise.allSettled(lifetimes);
+        failures.push(
+          ...drained.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        );
+      } while (deliveryPosition < pending.length || scopePosition < scopeRuns.mock.results.length);
+      throwTaskDeliveryFailures(failures);
     },
     [Symbol.dispose]() {
       capture.mockRestore();
+      scopeRuns[Symbol.dispose]();
     },
   };
+}
+
+function throwTaskDeliveryFailures(failures: unknown[]): void {
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Task delivery fixture work failed");
+  }
 }
 
 export function waitForFast<T>(

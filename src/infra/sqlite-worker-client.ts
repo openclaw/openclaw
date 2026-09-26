@@ -8,9 +8,13 @@ import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
+  type SqliteWorkerStateLifecycle,
 } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
-import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
+import {
+  captureSqliteWorkerStateContext,
+  type SqliteWorkerStateContext,
+} from "./sqlite-worker-state-context.js";
 
 export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOperations, T>(
   client: StoreClient | undefined,
@@ -19,7 +23,7 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
   track: (pending: Promise<void>) => () => void,
   assertCurrent?: (commandType: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
-  requireStateLifecycle = false,
+  requireStateLifecycle: SqliteWorkerStateLifecycle = false,
 ): Promise<T> {
   if (!client || client.sealed) {
     return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
@@ -30,15 +34,7 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
     assertCurrent,
     active: true,
     pending: new Set(),
-    ...(stateContext
-      ? {
-          stateContext: {
-            environment: { ...stateContext.environment },
-            coordinatorRuntime: { ...stateContext.coordinatorRuntime },
-            existingSchemaPath: stateContext.existingSchemaPath,
-          },
-        }
-      : {}),
+    ...(stateContext ? { stateContext: captureSqliteWorkerStateContext(stateContext) } : {}),
   };
   const released = createDeferredCore();
   client.scopes.add(released.promise);
@@ -122,16 +118,11 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
       );
       pending.add(operation);
       scope?.pending.add(operation);
-      void operation.then(
-        () => {
-          pending.delete(operation);
-          scope?.pending.delete(operation);
-        },
-        () => {
-          pending.delete(operation);
-          scope?.pending.delete(operation);
-        },
-      );
+      const settled = () => {
+        pending.delete(operation);
+        scope?.pending.delete(operation);
+      };
+      void operation.then(settled, settled);
       return operation;
     },
   };

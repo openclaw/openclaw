@@ -30,8 +30,11 @@ export function openShellNewSession(
     return false;
   }
   if (
-    !readSessionMethodAccess(context.gateway.snapshot, { method: "sessions.create", params: {} })
-      .allowed
+    !readSessionMethodAccess(context.gateway.snapshot, {
+      method: "sessions.create",
+      params: {},
+      sessionScope: true,
+    }).allowed
   ) {
     return false;
   }

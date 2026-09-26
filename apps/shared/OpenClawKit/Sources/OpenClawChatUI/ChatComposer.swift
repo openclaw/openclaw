@@ -287,15 +287,7 @@ struct OpenClawChatComposer: View {
             }
             .onChange(of: self.isAttachmentInputEnabled) { _, isEnabled in
                 if !isEnabled {
-                    self.showsPhotoPicker = false
-                    self.showsFileImporter = false
-                    self.showsCameraPicker = false
-                    self.photoPickerOwner = nil
-                    self.fileImporterOwner = nil
-                    #if canImport(UIKit)
-                    self.cameraCaptureOwner = nil
-                    #endif
-                    self.cancelActiveCameraEncoding()
+                    self.dismissAttachmentCapture()
                 }
             }
             .onAppear {
@@ -358,15 +350,7 @@ struct OpenClawChatComposer: View {
             .onChange(of: self.presentationOwner) { _, _ in
                 ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)
                 #if !os(macOS)
-                self.showsPhotoPicker = false
-                self.showsFileImporter = false
-                self.showsCameraPicker = false
-                self.photoPickerOwner = nil
-                self.fileImporterOwner = nil
-                #if canImport(UIKit)
-                self.cameraCaptureOwner = nil
-                #endif
-                self.cancelActiveCameraEncoding()
+                self.dismissAttachmentCapture()
                 #endif
             }
             .onAppear {
@@ -376,15 +360,7 @@ struct OpenClawChatComposer: View {
             .onDisappear {
                 ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)
                 #if !os(macOS)
-                self.showsPhotoPicker = false
-                self.showsFileImporter = false
-                self.showsCameraPicker = false
-                self.photoPickerOwner = nil
-                self.fileImporterOwner = nil
-                #if canImport(UIKit)
-                self.cameraCaptureOwner = nil
-                #endif
-                self.cancelActiveCameraEncoding()
+                self.dismissAttachmentCapture()
                 #endif
                 self.cancelActiveVoiceNoteIfNeeded()
                 self.viewModel.attachmentOwnerActivityChanged()
@@ -408,7 +384,7 @@ struct OpenClawChatComposer: View {
 
                 if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
                     OpenClawVoiceNoteRecordingRow(recorder: voiceNoteControl.recorder)
-                        .padding(self.editorPadding)
+                        .padding(self.composerPadding)
                 } else {
                     self.editor
                 }
@@ -702,7 +678,7 @@ struct OpenClawChatComposer: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(OpenClawChatTheme.composerBorder)))
-        .padding(editorPadding)
+        .padding(composerPadding)
     }
 
     private var cleanComposerCard: some View {
@@ -1307,10 +1283,6 @@ extension OpenClawChatComposer {
         self.style == .onboarding ? 5 : (self.composerChrome == .clean ? 4 : 6)
     }
 
-    private var editorPadding: CGFloat {
-        self.style == .onboarding ? 5 : (self.composerChrome == .clean ? 4 : 6)
-    }
-
     var textMinHeight: CGFloat {
         #if os(macOS)
         if self.usesDesktopModelMenu { return self.scaledBodyLineHeight }
@@ -1517,6 +1489,18 @@ extension OpenClawChatComposer {
         }
     }
     #endif
+
+    private func dismissAttachmentCapture() {
+        self.showsPhotoPicker = false
+        self.showsFileImporter = false
+        self.showsCameraPicker = false
+        self.photoPickerOwner = nil
+        self.fileImporterOwner = nil
+        #if canImport(UIKit)
+        self.cameraCaptureOwner = nil
+        #endif
+        self.cancelActiveCameraEncoding()
+    }
 
     private func cancelActiveCameraEncoding() {
         #if canImport(UIKit)

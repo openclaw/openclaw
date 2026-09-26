@@ -1,10 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { GatewayClientOptions } from "../gateway/client.js";
+import {
+  createTuiCommandHandlersHarness,
+  firstMockArg,
+  flushAsyncSelect,
+} from "./tui-command-handlers-test-support.js";
 // Covers gateway-backed chat behavior used by the TUI backend.
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClient, GatewayClientRequestError } = await import("../gateway/client.js");
+
+function createClient() {
+  return new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+}
 
 describe("GatewayChatClient", () => {
   afterEach(() => {
@@ -66,11 +76,103 @@ describe("GatewayChatClient", () => {
     },
   );
 
+  it("retains agent-scoped choices during a held refresh but cannot republish after stop", async () => {
+    const models = [{ provider: "fixture", id: "known", name: "Known" }];
+    const held = createDeferred<{ models: typeof models }>();
+    const request = vi
+      .spyOn(GatewayClient.prototype, "request")
+      .mockResolvedValueOnce({ models })
+      .mockReturnValueOnce(held.promise);
+    const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+    try {
+      await client.listModels({ agentId: "work" });
+      const refresh = client.listModels({ agentId: "work" });
+      const sharedRefresh = client.listModels({ agentId: "work" });
+      expect(client.getKnownModels({ agentId: "work" })).toEqual(models);
+      expect(client.getKnownModels({ agentId: "main" })).toBeUndefined();
+      await client.stop();
+      held.resolve({ models: [{ provider: "fixture", id: "obsolete", name: "Obsolete" }] });
+      await Promise.all([refresh, sharedRefresh]);
+      expect(client.getKnownModels({ agentId: "work" })).toBeUndefined();
+    } finally {
+      held.resolve({ models });
+      request.mockRestore();
+    }
+  });
+
+  it.each([
+    { remaining: ["first", "current", "highlighted"], expected: "highlighted" },
+    { remaining: ["first", "current"], expected: "current" },
+    { remaining: ["first"], expected: "first" },
+  ])(
+    "keeps rows through sign-in and restores $expected after policy retirement",
+    async ({ remaining, expected }) => {
+      const models = ["first", "current", "highlighted"].map((id) => ({
+        provider: "fixture",
+        id,
+        name: id,
+      }));
+      const held = createDeferred<{ models: typeof models }>();
+      const request = vi.fn().mockResolvedValueOnce({ models }).mockReturnValue(held.promise);
+      let onEvent: GatewayClientOptions["onEvent"];
+      vi.resetModules();
+      vi.doMock("../gateway/client.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("../gateway/client.js")>();
+        return {
+          ...actual,
+          GatewayClient: class {
+            request = request;
+            constructor(opts: GatewayClientOptions) {
+              onEvent = opts.onEvent!;
+            }
+          },
+        };
+      });
+      try {
+        // Reload the client so its transport constructor uses this test's event source.
+        const { GatewayChatClient: CatalogClient } = await import("./gateway-chat.js");
+        const client = new CatalogClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+        await client.listModels({ agentId: "main" });
+        const harness = createTuiCommandHandlersHarness({
+          getKnownModels: (opts) => client.getKnownModels(opts),
+          listModels: vi.fn((opts) => client.listModels(opts)),
+          sessionInfo: { modelProvider: "fixture", model: "current" },
+        });
+        client.onModelsChanged = harness.client.onModelsChanged;
+        await harness.handleCommand("/models");
+        const selector = firstMockArg(harness.openOverlay, "openOverlay") as {
+          handleInput(data: string): void;
+          render(width: number): string[];
+        };
+        selector.handleInput("\u001b[B");
+        selector.handleInput("\u001b[B");
+        onEvent!({ type: "event", event: "config.changed", payload: {} });
+        expect(selector.render(100).join("\n")).not.toContain("Checking models...");
+        expect(selector.render(100).join("\n")).toContain("fixture/highlighted");
+        onEvent!({
+          type: "event",
+          event: "chat.metadata.changed",
+          payload: { modelSelectionChanged: true },
+        });
+        expect(selector.render(100).join("\n")).toContain("Checking models...");
+        held.resolve({ models: models.filter((model) => remaining.includes(model.id)) });
+        await client.listModels({ agentId: "main" });
+        selector.handleInput("\r");
+        await flushAsyncSelect();
+        expect(harness.patchSession).toHaveBeenCalledWith({
+          key: "agent:main:main",
+          model: `fixture/${expected}`,
+        });
+      } finally {
+        held.resolve({ models });
+        vi.doUnmock("../gateway/client.js");
+        vi.resetModules();
+      }
+    },
+  );
+
   it("waits for gateway transport teardown on stop", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     let finishStop: (() => void) | undefined;
     const stopAndWait = vi.fn(
       () =>
@@ -246,10 +348,7 @@ describe("GatewayChatClient", () => {
   it("retries startup-unavailable history only while the backend is active", async () => {
     vi.useFakeTimers();
 
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const startupError = new GatewayClientRequestError({
       code: "UNAVAILABLE",
       message: "chat.history unavailable during gateway startup",
@@ -296,10 +395,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("passes selected-agent global scope through chat methods", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi.fn().mockResolvedValue({ messages: [] });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
@@ -336,10 +432,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("resolves a handoff key through the exact sessions.resolve wire contract", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi
       .fn()
       .mockResolvedValue({ ok: true, key: "agent:main:alpha", agentId: "main" });
@@ -362,10 +455,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("preserves side runs for session-scoped TUI aborts", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
@@ -378,10 +468,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("retries session aborts without side-run preservation on older Gateways", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi
       .fn()
       .mockRejectedValueOnce(
@@ -406,10 +493,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("retries session creation without disposition on older Gateways", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi
       .fn()
       .mockRejectedValueOnce(
@@ -442,10 +526,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("retries parallel session creation without parent lifecycle on older Gateways", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi
       .fn()
       .mockRejectedValueOnce(
@@ -479,10 +560,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("returns the actual chat send ack status from the gateway", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi.fn().mockResolvedValue({ runId: "run-gateway", status: "timeout" });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
@@ -496,10 +574,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("lists gateway commands through commands.list", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const command = {
       name: "tts",
       textAliases: ["/tts"],
@@ -522,10 +597,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("lists and resolves plugin approvals through the gateway", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const pending = [{ id: "plugin:skill-1" }];
     const request = vi.fn().mockResolvedValueOnce(pending).mockResolvedValueOnce({ ok: true });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
@@ -543,10 +615,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("requests a new non-worktree session even without mode capabilities", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const suggestion = {
       id: "task_1",
       title: "Investigate a restarting service",
@@ -590,10 +659,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("derives task suggestion actions from negotiated methods and scopes", () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     client.hello = {
       features: {
         methods: ["taskSuggestions.accept", "taskSuggestions.dismiss"],
@@ -619,10 +685,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("skips task suggestion refreshes against older gateways", async () => {
-    const client = new GatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = createClient();
     const request = vi.fn();
     client.hello = { features: { methods: ["chat.history"] } } as never;
     (client as unknown as { client: { request: typeof request } }).client.request = request;

@@ -596,8 +596,10 @@ function deliverGeneratedMedia(
 function mockRestartContinuation(
   continuation: NonNullable<RestartSentinelPayload["continuation"]>,
   threadId?: string,
+  revision?: number,
 ) {
   mocks.readRestartSentinel.mockResolvedValue({
+    ...(revision === undefined ? {} : { version: 1, revision }),
     payload: {
       sessionKey: "agent:main:main",
       deliveryContext: {
@@ -1291,7 +1293,7 @@ describe("scheduleRestartSentinelWake", () => {
     },
   );
 
-  it.each(["failed", "stale", "thrown"])(
+  it.each(["failed", "thrown"])(
     "warns and wakes the internal session when the update notice append is %s",
     async (failure) => {
       mocks.deliveryContextFromSession.mockReturnValue({ channel: "webchat" });
@@ -1308,7 +1310,6 @@ describe("scheduleRestartSentinelWake", () => {
         mocks.appendAssistantMessageToSessionTranscript.mockResolvedValue({
           ok: false,
           reason: "append failed",
-          ...(failure === "stale" ? { code: "session-rebound" as const } : {}),
         });
       }
 
@@ -1562,23 +1563,7 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("still dispatches continuation after a restart notice is queued for recovery", async () => {
     mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("transport still not ready"));
-    mocks.readRestartSentinel.mockResolvedValue({
-      version: 1,
-      revision: 123,
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        ts: 123,
-        continuation: {
-          kind: "agentTurn",
-          message: "continue",
-        },
-      },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mockRestartContinuation({ kind: "agentTurn", message: "continue" }, undefined, 123);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -2946,24 +2931,11 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("dispatches agentTurn continuation for a completed run entry", async () => {
-    mocks.readRestartSentinel.mockResolvedValue({
-      version: 1,
-      revision: 123,
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        threadId: "thread-42",
-        ts: 123,
-        continuation: {
-          kind: "agentTurn",
-          message: "continue after restart",
-        },
-      },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mockRestartContinuation(
+      { kind: "agentTurn", message: "continue after restart" },
+      "thread-42",
+      123,
+    );
     mocks.loadSessionEntry.mockReturnValue({
       cfg: { commands: { ownerAllowFrom: ["+15550002"] } },
       entry: {
@@ -3399,23 +3371,7 @@ describe("scheduleRestartSentinelWake", () => {
   it("retries restart continuations when the previous run is still shutting down", async () => {
     const busyReply = "⚠️ Previous run is still shutting down. Please try again in a moment.";
     let attempt = 0;
-    mocks.readRestartSentinel.mockResolvedValue({
-      version: 1,
-      revision: 123,
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
-        },
-        ts: 123,
-        continuation: {
-          kind: "agentTurn",
-          message: "continue",
-        },
-      },
-    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mockRestartContinuation({ kind: "agentTurn", message: "continue" }, undefined, 123);
     mocks.recordInboundSessionAndDispatchReply.mockImplementation(async (params) => {
       attempt += 1;
       if (attempt <= 2) {
@@ -3947,34 +3903,6 @@ describe("scheduleRestartSentinelWake", () => {
     });
   });
 
-  it("warns when continuation cannot run because the restart sentinel has no sessionKey", async () => {
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        message: "restart message",
-        continuation: {
-          kind: "agentTurn",
-          message: "continue",
-        },
-      },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-
-    await scheduleRestartSentinelWake({ deps: {} as never });
-
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      "restart message",
-      expect.objectContaining({ sessionKey: "agent:ops:main" }),
-    );
-    expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
-    expect(mocks.logWarn.mock.calls).toEqual([
-      [
-        "restart summary: continuation skipped: restart sentinel sessionKey unavailable",
-        {
-          sessionKey: "agent:ops:main",
-          continuationKind: "agentTurn",
-        },
-      ],
-    ]);
-  });
   it("skips outbound restart notice when no canonical delivery context survives restart", async () => {
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {

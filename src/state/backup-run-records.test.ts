@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildBackupStatusValue, noteBackupDoctorHint } from "../commands/backup-health.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { readBackupRunFreshness, recordBackupRunOutcome } from "./backup-run-records.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -44,14 +45,8 @@ describe("backup run records", () => {
   it("records an ordinary snapshot outcome without main-thread SQL and retains it after reopen", async () => {
     const env = await testEnv({ bootstrap: true });
     await closeOpenClawStateDatabaseAsync();
-    const native = requireNodeSqlite();
-    const counters = [
-      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-      vi.spyOn(native.DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
     try {
       await recordBackupRunOutcome({
         env,
@@ -60,11 +55,9 @@ describe("backup run records", () => {
         status: "ok",
         createdAt: 7,
       });
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
     } finally {
-      for (const counter of counters) {
-        counter.mockRestore();
-      }
+      sql.restore();
     }
     await closeOpenClawStateDatabaseAsync();
     expect(await readBackupRunFreshness(env)).toMatchObject({

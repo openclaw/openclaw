@@ -51,7 +51,6 @@ else
 fi
 git_cli="$git_root/openclaw.mjs"
 
-package_version="$(node -p "require(\"$npm_root/package.json\").version")"
 update_doctor_env="OPENCLAW_UPDATE_IN_PROGRESS=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART=1"
@@ -78,10 +77,6 @@ use_default_service_identity() {
   export XDG_RUNTIME_DIR="$account_home/.cache/openclaw-doctor-switch-runtime"
   export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
   unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
-}
-
-is_legacy_package_acceptance_compat() {
-  [ "$(node scripts/e2e/lib/package-compat.mjs "$1")" = "1" ]
 }
 
 assert_entrypoint() {
@@ -404,12 +399,4 @@ run_wrapper_flow() {
   assert_entrypoint "$unit_path" "$npm_entry"
 }
 
-if "$npm_bin" gateway install --help 2>&1 | grep -q -- "--wrapper"; then
-  run_wrapper_flow
-elif is_legacy_package_acceptance_compat "$package_version"; then
-  # Legacy compatibility: 2026.4.25 and older did not ship gateway install --wrapper.
-  echo "Skipping wrapper persistence; package gateway install does not support --wrapper."
-else
-  echo "Package $package_version must support gateway install --wrapper." >&2
-  exit 1
-fi
+run_wrapper_flow

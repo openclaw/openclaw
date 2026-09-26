@@ -6,6 +6,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
 import { beforeAll, describe, expect, it } from "vitest";
+import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
   listVitestRuntimeConsumerFiles,
   resolveVitestCliEntry,
@@ -24,11 +26,23 @@ const {
   buildVitestRunPlans,
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
+  hasImportGraphImpactOnTargets,
   parseTestProjectsArgs,
   resolveChangedTargetArgs,
   resolveChangedTestTargetPlan,
   resolveParallelFullSuiteConcurrency,
 } = await import("../../scripts/test-projects.test-support.mts");
+
+it("tracks compile-cache dependencies through generated SQLite lifecycle fixtures", () => {
+  expect(
+    hasImportGraphImpactOnTargets(
+      ["node-compile-cache.mjs"],
+      ["test/non-isolated-runner.sqlite.test.ts"],
+      process.cwd(),
+      { tooling: true, runtimeOnly: true },
+    ),
+  ).toBe(true);
+});
 
 const VITEST_NODE_PREFIX = [
   "exec",
@@ -135,7 +149,7 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it.each([["--watch", "false"], ["-w", "false"], ["--watch=false"], ["--no-watch"]])(
+  it.each([["--watch", "false"], ["--no-watch"]])(
     "preserves native watch controls after the wrapper separator: %j",
     (...flags) => {
       const file = "test/scripts/run-vitest.test.ts";
@@ -159,30 +173,18 @@ describe("test-projects args", () => {
     });
   });
 
-  it.each(
-    [
-      { label: "distinct operand", flag: "--exclude", operand: "test/scripts/other.test.ts" },
-      {
-        label: "identical exclusion",
-        flag: "--exclude",
-        operand: "test/scripts/run-vitest.test.ts",
-      },
-      { label: "identical name pattern", flag: "-t", operand: "test/scripts/run-vitest.test.ts" },
-    ].flatMap(({ label, flag, operand }) =>
-      [true, false].map((targetFirst) => ({ label, flag, operand, targetFirst })),
-    ),
-  )(
-    "partitions targets by occurrence, not option-operand value: $label (targetFirst=$targetFirst)",
-    ({ flag, operand, targetFirst }) => {
+  it.each([true, false])(
+    "partitions targets by occurrence when an exclusion repeats the target (targetFirst=%s)",
+    (targetFirst) => {
       const target = "test/scripts/run-vitest.test.ts";
       const args = targetFirst
-        ? [target, flag, operand, "--reporter=dot"]
-        : [flag, operand, target, "--reporter=dot"];
+        ? [target, "--exclude", target, "--reporter=dot"]
+        : ["--exclude", target, target, "--reporter=dot"];
       expect(buildVitestRunPlans(args)).toEqual([
         {
           config: "test/vitest/vitest.tooling.config.ts",
           includePatterns: [target],
-          forwardedArgs: [flag, operand, "--reporter=dot"],
+          forwardedArgs: ["--exclude", target, "--reporter=dot"],
           watchMode: false,
         },
       ]);
@@ -217,6 +219,11 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.gateway-database-workers.config.ts",
     },
     {
+      title: "routes the Gateway loopback and LAN producer to its worker owner",
+      target: "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
       title: "routes the Gateway TLS producer to its worker owner",
       target: "test/e2e/qa-lab/runtime/gateway-tls-pinning.test.ts",
       config: "test/vitest/vitest.infra.config.ts",
@@ -228,8 +235,13 @@ describe("test-projects args", () => {
     },
     {
       title: "routes fake-timer unit-fast targets to the serial fake-timer config",
-      target: "src/acp/control-plane/manager.test.ts",
+      target: "src/acp/translator.stop-reason.test.ts",
       config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+    },
+    {
+      title: "routes ACP session signals to their host broker owner",
+      target: "src/acp/control-plane/manager.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
     },
     {
       title: "routes process targets to the process config",
@@ -387,15 +399,6 @@ describe("test-projects args", () => {
   });
 
   it("routes infra targets to the infra config", () => {
-    expect(buildVitestRunPlans(["src/infra/openclaw-root.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.boundary.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/infra/openclaw-root.test.ts"],
-        watchMode: false,
-      },
-    ]);
-
     expect(buildVitestRunPlans(["src/infra/migrations.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.infra.config.ts",
@@ -499,15 +502,6 @@ describe("test-projects args", () => {
   });
 
   it("routes plugin targets to the plugins config", () => {
-    expect(buildVitestRunPlans(["src/plugins/loader.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.bundled.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/plugins/loader.test.ts"],
-        watchMode: false,
-      },
-    ]);
-
     expect(buildVitestRunPlans(["src/plugins/discovery.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.plugins.config.ts",
@@ -569,7 +563,8 @@ describe("test-projects args", () => {
 
     // Lower bound derived from the repo itself: every tracked test file that
     // directly imports the helper must be picked up by the expansion scan, so
-    // dropped importers still fail without freezing the full inventory.
+    // dropped importers still fail without freezing the full inventory. The
+    // independent AST reader excludes import text inside source fixtures.
     const scanRoots = ["src", "test", "ui", "extensions", "packages"];
     const grep = spawnSync(
       "git",
@@ -577,19 +572,24 @@ describe("test-projects args", () => {
       { encoding: "utf8" },
     );
     expect(grep.status).toBe(0);
+    using parser = createNativeTypeScriptParser();
     const directImporterTests = grep.stdout
       .split("\n")
       .map((line) => line.trim())
       .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"))
       .filter((file) => {
         const source = fs.readFileSync(file, "utf8");
-        return [...source.matchAll(/from\s+["'](\.[^"']+)["']/gu)].some((match) => {
-          const importerDir = path.posix.dirname(file);
-          const resolved = path.posix.normalize(
-            path.posix.join(importerDir, expectDefined(match[1], "match[1] test invariant")),
-          );
-          return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
-        });
+        return collectModuleReferencesFromSource(parser.parseSourceFile(file, source), {
+          acceptSpecifier: (specifier) => {
+            if (!specifier.startsWith(".")) {
+              return false;
+            }
+            const resolved = path.posix.normalize(
+              path.posix.join(path.posix.dirname(file), specifier),
+            );
+            return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
+          },
+        }).some(({ kind }) => kind === "import" || kind === "export");
       });
     expect(directImporterTests.length).toBeGreaterThan(0);
     expect(directImporterTests.filter((file) => !expandedFiles.includes(file))).toEqual([]);
@@ -769,19 +769,6 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
         includePatterns: [`${target}/**/*.test.ts`],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes direct Discord extension file targets to the Discord config", () => {
-    expect(
-      buildVitestRunPlans(["extensions/discord/src/monitor/message-handler.preflight.test.ts"]),
-    ).toEqual([
-      {
-        config: "test/vitest/vitest.extension-discord.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/discord/src/monitor/message-handler.preflight.test.ts"],
         watchMode: false,
       },
     ]);

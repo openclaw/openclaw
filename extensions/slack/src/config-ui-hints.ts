@@ -60,7 +60,7 @@ export const slackChannelConfigUiHints = {
   },
   allowBots: {
     label: "Slack Allow Bot Messages",
-    help: "Allow bot-authored messages to trigger Slack replies (default: false).",
+    help: 'Allow bot-authored messages to trigger Slack replies (default: true). Set false to disable bot-triggered turns, or "mentions" to require a mention. Channel access, mention, owner-presence, and loop-protection rules still apply; accessible bot-authored context remains available independently.',
   },
   botLoopProtection: {
     label: "Slack Bot Loop Protection",

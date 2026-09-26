@@ -1,25 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { recordSessionGoalChanged, recordSessionStateEvent } from "./session-state-events.js";
-import type { SessionStateNotice } from "./session-state-events.kernel.js";
+import {
+  recordSessionGoalChanged,
+  recordSessionHumanDirectMessage,
+  recordSessionStateEventAsync,
+  recordSessionStateEvent,
+} from "./session-state-events.js";
+import type { SessionStateEventRow, SessionStateNotice } from "./session-state-events.kernel.js";
 
 const edge = vi.hoisted(() => {
   const phases: string[] = [];
-  const context = { identity: "captured-shared-state" };
+  const context = {
+    identity: "captured-shared-state",
+    admission: { databasePath: "/synthetic/state.sqlite", assertCurrent: vi.fn() },
+  };
   const execute = vi.fn<(command: { type: string; input: unknown }) => Promise<unknown>>();
   return {
     phases,
     context,
     execute,
     capture: vi.fn(() => context),
+    admission: vi.fn((_admit: (request: { stage: string }, grant: () => boolean) => void) => ({})),
     run: vi.fn(
       async (
         _context: unknown,
-        operation: (scope: { execute: typeof execute }) => Promise<void>,
+        operation: (scope: { execute: typeof execute }) => Promise<unknown>,
+        _options?: { createAdmission: () => unknown },
       ) => {
-        await operation({ execute });
+        const result = await operation({ execute });
         phases.push("settled");
+        return result;
       },
     ),
     notice: vi.fn((_notice: unknown) => phases.push("notice")),
@@ -27,7 +38,7 @@ const edge = vi.hoisted(() => {
     nativeRecord: vi.fn(() => ({ notices: [] })),
     nativePrune: vi.fn(),
     forbidden: vi.fn((): never => {
-      throw new Error("Pure Goal event control crossed a native or process boundary");
+      throw new Error("Session signal control crossed a native or process boundary");
     }),
     nativeTransaction: vi.fn((operation: (database: { db: object }) => unknown) =>
       operation({ db: {} }),
@@ -45,6 +56,9 @@ vi.mock("node:child_process", () => ({
   execFile: edge.forbidden,
   execFileSync: edge.forbidden,
   fork: edge.forbidden,
+}));
+vi.mock("../infra/sqlite-worker-operation-admission.js", () => ({
+  createSqliteWorkerOperationAdmission: edge.admission,
 }));
 vi.mock("../infra/node-sqlite.js", () => ({
   requireNodeSqlite: edge.forbidden,
@@ -73,6 +87,7 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
 }));
 vi.mock("./session-state-events.kernel.js", () => ({
   recordSessionStateEventInDatabase: edge.nativeRecord,
+  rowToSessionStateEvent: vi.fn(),
   pruneSessionStateEventsInDatabase: edge.nativePrune,
 }));
 vi.mock("./session-state-notices.js", () => ({ enqueueSessionStateNotice: edge.notice }));
@@ -85,6 +100,21 @@ const notice: SessionStateNotice = {
   lastSeenSequence: 17,
   queueOnly: false,
 };
+const row: SessionStateEventRow = {
+  sequence: 18,
+  dedupe_key: null,
+  session_key: "agent:main:child",
+  session_id: "child-session",
+  agent_id: "main",
+  kind: "human_direct_message",
+  actor_type: "human",
+  actor_id: null,
+  run_id: null,
+  occurred_at: 1,
+  summary: "human message",
+  payload_json: null,
+};
+type Recorded = { row?: SessionStateEventRow; notices: SessionStateNotice[] };
 let now = 4_000_000;
 
 function goalChange() {
@@ -118,7 +148,7 @@ beforeEach(() => {
   edge.capture.mockImplementation(() => edge.context);
   edge.execute.mockImplementation(async (command) => {
     edge.phases.push(command.type === "sessionState.prune" ? "prune" : "record");
-    return command.type === "sessionState.prune" ? undefined : [notice];
+    return command.type === "sessionState.prune" ? undefined : { row, notices: [notice] };
   });
   edge.notice.mockImplementation(() => edge.phases.push("notice"));
   edge.warn.mockImplementation(() => undefined);
@@ -131,9 +161,67 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("Goal event worker reconciliation", () => {
+describe("Session signal worker reconciliation", () => {
+  it.each(["transaction", "commit"])(
+    "refuses a revoked producer at %s admission",
+    async (stage) => {
+      const recorded = createDeferred<Recorded>();
+      edge.execute.mockReturnValueOnce(recorded.promise);
+      let current = true;
+      const pending = recordSessionStateEventAsync(
+        {
+          sessionKey: "agent:main:child",
+          agentId: "main",
+          kind: "human_direct_message",
+          actorType: "human",
+          summary: "human message",
+        },
+        {
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("producer retired");
+            }
+          },
+        },
+      );
+      edge.run.mock.calls.at(-1)![2]!.createAdmission();
+      const admit = edge.admission.mock.calls.at(-1)![0];
+      current = false;
+      const grant = vi.fn(() => true);
+      expect(() => admit({ stage }, grant)).toThrow("producer retired");
+      expect(grant).not.toHaveBeenCalled();
+      recorded.reject(new Error("producer retired"));
+      await expect(pending).resolves.toBeUndefined();
+      expect(edge.notice).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps watched human-turn recording off the main-thread transaction owner", async () => {
+    const recorded = createDeferred<Recorded>();
+    edge.execute.mockReturnValueOnce(recorded.promise);
+    let settled = false;
+    const pending = Promise.resolve(
+      recordSessionHumanDirectMessage({
+        sessionKey: "agent:main:child",
+        entry: { sessionId: "child-session", updatedAt: now, spawnedBy: "agent:main:main" },
+        actor: { actorType: "human" },
+        channel: "webchat",
+      }),
+    ).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(edge.nativeTransaction).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+    expect(edge.notice).not.toHaveBeenCalled();
+    recorded.resolve({ row, notices: [notice] });
+    await pending;
+    expect(edge.notice).toHaveBeenCalledWith(notice);
+    expect(settled).toBe(true);
+  });
+
   it("retains committed notices and pruning before producer settlement", async () => {
-    const recorded = createDeferred<SessionStateNotice[]>();
+    const recorded = createDeferred<Recorded>();
     const pruning = createDeferred();
     const pruneStarted = createDeferred();
     edge.execute.mockImplementation(async (command) => {
@@ -152,9 +240,11 @@ describe("Goal event worker reconciliation", () => {
     expect(edge.notice).not.toHaveBeenCalled();
     expect(returned).toBe(false);
     expect(edge.execute).toHaveBeenCalledWith({
-      type: "sessionState.recordGoalChange",
+      type: "sessionState.record",
       input: {
         now,
+        onlyIfWatched: undefined,
+        expectedUpstream: undefined,
         event: {
           sessionKey: "global",
           sessionId: "original-session",
@@ -168,7 +258,7 @@ describe("Goal event worker reconciliation", () => {
         },
       },
     });
-    recorded.resolve([notice]);
+    recorded.resolve({ row, notices: [notice] });
     await pruneStarted.promise;
     expect(edge.phases).toEqual(["record", "notice", "prune"]);
     expect(returned).toBe(false);
@@ -199,7 +289,7 @@ describe("Goal event worker reconciliation", () => {
           if (command.type === "sessionState.prune") {
             throw error;
           }
-          return [notice];
+          return { row, notices: [notice] };
         });
       } else {
         edge.execute.mockRejectedValueOnce(error);
@@ -211,9 +301,7 @@ describe("Goal event worker reconciliation", () => {
       }
       await expect(goalChange()).resolves.toBeUndefined();
       expect(
-        edge.execute.mock.calls.filter(
-          ([command]) => command.type === "sessionState.recordGoalChange",
-        ),
+        edge.execute.mock.calls.filter(([command]) => command.type === "sessionState.record"),
       ).toHaveLength(failure === "capture" ? 0 : 1);
       expect(edge.warn).toHaveBeenCalled();
       expect(edge.nativeTransaction).not.toHaveBeenCalled();
@@ -228,7 +316,7 @@ describe("Goal event worker reconciliation", () => {
         pruneStarted.resolve();
         return pruning.promise;
       }
-      return [];
+      return { row, notices: [] };
     });
     const pending = goalChange();
     await pruneStarted.promise;

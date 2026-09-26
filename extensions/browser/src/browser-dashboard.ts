@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   readBrowserDashboardDefinition,
@@ -40,7 +41,6 @@ import {
   withoutBrowserSessionTabCleanup,
   type BrowserSessionTabRecord,
 } from "./browser/session-tab-store.js";
-import { getRuntimeConfig } from "./config/config.js";
 
 type DashboardTab = BrowserSessionTabRecord & { storageKey: string };
 const logger = createSubsystemLogger("browser");

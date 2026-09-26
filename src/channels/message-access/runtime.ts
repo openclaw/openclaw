@@ -49,10 +49,6 @@ import type {
 
 export { channelIngressRoutes } from "./runtime-routes.js";
 
-function commandRequested(policy: ChannelIngressPolicyInput): boolean {
-  return policy.command != null;
-}
-
 function normalizeChannelId(id: string): ChannelIngressChannelId {
   const trimmed = id.trim();
   if (!trimmed) {
@@ -71,37 +67,16 @@ function findIngressGate(params: {
   );
 }
 
-function findSenderGate(
-  ingress: ResolvedChannelMessageIngress["ingress"],
-  isGroup: boolean,
-): AccessGraphGate | undefined {
-  return findIngressGate({
-    ingress,
-    phase: "sender",
-    kind: isGroup ? "groupSender" : "dmSender",
-  });
-}
-
-function useAccessGroupsFromConfig(params: {
-  useAccessGroups?: boolean | null;
-  cfg?: ChannelIngressCommandPresetInput["cfg"];
-}): boolean {
-  return params.useAccessGroups ?? true;
-}
-
 function channelIngressCommand(
   params: ChannelIngressCommandPresetInput = {},
 ): ChannelMessageIngressCommandInput | undefined {
   if (params.requested === false) {
     return undefined;
   }
-  const { requested: _requested, cfg, ...command } = params;
+  const { requested: _requested, cfg: _cfg, ...command } = params;
   return {
     ...command,
-    useAccessGroups: useAccessGroupsFromConfig({
-      useAccessGroups: params.useAccessGroups,
-      cfg,
-    }),
+    useAccessGroups: params.useAccessGroups ?? true,
     allowTextCommands: params.allowTextCommands ?? false,
     hasControlCommand: params.hasControlCommand ?? true,
   };
@@ -163,10 +138,6 @@ function createChannelIngressResolverForOwner(
     eventDefaults?: ChannelIngressEventPresetInput,
   ) => {
     const isGroup = input.conversation.kind !== "direct";
-    const useAccessGroups = useAccessGroupsFromConfig({
-      useAccessGroups: base.useAccessGroups,
-      cfg: base.cfg,
-    });
     return await resolveChannelMessageIngressForOwner(
       {
         channelId: base.channelId,
@@ -198,7 +169,7 @@ function createChannelIngressResolverForOwner(
         useDefaultPairingStore: base.useDefaultPairingStore,
         command: resolveCommandInput({
           command: input.command,
-          useAccessGroups,
+          useAccessGroups: base.useAccessGroups ?? true,
         }),
       },
       owner,
@@ -256,7 +227,11 @@ function projectSenderAccess(params: {
   effectiveGroupAllowFrom: string[];
   providerMissingFallbackApplied?: boolean;
 }): ChannelIngressSenderAccess {
-  const gate = findSenderGate(params.ingress, params.isGroup);
+  const gate = findIngressGate({
+    ingress: params.ingress,
+    phase: "sender",
+    kind: params.isGroup ? "groupSender" : "dmSender",
+  });
   const reasonCode =
     !gate &&
     params.isGroup &&
@@ -291,8 +266,8 @@ function projectCommandAccess(params: {
     kind: "command",
   });
   return {
-    requested: commandRequested(params.policy),
-    authorized: commandRequested(params.policy) ? gate?.allowed === true : false,
+    requested: params.policy.command != null,
+    authorized: params.policy.command != null && gate?.allowed === true,
     shouldBlockControlCommand: gate?.command?.shouldBlockControlCommand === true,
     reasonCode: gate?.reasonCode ?? params.ingress.reasonCode,
     ...(gate ? { gate } : {}),

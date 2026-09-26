@@ -6,12 +6,10 @@ import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlit
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
 import * as sessionTargets from "../config/sessions/targets.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   readMigrationArtifactIdentity,
   moveMigrationArtifact,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   createSessionSqliteMigrationRun,
   recordPlannedMigrationMoves,
@@ -19,9 +17,11 @@ import {
   updateMigrationManifestTarget,
   writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationMove,
-} from "./doctor-session-sqlite-migration-run.js";
-import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
+import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -420,6 +420,8 @@ it.each(["import", "recover"] as const)(
           };
           recordPlannedMigrationMoves(old, target, [move]);
           await moveMigrationArtifact(sourcePath, archivePath, move.artifact!.identity);
+          // Retained receipts predate the remount; publication still used the live device.
+          move.artifact!.identity.dev = String(BigInt(move.artifact!.identity.dev) + 1n);
           recordCompletedMigrationMoves(old, target, [move]);
           moves.push(move);
         }
@@ -607,7 +609,7 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
   });
 });
 
-it.each(["unchanged", "metadata changed", "contents changed"])(
+it.each(["unchanged", "device changed", "metadata changed", "contents changed"])(
   "uses a 2026.9.4 archived registry under current SQLite state: %s",
   async (archiveState) => {
     await withOpenClawTestState({ label: "doctor-archived-lineage" }, async (state) => {
@@ -661,6 +663,9 @@ it.each(["unchanged", "metadata changed", "contents changed"])(
         saved.set(archivePath, fs.readFileSync(source, "utf8"));
         recordPlannedMigrationMoves(old, target, [move]);
         await moveMigrationArtifact(source, archivePath, move.artifact!.identity);
+        if (archiveState === "device changed") {
+          move.artifact!.identity.dev = String(BigInt(move.artifact!.identity.dev) + 1n);
+        }
         recordCompletedMigrationMoves(old, target, [move]);
       }
       updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
@@ -681,7 +686,7 @@ it.each(["unchanged", "metadata changed", "contents changed"])(
       const before = loadExactSessionEntry({ ...scope, storePath: store, sessionKey: key });
       const preview = await runDoctorSessionSqlite({ mode: "dry-run", store, env: state.env });
       expect(preview.totals).toMatchObject({ legacyEntries: 1, issues: 0, sqliteEntries: 1 });
-      if (archiveState !== "unchanged") {
+      if (archiveState === "metadata changed" || archiveState === "contents changed") {
         const registry = [...saved.keys()].find((file) => file.includes("legacy-store."))!;
         if (archiveState === "metadata changed") {
           fs.utimesSync(registry, new Date(0), new Date(0));

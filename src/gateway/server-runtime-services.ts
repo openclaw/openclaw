@@ -8,6 +8,7 @@ import {
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-sqlite.js";
 import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import type { runHeartbeatOnce } from "../infra/heartbeat-runner-run.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
@@ -89,11 +90,12 @@ export function startGatewayCronWithLogging(params: {
   );
 }
 
-/** Schedules post-ready maintenance and cancels/cleans handles if shutdown wins the race. */
+/** Schedules post-ready maintenance and cleans up if shutdown wins the race. */
 export function scheduleGatewayPostReadyMaintenance(params: {
+  scheduler: GatewayScheduler;
+  signal: AbortSignal;
   delayMs: number;
   isClosing: () => boolean;
-  onStarted?: () => void;
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => Promise<void> | void;
   shouldStartCron: () => boolean;
@@ -104,51 +106,62 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   logCron: { error: (message: string) => void };
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
-}): ReturnType<typeof setTimeout> {
-  const timer = setTimeout(() => {
-    params.onStarted?.();
-    if (params.isClosing()) {
-      return;
-    }
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
-      try {
-        if (!params.isClosing()) {
-          const maintenance = await params.startMaintenance();
-          if (params.isClosing()) {
-            // Maintenance can allocate intervals before shutdown is observed; clear them here
-            // instead of handing live timers to a closing gateway.
-            await clearGatewayMaintenanceHandles(maintenance);
-          } else if (maintenance) {
-            await params.applyMaintenance(maintenance);
+}): void {
+  params.scheduler.schedule({
+    id: "startup:maintenance",
+    delayMs: params.delayMs,
+    run: () => {
+      if (params.isClosing()) {
+        return undefined;
+      }
+      return runWithGatewayIndependentRootWorkAdmission(
+        async () => {
+          try {
+            if (!params.isClosing()) {
+              const maintenance = await params.startMaintenance();
+              if (params.isClosing()) {
+                // Startup may publish maintenance after shutdown has already fenced new work.
+                await clearGatewayMaintenanceHandles(maintenance);
+              } else if (maintenance) {
+                await params.applyMaintenance(maintenance);
+              }
+            }
+          } catch (err) {
+            params.log.warn(`gateway post-ready maintenance startup failed: ${String(err)}`);
           }
+          if (!params.isClosing() && params.shouldStartCron()) {
+            params.markCronStartHandled();
+            startGatewayCronWithLogging({
+              cronState: params.cronState,
+              cronReconciliation: params.cronReconciliation,
+              reason: "startup",
+              config: params.cronConfig,
+              logCron: params.logCron,
+            });
+          }
+          if (!params.isClosing()) {
+            params.recordPostReadyMemory();
+          }
+        },
+        "runtime:maintenance",
+        params.signal,
+      ).catch((err: unknown) => {
+        const ownedCancellation =
+          params.signal.aborted &&
+          (err === params.signal.reason ||
+            (err instanceof Error && err.cause === params.signal.reason));
+        if (!ownedCancellation) {
+          params.log.warn(`gateway post-ready maintenance deferred task failed: ${String(err)}`);
         }
-      } catch (err) {
-        params.log.warn(`gateway post-ready maintenance startup failed: ${String(err)}`);
-      }
-      if (!params.isClosing() && params.shouldStartCron()) {
-        params.markCronStartHandled();
-        startGatewayCronWithLogging({
-          cronState: params.cronState,
-          cronReconciliation: params.cronReconciliation,
-          reason: "startup",
-          config: params.cronConfig,
-          logCron: params.logCron,
-        });
-      }
-      if (!params.isClosing()) {
-        params.recordPostReadyMemory();
-      }
-    }, "runtime:maintenance").catch((err: unknown) =>
-      params.log.warn(`gateway post-ready maintenance deferred task failed: ${String(err)}`),
-    );
-  }, params.delayMs);
-  timer.unref?.();
-  return timer;
+      });
+    },
+  });
 }
 
 const RECOVERY_SHUTDOWN_STILL_PENDING_WARN_MS = 5_000;
 
 function startPendingOutboundDeliveryRecovery(params: {
+  scheduler: GatewayScheduler;
   cfg: OpenClawConfig;
   log: GatewayRuntimeServiceLogger;
 }): () => Promise<void> {
@@ -159,9 +172,9 @@ function startPendingOutboundDeliveryRecovery(params: {
   let stopPromise: Promise<void> | null = null;
   let logRecovery: ReturnType<GatewayRuntimeServiceLogger["child"]> | undefined;
 
-  const recover = (): void => {
+  const recover = (): Promise<void> | undefined => {
     if (stopped || inFlight || isGatewayWorkAdmissionClosed()) {
-      return;
+      return undefined;
     }
     const recovery = runWithGatewayIndependentRootWorkAdmission(async () => {
       if (stopped) {
@@ -277,16 +290,21 @@ function startPendingOutboundDeliveryRecovery(params: {
       }
     });
     inFlight = settled;
+    return settled;
   };
 
   // Match the queue's first backoff window without holding admission between
   // ticks; otherwise suspended/restarting gateways retain invisible work.
-  const retryTimer = setInterval(recover, computeBackoffMs(1));
-  retryTimer.unref?.();
-  recover();
+  const retryJob = params.scheduler.schedule({
+    id: "delivery:outbound-recovery",
+    delayMs: computeBackoffMs(1),
+    everyMs: computeBackoffMs(1),
+    run: recover,
+  });
+  void recover();
   return () => {
     stopped = true;
-    clearInterval(retryTimer);
+    retryJob.cancel();
     if (stopPromise) {
       return stopPromise;
     }
@@ -391,6 +409,7 @@ function startPendingSessionDeliveryRuntime(params: {
 
 /** Activates background gateway services after core runtime startup is ready. */
 export function activateGatewayScheduledServices(params: {
+  scheduler: GatewayScheduler;
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
   deps: import("../cli/deps.types.js").CliDeps;
@@ -407,6 +426,7 @@ export function activateGatewayScheduledServices(params: {
       stopDeliveryRecovery: async () => {},
     };
   }
+  const { scheduler } = params;
   if (
     !params.cronEnabled &&
     resolveHeartbeatAgents(params.cfgAtStart).some((agent) =>
@@ -454,7 +474,7 @@ export function activateGatewayScheduledServices(params: {
         }
       : {}),
   });
-  const sessionUpstreamMonitor = startSessionUpstreamMonitor();
+  const sessionUpstreamMonitor = startSessionUpstreamMonitor({ scheduler });
   const stopSessionDeliveryRuntime = startPendingSessionDeliveryRuntime({
     deps: params.deps,
     log: params.log,
@@ -464,6 +484,7 @@ export function activateGatewayScheduledServices(params: {
       : {}),
   });
   const stopOutboundDeliveryRecovery = startPendingOutboundDeliveryRecovery({
+    scheduler,
     cfg: params.cfgAtStart,
     log: params.log,
   });
@@ -481,7 +502,7 @@ export function activateGatewayScheduledServices(params: {
     stop: () => {
       heartbeatStopped = true;
       void stopDeliveryRecovery();
-      sessionUpstreamMonitor.stop();
+      void sessionUpstreamMonitor.stop();
       heartbeatRunner.stop();
     },
   };

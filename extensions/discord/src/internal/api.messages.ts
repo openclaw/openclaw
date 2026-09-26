@@ -4,8 +4,9 @@ import {
   type APIMessage,
   type APIThreadMember,
 } from "discord-api-types/v10";
+import type { RequestData } from "./rest-body.js";
 import type { RequestQuery } from "./rest-scheduler.js";
-import type { RequestClient, RequestData } from "./rest.js";
+import type { RequestClient } from "./rest.js";
 
 export function normalizeDiscordMessageId(messageId: string): string {
   const normalized = messageId.trim();

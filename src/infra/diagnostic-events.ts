@@ -26,6 +26,10 @@ import type {
   DiagnosticMemoryUsage,
   DiagnosticChildProcessSpawnFields,
 } from "./diagnostic-process-types.js";
+import type {
+  DiagnosticAgentCommentaryFields,
+  DiagnosticRunScopeFields,
+} from "./diagnostic-run-types.js";
 import {
   consumeCoreSemanticRunProgressDiagnosticEvent,
   CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY,
@@ -265,6 +269,7 @@ export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
   chatId?: number | string;
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
   durationMs?: number;
   outcome: "completed" | "skipped" | "error";
   reason?: string;
@@ -525,6 +530,7 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   type: "tool.loop";
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
   toolName: string;
   level: "warning" | "critical";
   action: "warn" | "block";
@@ -632,15 +638,7 @@ export type DiagnosticExecApprovalFollowupSuppressedEvent = DiagnosticBaseEvent 
   phase: "direct_delivery" | "gateway_preflight";
 };
 
-type DiagnosticRunBaseEvent = DiagnosticBaseEvent & {
-  runId: string;
-  sessionKey?: string;
-  sessionId?: string;
-  provider?: string;
-  model?: string;
-  trigger?: string;
-  channel?: string;
-};
+type DiagnosticRunBaseEvent = DiagnosticBaseEvent & DiagnosticRunScopeFields;
 
 export type DiagnosticRunStartedEvent = DiagnosticRunBaseEvent & {
   type: "run.started";
@@ -657,22 +655,18 @@ export type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
 export type DiagnosticHarnessRunPhase = "prepare" | "start" | "send" | "resolve" | "cleanup";
 export type DiagnosticHarnessRunOutcome = "completed" | "aborted" | "timed_out" | "error";
 
-type DiagnosticHarnessRunBaseEvent = DiagnosticBaseEvent & {
-  type: "harness.run.started" | "harness.run.completed" | "harness.run.error";
-  runId: string;
-  sessionKey?: string;
-  sessionId?: string;
-  provider?: string;
-  model?: string;
-  trigger?: string;
-  channel?: string;
-  harnessId: string;
-  pluginId?: string;
-};
+type DiagnosticHarnessRunBaseEvent = DiagnosticBaseEvent &
+  DiagnosticRunScopeFields & {
+    type: "harness.run.started" | "harness.run.completed" | "harness.run.error";
+    harnessId: string;
+    pluginId?: string;
+  };
 
 export type DiagnosticHarnessRunStartedEvent = DiagnosticHarnessRunBaseEvent & {
   type: "harness.run.started";
 };
+
+type DiagnosticAgentCommentaryEvent = DiagnosticBaseEvent & DiagnosticAgentCommentaryFields;
 
 export type DiagnosticHarnessRunCompletedEvent = DiagnosticHarnessRunBaseEvent & {
   type: "harness.run.completed";
@@ -698,6 +692,7 @@ export type DiagnosticHarnessRunErrorEvent = DiagnosticHarnessRunBaseEvent & {
 type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   type: "model.call.started" | "model.call.completed" | "model.call.error";
   runId: string;
+  agentId?: string;
   callId: string;
   sessionKey?: string;
   sessionId?: string;
@@ -889,6 +884,7 @@ export type DiagnosticEventPayload =
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
   | DiagnosticHarnessRunStartedEvent
+  | DiagnosticAgentCommentaryEvent
   | DiagnosticHarnessRunCompletedEvent
   | DiagnosticHarnessRunErrorEvent
   | DiagnosticModelCallStartedEvent
@@ -1043,6 +1039,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.error",
   "run.progress",
   "run.execution_phase",
+  "agent.commentary",
   "harness.run.completed",
   "harness.run.error",
   "context.assembled",

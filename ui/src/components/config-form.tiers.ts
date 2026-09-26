@@ -4,13 +4,6 @@ import { hintForPath, type JsonSchema } from "../lib/config-form-utils.ts";
 type ConfigSchemaTierSplit = {
   common: JsonSchema | null;
   advanced: JsonSchema | null;
-  commonLeafCount: number;
-  advancedLeafCount: number;
-};
-
-type TierProjection = {
-  schema: JsonSchema | null;
-  leaves: Set<string>;
 };
 
 function projectSchemaTier(params: {
@@ -18,16 +11,10 @@ function projectSchemaTier(params: {
   path: string[];
   advanced: boolean;
   hints: ConfigUiHints;
-}): TierProjection {
+}): JsonSchema | null {
   const { schema, path, advanced, hints } = params;
-  const leaves = new Set<string>();
   if (Array.isArray(schema.items) || schema.additionalProperties === true) {
-    const tier = hintForPath(path, hints)?.advanced ?? true;
-    if (tier !== advanced) {
-      return { schema: null, leaves };
-    }
-    leaves.add(path.join("."));
-    return { schema, leaves };
+    return (hintForPath(path, hints)?.advanced ?? true) === advanced ? schema : null;
   }
   const properties: Record<string, JsonSchema> = {};
   let hasSchemaChildren = false;
@@ -40,42 +27,33 @@ function projectSchemaTier(params: {
       advanced,
       hints,
     });
-    if (projected.schema) {
-      properties[key] = projected.schema;
-    }
-    for (const leaf of projected.leaves) {
-      leaves.add(leaf);
+    if (projected) {
+      properties[key] = projected;
     }
   }
 
   let additionalProperties = schema.additionalProperties;
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
     hasSchemaChildren = true;
-    const projected = projectSchemaTier({
-      schema: schema.additionalProperties,
-      path: [...path, "*"],
-      advanced,
-      hints,
-    });
-    additionalProperties = projected.schema ?? undefined;
-    for (const leaf of projected.leaves) {
-      leaves.add(leaf);
-    }
+    additionalProperties =
+      projectSchemaTier({
+        schema: schema.additionalProperties,
+        path: [...path, "*"],
+        advanced,
+        hints,
+      }) ?? undefined;
   }
 
   let items = schema.items;
   if (schema.items) {
     hasSchemaChildren = true;
-    const sourceItems = [schema.items];
-    const projectedItems = sourceItems
-      .map((item) => projectSchemaTier({ schema: item, path: [...path, "*"], advanced, hints }))
-      .filter((projection) => projection.schema !== null);
-    items = projectedItems[0]?.schema ?? undefined;
-    for (const projection of projectedItems) {
-      for (const leaf of projection.leaves) {
-        leaves.add(leaf);
-      }
-    }
+    items =
+      projectSchemaTier({
+        schema: schema.items,
+        path: [...path, "*"],
+        advanced,
+        hints,
+      }) ?? undefined;
   }
 
   const projectBranches = (branches: JsonSchema[] | undefined): JsonSchema[] | undefined => {
@@ -85,15 +63,8 @@ function projectSchemaTier(params: {
     hasSchemaChildren = true;
     const projected = branches
       .map((branch) => projectSchemaTier({ schema: branch, path, advanced, hints }))
-      .filter((projection) => projection.schema !== null);
-    for (const projection of projected) {
-      for (const leaf of projection.leaves) {
-        leaves.add(leaf);
-      }
-    }
-    return projected.length > 0
-      ? projected.map((projection) => projection.schema as JsonSchema)
-      : undefined;
+      .filter((projection) => projection !== null);
+    return projected.length > 0 ? projected : undefined;
   };
 
   const anyOf = projectBranches(schema.anyOf);
@@ -101,13 +72,7 @@ function projectSchemaTier(params: {
   const allOf = projectBranches(schema.allOf);
 
   if (!hasSchemaChildren) {
-    const pathString = path.join(".");
-    const tier = hintForPath(path, hints)?.advanced ?? true;
-    if (tier !== advanced) {
-      return { schema: null, leaves };
-    }
-    leaves.add(pathString);
-    return { schema, leaves };
+    return (hintForPath(path, hints)?.advanced ?? true) === advanced ? schema : null;
   }
 
   const hasProjectedChildren =
@@ -116,22 +81,19 @@ function projectSchemaTier(params: {
     (Array.isArray(items) ? items.length > 0 : Boolean(items)) ||
     Boolean(anyOf?.length || oneOf?.length || allOf?.length);
   if (!hasProjectedChildren) {
-    return { schema: null, leaves };
+    return null;
   }
 
   const required = schema.required?.filter((key) => Object.hasOwn(properties, key));
   return {
-    schema: {
-      ...schema,
-      ...(schema.properties ? { properties } : {}),
-      ...(schema.required ? { required } : {}),
-      ...(schema.additionalProperties !== undefined ? { additionalProperties } : {}),
-      ...(schema.items !== undefined ? { items } : {}),
-      ...(schema.anyOf ? { anyOf } : {}),
-      ...(schema.oneOf ? { oneOf } : {}),
-      ...(schema.allOf ? { allOf } : {}),
-    },
-    leaves,
+    ...schema,
+    ...(schema.properties ? { properties } : {}),
+    ...(schema.required ? { required } : {}),
+    ...(schema.additionalProperties !== undefined ? { additionalProperties } : {}),
+    ...(schema.items !== undefined ? { items } : {}),
+    ...(schema.anyOf ? { anyOf } : {}),
+    ...(schema.oneOf ? { oneOf } : {}),
+    ...(schema.allOf ? { allOf } : {}),
   };
 }
 
@@ -141,12 +103,8 @@ export function splitConfigSchemaByTier(params: {
   path: string[];
   hints: ConfigUiHints;
 }): ConfigSchemaTierSplit {
-  const common = projectSchemaTier({ ...params, advanced: false });
-  const advanced = projectSchemaTier({ ...params, advanced: true });
   return {
-    common: common.schema,
-    advanced: advanced.schema,
-    commonLeafCount: common.leaves.size,
-    advancedLeafCount: advanced.leaves.size,
+    common: projectSchemaTier({ ...params, advanced: false }),
+    advanced: projectSchemaTier({ ...params, advanced: true }),
   };
 }

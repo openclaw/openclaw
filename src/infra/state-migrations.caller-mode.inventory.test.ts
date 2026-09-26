@@ -9,7 +9,7 @@ import {
   resolveLivePluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
-import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
@@ -101,7 +101,7 @@ module.exports = { stateMigrations: [{
     loadInstalledPluginIndex({ config, env }),
   );
   // Older Doctor initialization persisted a projection with otherwise current metadata.
-  writePersistedInstalledPluginIndexSync(
+  await writePersistedInstalledPluginIndex(
     {
       ...fullIndex,
       refreshReason: "migration",
@@ -397,14 +397,12 @@ module.exports = { stateMigrations: [{
     if (inventory !== "readable") {
       expect(result.stepReceipts).toContainEqual(expect.objectContaining({ outcome: "refused" }));
       const blocker = result.stepReceipts.findIndex((receipt) => receipt.outcome === "refused");
+      // Agent history now needs the artifact-preserving snapshot before plugin inventory does.
       expect(result.stepReceipts[blocker]).toMatchObject({
-        id:
-          inventory === "staging-unavailable"
-            ? "plugin-migration-preparation"
-            : "plugin-doctor-state",
+        id: inventory === "staging-unavailable" ? "agent-migration-targets" : "plugin-doctor-state",
         refusal: {
           code:
-            inventory === "staging-unavailable" ? "plugin-inventory-unavailable" : "step-refused",
+            inventory === "staging-unavailable" ? "agent-target-discovery-failed" : "step-refused",
         },
       });
       expect(result.stepReceipts.slice(blocker + 1)).toEqual(

@@ -623,7 +623,6 @@ export class DiscordRealtimePlayback<TState> {
     const logContext = `guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}`;
     const output = new DiscordRealtimeOutput({
       player: this.params.player,
-      logContext,
       continuous: this.isContinuousOutput(),
       onStart: () => {
         this.params.harness.outputActivity.markPlaybackStarted();

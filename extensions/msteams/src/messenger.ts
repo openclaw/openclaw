@@ -26,6 +26,7 @@ import {
   requireMSTeamsSharePointSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
+import { normalizeMSTeamsConversationId } from "./inbound.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
@@ -106,10 +107,6 @@ type MSTeamsSendRetryEvent = {
   classification: ReturnType<typeof classifyMSTeamsSendError>;
 };
 
-function normalizeConversationId(rawId: string): string {
-  return rawId.split(";")[0] ?? rawId;
-}
-
 export function buildConversationReference(
   ref: StoredConversationReference,
 ): MSTeamsConversationReference {
@@ -137,7 +134,7 @@ export function buildConversationReference(
     user: aadObjectId ? { ...user, aadObjectId } : user,
     agent,
     conversation: {
-      id: normalizeConversationId(conversationId),
+      id: normalizeMSTeamsConversationId(conversationId),
       conversationType: ref.conversation?.conversationType,
       tenantId,
     },
@@ -161,26 +158,19 @@ function pushTextMessages(
   if (!text) {
     return;
   }
-  if (opts.chunkText) {
-    for (const chunk of getMSTeamsRuntime().channel.text.chunkMarkdownTextWithMode(
-      text,
-      opts.chunkLimit,
-      opts.chunkMode,
-    )) {
-      const trimmed = chunk.trim();
-      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
-        continue;
-      }
+  const chunks = opts.chunkText
+    ? getMSTeamsRuntime().channel.text.chunkMarkdownTextWithMode(
+        text,
+        opts.chunkLimit,
+        opts.chunkMode,
+      )
+    : [text];
+  for (const chunk of chunks) {
+    const trimmed = chunk.trim();
+    if (trimmed && !isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
       out.push({ text: trimmed });
     }
-    return;
   }
-
-  const trimmed = text.trim();
-  if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
-    return;
-  }
-  out.push({ text: trimmed });
 }
 
 function clampMs(value: number, maxMs: number): number {

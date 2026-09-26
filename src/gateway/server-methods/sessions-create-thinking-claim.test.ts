@@ -124,6 +124,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
       }
       return response.payload;
     });
+    const requests = vi.spyOn(gatewayClient, "request");
     const { gateway, emitEvent } = createGatewayHarness(gatewayClient);
     const sessions = createTestSessionCapability(gateway);
     try {
@@ -197,7 +198,9 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         expect(sessions.think(key, "main")).toBe("low");
       } else if (mode === "ui-patch") {
         const patched = sessions.patch(key, { thinkingLevel: "low" }, { agentId: "main" });
-        await vi.waitFor(() => expect(sessions.think(key, "main")).toBeUndefined());
+        // Observe the real PATCH acknowledgement, not a polling deadline before it settles.
+        await requests.mock.results.at(-1)?.value;
+        expect(sessions.think(key, "main")).toBeUndefined();
         releaseFirstList.resolve(undefined);
         await patched;
       }
@@ -221,6 +224,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         await settleWorkspaceRuns(context, storePath, key, true);
       } finally {
         sessions.dispose();
+        requests.mockRestore();
         gatewayReplyMock.mockReset();
         runModel.mockRestore();
         clock.mockRestore();

@@ -85,7 +85,11 @@ vi.mock("./openclaw-state-db-cache.js", () => ({
   },
 }));
 vi.mock("./openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateWorkerContext: ({ path }: { path: string }): OpenClawStateWorkerContext => ({
+  captureOpenClawStateReadWorkerContext: ({
+    path,
+  }: {
+    path: string;
+  }): OpenClawStateWorkerContext => ({
     admission: {
       databasePath: path,
       identity: { key: path, canonicalPath: path },

@@ -27,8 +27,10 @@ vi.mock("./operator-run-cancellation.js", async () => {
   );
   return {
     ...actual,
-    retainGatewayOperatorRun: (params: Parameters<typeof actual.retainGatewayOperatorRun>[0]) => {
-      const retained = actual.retainGatewayOperatorRun(params);
+    retainGatewayOperatorRun: async (
+      params: Parameters<typeof actual.retainGatewayOperatorRun>[0],
+    ) => {
+      const retained = await actual.retainGatewayOperatorRun(params);
       operatorRunCaptures.set(params.runId, retained);
       return retained;
     },

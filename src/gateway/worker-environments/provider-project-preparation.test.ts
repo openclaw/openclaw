@@ -75,7 +75,7 @@ describe("worker provider project preparation ownership", () => {
           const preparation = expectDefined(project.preparation, "prepared identity");
           const directory = `/worker/.openclaw-worker/prepared/gateway/${preparation.cacheKey}`;
           await project.prepare({
-            runScript: async () => JSON.stringify({ ready: true }),
+            runScript: async () => JSON.stringify({ ready: true, retainedWorkspace: null }),
             upload: async () => {
               throw new Error("cached seed must not upload");
             },

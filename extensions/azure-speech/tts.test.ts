@@ -3,6 +3,7 @@ import { withServer } from "openclaw/plugin-sdk/test-env";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import {
   azureSpeechTTS,
   inferAzureSpeechFileExtension,
@@ -13,31 +14,6 @@ import {
 
 describe("azure speech tts", () => {
   installPinnedHostnameTestHooks();
-
-  function createStreamingAudioResponse(params: {
-    chunkCount: number;
-    chunkSize: number;
-    byte: number;
-  }): { response: Response; getReadCount: () => number } {
-    let reads = 0;
-    const stream = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (reads >= params.chunkCount) {
-          controller.close();
-          return;
-        }
-        reads += 1;
-        controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
-      },
-    });
-    return {
-      response: new Response(stream, {
-        status: 200,
-        headers: { "Content-Type": "audio/mpeg" },
-      }),
-      getReadCount: () => reads,
-    };
-  }
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -100,10 +76,11 @@ describe("azure speech tts", () => {
   });
 
   it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
-    const streamed = createStreamingAudioResponse({
+    const streamed = createStreamingResponse({
       chunkCount: 20,
       chunkSize: 1024,
       byte: 121,
+      headers: { "Content-Type": "audio/mpeg" },
     });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(streamed.response));
 

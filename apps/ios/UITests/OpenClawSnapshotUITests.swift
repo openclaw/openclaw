@@ -956,7 +956,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_ATTACHMENT_FIXTURE_URL"] != nil,
             "Run through scripts/test-ios-chat-attachments.sh with the owned loopback fixture")
         let fixtureURL = try XCTUnwrap(ProcessInfo.processInfo.environment["OPENCLAW_IOS_ATTACHMENT_FIXTURE_URL"])
-        let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        let fixtureBaseURL = try XCTUnwrap(URL(string: fixtureURL))
+        let app = try await self.launchPairedLiveGatewayApp(
+            initialTab: "chat",
+            initialDestination: "chat",
+            readinessURL: fixtureBaseURL.appendingPathComponent("attachment-ready"))
         // A fixture/history failure must never produce the expected baseline regression marker.
         guard app.staticTexts["Your report is ready."].waitForExistence(timeout: 15) else {
             XCTFail("Managed document fixture history did not load")
@@ -974,7 +978,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(saveToFiles.waitForExistence(timeout: 10), "Downloaded file must reach the system exporter")
         self.attachScreenshot(named: "document-system-share")
 
-        let statusURL = try XCTUnwrap(URL(string: fixtureURL))
+        let statusURL = fixtureBaseURL
         let (statusData, _) = try await URLSession.shared.data(from: statusURL)
         let status = try XCTUnwrap(JSONSerialization.jsonObject(with: statusData) as? [String: Any])
         XCTAssertEqual(status["documentDownloads"] as? Int, 1)
@@ -1025,14 +1029,14 @@ final class OpenClawSnapshotUITests: XCTestCase {
         for index in 0..<3 {
             let seedMarker = "OPENCLAW_E2E_SEED_\(index)_\(Int(Date().timeIntervalSince1970 * 1000))"
             let seedContext = String(repeating: "Reader context \(index). ", count: 6)
-            self.sendLiveGatewayMessage(
+            try self.sendLiveGatewayMessage(
                 "\(seedContext)Reply exactly with \(seedMarker) and no other text.",
                 expecting: seedMarker,
                 in: app)
         }
 
         let replyMarker = "OPENCLAW_E2E_OK_\(Int(Date().timeIntervalSince1970 * 1000))"
-        self.sendLiveGatewayMessage(
+        try self.sendLiveGatewayMessage(
             "Reply exactly with \(replyMarker) and no other text.",
             expecting: replyMarker,
             in: app)
@@ -1046,7 +1050,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.5)
         self.attachScreenshot(named: "live-gateway-chat-jumped-to-latest")
 
-        let transcript = app.scrollViews.firstMatch
+        let transcript = try self.chatTranscript(in: app)
         XCTAssertTrue(transcript.exists)
         transcript.swipeDown()
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
@@ -1766,6 +1770,37 @@ extension OpenClawSnapshotUITests {
         initialTab: String,
         initialDestination: String) throws -> XCUIApplication
     {
+        let app = try self.startPairedLiveGatewayApp(
+            initialTab: initialTab,
+            initialDestination: initialDestination)
+        XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 45))
+        app.buttons["Go to Chat"].tap()
+        return app
+    }
+
+    private func launchPairedLiveGatewayApp(
+        initialTab: String,
+        initialDestination: String,
+        readinessURL: URL) async throws -> XCUIApplication
+    {
+        let app = try self.startPairedLiveGatewayApp(
+            initialTab: initialTab,
+            initialDestination: initialDestination)
+        var request = URLRequest(url: readinessURL)
+        request.timeoutInterval = 45
+        let (data, response) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        let readiness = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(readiness["ready"] as? Bool, true)
+        XCTAssertTrue(app.staticTexts["You're connected"].exists)
+        app.buttons["Go to Chat"].tap()
+        return app
+    }
+
+    private func startPairedLiveGatewayApp(
+        initialTab: String,
+        initialDestination: String) throws -> XCUIApplication
+    {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1",
             "Set OPENCLAW_IOS_LIVE_GATEWAY=1 and provide a fresh setup code")
@@ -1803,9 +1838,6 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.menuItems["Paste"].waitForExistence(timeout: 3))
         app.menuItems["Paste"].tap()
         app.buttons["Apply"].tap()
-
-        XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 45))
-        app.buttons["Go to Chat"].tap()
         return app
     }
 
@@ -1827,10 +1859,17 @@ extension OpenClawSnapshotUITests {
         return app
     }
 
+    private func chatTranscript(in app: XCUIApplication) throws -> XCUIElement {
+        let candidates = app.scrollViews.matching(identifier: "chat-transcript").allElementsBoundByIndex
+        return try XCTUnwrap(
+            candidates.count == 1 ? candidates.first : nil,
+            "Expected one chat transcript")
+    }
+
     private func sendLiveGatewayMessage(
         _ text: String,
         expecting replyMarker: String,
-        in app: XCUIApplication)
+        in app: XCUIApplication) throws
     {
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
@@ -1840,10 +1879,30 @@ extension OpenClawSnapshotUITests {
         let send = app.buttons["chat-send-message"]
         XCTAssertTrue(send.waitForExistence(timeout: 3))
         XCTAssertTrue(send.isEnabled)
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        // Typing can move historical replies off-screen; tap visible text without activating an action.
+        let transcript = try self.chatTranscript(in: app)
+        let actionQueries = [transcript.buttons, transcript.links]
+        let dismissalText = try XCTUnwrap(
+            transcript.staticTexts.allElementsBoundByIndex.first { candidate in
+                guard candidate.isHittable,
+                      candidate.buttons.count == 0,
+                      candidate.links.count == 0
+                else {
+                    return false
+                }
+                let label = NSPredicate(format: "label == %@", candidate.label)
+                return actionQueries.allSatisfy {
+                    !$0.matching(label).firstMatch.exists && !$0.containing(label).firstMatch.exists
+                }
+            },
+            "Expected visible noninteractive transcript text")
+        dismissalText.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
-        send.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertEqual(input.value as? String, text)
+        send.tap()
 
+        let submittedText = app.staticTexts.matching(NSPredicate(format: "label == %@", text)).firstMatch
+        XCTAssertTrue(submittedText.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts[replyMarker].waitForExistence(timeout: 60))
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
     }

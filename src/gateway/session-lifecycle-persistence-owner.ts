@@ -84,6 +84,12 @@ export function createSessionLifecyclePersistenceOwner() {
         ...(params.agentId ? { agentId: params.agentId } : {}),
         event: {
           ...params.event,
+          ...(params.event.controlUiVisible !== undefined
+            ? { controlUiVisible: params.event.controlUiVisible }
+            : {}),
+          ...(params.event.isHeartbeat !== undefined
+            ? { isHeartbeat: params.event.isHeartbeat }
+            : {}),
           ...(params.event.lifecycleGeneration
             ? { lifecycleGeneration: params.event.lifecycleGeneration }
             : {}),

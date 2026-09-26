@@ -24,6 +24,7 @@ export function renderSessionActivitySummary(
     class="activity-feed__recap"
     data-activity-recap=${row.key}
     data-state=${state}
+    role="group"
     aria-busy=${String(updating)}
     aria-label=${t("activityFeed.recap")}
     title=${

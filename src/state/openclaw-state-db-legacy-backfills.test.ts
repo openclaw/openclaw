@@ -9,7 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 
@@ -46,7 +46,7 @@ function createDatabase() {
 }
 
 describe("Doctor historical row repair", () => {
-  it("refuses an automatic older-schema upgrade with invalid foreign keys without repairing rows", () => {
+  it("refuses an automatic older-schema upgrade with invalid foreign keys without repairing rows", async () => {
     const stateDir = tempDirs.make("openclaw-automatic-upgrade-integrity-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const { db: initial, path: pathname } = openOpenClawStateDatabase(options);
@@ -58,7 +58,7 @@ describe("Doctor historical row repair", () => {
     initial.exec("PRAGMA user_version = 16; UPDATE schema_meta SET schema_version = 16;");
     closeOpenClawStateDatabaseForTest();
 
-    expect(repairOpenClawStateDatabaseSchemaIfNeeded(options)).toEqual({
+    expect(await prepareOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [],
       warnings: [expect.stringMatching(/foreign_key_check failed.*task_delivery_state/iu)],
     });

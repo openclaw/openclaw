@@ -1,5 +1,5 @@
 /** Full-text search over visible session transcripts. */
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
@@ -50,7 +50,10 @@ const SESSIONS_SEARCH_INDEXING_WARNING =
 const SessionsSearchToolSchema = Type.Object({
   query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
   sessionKey: Type.Optional(Type.String()),
-  limit: optionalPositiveIntegerSchema({ maximum: SESSIONS_SEARCH_MAX_LIMIT }),
+  limit: optionalPositiveIntegerSchema({
+    maximum: SESSIONS_SEARCH_MAX_LIMIT,
+    description: `Maximum search results: ${SESSIONS_SEARCH_MAX_LIMIT}. Defaults to ${SESSIONS_SEARCH_DEFAULT_LIMIT}.`,
+  }),
 });
 
 const SessionsSearchHitSchema = Type.Object(
@@ -103,15 +106,7 @@ type GatewaySearchHit = {
   score?: unknown;
 };
 
-type SanitizedSearchHit = {
-  sessionKey: string;
-  timestamp: number;
-  role: "assistant" | "user";
-  snippet: string;
-  score: number;
-  sessionId?: string;
-  messageId?: string;
-};
+type SanitizedSearchHit = Static<typeof SessionsSearchHitSchema>;
 
 type SearchSessionCandidate = {
   key: string;
@@ -340,7 +335,7 @@ export function createSessionsSearchTool(opts?: {
     outputSchema: SessionsSearchOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const query = readToolStringParam(params, "query")?.trim() ?? "";
+      const query = readToolStringParam(params, "query") ?? "";
       if (!query) {
         throw new ToolInputError("query must not be empty");
       }
@@ -434,10 +429,9 @@ export function createSessionsSearchTool(opts?: {
         };
       }
 
-      const defaultAgentId = requesterAgentId;
       const rowGuard = createSessionVisibilityRowChecker({
         action: "history",
-        defaultAgentId,
+        defaultAgentId: requesterAgentId,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,

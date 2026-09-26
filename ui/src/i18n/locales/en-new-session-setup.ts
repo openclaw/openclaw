@@ -98,7 +98,8 @@ const enNewSessionSetup = {
     worktreeBranchFromTitleNote: "Creates a branch from the session title in a separate checkout.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
     incognito: "Incognito",
-    incognitoDescription: "Keep this session only until the Gateway restarts",
+    incognitoDescription:
+      "Keep this session for 24 hours or until the Gateway restarts, whichever comes first",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     messagePlaceholder: "What should this session work on?",
@@ -173,6 +174,8 @@ const enNewSessionSetup = {
     restoringPreferences: "Restoring your last session setup…",
     checkingPlace: "Checking the selected place…",
     agentsUnavailable: "No agents are available on this Gateway yet.",
+    loadingAgentDefaults: "Refreshing agent defaults…",
+    agentDefaultsUnavailable: "Could not refresh agent defaults. Reload to try again.",
     terminalHostUnavailable:
       "Native CLI host unavailable. Check that the CLI is installed and the node is connected with its fresh-start command approved, then retry the catalog.",
     terminalDisabled: "Enable CLI agents and terminals in Gateway settings to start a native CLI.",

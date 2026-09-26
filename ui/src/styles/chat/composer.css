@@ -948,6 +948,14 @@
 
 /* Sole content of the popover when no input can be selected, so it carries the
    row's own weight instead of reading as a footnote under the heading. */
+.chat-talk-input-picker__notice {
+  padding: 0;
+  opacity: 1;
+  color: inherit;
+  line-height: inherit;
+  cursor: default;
+}
+
 .chat-talk-input-picker__empty {
   padding: 4px 8px 8px;
   color: var(--muted);
@@ -966,22 +974,28 @@
   padding-top: 8px;
 }
 
-.chat-talk-input-picker__capabilities {
-  display: grid;
-  gap: 6px;
-  margin-top: 5px;
-  padding: 8px 9px 3px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-}
-
 .chat-talk-input-picker__capability {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  margin-top: 5px;
+  padding: 8px 9px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   color: var(--muted);
   font-size: 11px;
   line-height: 1.35;
+}
+
+.chat-talk-input-picker__capability + .chat-talk-input-picker__capability {
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 3px;
+}
+
+.chat-talk-input-picker__capability[disabled] {
+  opacity: 1;
+  cursor: default;
 }
 
 .chat-talk-input-picker__capability-copy {
@@ -1043,6 +1057,10 @@
   color: var(--text);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.chat-talk-input-picker__preference::part(checkmark) {
+  display: none;
 }
 
 .chat-send-btn--hold-enabled {
@@ -2089,7 +2107,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-bottom: 9px;
+  padding: 0 0 9px;
 }
 
 .chat-controls__permission-learn-more {
@@ -2216,6 +2234,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
   line-height: 1.25;
 }
 
+.chat-controls__permission-option--selected .chat-controls__permission-option-description {
+  color: var(--text);
+}
+
 .chat-controls__model-search-wrap {
   display: flex;
   align-items: center;
@@ -2329,7 +2351,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
   gap: inherit;
   min-width: 0;
   min-height: 32px;
-  flex: 1;
+  /* Long account metadata shrinks before the provider toggle's contents. */
+  flex: 1 0 auto;
   padding: 6px 0;
   border: 0;
   background: transparent;
@@ -2383,6 +2406,16 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__model-option-copy > .chat-controls__auth-meta {
   margin-inline-start: 6px;
+}
+
+[data-chat-account-option] .chat-controls__model-option-copy {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+[data-chat-account-option] .chat-controls__auth-meta {
+  max-width: 100%;
+  margin-inline-start: 0;
 }
 
 .chat-controls__provider-settings {

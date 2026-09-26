@@ -1,36 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
   resolveEnvHttpProxyAgentOptions,
   wrapFetchWithAbortSignal,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import {
-  captureHttpExchange,
+  captureHttpExchangeAsync,
   resolveEffectiveDebugProxyUrl,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
-import { Agent } from "undici";
+import type { Dispatcher } from "undici";
 import { createDiscordDnsLookup } from "../network-config.js";
 import { withValidatedDiscordProxy } from "../proxy-fetch.js";
 
 const discordDnsLookup = createDiscordDnsLookup();
-
-type DiscordRestDispatcher =
-  | InstanceType<typeof Agent>
-  | ReturnType<typeof createHttp1EnvHttpProxyAgent>
-  | ReturnType<typeof createHttp1ProxyAgent>;
-
-function createDirectDiscordRestDispatcher(): InstanceType<typeof Agent> {
-  return new Agent({
-    allowH2: false,
-    connect: { lookup: discordDnsLookup },
-  });
-}
 
 function createEnvProxyDiscordRestDispatcher(
   runtime: RuntimeEnv,
@@ -54,10 +43,11 @@ function createEnvProxyDiscordRestDispatcher(
   }
 }
 
-function createDiscordRestFetchWithDispatcher(dispatcher: DiscordRestDispatcher): typeof fetch {
+function createDiscordRestFetchWithDispatcher(dispatcher: Dispatcher): typeof fetch {
   return wrapFetchWithAbortSignal(((input: RequestInfo | URL, init?: RequestInit) =>
     fetchWithRuntimeDispatcher(input, { ...init, dispatcher }).then((response) => {
-      captureHttpExchange({
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void captureHttpExchangeAsync({
         url: resolveRequestUrl(input),
         method: init?.method ?? "GET",
         requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
@@ -65,7 +55,7 @@ function createDiscordRestFetchWithDispatcher(dispatcher: DiscordRestDispatcher)
         response,
         flowId: randomUUID(),
         meta: { subsystem: "discord-rest" },
-      });
+      }).catch(() => {});
       return response;
     })) as typeof fetch);
 }
@@ -86,8 +76,8 @@ export function resolveDiscordRestFetch(
     return fetcher;
   }
 
-  const fetcher = createDiscordRestFetchWithDispatcher(
-    createEnvProxyDiscordRestDispatcher(runtime) ?? createDirectDiscordRestDispatcher(),
+  return createDiscordRestFetchWithDispatcher(
+    createEnvProxyDiscordRestDispatcher(runtime) ??
+      createHttp1Agent({ connect: { lookup: discordDnsLookup } }),
   );
-  return fetcher;
 }

@@ -8,7 +8,15 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-metadata.js";
+import {
+  getCodexInferenceThread,
+  getCodexInferenceThreadQualification,
+  ownCodexInferenceClient,
+} from "./inference-routing.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
@@ -25,6 +33,103 @@ import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 setupRunAttemptTestHooks();
 
 describe("Codex native hook Gateway fallback", () => {
+  it.each(["disabled", "managed-only"] as const)(
+    "preserves a no-policy operator's %s profile until a policy is introduced",
+    async (hooks) => {
+      const params = createParams(
+        path.join(tempDir, "optional-model-hooks.jsonl"),
+        path.join(tempDir, "optional-model-hooks-workspace"),
+      );
+      const listeners = new Set<() => void>();
+      let policy: NonNullable<
+        Parameters<typeof bindProductionHarnessHostCapabilitiesForTest>[1]
+      >["modelPolicy"];
+      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
+        profileId: "unrestricted-native-operator",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+        get modelPolicy() {
+          return policy;
+        },
+        onModelPolicyChanged: (listener) => {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+      });
+      const selected = { provider: params.provider, model: params.modelId };
+      const permitted = params.hostCapabilities.bindModelExecution?.(selected);
+      if (!permitted) {
+        throw new Error("Expected a canonical operator model guard");
+      }
+      const started = createDeferred<void>();
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "configRequirements/read") {
+          return { requirements: { allowManagedHooksOnly: hooks === "managed-only" } };
+        }
+        if (method === "account/read") {
+          return { account: { type: "apiKey" } };
+        }
+        if (method === "turn/start") {
+          started.resolve();
+        }
+        return undefined;
+      });
+      ownCodexInferenceClient(harness.client);
+      const abort = new AbortController();
+      params.abortSignal = abort.signal;
+      const run = runCodexAppServerAttempt(params, {
+        nativeHookRelay: hooks === "disabled" ? { enabled: false } : undefined,
+      });
+      try {
+        await Promise.race([started.promise, run]);
+        const accepted = await codexNativeSubagentMonitorRuntime.captureModelSource({
+          client: harness.client,
+          threadId: "thread-1",
+          turnId: "turn-1",
+        });
+        expect(accepted).toBeDefined();
+        accepted?.release();
+        const route = getCodexInferenceThread(harness.client, "thread-1");
+        expect(route).toBeDefined();
+        expect(getCodexInferenceThreadQualification(harness.client, "thread-1")).toBeUndefined();
+        const start = harness.requests.find(({ method }) => method === "thread/start");
+        expect(start?.params).toMatchObject({
+          config: { "features.shell_tool": true, openai_base_url: route?.baseUrl },
+        });
+        expect(start?.params).not.toHaveProperty(["config", "hooks.PreToolUse", 0]);
+        const turn = harness.requests.find(({ method }) => method === "turn/start");
+        expect(turn?.params).toHaveProperty(
+          ["responsesapiClientMetadata", CODEX_INFERENCE_GENERATION_KEY],
+          expect.any(String),
+        );
+        policy = {
+          models: [selected],
+          allows: (model) => model.provider === selected.provider && model.model === selected.model,
+        };
+        for (const changed of listeners) {
+          changed();
+        }
+        const result = await run;
+        expect(readAttemptTerminal(result).aborted).toBe(true);
+        expect(harness.requests).toContainEqual({
+          method: "turn/interrupt",
+          params: { threadId: "thread-1", turnId: "turn-1" },
+        });
+        expect(permitted.signal.aborted).toBe(false);
+        expect(permitted.assertCurrent).not.toThrow();
+      } finally {
+        abort.abort("test cleanup");
+        await run.catch(() => undefined);
+        permitted.release();
+        closeHost();
+        harness.close();
+      }
+      expect(listeners.size).toBe(0);
+    },
+  );
+
   it.each(["fresh", "resumed"] as const)(
     "keeps %s native hook policy available when the direct listener fails",
     async (selection) => {

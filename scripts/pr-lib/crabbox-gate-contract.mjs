@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 
 export const CRABBOX_GATE_CHECK_NAME = "openclaw/crabbox-gate";
-const CRABBOX_GATE_TEST_ENV =
-  "CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_VITEST_MAX_WORKERS=1";
+const CRABBOX_GATE_TEST_ENV = "CI=1 NODE_OPTIONS=--max-old-space-size=4096";
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
@@ -74,12 +73,13 @@ export function buildCrabboxGateCommand(plan, bootstrapSha256) {
     throw new Error("bootstrap SHA-256 must be exactly 64 lowercase hex characters");
   }
   const planDigest = crabboxGatePlanDigest(validated);
+  // Native worker limits own sizing; compact progress preserves bounded broker proof logs.
   const testCommand =
     validated.targets.length === 0
       ? "true"
       : `${CRABBOX_GATE_TEST_ENV} node --import ./scripts/tsx.mjs scripts/test-projects.mts ${validated.targets
           .map(shellQuote)
-          .join(" ")}`;
+          .join(" ")} -- --reporter=dot`;
   return [
     "set -euo pipefail",
     "umask 022",

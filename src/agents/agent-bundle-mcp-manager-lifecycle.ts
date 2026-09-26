@@ -205,6 +205,12 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
             store.pendingDisposals.delete(runtimeKey);
           }
         }
+        // A pending close can outlive the last empty runtime or queued acquisition.
+        for (const sessionId of new Set(runtimeKeys.map(parseRuntimeCacheSessionId))) {
+          if (runtimeKeysForSessionId(sessionId).length === 0) {
+            forgetSessionKeysForSessionId(sessionId);
+          }
+        }
       });
     for (const runtimeKey of runtimeKeys) {
       const pending = store.pendingDisposals.get(runtimeKey) ?? new Set<Promise<void>>();
@@ -229,6 +235,11 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
       }
     }
     for (const runtimeKey of store.runtimeWorkChains.keys()) {
+      if (parseRuntimeCacheSessionId(runtimeKey) === sessionId) {
+        keys.add(runtimeKey);
+      }
+    }
+    for (const runtimeKey of store.pendingDisposals.keys()) {
       if (parseRuntimeCacheSessionId(runtimeKey) === sessionId) {
         keys.add(runtimeKey);
       }
@@ -371,13 +382,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
               ...store.runtimeWorkChains.keys(),
               ...store.pendingDisposals.keys(),
             ]
-          : [
-              sessionId,
-              ...runtimeKeysForSessionId(sessionId),
-              ...[...store.pendingDisposals.keys()].filter(
-                (key) => parseRuntimeCacheSessionId(key) === sessionId,
-              ),
-            ],
+          : [sessionId, ...runtimeKeysForSessionId(sessionId)],
       ),
     ];
     // Capture before queuing: the previous owner may unpublish and settle before

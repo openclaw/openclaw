@@ -1,10 +1,10 @@
 import fs, { type BigIntStats } from "node:fs";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import {
   hashFileDescriptorSync,
   sameFileMutationFingerprint,
   type FileMutationFingerprint,
 } from "./file-descriptor.js";
-import { sameFileIdentity, type FileIdentityStat } from "./fs-safe-advanced.js";
 
 export function readSqliteIntegrityFileIdentity(
   pathname: string,
@@ -19,15 +19,7 @@ export function readSqliteIntegrityFileIdentity(
 
 type SqliteFileFingerprint = FileMutationFingerprint & { sha256: string };
 
-type SerializedSqliteFileFingerprint = {
-  birthtimeNs: string;
-  ctimeNs: string;
-  dev: string;
-  ino: string;
-  mtimeNs: string;
-  sha256: string;
-  size: string;
-};
+type SerializedSqliteFileFingerprint = Record<keyof SqliteFileFingerprint, string>;
 
 export type SqliteFileGeneration = {
   database: SqliteFileFingerprint;

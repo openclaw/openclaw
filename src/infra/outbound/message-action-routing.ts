@@ -366,7 +366,7 @@ export async function prepareMessageRoute(params: {
   const selection = await resolveChannel(cfg, actionParams, input.toolContext, action, agentId);
   const { channel, plugin: channelPlugin } = selection;
   actionParams.channel = channel;
-  const explicitAccountId = validateExplicitMessageAccountSelection({
+  const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg,
     channel,
     accountId: readToolStringParam(actionParams, "accountId"),
@@ -442,7 +442,7 @@ export async function prepareMessageRoute(params: {
   let assertTargetAuthorityCurrent: (() => void) | undefined;
   if (!delegatesActionToGateway || dryRun) {
     const authorization = input.messageActionAuthorization;
-    const preparedRead = prepareExternalMessageActionTargetForResolution({
+    const preparedRead = await prepareExternalMessageActionTargetForResolution({
       channel,
       action,
       cfg,

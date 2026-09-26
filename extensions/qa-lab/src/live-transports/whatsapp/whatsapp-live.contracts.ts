@@ -1,4 +1,3 @@
-// QA Lab WhatsApp live domain contracts.
 import type {
   WhatsAppQaDriverObservedMessage,
   WhatsAppQaDriverSession,

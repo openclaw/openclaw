@@ -1,13 +1,9 @@
-/**
- * Shared identifiers for representing Codex native subagents as OpenClaw task
- * runtime rows.
- */
 import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   normalizeOptionalString,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isJsonObject } from "./protocol.js";
+import { isJsonObject, type JsonObject } from "./protocol.js";
 
 export type NativeSubagentAssignment = {
   runId: string;
@@ -15,11 +11,8 @@ export type NativeSubagentAssignment = {
   nativeTurnId: string | undefined;
 };
 
-/** Task runtime namespace for Codex native subagent task rows. */
 export const CODEX_NATIVE_SUBAGENT_RUNTIME = "subagent";
-/** Task kind used to distinguish native Codex subagents from other subagent runtimes. */
 export const CODEX_NATIVE_SUBAGENT_TASK_KIND = "codex-native";
-/** Run id prefix for task rows keyed by Codex child thread ids. */
 export const CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX = "codex-thread:";
 
 /** Initial tasks keep their shipped locator; later assignments belong to a native turn. */
@@ -62,4 +55,25 @@ export function readNativeSubagentThreadIds(value: unknown): string[] {
     return [];
   }
   return value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
+}
+
+export function readThreadParentThreadId(
+  thread: Record<string, unknown> | undefined,
+): string | undefined {
+  return (
+    readString(thread, "parentThreadId")?.trim() ??
+    readString(readThreadSpawnSource(thread), "parent_thread_id")?.trim()
+  );
+}
+
+export function readThreadSpawnSource(
+  thread: Record<string, unknown> | undefined,
+): JsonObject | undefined {
+  const source = isJsonObject(thread?.source) ? thread.source : undefined;
+  const subAgent = isJsonObject(source?.subAgent) ? source.subAgent : undefined;
+  return isJsonObject(subAgent?.thread_spawn) ? subAgent.thread_spawn : undefined;
+}
+
+export function normalizeIdentifier(value: string | undefined): string | undefined {
+  return value?.replace(/[^a-z0-9]/giu, "").toLowerCase();
 }

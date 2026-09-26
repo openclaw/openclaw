@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type ResponsesInputItem,
@@ -17,12 +18,7 @@ import {
   extractExactReplyDirective,
   extractFinishExactlyDirective,
   extractExactMarkerDirective,
-  extractWhatsAppLocationMarkerDirective,
-  extractWhatsAppContactMarkerDirective,
-  extractWhatsAppStickerMarkerDirective,
-  shouldUseWhatsAppLocationMarker,
-  shouldUseWhatsAppContactMarker,
-  shouldUseWhatsAppStickerMarker,
+  resolveWhatsAppStructuredReply,
   extractToolErrorForNamedCall,
   resolveHeartbeatPromptReply,
   readFirstMediaPath,
@@ -103,13 +99,9 @@ export function isCanonicalCompactionRetryWriteResult(toolOutput: string): boole
   if (!parsed || parsed.status !== "completed" || parsed.replaySafe !== false) {
     return false;
   }
-  const value = parsed.value;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const result = value as Record<string, unknown>;
+  const result = asOptionalRecord(parsed.value);
   return (
-    result.changed === true &&
+    result?.changed === true &&
     result.created === true &&
     result.firstChangedLine === 1 &&
     isCompactionRetryWritePatch(result.patch)
@@ -162,12 +154,7 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
         ? JSON.stringify(toolJson.results)
         : scenarioToolOutput;
   const orbitCode = extractOrbitCode(memorySnippet) ?? extractOrbitCode(allInputText);
-  const mediaPath =
-    typeof toolJson?.details === "object" &&
-    toolJson.details !== null &&
-    !Array.isArray(toolJson.details)
-      ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
-      : "";
+  const mediaPath = readFirstMediaPath(asOptionalRecord(toolJson?.details)?.media);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserText = userTexts.join("\n");
@@ -177,15 +164,6 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const currentImageRequest = extractCurrentImageRequest(input, body);
-  const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
-    ? extractWhatsAppLocationMarkerDirective(allInputText)
-    : "";
-  const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
-    ? extractWhatsAppContactMarkerDirective(allInputText)
-    : "";
-  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
-    ? extractWhatsAppStickerMarkerDirective(allInputText)
-    : "";
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
@@ -231,14 +209,9 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   ) {
     return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
-  if (whatsAppLocationMarker) {
-    return whatsAppLocationMarker;
-  }
-  if (whatsAppContactMarker) {
-    return whatsAppContactMarker;
-  }
-  if (whatsAppStickerMarker) {
-    return whatsAppStickerMarker;
+  const whatsAppStructuredReply = resolveWhatsAppStructuredReply(prompt, input, allInputText);
+  if (whatsAppStructuredReply) {
+    return whatsAppStructuredReply;
   }
   if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
     return promptExactMarkerDirective;
@@ -289,9 +262,6 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
-  }
-  if (toolOutput && promptExactReplyDirective) {
-    return promptExactReplyDirective;
   }
   if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");

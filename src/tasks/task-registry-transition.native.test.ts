@@ -120,6 +120,64 @@ beforeEach(() => {
 });
 
 describe("native run transition selection", () => {
+  it.each([
+    "replaced before operation",
+    "replaced during flush",
+    "revoked during flush",
+    "metadata",
+  ] as const)("retains the admission receipt and live owner when %s", (change) => {
+    const expectedTask = captureTaskPersistenceReceipt(memory.tasks.get("first")!);
+    let active = true;
+    const replace = () => memory.tasks.set("first", { ...record("first"), createdAt: 101 });
+    if (change === "replaced before operation") {
+      replace();
+    }
+    memory.beforeActivityFlush = () => {
+      if (change === "replaced during flush") {
+        replace();
+      }
+      if (change === "revoked during flush") {
+        active = false;
+      }
+      if (change === "metadata") {
+        memory.tasks.set("first", { ...record("first"), label: "Current metadata" });
+      }
+    };
+    const mutate = () =>
+      transitionTaskRecordsByRunNative(
+        {
+          kind: "state",
+          params: {
+            runId: "shared-run",
+            runtime: "subagent",
+            sessionKey: session,
+            status: "succeeded",
+            endedAt: 200,
+            suppressDelivery: true,
+          },
+        },
+        {
+          expectedTask,
+          assertCurrent: () => {
+            if (!active) {
+              throw new Error("Owner retired");
+            }
+          },
+        },
+      );
+    if (change === "revoked during flush") {
+      expect(mutate).toThrow("Owner retired");
+    } else {
+      expect(mutate().map((task) => task.taskId)).toEqual(change === "metadata" ? ["first"] : []);
+    }
+    expect(memory.writes).toEqual(change === "metadata" ? ["first"] : []);
+    expect(memory.tasks.get("second")?.status).toBe("running");
+    expect(memory.tasks.get("first")?.status).toBe(change === "metadata" ? "succeeded" : "running");
+    if (change === "metadata") {
+      expect(memory.tasks.get("first")?.label).toBe("Current metadata");
+    }
+  });
+
   it.each(
     (["flow restoration", "activity flush"] as const).flatMap((stage) =>
       (["removal", "replacement", "metadata", "backing"] as const).map((change) => ({

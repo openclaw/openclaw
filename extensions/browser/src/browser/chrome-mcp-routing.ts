@@ -2,8 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { toErrorObject } from "../infra/errors.js";
 import {
   CHROME_MCP_SESSION_TARGET_PREFIX,
   CHROME_MCP_SNAPSHOT_REF_PREFIX,
@@ -123,20 +123,13 @@ async function withChromeMcpOperationLock<T>(
   }
 }
 
-export function clearChromeMcpSnapshotRefsForTarget(
-  routing: ChromeMcpRoutingState,
-  targetId: string,
-): void {
-  routing.snapshotsByTarget.delete(targetId);
-}
-
 function updateChromeMcpTargetMappings(
   routing: ChromeMcpRoutingState,
   targetIdByPageId: Map<number, string>,
 ): void {
   for (const [pageId, targetId] of routing.targetIdByPageId) {
     if (!targetIdByPageId.has(pageId)) {
-      clearChromeMcpSnapshotRefsForTarget(routing, targetId);
+      routing.snapshotsByTarget.delete(targetId);
     }
   }
   routing.targetIdByPageId = targetIdByPageId;

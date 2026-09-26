@@ -1,8 +1,10 @@
+import { createAcceptedChannelDeliveryResult } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createPreviewMessageReceipt,
   isPotentialTruncatedFinal,
   resolveTranscriptBackedChannelFinalText,
   selectLongerFinalText,
+  type LivePreviewDeliveryResult,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -34,13 +36,19 @@ type LanePreviewFinalizedDelivery = {
   receipt: MessageReceipt;
 };
 
-export type LaneDeliveryResult =
+export type LaneDeliveryResult = (
   | {
       kind: "preview-finalized";
       delivery: LanePreviewFinalizedDelivery;
     }
-  | { kind: "preview-finalized-partial"; delivery: LanePreviewFinalizedDelivery; error: unknown }
-  | { kind: "preview-retained" | "preview-updated" | "sent" | "skipped" };
+  | {
+      kind: "preview-finalized-partial";
+      delivery: LanePreviewFinalizedDelivery;
+      error: unknown;
+      confirmedFinalContent?: true;
+    }
+  | { kind: "preview-retained" | "preview-updated" | "sent" | "skipped" }
+) & { deliveryResult: LivePreviewDeliveryResult };
 
 type CreateLaneTextDelivererParams = {
   lanes: Record<LaneName, DraftLaneState>;
@@ -57,7 +65,7 @@ type CreateLaneTextDelivererParams = {
       bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
       onMediaAccepted?: (mediaUrls: readonly string[]) => void;
     },
-  ) => Promise<boolean>;
+  ) => Promise<LivePreviewDeliveryResult>;
   flushDraftLane: (lane: DraftLaneState) => Promise<void>;
   stopDraftLane: (lane: DraftLaneState) => Promise<void>;
   clearDraftLane: (lane: DraftLaneState) => Promise<void>;
@@ -75,6 +83,10 @@ type CreateLaneTextDelivererParams = {
     payload: ReplyPayload;
     candidateTexts: readonly (string | undefined)[];
   }) => Promise<ReplyPayload | undefined> | ReplyPayload | undefined;
+  resolveFinalPresentationText?: (params: {
+    payload: ReplyPayload;
+    text: string;
+  }) => Promise<string | undefined> | string | undefined;
   log: (message: string) => void;
   markDelivered: () => void;
 };
@@ -270,7 +282,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     rotateFinalizedStream(lane);
 
     const finalText = text.trimEnd();
-    const previewText = useFinalTextRecovery
+    const recoveredText = useFinalTextRecovery
       ? await resolveTranscriptBackedChannelFinalText({
           payload,
           finalText,
@@ -281,6 +293,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
             }),
         })
       : finalText;
+    const previewText =
+      finalizePreview && payload.presentation
+        ? ((await params.resolveFinalPresentationText?.({
+            payload,
+            text: recoveredText,
+          })) ?? recoveredText)
+        : recoveredText;
     lane.lastPartialText = previewText;
     lane.hasStreamedMessage = true;
     lane.finalized = false;
@@ -314,11 +333,23 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     const messageId = stream.messageId();
     if (typeof messageId !== "number") {
       if (finalizePreview && stream.sendMayHaveLanded()) {
+        const retainedDelivery = lane.retainedPromptContextPages.length
+          ? createAcceptedChannelDeliveryResult({
+              results: lane.retainedPromptContextPages.map(({ messageId: acceptedPageId }) => ({
+                messageId: String(acceptedPageId),
+              })),
+            })
+          : undefined;
         await recordRetainedPromptContextPages(lane, promptContextSequence);
         await promptContextSequence.fail();
-        lane.finalized = true;
-        params.markDelivered();
-        return { kind: "preview-retained" };
+        return {
+          kind: "preview-retained",
+          deliveryResult: {
+            visibleReplySent: false,
+            ...retainedDelivery,
+            suppression: { reason: "adapter_returned_no_identity" },
+          },
+        };
       }
       if (!finalizePreview) {
         await discardUnmaterializedStream(lane);
@@ -359,7 +390,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       }
     }
     if (!finalizePreview && buttonAttachmentError === undefined) {
-      return { kind: "preview-updated" };
+      return {
+        kind: "preview-updated",
+        deliveryResult: {
+          visibleReplySent: true,
+          receipt: createPreviewMessageReceipt({ id: messageId }),
+        },
+      };
     }
     if (!activeSnapshot) {
       if (finalizePreview) {
@@ -374,6 +411,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       buttonsAttached,
       receipt: createPreviewMessageReceipt({ id: messageId }),
     };
+    const deliveryResult = {
+      visibleReplySent: true,
+      receipt: delivery.receipt,
+      content: previewText,
+    };
     try {
       await recordRetainedPromptContextPages(lane, promptContextSequence);
       await promptContextSequence.accept({ messageId, text: activeSnapshot.text });
@@ -382,11 +424,23 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       }
     } catch (error) {
       promptContextSequence.invalidate();
-      return { kind: "preview-finalized-partial", delivery, error };
+      return {
+        kind: "preview-finalized-partial",
+        delivery,
+        deliveryResult,
+        error,
+        confirmedFinalContent:
+          !buttonAttachmentError && !followedByDurablePayload ? true : undefined,
+      };
     }
     return buttonAttachmentError
-      ? { kind: "preview-finalized-partial", delivery, error: buttonAttachmentError }
-      : { kind: "preview-finalized", delivery };
+      ? {
+          kind: "preview-finalized-partial",
+          delivery,
+          deliveryResult,
+          error: buttonAttachmentError,
+        }
+      : { kind: "preview-finalized", delivery, deliveryResult };
   };
 
   return async ({
@@ -416,6 +470,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     const finalizePreview = requestedFinalizePreview ?? isDurableFinal;
     const durable = requestedDurable ?? isDurableFinal;
     let streamedErrorDraftText =
+      allowStream &&
       isDurableFinal &&
       payload.isError === true &&
       laneName === "answer" &&
@@ -440,6 +495,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     const canRecoverFromTextPreview =
       allowStream && !reply.hasMedia && (!payload.isError || streamedErrorDraftText !== undefined);
     const canRecoverFromMediaPreview =
+      allowStream &&
       finalizePreview &&
       reply.hasMedia &&
       lane.hasStreamedMessage &&
@@ -497,6 +553,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
 
     if (
       preservesPreviewReplyTarget &&
+      allowStream &&
       finalizePreview &&
       reply.hasMedia &&
       lane.stream &&
@@ -528,7 +585,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         const mediaText =
           finalizedPreview.kind === "preview-finalized" ? finalizedPreview.delivery.content : text;
         try {
-          await params.sendPayload(
+          const mediaDelivery = await params.sendPayload(
             mediaOnlyPayload(payload, mediaText, {
               stripButtons,
               fallbackButtons: stripButtons ? undefined : buttons,
@@ -543,13 +600,30 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
               onMediaAccepted,
             },
           );
+          const suppression =
+            finalizedPreview.deliveryResult.suppression?.reason === "adapter_returned_no_identity"
+              ? finalizedPreview.deliveryResult.suppression
+              : (mediaDelivery.suppression ?? finalizedPreview.deliveryResult.suppression);
+          return {
+            ...finalizedPreview,
+            deliveryResult: {
+              ...(mediaDelivery.visibleReplySent
+                ? createAcceptedChannelDeliveryResult({
+                    deliveryResults: [finalizedPreview.deliveryResult, mediaDelivery],
+                  })
+                : finalizedPreview.deliveryResult),
+              ...(suppression ? { suppression } : {}),
+              ...(mediaDelivery.deliveryIntent
+                ? { deliveryIntent: mediaDelivery.deliveryIntent }
+                : {}),
+            },
+          };
         } catch (error) {
           if (durable && finalizedPreview.kind === "preview-finalized") {
             return { ...finalizedPreview, kind: "preview-finalized-partial", error };
           }
           throw error;
         }
-        return finalizedPreview;
       }
     }
 
@@ -562,12 +636,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
 
     if (finalizePreview) {
       await recordRetainedPromptContextPages(lane, promptContextSequence);
-      await clearUnfinalizedStream(lane);
+      await lane.stream?.discard().catch((error: unknown) => {
+        params.log(`telegram: ${laneName} draft discard failed: ${String(error)}`);
+      });
     }
 
     // Accepted pagination pages remain visible. If bounded final retries exhaust,
     // deliver only the unaccepted suffix so fallback cannot duplicate the prefix.
-    const delivered = await params.sendPayload(
+    const deliveryResult = await params.sendPayload(
       params.applyTextToPayload(payload, retainedFinalContent?.sourceText ?? text),
       {
         afterAcceptedDraft,
@@ -580,9 +656,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         ...(retainedFinalContent?.sourceTextMode === "html" ? { textMode: "html" } : {}),
       },
     );
-    if (delivered && finalizePreview) {
-      lane.finalized = true;
+    if (deliveryResult.visibleReplySent && finalizePreview && !isDurableFinal) {
+      await clearUnfinalizedStream(lane);
     }
-    return { kind: delivered ? "sent" : "skipped" };
+    return { kind: deliveryResult.visibleReplySent ? "sent" : "skipped", deliveryResult };
   };
 }

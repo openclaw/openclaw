@@ -12,7 +12,6 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.SystemClock
-import com.google.android.gms.tasks.Task
 import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CancellationException
@@ -32,7 +31,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -41,8 +39,6 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlin.math.ceil
 import kotlin.math.sqrt
 
@@ -188,15 +184,15 @@ internal class WearRealtimeTalkClient(
         opened =
           channelClient
             .openChannel(nodeId, wearRealtimeAudioChannelPath(attemptId, attemptScopedAudio))
-            .awaitRealtimeTask()
-        input = channelClient.getInputStream(opened).awaitRealtimeTask()
-        output = channelClient.getOutputStream(opened).awaitRealtimeTask()
+            .awaitWearTask()
+        input = channelClient.getInputStream(opened).awaitWearTask()
+        output = channelClient.getOutputStream(opened).awaitWearTask()
         return ChannelResources(opened, input, output)
       } catch (err: Throwable) {
         withContext(NonCancellable) {
           input.closeQuietly()
           output.closeQuietly()
-          opened?.let { channel -> runCatching { channelClient.close(channel).awaitRealtimeTask() } }
+          opened?.let { channel -> runCatching { channelClient.close(channel).awaitWearTask() } }
         }
         if (err is CancellationException) throw err
         lastError = err
@@ -608,10 +604,3 @@ private const val RMS_SPEECH_RANGE = 0.2
 private fun java.io.Closeable?.closeQuietly() {
   runCatching { this?.close() }
 }
-
-private suspend fun <T> Task<T>.awaitRealtimeTask(): T =
-  suspendCancellableCoroutine { continuation ->
-    addOnSuccessListener { value -> if (continuation.isActive) continuation.resume(value) }
-    addOnFailureListener { error -> if (continuation.isActive) continuation.resumeWithException(error) }
-    addOnCanceledListener { continuation.cancel() }
-  }

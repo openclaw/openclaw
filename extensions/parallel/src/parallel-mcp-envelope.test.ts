@@ -1,15 +1,10 @@
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createParallelFreeWebSearchProvider } from "./parallel-free-web-search-provider.js";
 
-let dnsMock: ReturnType<typeof mockPinnedHostnameResolution>;
-
-beforeEach(() => {
-  dnsMock = mockPinnedHostnameResolution();
-});
+installPinnedHostnameTestHooks();
 
 afterEach(() => {
-  dnsMock.mockRestore();
   vi.restoreAllMocks();
 });
 

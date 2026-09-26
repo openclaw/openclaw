@@ -240,6 +240,12 @@ describe("listGatewayMethods", () => {
       "users.linkChannelIdentity",
       "users.unlinkChannelIdentity",
       "users.listChannelIdentities",
+      "users.personalFile.get",
+      "users.personalFile.set",
+      "portal.session.list",
+      "portal.session.open",
+      "portal.session.close",
+      "cron.history",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -300,6 +306,12 @@ describe("listGatewayMethods", () => {
       "users.linkChannelIdentity",
       "users.unlinkChannelIdentity",
       "users.listChannelIdentities",
+      "users.personalFile.get",
+      "users.personalFile.set",
+      "portal.session.list",
+      "portal.session.open",
+      "portal.session.close",
+      "cron.history",
     ]);
   });
 
@@ -370,7 +382,7 @@ describe("listGatewayMethods", () => {
         controlPlaneWrite: true,
       });
     }
-    for (const method of ["cron.get", "cron.list", "cron.status", "cron.runs"]) {
+    for (const method of ["cron.get", "cron.list", "cron.status", "cron.runs", "cron.history"]) {
       expect(
         descriptors.find((descriptor) => descriptor.name === method)?.controlPlaneWrite,
       ).toBeUndefined();
@@ -489,6 +501,12 @@ describe("listGatewayMethods", () => {
       "users.linkChannelIdentity",
       "users.unlinkChannelIdentity",
       "users.listChannelIdentities",
+      "users.personalFile.get",
+      "users.personalFile.set",
+      "portal.session.list",
+      "portal.session.open",
+      "portal.session.close",
+      "cron.history",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

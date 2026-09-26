@@ -1,6 +1,8 @@
 import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
@@ -9,7 +11,10 @@ import {
   createRetainedPackageSwap,
 } from "./package-update-swap.test-support.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  __setFsSafeTestHooksForTest(undefined);
+  vi.restoreAllMocks();
+});
 
 describe("retained package transaction authority", () => {
   it("stops a partial npm activation before launcher compensation after executor loss", async () => {
@@ -40,7 +45,8 @@ describe("retained package transaction authority", () => {
         await rename(...args);
         current = false;
       });
-      const copy = vi.spyOn(fs, "copyFile");
+      const prototype = Object.getPrototypeOf(await fsSafeRoot(base)) as Root;
+      const copy = vi.spyOn(prototype, "copyIn");
       await expect(transaction.rollback(assertCurrent)).rejects.toThrow(
         "partial activation executor lost",
       );
@@ -70,7 +76,16 @@ describe("retained package transaction authority", () => {
         const shimBackup = (await fs.readdir(globalRoot)).find((entry) =>
           entry.startsWith(".openclaw.shim-backup-"),
         )!;
+        const shimBackupPath = await fs.realpath(path.join(globalRoot, shimBackup));
+        const launcherParent = await fs.realpath(path.dirname(launcher));
         let current = true;
+        let injections = 0;
+        const revoke = () => {
+          if (current) {
+            injections += 1;
+            current = false;
+          }
+        };
         const lost = new Error("original executor lost");
         const assertCurrent = () => {
           if (!current) {
@@ -78,10 +93,14 @@ describe("retained package transaction authority", () => {
           }
         };
         const staleEffects: string[] = [];
+        const privateStages = new Set<string>();
         const record = (operation: string, destination: string) => {
           // Unpublished, operation-owned launcher scratch is disposable even
           // after revocation; live paths and retained evidence are not.
-          if (!current && !destination.includes(".openclaw-shim-stage-")) {
+          const privateTarget = [...privateStages].some(
+            (stage) => destination === stage || destination.startsWith(`${stage}${path.sep}`),
+          );
+          if (!current && !privateTarget) {
             staleEffects.push(`${operation}: ${destination}`);
           }
         };
@@ -89,7 +108,7 @@ describe("retained package transaction authority", () => {
         vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
           const result = await lstat(...args);
           if (boundary === "integrity" && String(args[0]) === transaction.backupRoot) {
-            current = false;
+            revoke();
           }
           return result;
         });
@@ -97,20 +116,30 @@ describe("retained package transaction authority", () => {
         const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
           record("rename", String(args[1]));
           if (boundary === "compensation" && String(args[0]) === transaction.backupRoot) {
-            current = false;
+            revoke();
             throw Object.assign(new Error("restore denied"), { code: "EACCES" });
           }
           await rename(...args);
           if (boundary === "displacement" && String(args[0]) === packageRoot) {
-            current = false;
+            revoke();
           }
         });
-        const copyFile = fs.copyFile.bind(fs);
-        vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
-          record("copy", String(args[1]));
-          await copyFile(...args);
+        const prototype = Object.getPrototypeOf(await fsSafeRoot(base)) as Root;
+        // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+        const copy = prototype.copyIn;
+        vi.spyOn(prototype, "copyIn").mockImplementation(async function (
+          this: Root,
+          target,
+          source,
+          options,
+        ) {
+          expect(path.dirname(this.rootReal)).toBe(launcherParent);
+          expect(path.basename(this.rootReal)).toMatch(/^\.openclaw-shim-stage-/);
+          privateStages.add(this.rootReal);
+          record("copy", path.join(this.rootReal, target));
+          await copy.call(this, target, source, options);
           if (boundary === "launcher") {
-            current = false;
+            revoke();
           }
         });
         const chmod = fs.chmod.bind(fs);
@@ -118,23 +147,37 @@ describe("retained package transaction authority", () => {
           record("chmod", String(args[0]));
           return chmod(...args);
         });
-        const rm = fs.rm.bind(fs);
-        vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
-          record("remove", String(args[0]));
-          if (boundary === "retirement" && String(args[0]) === path.join(globalRoot, shimBackup)) {
-            current = false;
-            throw Object.assign(new Error("retirement denied"), { code: "EACCES" });
-          }
-          return rm(...args);
+        const unlink = fs.unlink.bind(fs);
+        vi.spyOn(fs, "unlink").mockImplementation(async (...args) => {
+          record("unlink", String(args[0]));
+          await unlink(...args);
+        });
+        const rmdir = fs.rmdir.bind(fs);
+        vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+          record("rmdir", String(args[0]));
+          await rmdir(...args);
+        });
+        __setFsSafeTestHooksForTest({
+          beforeRootFallbackMutation(operation, target) {
+            if (
+              boundary === "retirement" &&
+              operation === "remove" &&
+              (target === shimBackupPath || target.startsWith(`${shimBackupPath}${path.sep}`))
+            ) {
+              revoke();
+            }
+          },
         });
         await expect(transaction.rollback(assertCurrent)).rejects.toBe(lost);
         expect(current).toBe(false);
+        expect(injections).toBe(1);
         expect(staleEffects).toEqual([]);
         expect(() => transaction.rollback(() => {})).toThrow(lost);
         await expect(transaction.complete({ activationVerified: true }, () => {})).rejects.toBe(
           lost,
         );
         expect(staleEffects).toEqual([]);
+        expect(injections).toBe(1);
         expect(await fs.readdir(path.dirname(launcher))).toEqual(["openclaw"]);
         await expect(fs.stat(path.join(globalRoot, shimBackup))).resolves.toBeDefined();
         if (boundary === "integrity") {
@@ -173,14 +216,21 @@ describe("retained package transaction authority", () => {
           throw new Error("retirement executor lost");
         }
       };
-      const rm = fs.rm.bind(fs);
-      vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
-        if (String(args[0]) === transaction.backupRoot) {
-          current = false;
-          throw Object.assign(new Error("remove denied"), { code: "EACCES" });
-        }
-        return rm(...args);
+      const backupRoot = await fs.realpath(transaction.backupRoot);
+      let injections = 0;
+      __setFsSafeTestHooksForTest({
+        beforeRootFallbackMutation(operation, target) {
+          if (
+            operation === "remove" &&
+            (target === backupRoot || target.startsWith(`${backupRoot}${path.sep}`))
+          ) {
+            injections += 1;
+            current = false;
+          }
+        },
       });
+      const unlink = vi.spyOn(fs, "unlink");
+      const rmdir = vi.spyOn(fs, "rmdir");
       const rename = vi.spyOn(fs, "rename");
       await expect(
         transaction.complete({ activationVerified: true }, assertCurrent),
@@ -188,7 +238,10 @@ describe("retained package transaction authority", () => {
       await expect(transaction.complete({ activationVerified: true }, () => {})).rejects.toThrow(
         "retirement executor lost",
       );
+      expect(injections).toBe(1);
       expect(rename).not.toHaveBeenCalled();
+      expect(unlink).not.toHaveBeenCalled();
+      expect(rmdir).not.toHaveBeenCalled();
       await expect(
         fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
       ).resolves.toContain('"version":"1.0.0"');

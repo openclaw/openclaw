@@ -8,6 +8,7 @@ import {
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as profileReader from "../state/user-profile-list.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -256,6 +257,36 @@ describe("OpenAI-compatible operator run authority", () => {
       });
     },
   );
+
+  it("does not enter the command when its request ends during profile preparation", async () => {
+    await withOpenClawTestState({ label: "compat-run-preparation" }, async () => {
+      const fixture = createOperatorRunFixture();
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const prepare = profileReader.prepareUserProfileIdentity;
+      const held = vi
+        .spyOn(profileReader, "prepareUserProfileIdentity")
+        .mockImplementationOnce(async (...args) => {
+          const identity = await prepare(...args);
+          entered.resolve();
+          await resume.promise;
+          return identity;
+        });
+      const running = runOpenAiCompatibleAgentCommand(fixture.params);
+      const rejected = expect(running).rejects.toThrow();
+      try {
+        await entered.promise;
+        fixture.request.abort(new Error("Request ended during preparation"));
+        resume.resolve();
+        await rejected;
+        expect(agentCommandFromGatewayIngress).not.toHaveBeenCalled();
+      } finally {
+        resume.resolve();
+        await running.catch(() => {});
+        held.mockRestore();
+      }
+    });
+  });
 
   it.each(["owner", "system"] as const)(
     "preserves %s authority without requiring a person-bound Gateway capture",

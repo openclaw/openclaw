@@ -22,11 +22,16 @@ import {
   resolveManagedServiceNodeRunner,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceState,
+import {
+  hasGatewayServiceDefinitionOverrides,
+  type GatewayServiceCommandConfig,
+  type GatewayServiceState,
 } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayServiceState,
+  resolveGatewayService,
+  type GatewayService,
+} from "../../daemon/service.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
@@ -44,6 +49,7 @@ import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import type { UPDATE_PREFLIGHT_DETAILS } from "../../infra/update-preflight-details.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -71,13 +77,18 @@ export type ManagedServiceRootRedirect = {
 export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
 
-  constructor(message: string, cause: unknown, inspectionReason?: ServiceInspectionReason) {
+  constructor(
+    message: string,
+    cause: unknown,
+    inspectionReason?: ServiceInspectionReason,
+    code?: keyof typeof UPDATE_PREFLIGHT_DETAILS,
+  ) {
     super(inspectionReason ? formatServiceInspectionReason(inspectionReason) : message, { cause });
     this.name = "GatewayServiceUpdateOwnershipError";
     this.failureFacts = [
       createUpdateFailureFact({
         check: "managed-service",
-        code: inspectionReason ?? "service-ownership-unverified",
+        code: inspectionReason ?? code ?? "service-ownership-unverified",
         message: this.message,
       }),
     ];
@@ -98,6 +109,7 @@ export function assertGatewayServiceAdmissionUnchanged(
       serviceUpdateVerdict.kind === "unavailable"
         ? serviceUpdateVerdict.inspectionReason
         : undefined,
+      serviceUpdateVerdict.kind === "unavailable" ? undefined : "service-ownership-changed",
     );
   }
   if (
@@ -110,6 +122,8 @@ export function assertGatewayServiceAdmissionUnchanged(
     throw new GatewayServiceUpdateOwnershipError(
       "Gateway service definition changed after database admission; retry against its current configuration.",
       undefined,
+      undefined,
+      "service-definition-changed",
     );
   }
 }
@@ -132,7 +146,12 @@ export function assertGatewayServiceManagementAllowedForUpdate(
     assertGatewayServiceMutationAllowed("manage the gateway service during update", env);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new GatewayServiceUpdateOwnershipError(message, err);
+    throw new GatewayServiceUpdateOwnershipError(
+      message,
+      err,
+      undefined,
+      "service-mutation-refused",
+    );
   }
 }
 
@@ -218,9 +237,13 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   }
   // Stable updaters through 2026.9.4 omit known-empty systemd override metadata.
   // Keep their fingerprint while the full snapshot retains authored defaults for runtime pinning.
-  const { managedDefinition: _managedDefinition, managedOverrides, ...effectiveCommand } = command;
+  const {
+    managedDefinition: _managedDefinition,
+    managedOverrides: _managedOverrides,
+    ...effectiveCommand
+  } = command;
   const serialized = stableStringify(
-    managedOverrides && Object.keys(managedOverrides).length === 0 ? effectiveCommand : command,
+    hasGatewayServiceDefinitionOverrides(command) ? command : effectiveCommand,
   );
   if (Buffer.byteLength(serialized) > 4 * 1024 * 1024) {
     return unavailable();
@@ -262,6 +285,21 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
     : { kind: "unresolved", root, fingerprint };
 }
 
+/** Update ownership requires the effective loaded command and an admitted manager route. */
+export function readGatewayServiceStateForUpdate(
+  service: GatewayService,
+  env: NodeJS.ProcessEnv | undefined,
+  timeoutMs?: number,
+): Promise<GatewayServiceState> {
+  return readGatewayServiceState(service, {
+    env,
+    requireEffective: true,
+    requireLoadedCommand: true,
+    validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+    timeoutMs,
+  });
+}
+
 /** Recorded launchers cannot select an update's package, Node, or state without live inspection. */
 export async function readManagedGatewayServiceForUpdate(
   env: NodeJS.ProcessEnv,
@@ -272,12 +310,7 @@ export async function readManagedGatewayServiceForUpdate(
     let service: ReturnType<typeof resolveGatewayService> | undefined;
     try {
       service = resolveGatewayService();
-      const state = await readGatewayServiceState(service, {
-        env,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-      });
+      const state = await readGatewayServiceStateForUpdate(service, env);
       if (!state.command) {
         return null;
       }
@@ -618,8 +651,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
     const canRebind =
       params.rebind !== false &&
       process.platform !== "win32" &&
-      !command?.managedOverrides &&
-      !command?.managedDefinition &&
+      !hasGatewayServiceDefinitionOverrides(command) &&
       inspected?.verdict.refreshDefinition === true;
     return {
       serviceUnitTarget,

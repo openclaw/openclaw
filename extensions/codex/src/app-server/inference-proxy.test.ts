@@ -95,10 +95,15 @@ async function post(
   );
 }
 
-async function fixture(withInstructions = true, contextText = "synthetic persona") {
+async function fixture(
+  withInstructions = true,
+  contextText = "synthetic persona",
+  oauth?: Parameters<typeof createCodexInferenceProxy>[0]["oauth"],
+) {
   const proxy = await createCodexInferenceProxy({
     upstream: new URL("https://api.openai.com/v1"),
     assertCurrent: () => {},
+    oauth,
   });
   proxies.push(proxy);
   const controller = new AbortController();
@@ -124,14 +129,160 @@ async function fixture(withInstructions = true, contextText = "synthetic persona
 }
 
 describe("private inference HTTP relay", () => {
+  it("resolves host OAuth only for admitted Responses requests and refreshes once after 401", async () => {
+    const resolve = vi.fn(async (forceRefresh: boolean) => ({
+      token: forceRefresh ? "synthetic-refreshed" : "synthetic-access",
+      assertCurrent: () => {},
+    }));
+    const { proxy, body } = await fixture(true, undefined, { resolve });
+    transport.fetch.mockImplementation(async (args) => {
+      args.beforeRequest();
+      const bytes = await new Response(args.init.body).text();
+      expect(JSON.parse(bytes).instructions).toBe("native base\n\nsynthetic persona");
+      const first = args.init.headers.authorization === "Bearer synthetic-access";
+      expect(args.init.headers).not.toHaveProperty("chatgpt-account-id");
+      expect(args.init.headers).not.toHaveProperty("openai-organization");
+      expect(args.init.headers).not.toHaveProperty("openai-project");
+      return {
+        response: new Response(first ? "expired" : "data: completed\n\n", {
+          status: first ? 401 : 200,
+        }),
+        release: async () => {},
+      };
+    });
+    for (const path of ["/models", "/responses/compact", "/responses?other=1"]) {
+      expect(
+        (await post(proxy.baseUrl + path, { method: "POST", body: JSON.stringify(body) })).status,
+      ).toBe(502);
+    }
+    expect(resolve).not.toHaveBeenCalled();
+    const result = await post(proxy.baseUrl + "/responses", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: {
+        authorization: "Bearer local-placeholder",
+        "chatgpt-account-id": "native-account",
+        "openai-project": "native-project",
+        "openai-organization": "native-org",
+        "X-OpenAI-ChatPass-Test": "stale",
+      },
+    });
+    expect(result.status).toBe(200);
+    expect(await result.text()).toBe("data: completed\n\n");
+    expect(resolve.mock.calls).toEqual([[false], [true]]);
+    expect(transport.fetch).toHaveBeenCalledTimes(2);
+    expect(
+      transport.fetch.mock.calls.map(([args]) => args.init.headers["x-openai-chatpass-test"]),
+    ).toEqual(["codex-direct", "codex-direct"]);
+    expect(transport.fetch.mock.calls[1]?.[0].init.headers.authorization).toBe(
+      "Bearer synthetic-refreshed",
+    );
+  });
+
+  it("rejects OAuth use after refresh loses the admitted turn and before physical I/O loses the grant", async () => {
+    let loseAdmission = true;
+    let grantCurrent = true;
+    const resolve = vi.fn(async () => {
+      if (loseAdmission) {
+        registration.release();
+      }
+      return {
+        token: "synthetic-access",
+        assertCurrent: () => {
+          if (!grantCurrent) {
+            throw new Error("revoked");
+          }
+        },
+      };
+    });
+    const { proxy, body, registration } = await fixture(true, undefined, { resolve });
+    expect(
+      (await post(proxy.baseUrl + "/responses", { method: "POST", body: JSON.stringify(body) }))
+        .status,
+    ).toBe(502);
+    expect(transport.fetch).not.toHaveBeenCalled();
+    loseAdmission = false;
+    const next = await fixture(true, undefined, { resolve });
+    let writes = 0;
+    transport.fetch.mockImplementation(async (args) => {
+      grantCurrent = false;
+      args.beforeRequest();
+      writes++;
+      throw new Error("unexpected upstream write");
+    });
+    expect(
+      (
+        await post(next.proxy.baseUrl + "/responses", {
+          method: "POST",
+          body: JSON.stringify(next.body),
+        })
+      ).status,
+    ).toBe(502);
+    expect(writes).toBe(0);
+  });
+
+  it("rejects unadmitted native prewarm for OAuth", async () => {
+    const resolve = vi.fn();
+    const { proxy } = await fixture(true, undefined, { resolve });
+    const body = {
+      generate: false,
+      client_metadata: { "x-codex-turn-metadata": JSON.stringify({ request_kind: "prewarm" }) },
+    };
+    expect(
+      (await post(proxy.baseUrl + "/responses", { method: "POST", body: JSON.stringify(body) }))
+        .status,
+    ).toBe(502);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("authorizes automatic compaction only with the current admitted generation", async () => {
+    const resolve = vi.fn(async () => ({ token: "synthetic-access", assertCurrent: () => {} }));
+    const { proxy, body, registration } = await fixture(true, undefined, { resolve });
+    const compaction = {
+      ...body,
+      client_metadata: {
+        thread_id: "root",
+        "x-codex-turn-metadata": JSON.stringify({
+          thread_id: "root",
+          request_kind: "compaction",
+          [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+        }),
+      },
+    };
+    transport.fetch.mockImplementation(async (args) => {
+      args.beforeRequest();
+      expect(JSON.parse(await new Response(args.init.body).text()).instructions).toBe(
+        "native base",
+      );
+      return { response: new Response("data: summary\n\n"), release: async () => {} };
+    });
+    expect(
+      (
+        await post(proxy.baseUrl + "/responses", {
+          method: "POST",
+          body: JSON.stringify(compaction),
+        })
+      ).status,
+    ).toBe(200);
+    registration.release();
+    expect(
+      (
+        await post(proxy.baseUrl + "/responses", {
+          method: "POST",
+          body: JSON.stringify(compaction),
+        })
+      ).status,
+    ).toBe(502);
+    expect(resolve).toHaveBeenCalledOnce();
+  });
   it.each([
-    { zstd: false, withInstructions: true },
+    { zstd: false, withInstructions: true, query: "?cursor=synthetic%2Fa%5Cb%2Ec" },
     { zstd: true, withInstructions: true },
     { zstd: false, withInstructions: false },
     { zstd: true, withInstructions: false },
   ])(
     "preserves auth and native input (zstd=$zstd, top-level instructions=$withInstructions)",
-    async ({ zstd, withInstructions }) => {
+    async ({ zstd, withInstructions, query = "" }) => {
       const { proxy, body } = await fixture(withInstructions);
       let forwarded: unknown;
       transport.fetch.mockImplementation(async (args) => {
@@ -141,8 +292,11 @@ describe("private inference HTTP relay", () => {
         expect(args.init.duplex).toBe("half");
         const bytes = zstd ? zstdDecompressSync(wire) : wire;
         forwarded = JSON.parse(bytes.toString());
-        expect(args.url).toBe("https://api.openai.com/v1/responses");
+        const target = new URL(args.url);
+        expect(target.origin + target.pathname).toBe("https://api.openai.com/v1/responses");
+        expect(target.searchParams.get("cursor")).toBe(query ? "synthetic/a\\b.c" : null);
         expect(args.init.headers.authorization).toBe("Bearer synthetic-native-auth");
+        expect(args.init.headers).not.toHaveProperty("x-openai-chatpass-test");
         expect(args.capture).toBe(false);
         expect(args.mode).toBe("trusted_env_proxy");
         expect(args.maxRedirects).toBe(0);
@@ -154,7 +308,7 @@ describe("private inference HTTP relay", () => {
         };
       });
       const bytes = Buffer.from(JSON.stringify(body));
-      const response = await post(proxy.baseUrl + "/responses", {
+      const response = await post(proxy.baseUrl + "/responses" + query, {
         method: "POST",
         body: zstd ? zstdCompressSync(bytes) : bytes,
         headers: {
@@ -226,6 +380,20 @@ describe("private inference HTTP relay", () => {
 });
 
 describe("private inference WebSocket relay", () => {
+  it("rejects WebSocket OAuth without resolving a bearer or dialing upstream", async () => {
+    const resolve = vi.fn();
+    const { proxy } = await fixture(true, undefined, { resolve });
+    const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+    socket.on("error", () => {});
+    try {
+      await once(socket, "error");
+      expect(resolve).not.toHaveBeenCalled();
+      expect(transport.resolve).not.toHaveBeenCalled();
+      expect(transport.dials).toEqual([]);
+    } finally {
+      socket.terminate();
+    }
+  });
   it.each(["unavailable", "private"] as const)(
     "rejects %s destination DNS on a direct WebSocket route",
     async (resolution) => {
@@ -245,8 +413,17 @@ describe("private inference WebSocket relay", () => {
       }
       const { proxy } = await fixture();
       const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+      socket.on("error", () => {});
       try {
-        await once(socket, "error");
+        const [, response] = await once(socket, "unexpected-response");
+        const chunks: Buffer[] = [];
+        for await (const chunk of response) {
+          chunks.push(Buffer.from(chunk));
+        }
+        expect(response.statusCode).toBe(502);
+        expect(Buffer.concat(chunks).toString()).toBe(
+          "Codex parent-local inference transport failed; retry on a fresh connection.",
+        );
         expect(transport.resolve).toHaveBeenCalledOnce();
         expect(transport.proxyAgent).toHaveBeenCalledOnce();
         expect(transport.dials).toEqual([]);
@@ -255,6 +432,39 @@ describe("private inference WebSocket relay", () => {
       }
     },
   );
+
+  it("returns a complete sanitized rejection when upstream closes before upgrading", async () => {
+    const server = createServer();
+    server.on("upgrade", (_request, socket) => socket.destroy());
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("fixture did not listen");
+    }
+    transport.upstream = "ws://127.0.0.1:" + address.port;
+    const { proxy } = await fixture();
+    const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+    socket.on("error", () => {});
+    try {
+      const [, response] = await once(socket, "unexpected-response");
+      const chunks: Buffer[] = [];
+      for await (const chunk of response) {
+        chunks.push(Buffer.from(chunk));
+      }
+      expect(response.statusCode).toBe(502);
+      expect(Buffer.concat(chunks).toString()).toBe(
+        "Codex parent-local inference transport failed; retry on a fresh connection.",
+      );
+    } finally {
+      socket.terminate();
+      proxy.close();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
 
   it.each(["https://127.0.0.1/v1", "https://service.internal/v1"])(
     "rejects blocked hostname %s before proxy or DNS work",

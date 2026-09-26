@@ -149,9 +149,11 @@ it("shows the git target when no package version is available", async () => {
   await settled;
 });
 
-it.each([false, true])(
-  "shows short git revisions with refreshed metadata: %s",
-  async (refreshed) => {
+it.each(["absent", "unavailable", "refreshed", "campaign", "moved campaign"] as const)(
+  "shows coherent git revisions with %s comparison metadata",
+  async (comparison) => {
+    const campaign = comparison === "campaign" || comparison === "moved campaign";
+    const refreshed = comparison === "refreshed" || campaign;
     const { settled } = startUpdate({
       updateAvailable: {
         channel: "dev",
@@ -168,30 +170,72 @@ it.each([false, true])(
             autoEnabled: false,
             install: {
               kind: "git",
-              git: { status: "behind", currentSha: "c".repeat(40), commitsBehind: 1 },
+              git: {
+                status: "behind",
+                currentSha: (comparison === "campaign" ? "a" : "c").repeat(40),
+                upstreamSha: "d".repeat(40),
+                repositoryUrl: "https://github.com/example/refreshed",
+                commitsBehind: 1,
+              },
             },
             target: {
               kind: "git",
               upstreamRef: "origin/main",
-              upstreamSha: "d".repeat(40),
-              commitsBehind: 1,
+              upstreamSha: "b".repeat(40),
+              commitsBehind: 6,
             },
+            ...(campaign
+              ? {
+                  campaign: {
+                    id: "campaign-1",
+                    state: "waiting-for-idle" as const,
+                    announcedAtMs: 1_000,
+                    forceAtMs: 901_000,
+                    updatedAtMs: 1_000,
+                  },
+                }
+              : {}),
           }
-        : null,
+        : comparison === "unavailable"
+          ? {
+              channel: "dev",
+              autoEnabled: false,
+              install: {
+                kind: "git",
+                git: { status: "unavailable", reason: "fetch-failed", currentSha: "c".repeat(40) },
+              },
+              target: {
+                kind: "git",
+                upstreamRef: "origin/main",
+                upstreamSha: "d".repeat(40),
+                commitsBehind: 6,
+              },
+            }
+          : null,
     });
     const { modal } = await getRenderedModalDialog(document.body);
     expect(modal.querySelector(".exec-approval-command > div")?.textContent).toBe(
-      refreshed
-        ? "Installed v2026.9.5 · 1 commit behind"
-        : "Installed v2026.9.5 · 3 commits behind",
+      comparison === "moved campaign"
+        ? "v2026.9.5"
+        : comparison === "refreshed"
+          ? "Installed v2026.9.5 · 1 commit behind"
+          : "Installed v2026.9.5 · 3 commits behind",
     );
     expect(
       [...modal.querySelectorAll(".update-git-revisions code")].map((code) => code.textContent),
-    ).toEqual(refreshed ? ["cccccccc", "dddddddd"] : ["aaaaaaaa", "bbbbbbbb"]);
+    ).toEqual(
+      comparison === "moved campaign"
+        ? ["bbbbbbbb"]
+        : comparison === "refreshed"
+          ? ["cccccccc", "dddddddd"]
+          : ["aaaaaaaa", "bbbbbbbb"],
+    );
     expect(modal.querySelector(".update-git-revisions a")?.getAttribute("href")).toBe(
-      refreshed
+      comparison === "moved campaign"
         ? undefined
-        : `https://github.com/example/openclaw/compare/${"a".repeat(40)}...${"b".repeat(40)}`,
+        : comparison === "refreshed"
+          ? `https://github.com/example/refreshed/compare/${"c".repeat(40)}...${"d".repeat(40)}`
+          : `https://github.com/example/openclaw/compare/${"a".repeat(40)}...${"b".repeat(40)}`,
     );
     expect(modal.textContent).not.toContain("a".repeat(40));
     findButton("Cancel").click();

@@ -346,8 +346,15 @@ test("preserves viewer pages across publications while bounding shared predicate
         predicate.mockClear();
         selectEntries.mockClear();
         for (const [index, client] of clients.entries()) {
-          const result = await listProjectedSessions({ projection, client, opts });
           const expected = golden[revision]![index]!;
+          const projectOwner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
+          let result: Awaited<ReturnType<typeof listProjectedSessions>>;
+          try {
+            result = await listProjectedSessions({ projection, client, opts });
+            expect(projectOwner.mock.calls.length).toBeLessThanOrEqual(expected.total);
+          } finally {
+            projectOwner.mockRestore();
+          }
           expect({
             ids: result.sessions.map((row) => row.sessionId),
             total: result.totalCount,
@@ -499,6 +506,7 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
       moves: new Map(),
       environments: new Map(),
       workspaceResultReconcilingSessionIds: new Set(),
+      workspaceRecoveryPendingSessionIds: new Set(),
     };
     let entered = createDeferredCore();
     let paused = createDeferredCore<WorkerSessionPlacementProjection>();

@@ -2,9 +2,6 @@
 // Keep this barrel thin and generic-only.
 
 export type {
-  AllowlistMatch,
-  AnyAgentTool,
-  BaseProbeResult,
   ChannelGroupContext,
   ChannelMessageActionName,
   ChannelMeta,
@@ -23,32 +20,9 @@ export type RuntimeEnv = {
   error: (...args: unknown[]) => void;
   exit: (code: number) => void;
 };
-export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-contracts";
-export {
-  DEFAULT_ACCOUNT_ID,
-  buildChannelConfigSchema,
-  createActionGate,
-  createDedupeCache,
-} from "openclaw/plugin-sdk/core";
-export {
-  PAIRING_APPROVED_MESSAGE,
-  buildProbeChannelStatusSummary,
-  createDefaultChannelRuntimeState,
-} from "openclaw/plugin-sdk/channel-status";
-export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createReplyPrefixContext } from "openclaw/plugin-sdk/channel-outbound";
 export {
   evaluateSupplementalContextVisibility,
-  filterSupplementalContextItems,
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
-export { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-export { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 export { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-export {
-  isRequestBodyLimitError,
-  readRequestBodyWithLimit,
-  requestBodyErrorToText,
-} from "openclaw/plugin-sdk/webhook-ingress";
 export { setFeishuRuntime } from "./src/runtime.js";

@@ -171,34 +171,18 @@ async function executeOperation(
       const effect = value as GitWorkerHostRequest;
       let result: unknown;
       const transferList: Transferable[] = [];
-      if (effect.type === "git.text") {
-        const output = await (options.git?.text ?? runGitBytes)(
-          effect.input.cwd,
-          effect.input.args,
-          {
-            ...effect.input.options,
-            baseEnv,
-            signal,
-            beforeRun: options.assertCurrent,
-            killProcessTree: true,
-          },
-        );
-        const stdout = ownedWorkerBytes(output.stdout);
-        const stderr = ownedWorkerBytes(output.stderr);
-        result = { ...output, stdout, stderr };
-        transferList.push(stdout.buffer, stderr.buffer);
-      } else if (effect.type === "git.buffer") {
-        const output = await (options.git?.buffered ?? runGitBuffered)(
-          effect.input.cwd,
-          effect.input.args,
-          {
-            ...effect.input.options,
-            baseEnv,
-            signal,
-            beforeRun: options.assertCurrent,
-            killProcessTree: true,
-          },
-        );
+      if (effect.type === "git.text" || effect.type === "git.buffer") {
+        const run =
+          effect.type === "git.text"
+            ? (options.git?.text ?? runGitBytes)
+            : (options.git?.buffered ?? runGitBuffered);
+        const output = await run(effect.input.cwd, effect.input.args, {
+          ...effect.input.options,
+          baseEnv,
+          signal,
+          beforeRun: options.assertCurrent,
+          killProcessTree: true,
+        });
         const stdout = ownedWorkerBytes(output.stdout);
         const stderr = ownedWorkerBytes(output.stderr);
         result = { ...output, stdout, stderr };

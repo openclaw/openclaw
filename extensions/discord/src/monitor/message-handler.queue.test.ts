@@ -11,6 +11,8 @@ import {
   preflightDiscordMessageMock,
   processDiscordMessageMock,
 } from "./message-handler.module-test-helpers.js";
+import { createDiscordMessage } from "./message-handler.preflight.test-helpers.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 import {
   createIngressLifecycle,
   createDiscordHandlerParams,
@@ -116,23 +118,69 @@ async function createLifecycleStopScenario(params: {
 
 describe("createDiscordMessageHandler queue behavior", () => {
   beforeEach(() => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
     vi.useRealTimers();
   });
 
-  it("resets busy counters when the handler is created", () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
-
-    const setStatus = vi.fn();
-    createDiscordMessageHandler(createDiscordHandlerParams({ setStatus }));
-
-    expectStatusPatch(setStatus, { activeRuns: 0, busy: false });
-  });
+  it.each(["message", "handler"] as const)(
+    "preserves prepared context and forwards %s cancellation through the run queue",
+    async (cancelSource) => {
+      const message = createDiscordMessage({
+        id: "m-1",
+        channelId: "ch-1",
+        content: "hello",
+        author: { id: "user-1", bot: false },
+        referencedMessage: createDiscordMessage({
+          id: "parent-1",
+          channelId: "ch-1",
+          content: "earlier",
+          author: { id: "user-2", bot: false },
+        }),
+      });
+      const data = { ...createMessageData(message.id), message };
+      const messageAbort = new AbortController();
+      const handlerAbort = new AbortController();
+      const context = {
+        ...createDiscordQueuePreflightContextForMessage(data),
+        data,
+        message,
+        buildContext: vi.fn(),
+        abortSignal: messageAbort.signal,
+      };
+      const started = createDeferred<DiscordMessagePreflightContext>();
+      const finish = createDeferred<void>();
+      preflightDiscordMessageMock.mockResolvedValue(context);
+      processDiscordMessageMock.mockImplementation(
+        async (received: DiscordMessagePreflightContext) => {
+          started.resolve(received);
+          await finish.promise;
+        },
+      );
+      const handler = createDiscordMessageHandler(
+        createDiscordHandlerParams({ abortSignal: handlerAbort.signal }),
+      );
+      try {
+        await handler(data as never, {} as never);
+        const received = await started.promise;
+        expect(received.message.content).toBe("hello");
+        expect(received.data.message.content).toBe("hello");
+        expect(received.message.referencedMessage?.content).toBe("earlier");
+        expect(received.runtime).toBe(context.runtime);
+        expect(received.buildContext).toBe(context.buildContext);
+        const signal = received.abortSignal;
+        expect(signal?.aborted).toBe(false);
+        const reason = new Error(`${cancelSource} cancelled`);
+        (cancelSource === "message" ? messageAbort : handlerAbort).abort(reason);
+        expect(signal?.reason).toBe(reason);
+      } finally {
+        finish.resolve();
+        await handler.deactivate();
+      }
+    },
+  );
 
   it("starts a second same-session event while the first run is active", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
-
     const firstRun = createDeferred<void>();
     const secondRun = createDeferred<void>();
     processDiscordMessageMock
@@ -148,6 +196,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     );
     const setStatus = vi.fn();
     const handler = createDiscordMessageHandler(createDiscordHandlerParams({ setStatus }));
+    expectStatusPatch(setStatus, { activeRuns: 0, busy: false });
 
     await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
 
@@ -178,8 +227,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("fans merged-turn adoption out to every debounced ingress claim", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
     const params = createDiscordHandlerParams();
     params.cfg.messages = { inbound: { debounceMs: 20 } };
     preflightDiscordMessageMock.mockImplementation(
@@ -217,8 +264,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("completes every debounced ingress claim when preflight gates the merged turn", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
     preflightDiscordMessageMock.mockResolvedValue(null);
     const params = createDiscordHandlerParams();
     params.cfg.messages = { inbound: { debounceMs: 20 } };
@@ -240,8 +285,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("returns retryable, never completed, for a dispatch after shutdown", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
     const handler = createDiscordMessageHandler(createDiscordHandlerParams());
     await handler.deactivate();
     const lifecycle = createIngressLifecycle();
@@ -258,8 +301,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("reports a genuine pre-admission exception only through onFailed", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
     const failure = new Error("preflight failed");
     preflightDiscordMessageMock.mockRejectedValue(failure);
     const handler = createDiscordMessageHandler(createDiscordHandlerParams());
@@ -277,8 +318,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("cancels a buffered ingress claim during deactivation", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
     const params = createDiscordHandlerParams();
     params.cfg.messages = { inbound: { debounceMs: 60_000 } };
     const handler = createDiscordMessageHandler(params);
@@ -296,8 +335,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("settles every buffered claim when cancellation fan-in includes a legacy lifecycle", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
     const params = createDiscordHandlerParams();
     params.cfg.messages = { inbound: { debounceMs: 60_000 } };
     const handler = createDiscordMessageHandler(params);
@@ -320,8 +357,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("waits for an active debounce flush and cancels it after shutdown", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
     const preflightGate = createDeferred<void>();
     preflightDiscordMessageMock.mockImplementation(async () => {
       await preflightGate.promise;
@@ -351,9 +386,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   it("does not abort concurrent runs with a Discord-owned channel timeout", async () => {
     vi.useFakeTimers();
     try {
-      preflightDiscordMessageMock.mockReset();
-      processDiscordMessageMock.mockReset();
-
       const firstRun = createDeferred<void>();
       const secondRun = createDeferred<void>();
       const capturedAbortSignals: Array<AbortSignal | undefined> = [];
@@ -401,9 +433,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("refreshes run activity while active runs are in progress", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
-
     const runInFlight = createDeferred<void>();
     processDiscordMessageMock.mockImplementation(async () => {
       await runInFlight.promise;
@@ -462,9 +491,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("stops status publishing after lifecycle abort", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
-
     const { setStatus, callsBeforeStop, finish } = await createLifecycleStopScenario({
       createHandler: (status) => {
         const abortController = new AbortController();
@@ -480,9 +506,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("stops status publishing after handler deactivation", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
-
     const { setStatus, callsBeforeStop, finish } = await createLifecycleStopScenario({
       createHandler: (status) => {
         const handler = createDiscordMessageHandler(
@@ -513,9 +536,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("preserves non-debounced message ordering by awaiting debouncer enqueue", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
-
     const firstPreflight = createDeferred<void>();
     const processedMessageIds: string[] = [];
 
@@ -557,9 +577,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("reports a concurrent run failure without leaving busy state stuck", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
-
     const firstRun = createDeferred<void>();
     processDiscordMessageMock
       .mockImplementationOnce(async () => {

@@ -24,13 +24,15 @@ import {
   buildSubagentRunReadIndexFromRuns,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
-import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
-import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
-  getSubagentSessionListRunsSnapshotForRead,
-  withSubagentRunReadSnapshot,
-} from "./subagent-registry-state.js";
+  getLatestLiveSubagentRunByChildSessionKey,
+  listSubagentRunsForController,
+  listSubagentRunsForRequester,
+} from "./subagent-registry-read.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
 
 /** Recent-run default window used by subagent control UI/tools. */
 export const DEFAULT_RECENT_MINUTES = 30;
@@ -84,6 +86,38 @@ export function resolveSubagentController(params: {
     callerIsSubagent: true,
     controlScope: capabilities.controlScope,
   };
+}
+
+export function listControlledSubagentRunsForTurn(
+  controller: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">,
+  requesterTurnRunId?: string,
+): SubagentRunRecord[] {
+  const controlledRuns = listSubagentRunsForController(
+    controller.controllerSessionKey,
+    controller.controllerAgentId,
+  );
+  if (requesterTurnRunId === undefined) {
+    return controlledRuns;
+  }
+  const requesterRuns = listSubagentRunsForRequester(controller.controllerSessionKey, {
+    requesterAgentId: controller.controllerAgentId,
+  });
+  const runsById = new Map(
+    requesterRuns
+      .filter((entry) => getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey) === entry)
+      .map((entry) => [entry.runId, entry]),
+  );
+  return controlledRuns.filter(
+    (entry) =>
+      entry.requesterTurnRunId === requesterTurnRunId ||
+      isRequesterSettleWakeForRun({
+        entry,
+        runId: requesterTurnRunId,
+        requesterSessionKey: controller.controllerSessionKey,
+        requesterAgentId: controller.controllerAgentId,
+        runsById,
+      }),
+  );
 }
 
 function resolveRunRequesterAgentId(
@@ -214,23 +248,6 @@ function buildControlledReadContext(
       );
     },
   };
-}
-
-/** Cancellation consumes current ownership facts without hydrating retained result payloads. */
-export function listControlledSubagentRunFacts(
-  controllerSessionKey: string,
-  controllerAgentId: string | undefined,
-  cfg: OpenClawConfig,
-): SubagentRunReadRecord[] {
-  if (!controllerAgentId) {
-    return [];
-  }
-  const index = buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentSessionListRunsSnapshotForRead(subagentRuns),
-  });
-  return [...index.latestRunsByChildSessionKey.values()].filter((entry) =>
-    isSubagentRunVisibleToSession(entry, controllerSessionKey, controllerAgentId, cfg),
-  );
 }
 
 export function ensureSubagentControllerOwnsRun(params: {

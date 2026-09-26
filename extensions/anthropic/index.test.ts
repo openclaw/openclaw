@@ -1294,7 +1294,7 @@ describe("anthropic provider replay hooks", () => {
     });
     expect(await method.runNonInteractive(context)).toMatchObject({
       auth: { profiles: { "anthropic:default": { provider: "anthropic", mode: "api_key" } } },
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
     });
     const result = await method.run({
       config: {},
@@ -1308,7 +1308,7 @@ describe("anthropic provider replay hooks", () => {
       oauth: { createVpsAwareHandlers: vi.fn() },
     });
     expect(result).toMatchObject({
-      defaultModel: "anthropic/claude-opus-5",
+      defaultModel: "anthropic/claude-opus-5-5",
       profiles: [
         {
           profileId: "anthropic:default",

@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
@@ -45,10 +46,6 @@ export type FeishuReactionCreatedEvent = {
   operator_type?: string;
   user_id?: { open_id?: string; user_id?: string };
   action_time?: string;
-};
-
-type FeishuReactionDeletedEvent = FeishuReactionCreatedEvent & {
-  reaction_id?: string;
 };
 
 type ResolveReactionSyntheticEventParams = {
@@ -307,6 +304,36 @@ function registerEventHandlers(
     }
   };
 
+  const handleReaction = (data: unknown, action: "created" | "deleted") =>
+    runFeishuHandler({
+      errorMessage: `feishu[${accountId}]: error handling reaction ${action === "deleted" ? "removal event" : "event"}`,
+      task: async () => {
+        const myBotId = botOpenIds.get(accountId);
+        const syntheticEvent = await resolveReactionSyntheticEvent({
+          cfg,
+          accountId,
+          event: data as FeishuReactionCreatedEvent,
+          botOpenId: myBotId,
+          logger: log,
+          action,
+        });
+        if (!syntheticEvent || !context.isAccountActive()) {
+          return;
+        }
+        await handleFeishuMessage({
+          trackTask: context.trackTask,
+          cfg,
+          event: syntheticEvent,
+          botOpenId: myBotId,
+          botName: botNames.get(accountId),
+          runtime,
+          channelRuntime,
+          chatHistories,
+          accountId,
+        });
+      },
+    });
+
   eventDispatcher.register({
     "im.message.receive_v1": createFeishuMessageReceiveHandler({
       cfg,
@@ -374,69 +401,8 @@ function registerEventHandlers(
       isAccountActive: context.isAccountActive,
       trackTask: context.trackTask,
     }),
-    "im.message.reaction.created_v1": async (data) => {
-      await runFeishuHandler({
-        errorMessage: `feishu[${accountId}]: error handling reaction event`,
-        task: async () => {
-          const event = data as FeishuReactionCreatedEvent;
-          const myBotId = botOpenIds.get(accountId);
-          const syntheticEvent = await resolveReactionSyntheticEvent({
-            cfg,
-            accountId,
-            event,
-            botOpenId: myBotId,
-            logger: log,
-          });
-          if (!syntheticEvent || !context.isAccountActive()) {
-            return;
-          }
-          const promise = handleFeishuMessage({
-            trackTask: context.trackTask,
-            cfg,
-            event: syntheticEvent,
-            botOpenId: myBotId,
-            botName: botNames.get(accountId),
-            runtime,
-            channelRuntime,
-            chatHistories,
-            accountId,
-          });
-          await promise;
-        },
-      });
-    },
-    "im.message.reaction.deleted_v1": async (data) => {
-      await runFeishuHandler({
-        errorMessage: `feishu[${accountId}]: error handling reaction removal event`,
-        task: async () => {
-          const event = data as FeishuReactionDeletedEvent;
-          const myBotId = botOpenIds.get(accountId);
-          const syntheticEvent = await resolveReactionSyntheticEvent({
-            cfg,
-            accountId,
-            event,
-            botOpenId: myBotId,
-            logger: log,
-            action: "deleted",
-          });
-          if (!syntheticEvent || !context.isAccountActive()) {
-            return;
-          }
-          const promise = handleFeishuMessage({
-            trackTask: context.trackTask,
-            cfg,
-            event: syntheticEvent,
-            botOpenId: myBotId,
-            botName: botNames.get(accountId),
-            runtime,
-            channelRuntime,
-            chatHistories,
-            accountId,
-          });
-          await promise;
-        },
-      });
-    },
+    "im.message.reaction.created_v1": (data) => handleReaction(data, "created"),
+    "im.message.reaction.deleted_v1": (data) => handleReaction(data, "deleted"),
     "application.bot.menu_v6": createFeishuBotMenuHandler({
       cfg,
       accountId,
@@ -595,6 +561,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       durableIngress?.start();
       if (connectionMode === "webhook") {
         return await monitorWebhook({
+          gatewayPort: resolveGatewayPort(cfg),
           account,
           accountId,
           runtime,

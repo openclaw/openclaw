@@ -32,6 +32,7 @@ describe("transcript follow continuity", () => {
           requestUpdate: vi.fn(),
           updateComplete: Promise.resolve(true),
         },
+        () => "follow-continuity",
         { canFollowEnd: () => !policy.chatFollowLocked },
       );
       Object.assign(policy, {

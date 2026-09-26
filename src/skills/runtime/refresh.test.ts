@@ -14,12 +14,15 @@ import {
 import {
   createSkillsWatcherMock,
   useSkillsWatcherFixture,
+  waitForSkillsWatcherTurn,
 } from "./refresh.watcher.test-support.js";
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
 
-const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
-  createSkillsWatcherMock();
+const watcherMocks = createSkillsWatcherMock();
+const { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot } =
+  watcherMocks;
+const { watcherAdmissions } = watcherMocks;
 
 const pluginSkillsMocks = vi.hoisted(() => ({
   resolvePluginSkillRoots: vi.fn((): Array<{ dir: string; rejectHardlinks: boolean }> => []),
@@ -35,7 +38,10 @@ vi.mock("chokidar", () => ({
   default: { watch: watchMock },
 }));
 vi.mock("./refresh-ancestor-native.js", () => ({
-  createNativeSkillsAncestorWatcher: nativeWatchMock,
+  createNativeSkillsAncestorWatcher: vi.fn(nativeWatchMock),
+}));
+vi.mock("./refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: vi.fn(nativeContentWatchMock),
 }));
 
 vi.mock("../loading/plugin-skills.js", () => ({
@@ -75,6 +81,7 @@ describe("ensureSkillsWatcher", () => {
     expect(projectWatch.options.depth).toBe(0);
     await fs.mkdir(projectSkillsRoot, { recursive: true });
     projectWatch.watcher.emit("all", "addDir", path.dirname(projectSkillsRoot));
+    await waitForSkillsWatcherTurn();
     expect(watchForSkillRoot(projectSkillsRoot).options.depth).toBe(7);
     expect(
       watchForSkillRoot(path.join(os.homedir(), ".agents", "skills")).options.followSymlinks,
@@ -157,6 +164,33 @@ describe("ensureSkillsWatcher", () => {
     }
   });
 
+  it("keeps Darwin content and ancestor generations on stock Chokidar", async () => {
+    const ancestor = vi.mocked(
+      (await import("./refresh-ancestor-native.js")).createNativeSkillsAncestorWatcher,
+    );
+    const content = vi.mocked(
+      (await import("./refresh-content-native.js")).createNativeSkillsContentWatcher,
+    );
+    ancestor.mockClear();
+    content.mockClear();
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+      refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir });
+      expect(ancestor).not.toHaveBeenCalled();
+      expect(content).not.toHaveBeenCalled();
+      expect(watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills")).options).toMatchObject({
+        depth: 7,
+        usePolling: false,
+      });
+      expect(
+        watchForSkillRoot(path.join(fixtureWorkspaceDir, ".agents", "skills")).options,
+      ).toMatchObject({ depth: 0, usePolling: false });
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
   it("keeps grouped skill folders within the watcher traversal depth", async () => {
     vi.useFakeTimers();
     const workspaceDir = await createFixtureDirectory("watch-depth");
@@ -176,6 +210,7 @@ describe("ensureSkillsWatcher", () => {
     const changedPath = path.join(workspaceDir, "skills", "group", "demo", "SKILL.md");
     await fs.mkdir(path.dirname(changedPath), { recursive: true });
     watched.watcher.emit("all", "addDir", path.join(workspaceDir, "skills"));
+    await vi.advanceTimersByTimeAsync(0);
     const promoted = watchForSkillRoot(path.join(workspaceDir, "skills"));
     expect(promoted.options.depth).toBe(7);
     await vi.advanceTimersByTimeAsync(250);
@@ -403,6 +438,7 @@ describe("ensureSkillsWatcher", () => {
     expect(companionWatch.watcher).toBe(rootWatch.watcher);
     await fs.mkdir(path.join(missingRoot, "skills", "group", "demo"), { recursive: true });
     rootWatch.watcher.emit("all", "addDir", missingRoot);
+    await waitForSkillsWatcherTurn();
     expect(watchForSkillRoot(missingRoot).options.depth).toBe(3);
     expect(watchForSkillRoot(path.join(missingRoot, "skills")).options.depth).toBe(7);
   });
@@ -493,6 +529,7 @@ describe("ensureSkillsWatcher", () => {
         workspaceDir: secondWorkspace,
         config: { skills: { load: { extraDirs: [secondRoot] } } },
       });
+      await vi.advanceTimersByTimeAsync(0);
       const replacement = watchForSkillRoot(secondRoot).watcher;
       expect(replacement).not.toBe(failed);
       expect(watchForSkillRoot(firstRoot).watcher).toBe(replacement);
@@ -504,16 +541,14 @@ describe("ensureSkillsWatcher", () => {
       }
       const firstBeforeReady = getSkillsSourceVersion(fixtureWorkspaceDir);
       const secondBeforeReady = getSkillsSourceVersion(secondWorkspace);
+      const snapshotBeforeReady = getSkillsSnapshotVersion(fixtureWorkspaceDir);
       lateReady();
       lateError(new Error("retired scan failed"));
       expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBe(firstBeforeReady);
       expect(getSkillsSourceVersion(secondWorkspace)).toBe(secondBeforeReady);
+      expect(getSkillsSnapshotVersion(fixtureWorkspaceDir)).toBe(snapshotBeforeReady);
       replacement.emit("ready");
-      if (scan === "ready-then-error") {
-        expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBe(firstBeforeReady);
-      } else {
-        expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBeGreaterThan(firstBeforeReady);
-      }
+      expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBeGreaterThan(firstBeforeReady);
       expect(getSkillsSourceVersion(secondWorkspace)).toBeGreaterThan(secondBeforeReady);
 
       const firstBeforeCreation = getSkillsSourceVersion(fixtureWorkspaceDir);
@@ -546,10 +581,11 @@ describe("ensureSkillsWatcher", () => {
     },
   );
 
-  it.each(["before-content", "around-content"] as const)(
+  it.each(["before-content", "around-content", "after-content"] as const)(
     "discovers initial content when ancestor scans fail %s",
     async (ordering) => {
       const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+      const { pathWatchers } = await import("./refresh-watch-registry.js");
       const ancestor = await createFixtureDirectory("ancestor-error");
       const intermediate = path.join(ancestor, "nested");
       const innerAncestor = path.join(intermediate, "inner");
@@ -567,6 +603,7 @@ describe("ensureSkillsWatcher", () => {
       // Promotion through initial readiness creates no addDir debounce that could
       // later invalidate the empty cache independently of content readiness.
       initialAncestor.emit("ready");
+      await waitForSkillsWatcherTurn();
       const content = watchForSkillRoot(logicalRoot).watcher;
       expect(content).not.toBe(initialAncestor);
       const failedIndex = watchMock.mock.calls.findLastIndex(
@@ -577,50 +614,83 @@ describe("ensureSkillsWatcher", () => {
       );
       expect(failedIndex).toBeGreaterThanOrEqual(0);
       const failedAncestor = createdWatchers[failedIndex]!;
-      const lastFailedIndex =
-        ordering === "around-content"
-          ? watchMock.mock.calls.findLastIndex(
-              ([watchRoot, options], index) =>
-                watchRoot === innerAncestor.replaceAll("\\", "/") &&
-                options.depth === 0 &&
-                !createdWatchers[index]?.closed,
-            )
-          : -1;
-      if (ordering === "around-content") {
-        expect(lastFailedIndex).toBeGreaterThanOrEqual(0);
-      }
-      const lastFailedAncestor = createdWatchers[lastFailedIndex];
+      // Settle unrelated startup work before priming the cache. The failed
+      // ancestor stays pending while this recovering owner's content verifies.
       for (const watcher of createdWatchers) {
-        if (watcher !== content && watcher !== failedAncestor && watcher !== lastFailedAncestor) {
+        if (watcher !== content && watcher !== failedAncestor) {
           watcher.emit("ready");
         }
       }
-      // Existing shared ancestors notify late subscriptions in a microtask. Finish
-      // those callbacks before error delivery; they must not repair the cache later.
-      await Promise.resolve();
-      failedAncestor.emit(
-        "error",
-        Object.assign(new Error("ancestor scan failed"), { code: "EIO" }),
-      );
+      await waitForSkillsWatcherTurn();
+      const lateCallbacks = [...content.on.mock.calls];
+      if (ordering === "around-content") {
+        content.emit("ready");
+        expect(watchForSkillRoot(logicalRoot).watcher).not.toBe(content);
+      }
+      const available = vi.fn();
+      refreshModule.registerSkillsChangeListener((event) => {
+        if (event.reason === "watch-available") {
+          available(event);
+        }
+      });
+      const admissions = watchMock.mock.calls.length;
+      const failAncestor = () =>
+        failedAncestor.emit(
+          "error",
+          Object.assign(new Error("ancestor scan failed"), { code: "EIO" }),
+        );
+      if (ordering !== "after-content") {
+        failAncestor();
+      }
+      await waitForSkillsWatcherTurn();
+      expect(watchMock.mock.calls).toHaveLength(admissions);
+      expect(content.close).not.toHaveBeenCalled();
+      expect(failedAncestor.close).not.toHaveBeenCalled();
       expect(read()).toEqual([]);
       const skillDir = path.join(logicalRoot, "ancestor-error-proof");
       await fs.mkdir(skillDir);
+      const skillFile = path.join(skillDir, "SKILL.md");
       await fs.writeFile(
-        path.join(skillDir, "SKILL.md"),
+        skillFile,
         "---\nname: ancestor-error-proof\ndescription: Discovered by healthy content scan\n---\n",
       );
       // ignoreInitial may suppress all/change events for content found by this scan.
       expect(read()).toEqual([]);
-      content.emit("ready");
-      expect(read()).toEqual([]);
-      watchForSkillRoot(logicalRoot).watcher.emit("ready");
-      if (lastFailedAncestor) {
-        expect(read()).toEqual([]);
-        lastFailedAncestor.emit(
-          "error",
-          Object.assign(new Error("last ancestor scan failed"), { code: "EIO" }),
-        );
+      if (ordering !== "around-content") {
+        content.emit("ready");
       }
+      const verifier = watchForSkillRoot(logicalRoot).watcher;
+      expect(verifier).not.toBe(content);
+      expect(read()).toEqual([]);
+      verifier.emit("ready");
+      expect(read()).toEqual(["ancestor-error-proof"]);
+      expect(available).not.toHaveBeenCalled();
+      expect(content.close).toHaveBeenCalledOnce();
+      const settledAdmissions = watchMock.mock.calls.length;
+      const version = getSkillsSourceVersion(fixtureWorkspaceDir);
+      const snapshotVersion = getSkillsSnapshotVersion(fixtureWorkspaceDir);
+      if (ordering === "after-content") {
+        failAncestor();
+        await waitForSkillsWatcherTurn();
+      }
+      expect(pathWatchers.get(logicalRoot.replaceAll("\\", "/"))).toMatchObject({
+        unavailable: true,
+        verified: false,
+      });
+      expect(available).not.toHaveBeenCalled();
+      expect(failedAncestor.close).not.toHaveBeenCalled();
+      for (const [event, callback] of lateCallbacks) {
+        if (event === "ready") {
+          callback();
+        } else if (event === "error") {
+          callback(new Error("retired scan failed"));
+        } else if (event === "all") {
+          callback("change", skillFile);
+        }
+      }
+      expect(watchMock.mock.calls).toHaveLength(settledAdmissions);
+      expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBe(version);
+      expect(getSkillsSnapshotVersion(fixtureWorkspaceDir)).toBe(snapshotVersion);
       expect(read()).toEqual(["ancestor-error-proof"]);
     },
   );
@@ -629,31 +699,27 @@ describe("ensureSkillsWatcher", () => {
     "preserves shared coverage when a replaced ancestor scan is %s",
     async (scan) => {
       vi.useFakeTimers();
+      const workspaceDir = fixtureWorkspaceDir;
       const ancestor = await createFixtureDirectory("ancestor");
       const logicalRoot = path.join(ancestor, "a", "b", "c", "d", "repo");
       const secondWorkspace = await createFixtureDirectory("second-workspace");
       const executionWorkspaceDir = await createFixtureDirectory("first-execution");
       const config = { skills: { load: { extraDirs: [logicalRoot] } } };
-      refreshModule.ensureSkillsWatcher({
-        workspaceDir: fixtureWorkspaceDir,
-        executionWorkspaceDir,
-        config,
-      });
+      const request = { workspaceDir, executionWorkspaceDir, config };
+      refreshModule.ensureSkillsWatcher(request);
       const shallow = watchForSkillRoot(logicalRoot);
       expect(shallow.watchRoot).toBe(ancestor.replaceAll("\\", "/"));
       expect(shallow.options.depth).toBe(0);
       for (const watcher of createdWatchers) {
         watcher.emit("ready");
       }
-      const beforeReplacement = getSkillsSourceVersion(fixtureWorkspaceDir);
+      const beforeReplacement = getSkillsSourceVersion(workspaceDir);
 
       await fs.mkdir(logicalRoot, { recursive: true });
-      await fs.symlink(
-        logicalRoot,
-        path.join(secondWorkspace, "skills"),
-        process.platform === "win32" ? "junction" : "dir",
-      );
+      const alias = path.join(secondWorkspace, "skills");
+      await fs.symlink(logicalRoot, alias, process.platform === "win32" ? "junction" : "dir");
       refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace });
+      await vi.advanceTimersByTimeAsync(0);
       const deeper = watchForSkillRoot(logicalRoot);
       expect(deeper.watchRoot).toBe(logicalRoot.replaceAll("\\", "/"));
       expect(deeper.options.depth).toBe(7);
@@ -662,44 +728,47 @@ describe("ensureSkillsWatcher", () => {
           watcher.emit("ready");
         }
       }
-      expect(shallow.watcher.close).not.toHaveBeenCalled();
+      expect(shallow.watcher.close).toHaveBeenCalledOnce();
+      expect(shallow.watcher.closed).toBe(true);
+      const live = watcherAdmissions(ancestor, true).filter((watcher) => watcher?.closed === false);
+      expect(live).toHaveLength(1);
+      expect(live[0]).not.toBe(shallow.watcher);
+      expect(live[0]?.closed).toBe(false);
+      expect(live[0]?.close).not.toHaveBeenCalled();
       if (scan === "error-then-ready") {
         deeper.watcher.emit("error", new Error("initial scan interrupted"));
-        expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBeGreaterThan(beforeReplacement);
+        expect(getSkillsSourceVersion(workspaceDir)).toBeGreaterThan(beforeReplacement);
       }
-      const beforeReady = getSkillsSourceVersion(fixtureWorkspaceDir);
+      const beforeReady = getSkillsSourceVersion(workspaceDir);
       deeper.watcher.emit("ready");
-      expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBe(beforeReady);
+      expect(getSkillsSourceVersion(workspaceDir)).toBe(beforeReady);
+      await vi.advanceTimersByTimeAsync(0);
       watchForSkillRoot(logicalRoot).watcher.emit("ready");
       if (scan === "error-then-ready") {
-        expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBe(beforeReady);
+        expect(getSkillsSourceVersion(workspaceDir)).toBe(beforeReady);
         watchForSkillRoot(logicalRoot).watcher.emit("ready");
       }
-      expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBeGreaterThan(beforeReady);
+      expect(getSkillsSourceVersion(workspaceDir)).toBeGreaterThan(beforeReady);
+      const verifiedContent = watchForSkillRoot(logicalRoot).watcher;
+      expect(verifiedContent.close).not.toHaveBeenCalled();
 
       const seen: SkillsChangeEvent[] = [];
       refreshModule.registerSkillsChangeListener((change) => seen.push(change));
-      const versionBefore = getSkillsSnapshotVersion(fixtureWorkspaceDir);
+      const versionBefore = getSkillsSnapshotVersion(workspaceDir);
       const removedParent = path.dirname(logicalRoot);
-      const parentWatchRoot = path.dirname(removedParent).replaceAll("\\", "/");
-      const parentWatchIndex = watchMock.mock.calls.findLastIndex(
-        ([watchRoot, options], index) =>
-          watchRoot === parentWatchRoot && options.depth === 0 && !createdWatchers[index]?.closed,
+      const parentWatcher = watcherAdmissions(path.dirname(removedParent), true).findLast(
+        (watcher) => watcher?.closed === false,
       );
-      expect(parentWatchIndex).toBeGreaterThanOrEqual(0);
-      const parentWatcher = createdWatchers[parentWatchIndex]!;
+      expect(parentWatcher).toBeDefined();
       await fs.rm(removedParent, { recursive: true });
-      parentWatcher.emit("all", "unlinkDir", removedParent);
+      parentWatcher!.emit("all", "unlinkDir", removedParent);
       await vi.advanceTimersByTimeAsync(250);
-      expect(getSkillsSnapshotVersion(fixtureWorkspaceDir)).toBeGreaterThan(versionBefore);
+      expect(verifiedContent.close).toHaveBeenCalledOnce();
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(versionBefore);
 
       // A shallow subscriber reconciles first; the surviving deeper subscriber
       // still requires six skill levels and their metadata below the logical root.
-      refreshModule.ensureSkillsWatcher({
-        workspaceDir: fixtureWorkspaceDir,
-        executionWorkspaceDir,
-        config,
-      });
+      refreshModule.ensureSkillsWatcher(request);
       const rebuilt = watchForSkillRoot(logicalRoot);
       expect(deeper.watcher.close).toHaveBeenCalledOnce();
       expect(rebuilt.watchRoot).toBe(path.dirname(removedParent).replaceAll("\\", "/"));
@@ -707,6 +776,7 @@ describe("ensureSkillsWatcher", () => {
       const changedPath = path.join(logicalRoot, "group", "nested", "demo", "SKILL.md");
       await fs.mkdir(path.dirname(changedPath), { recursive: true });
       rebuilt.watcher.emit("all", "addDir", removedParent);
+      await vi.advanceTimersByTimeAsync(0);
       const promoted = watchForSkillRoot(logicalRoot);
       expect(promoted.watchRoot).toBe(logicalRoot.replaceAll("\\", "/"));
       expect(promoted.options.depth).toBe(7);
@@ -715,7 +785,7 @@ describe("ensureSkillsWatcher", () => {
       promoted.watcher.emit("all", "change", changedPath);
       await vi.advanceTimersByTimeAsync(250);
       expect(seen).toEqual([
-        { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath },
+        { workspaceDir, reason: "watch", changedPath },
         { workspaceDir: secondWorkspace, reason: "watch", changedPath },
       ]);
     },
@@ -735,6 +805,7 @@ describe("ensureSkillsWatcher", () => {
     expect(watched.options.ignored(path.join(repoDir, "unrelated"))).toBe(true);
     await fs.mkdir(path.join(nestedRoot, "group", "demo"), { recursive: true });
     watched.watcher.emit("all", "addDir", nestedRoot);
+    await waitForSkillsWatcherTurn();
     const promoted = watchForSkillRoot(nestedRoot);
     expect(promoted.watchRoot).toBe(nestedRoot.replaceAll("\\", "/"));
     expect(promoted.options.depth).toBe(7);
@@ -780,6 +851,7 @@ describe("ensureSkillsWatcher", () => {
     expect(watched.options.ignored(path.join(pluginDir, "unrelated"))).toBe(true);
     await fs.mkdir(path.join(nestedRoot, "group", "demo"), { recursive: true });
     watched.watcher.emit("all", "addDir", nestedRoot);
+    await waitForSkillsWatcherTurn();
     const promoted = watchForSkillRoot(nestedRoot);
     expect(promoted.watchRoot).toBe(nestedRoot.replaceAll("\\", "/"));
     expect(promoted.options.depth).toBe(7);
@@ -840,14 +912,27 @@ describe("ensureSkillsWatcher", () => {
         "demo",
         ...(event.endsWith("Dir") ? [] : ["SKILL.md"]),
       );
+      const { shouldUseNativeSkillsWatcher } = await import("./refresh-watch-transport.js");
+      const unavailable =
+        event === "unlinkDir" && !shouldUseNativeSkillsWatcher(false)
+          ? [
+              {
+                workspaceDir: fixtureWorkspaceDir,
+                reason: "watch-unavailable",
+                changedPath: undefined,
+              },
+            ]
+          : [];
       watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills")).watcher.emit(
         "all",
         event,
         changedPath,
       );
+      expect(seen).toEqual(unavailable);
       await vi.advanceTimersByTimeAsync(250);
 
       expect(seen).toEqual([
+        ...unavailable,
         {
           workspaceDir: fixtureWorkspaceDir,
           reason: "watch",

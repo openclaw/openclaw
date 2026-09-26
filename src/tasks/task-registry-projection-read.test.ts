@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as taskRuntime from "./runtime-internal.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
 import { taskAgentEventMutations } from "./task-registry-agent-events.js";
+import * as listenerState from "./task-registry-listener-state.js";
 import { updateTask } from "./task-registry-mutation.js";
 import { prepareTaskRegistryRead } from "./task-registry-read.js";
 import {
@@ -14,7 +19,8 @@ import {
   withReadState,
 } from "./task-registry-read.test-support.js";
 import { runTaskRegistryWorkerMutation, taskDeliveryStates, tasks } from "./task-registry-state.js";
-import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
+import { configureTaskRegistryRuntime } from "./task-registry.store.js";
+import { deleteTaskRowsWithDeliveryState } from "./task-registry.store.kernel.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import type {
   TaskRegistryMutationScope,
@@ -185,7 +191,9 @@ it.each(["current", "read failure", "retired store"] as const)(
                 deliveryState: overlapDelivery,
               });
             } else {
-              store.deleteTaskWithDeliveryState(removed.taskId);
+              runOpenClawStateWriteTransaction(() =>
+                deleteTaskRowsWithDeliveryState(openOpenClawStateDatabase().db, removed.taskId),
+              );
             }
             await releaseMutations.promise;
           },
@@ -285,6 +293,87 @@ it.each(["current", "read failure", "retired store"] as const)(
 );
 
 describe("registered task list read fence", () => {
+  it.each(["another run", "same run", "new committed target"] as const)(
+    "keeps creation identity checks scoped while holding %s",
+    async (change) => {
+      await withReadState(async () => {
+        const historical = createTaskFixture("cli", {
+          runId: "historical-session-run",
+          childSessionKey: "agent:main:repeated-session",
+          ownerKey: "agent:main:repeated-session",
+          requesterSessionKey: "agent:main:repeated-session",
+          task: "Session turn",
+          notifyPolicy: "silent",
+          deliveryStatus: "not_applicable",
+        });
+        const store = await prepareTaskFixtureRead(historical);
+        const prepared = await prepareTaskRegistryRead();
+        expect(prepared).toBeDefined();
+        const captured = createDeferred();
+        const releaseRead = createDeferred();
+        const entered = createDeferred();
+        const releaseCreation = createDeferred();
+        const capture = listenerState.captureTaskRegistryReadFence;
+        vi.spyOn(listenerState, "captureTaskRegistryReadFence").mockImplementationOnce(
+          (admission) => {
+            const fence = capture(admission);
+            captured.resolve();
+            return fence.then(() => releaseRead.promise);
+          },
+        );
+        const mutate = store.runInitialMutationAsync.bind(store);
+        vi.spyOn(store, "runInitialMutationAsync").mockImplementation(async (...args) => {
+          if (args[1].type !== "tasks.createRecord") {
+            return mutate(...args);
+          }
+          if (change === "new committed target") {
+            const result = await mutate(...args);
+            entered.resolve();
+            await releaseCreation.promise;
+            return result;
+          }
+          entered.resolve();
+          await releaseCreation.promise;
+          return mutate(...args);
+        });
+        const reading = requestTasks(historical.ownerKey);
+        let creation: ReturnType<typeof createRunningTaskRunCoreWithReceiptAsync> | undefined;
+        try {
+          await captured.promise;
+          creation = createRunningTaskRunCoreWithReceiptAsync({
+            runtime: "cli",
+            runId: change === "same run" ? historical.runId! : "next-session-run",
+            childSessionKey: historical.childSessionKey,
+            ownerKey: historical.ownerKey,
+            scopeKind: historical.scopeKind,
+            requesterSessionKey: historical.requesterSessionKey,
+            task: historical.task,
+            detail: { generation: "next" },
+            notifyPolicy: "silent",
+            deliveryStatus: "not_applicable",
+          });
+          await entered.promise;
+          // Discovering a session backing or waiting for all writes still needs the broad scope.
+          expect(prepared?.isChildSessionCurrent(historical.childSessionKey!)).toBe(false);
+          expect(prepared?.isTaskSettled(historical.taskId)).toBe(false);
+          releaseRead.resolve();
+          const respond = await reading;
+          if (change === "another run") {
+            expect(respond.mock.calls).toMatchObject([
+              [true, { tasks: [{ id: historical.taskId }] }],
+            ]);
+          } else {
+            expect(respond.mock.calls).toMatchObject([[false, undefined, { code: "UNAVAILABLE" }]]);
+          }
+        } finally {
+          releaseRead.resolve();
+          releaseCreation.resolve();
+          await Promise.allSettled([reading, creation]);
+        }
+      });
+    },
+  );
+
   it("retries a changed page without joining events accepted after its first read", async () => {
     await withReadState(async () => {
       const task = createReadTask("read-before-page-retry");
@@ -299,7 +388,7 @@ describe("registered task list read fence", () => {
       });
       const entered = createDeferred();
       const release = createDeferred();
-      const store = getTaskRegistryStore();
+      const store = await prepareTaskFixtureRead(task);
       const mutate = store.runAgentEventMutationAsync.bind(store);
       vi.spyOn(store, "runAgentEventMutationAsync").mockImplementation(async (...args) => {
         if (args[1].taskId === later.taskId) {

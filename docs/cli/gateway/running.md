@@ -62,7 +62,7 @@ openclaw gateway run   # equivalent, explicit form
   Create a dev config + workspace if missing (skips `BOOTSTRAP.md`).
 </ParamField>
 <ParamField path="--ambient-channels" type="boolean">
-  Allow the Gateway to auto-configure channels from ambient environment variables. By default, channels require an explicit `channels.<id>` config block.
+  Allow the Gateway to auto-configure channels from ambient environment variables for this process, including config reloads. By default, foreground, dev, and service Gateways require explicit `channels.<id>` configuration, such as `channels.discord.enabled=true`. Configured channels can still read credentials from environment variables. For managed services, add the channel config block; this flag is not persisted by service installation.
 </ParamField>
 <ParamField path="--dev-ambient-channels" type="boolean">
   Deprecated alias for `--ambient-channels`.

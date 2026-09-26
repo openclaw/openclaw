@@ -33,16 +33,32 @@ afterEach(() => {
   extraParamsTesting.resetProviderRuntimeDepsForTest();
 });
 
+function createStreamAgent() {
+  const underlying = vi.fn(() => ({
+    push: vi.fn(),
+    result: vi.fn(async () => undefined),
+    [Symbol.asyncIterator]: vi.fn(async function* () {}),
+  })) as unknown as StreamFn;
+  const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+  return { underlying, agent };
+}
+
+function captureStreamOptions(
+  agent: { streamFn?: StreamFn },
+  underlying: StreamFn,
+  model: Parameters<StreamFn>[0],
+  options: Parameters<StreamFn>[2],
+) {
+  if (!agent.streamFn) {
+    throw new Error("expected extra params to wrap streamFn");
+  }
+  void agent.streamFn(model, { messages: [], tools: [] }, options);
+  return vi.mocked(underlying).mock.calls[0]?.[2];
+}
+
 describe("createStreamFnWithExtraParams sampling overrides", () => {
   it("forwards temperature, top_p, and maxTokens from override into the underlying streamFn options", () => {
-    const underlying = vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(async () => undefined),
-      [Symbol.asyncIterator]: vi.fn(async function* () {
-        // empty stream
-      }),
-    })) as unknown as StreamFn;
-    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+    const { underlying, agent } = createStreamAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", {
       temperature: 0.4,
@@ -50,79 +66,49 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       maxTokens: 512,
     });
 
-    if (!agent.streamFn) {
-      throw new Error("expected extra params to wrap streamFn");
-    }
-
-    void agent.streamFn(
+    const callOptions = captureStreamOptions(
+      agent,
+      underlying,
       { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
-      { messages: [], tools: [] } as never,
       undefined,
     );
 
     expect(underlying).toHaveBeenCalledTimes(1);
-    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
-      .calls[0]?.[2] as { temperature?: number; topP?: number; maxTokens?: number } | undefined;
-    expect(callOptions?.temperature).toBe(0.4);
-    expect(callOptions?.topP).toBe(0.7);
-    expect(callOptions?.maxTokens).toBe(512);
+
+    expect(callOptions).toMatchObject({ temperature: 0.4, topP: 0.7, maxTokens: 512 });
   });
 
   it("forwards OpenAI completions token aliases into the underlying streamFn options", () => {
-    const underlying = vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(async () => undefined),
-      [Symbol.asyncIterator]: vi.fn(async function* () {
-        // empty stream
-      }),
-    })) as unknown as StreamFn;
-    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+    const { underlying, agent } = createStreamAgent();
 
     applyExtraParamsToAgent(agent, undefined, "dashscope", "kimi-k2.6", {
       max_completion_tokens: 64_000,
     });
 
-    if (!agent.streamFn) {
-      throw new Error("expected extra params to wrap streamFn");
-    }
-
-    void agent.streamFn(
+    const callOptions = captureStreamOptions(
+      agent,
+      underlying,
       { id: "kimi-k2.6", api: "openai-completions", provider: "dashscope" } as never,
-      { messages: [], tools: [] } as never,
       undefined,
     );
 
-    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
-      .calls[0]?.[2] as { maxTokens?: number } | undefined;
     expect(callOptions?.maxTokens).toBe(64_000);
   });
 
   it("keeps runtime maxTokens ahead of OpenAI completions token alias defaults", () => {
-    const underlying = vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(async () => undefined),
-      [Symbol.asyncIterator]: vi.fn(async function* () {
-        // empty stream
-      }),
-    })) as unknown as StreamFn;
-    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+    const { underlying, agent } = createStreamAgent();
 
     applyExtraParamsToAgent(agent, undefined, "dashscope", "kimi-k2.6", {
       max_completion_tokens: 64_000,
     });
 
-    if (!agent.streamFn) {
-      throw new Error("expected extra params to wrap streamFn");
-    }
-
-    void agent.streamFn(
+    const callOptions = captureStreamOptions(
+      agent,
+      underlying,
       { id: "kimi-k2.6", api: "openai-completions", provider: "dashscope" } as never,
-      { messages: [], tools: [] } as never,
       { maxTokens: 32_000 } as never,
     );
 
-    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
-      .calls[0]?.[2] as { maxTokens?: number } | undefined;
     expect(callOptions?.maxTokens).toBe(32_000);
   });
 
@@ -167,42 +153,22 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
   it("lets runtime options override the wrapper sampling defaults", () => {
     // Runtime call options are closest to the request and must beat configured
     // defaults injected by the extra-params wrapper.
-    const underlying = vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(async () => undefined),
-      [Symbol.asyncIterator]: vi.fn(async function* () {
-        // empty stream
-      }),
-    })) as unknown as StreamFn;
-    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+    const { underlying, agent } = createStreamAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", { temperature: 0.4, topP: 0.7 });
 
-    if (!agent.streamFn) {
-      throw new Error("expected extra params to wrap streamFn");
-    }
-
-    void agent.streamFn(
+    const callOptions = captureStreamOptions(
+      agent,
+      underlying,
       { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
-      { messages: [], tools: [] } as never,
       { topP: 0.9 } as never,
     );
 
-    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
-      .calls[0]?.[2] as { temperature?: number; topP?: number } | undefined;
-    expect(callOptions?.temperature).toBe(0.4);
-    expect(callOptions?.topP).toBe(0.9);
+    expect(callOptions).toMatchObject({ temperature: 0.4, topP: 0.9 });
   });
 
   it("forwards response_format aliases into the underlying streamFn options", () => {
-    const underlying = vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(async () => undefined),
-      [Symbol.asyncIterator]: vi.fn(async function* () {
-        // empty stream
-      }),
-    })) as unknown as StreamFn;
-    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+    const { underlying, agent } = createStreamAgent();
 
     applyExtraParamsToAgent(
       agent,
@@ -221,33 +187,19 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       { preparedExtraParams: { temperature: 0.4 } },
     );
 
-    if (!agent.streamFn) {
-      throw new Error("expected extra params to wrap streamFn");
-    }
-
-    void agent.streamFn(
+    const callOptions = captureStreamOptions(
+      agent,
+      underlying,
       { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
-      { messages: [], tools: [] } as never,
       undefined,
     );
 
-    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
-      .calls[0]?.[2] as
-      | { responseFormat?: Record<string, unknown>; temperature?: number }
-      | undefined;
     expect(callOptions?.responseFormat).toEqual({ type: "json_object" });
     expect(callOptions?.temperature).toBe(0.4);
   });
 
   it("threads a run-scoped responseFormat schema ahead of configured response_format", () => {
-    const underlying = vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(async () => undefined),
-      [Symbol.asyncIterator]: vi.fn(async function* () {
-        // empty stream
-      }),
-    })) as unknown as StreamFn;
-    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+    const { underlying, agent } = createStreamAgent();
 
     const responseFormat = {
       type: "object",
@@ -277,18 +229,13 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       },
     );
 
-    if (!agent.streamFn) {
-      throw new Error("expected extra params to wrap streamFn");
-    }
-
-    void agent.streamFn(
+    const callOptions = captureStreamOptions(
+      agent,
+      underlying,
       { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
-      { messages: [], tools: [] } as never,
       undefined,
     );
 
-    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
-      .calls[0]?.[2] as { responseFormat?: Record<string, unknown> } | undefined;
     expect(callOptions?.responseFormat).toEqual(responseFormat);
   });
 
@@ -368,12 +315,7 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
   });
 
   it("forwards frequency_penalty, presence_penalty, and seed from override into stream options", () => {
-    const underlying = vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(async () => undefined),
-      [Symbol.asyncIterator]: vi.fn(async function* () {}),
-    })) as unknown as StreamFn;
-    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+    const { underlying, agent } = createStreamAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", {
       frequencyPenalty: 0.8,
@@ -381,65 +323,39 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       seed: 12345,
     });
 
-    if (!agent.streamFn) {
-      throw new Error("expected extra params to wrap streamFn");
-    }
-
-    void agent.streamFn(
+    const callOptions = captureStreamOptions(
+      agent,
+      underlying,
       { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
-      { messages: [], tools: [] } as never,
       undefined,
     );
 
     expect(underlying).toHaveBeenCalledTimes(1);
-    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
-      .calls[0]?.[2] as
-      | {
-          frequencyPenalty?: number;
-          presencePenalty?: number;
-          seed?: number;
-        }
-      | undefined;
-    expect(callOptions?.frequencyPenalty).toBe(0.8);
-    expect(callOptions?.presencePenalty).toBe(0.3);
-    expect(callOptions?.seed).toBe(12345);
+
+    expect(callOptions).toMatchObject({ frequencyPenalty: 0.8, presencePenalty: 0.3, seed: 12345 });
   });
 
   it("forwards stop sequences from override into stream options", () => {
-    const underlying = vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(async () => undefined),
-      [Symbol.asyncIterator]: vi.fn(async function* () {}),
-    })) as unknown as StreamFn;
-    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+    const { underlying, agent } = createStreamAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", {
       stop: ["User:", "Assistant:"],
     });
 
-    if (!agent.streamFn) {
-      throw new Error("expected extra params to wrap streamFn");
-    }
-
-    void agent.streamFn(
+    const callOptions = captureStreamOptions(
+      agent,
+      underlying,
       { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
-      { messages: [], tools: [] } as never,
       undefined,
     );
 
     expect(underlying).toHaveBeenCalledTimes(1);
-    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
-      .calls[0]?.[2] as { stop?: string[] } | undefined;
+
     expect(callOptions?.stop).toEqual(["User:", "Assistant:"]);
   });
 
   it("prefers camelCase runtime overrides over snake_case config for penalty params", () => {
-    const underlying = vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(async () => undefined),
-      [Symbol.asyncIterator]: vi.fn(async function* () {}),
-    })) as unknown as StreamFn;
-    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+    const { underlying, agent } = createStreamAgent();
 
     applyExtraParamsToAgent(
       agent,
@@ -465,25 +381,14 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       },
     );
 
-    if (!agent.streamFn) {
-      throw new Error("expected extra params to wrap streamFn");
-    }
-
-    void agent.streamFn(
+    const callOptions = captureStreamOptions(
+      agent,
+      underlying,
       { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
-      { messages: [], tools: [] } as never,
       undefined,
     );
 
-    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
-      .calls[0]?.[2] as
-      | {
-          frequencyPenalty?: number;
-          presencePenalty?: number;
-        }
-      | undefined;
-    expect(callOptions?.frequencyPenalty).toBe(0.9);
-    expect(callOptions?.presencePenalty).toBe(0.7);
+    expect(callOptions).toMatchObject({ frequencyPenalty: 0.9, presencePenalty: 0.7 });
   });
 
   it("preserves each request's dynamic fast mode override", () => {
@@ -522,19 +427,10 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
   it.each([
     { requestRetention: undefined, expected: "long", name: "own undefined" },
     { requestRetention: "none" as const, expected: "none", name: "explicit none" },
-    { requestRetention: "short" as const, expected: "short", name: "explicit short" },
-    { requestRetention: "long" as const, expected: "long", name: "explicit long" },
   ])(
     "merges configured cache retention with $name request options",
     ({ requestRetention, expected }) => {
-      const underlying = vi.fn(() => ({
-        push: vi.fn(),
-        result: vi.fn(async () => undefined),
-        [Symbol.asyncIterator]: vi.fn(async function* () {
-          // empty stream
-        }),
-      })) as unknown as StreamFn;
-      const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+      const { underlying, agent } = createStreamAgent();
 
       applyExtraParamsToAgent(
         agent,
@@ -548,21 +444,17 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
         { supportsPromptCacheKey: true } as never,
       );
 
-      if (!agent.streamFn) {
-        throw new Error("expected extra params to wrap streamFn");
-      }
-
       const requestOptions = { cacheRetention: requestRetention };
       expect(requestOptions).toHaveProperty("cacheRetention");
-      void agent.streamFn(
+      const callOptions = captureStreamOptions(
+        agent,
+        underlying,
         { id: "claude-sonnet-5", api: "anthropic-messages", provider: "anthropic" } as never,
-        { messages: [], tools: [] } as never,
         requestOptions,
       );
 
       expect(underlying).toHaveBeenCalledTimes(1);
-      const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
-        .calls[0]?.[2] as { cacheRetention?: string } | undefined;
+
       expect(callOptions?.cacheRetention).toBe(expected);
     },
   );

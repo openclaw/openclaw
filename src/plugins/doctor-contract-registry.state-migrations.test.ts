@@ -33,6 +33,10 @@ let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
   | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
   | undefined;
 
+function mockDoctorPlugins(...plugins: Record<string, unknown>[]): void {
+  mocks.loadPluginManifestRegistry.mockReturnValue({ plugins, diagnostics: [] });
+}
+
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-doctor-contract-state-migrations", tempDirs);
 }
@@ -112,27 +116,24 @@ describe("doctor-contract-registry state migrations", () => {
   }],
 };\n`,
     );
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "dynamic-owner",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-        {
-          id: "declared-owner",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: [{ id: "declared-action" }] },
-        },
-      ],
-      diagnostics: [],
-    });
+    mockDoctorPlugins(
+      {
+        id: "dynamic-owner",
+        origin: "bundled",
+        rootDir: pluginRoot,
+        channels: [],
+        providers: [],
+        doctorContract: { stateMigrations: true },
+      },
+      {
+        id: "declared-owner",
+        origin: "bundled",
+        rootDir: pluginRoot,
+        channels: [],
+        providers: [],
+        doctorContract: { stateMigrations: [{ id: "declared-action" }] },
+      },
+    );
 
     expect(
       resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} }).descriptors,
@@ -407,18 +408,13 @@ describe("doctor-contract-registry state migrations", () => {
         },
       ],
     }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin: "global",
-          rootDir: pluginRoot,
-          channels: ["alpha", "alpha-alias"],
-          providers: [],
-          doctorContract: { configRepair: true, stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
+    mockDoctorPlugins({
+      id: "alpha",
+      origin: "global",
+      rootDir: pluginRoot,
+      channels: ["alpha", "alpha-alias"],
+      providers: [],
+      doctorContract: { configRepair: true, stateMigrations: true },
     });
 
     expect(listPluginDoctorStateMigrationEntries({ config, env: {} })).toEqual([]);
@@ -514,18 +510,13 @@ describe("doctor-contract-registry state migrations", () => {
         },
       ],
     }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin: "workspace",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
+    mockDoctorPlugins({
+      id: "alpha",
+      origin: "workspace",
+      rootDir: pluginRoot,
+      channels: [],
+      providers: [],
+      doctorContract: { stateMigrations: true },
     });
 
     expect(
@@ -546,18 +537,13 @@ describe("doctor-contract-registry state migrations", () => {
 }] };\n`,
       "utf8",
     );
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: ["alpha", "alpha-alias"],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
+    mockDoctorPlugins({
+      id: "alpha",
+      origin: "bundled",
+      rootDir: pluginRoot,
+      channels: ["alpha", "alpha-alias"],
+      providers: [],
+      doctorContract: { stateMigrations: true },
     });
 
     expect(
@@ -661,18 +647,13 @@ describe("doctor-contract-registry state migrations", () => {
 }] };\n`,
       "utf8",
     );
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "memory-state",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
+    mockDoctorPlugins({
+      id: "memory-state",
+      origin: "bundled",
+      rootDir: pluginRoot,
+      channels: [],
+      providers: [],
+      doctorContract: { stateMigrations: true },
     });
 
     expect(

@@ -18,7 +18,7 @@ import {
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
-import { createTelegramIngressResolver, createTelegramIngressSubject } from "./ingress.js";
+import { createTelegramIngressResolver } from "./ingress.js";
 import * as telegramRequestTimeouts from "./request-timeouts.js";
 import { setTelegramRuntime } from "./runtime.js";
 
@@ -28,7 +28,8 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
   let apiRoot: string;
   let getChatRequests = 0;
   let closedSocketCount = 0;
-  let resolveGetChatHeaders: (() => void) | undefined;
+  let resolveResponseHeaders: (() => void) | undefined;
+  let resolveSocketClosed: (() => void) | undefined;
 
   beforeAll(async () => {
     setTelegramRuntime(createPluginRuntimeMock());
@@ -41,13 +42,13 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       getChatRequests += 1;
       response.writeHead(200, { "content-type": "application/json" });
       response.write('{"ok":true,"result":{"id":-100364');
-      resolveGetChatHeaders?.();
     });
     server.on("connection", (socket) => {
       liveSockets.add(socket);
       socket.once("close", () => {
         liveSockets.delete(socket);
         closedSocketCount += 1;
+        resolveSocketClosed?.();
       });
     });
     await new Promise<void>((resolve) => {
@@ -57,6 +58,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
   });
 
   afterAll(async () => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     for (const socket of liveSockets) {
       socket.destroy();
@@ -67,6 +69,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
   });
 
   it("dispatches DMs immediately and the supergroup after cancelling its stalled socket", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const canonicalRequestTimeout = telegramRequestTimeouts.resolveTelegramRequestTimeoutMs;
     vi.spyOn(telegramRequestTimeouts, "resolveTelegramRequestTimeoutMs").mockImplementation(
       (method, configuredTimeoutSeconds) =>
@@ -79,10 +82,15 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     if (!clientFetch) {
       throw new Error("expected production Telegram client fetch wrapper");
     }
+    const observeClientFetch: typeof clientFetch = async (input, init) => {
+      const response = await clientFetch(input, init);
+      resolveResponseHeaders?.();
+      return response;
+    };
     const botInfo = telegramBotInfoForTest;
     const bot = new Bot("123456:integration-token", {
       botInfo,
-      client: { apiRoot, fetch: asTelegramClientFetch(clientFetch) },
+      client: { apiRoot, fetch: asTelegramClientFetch(observeClientFetch) },
     });
     const dispatched = vi.fn<TelegramMessagePipeline["processMessageWithReplyChain"]>(async () => ({
       kind: "completed",
@@ -119,7 +127,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
         allowed: true as const,
         resolveChannelIngress: async (contextBinding) =>
           await resolver.message({
-            subject: createTelegramIngressSubject(inbound.senderId),
+            subject: { stableId: inbound.senderId },
             conversation: {
               kind: inbound.isGroup ? "group" : "direct",
               id: String(inbound.chatId),
@@ -148,16 +156,9 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     };
     const message: TelegramMessagePipeline = {
       ...createTelegramMessagePipeline(params),
-      normalizePromptContextMinTimestampMs: () => undefined,
-      promptContextBoundaryOptions: () => ({}),
       releaseDispatchDedupeClaims: () => undefined,
       claimMessageDispatchDedupe: async () => ({ process: true, claims: [] }),
-      buildSyntheticContext: (context, syntheticMessage) => ({
-        message: syntheticMessage,
-        me: context.me,
-        getFile: context.getFile.bind(context),
-      }),
-      resolveTelegramSessionState: () => ({
+      resolveTelegramSessionState: async () => ({
         agentId: "integration",
         sessionEntry: undefined,
         sessionKey: "integration",
@@ -176,7 +177,10 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     registerTelegramInboundHandlers({ bot, pipeline });
 
     const headersReceived = new Promise<void>((resolve) => {
-      resolveGetChatHeaders = resolve;
+      resolveResponseHeaders = resolve;
+    });
+    const socketClosed = new Promise<void>((resolve) => {
+      resolveSocketClosed = resolve;
     });
     const groupDelivery = bot.handleUpdate({
       update_id: 1,
@@ -189,7 +193,14 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       },
     });
     void groupDelivery.catch(() => undefined);
-    await headersReceived;
+    // The client must receive headers before the deadline advances: the regression
+    // cleared the deadline after fetch resolved, leaving body consumption unbounded.
+    await Promise.race([
+      headersReceived,
+      groupDelivery.then(() => {
+        throw new Error("group delivery settled before the metadata response headers");
+      }),
+    ]);
 
     await bot.handleUpdate({
       update_id: 2,
@@ -209,14 +220,15 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       isForum: false,
     });
 
-    const groupResult = await Promise.race([
+    const groupResult = Promise.race([
       groupDelivery.then(() => "dispatched" as const),
       new Promise<"stalled">((resolve) => {
         setTimeout(() => resolve("stalled"), 1_000);
       }),
     ]);
 
-    expect(groupResult).toBe("dispatched");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await groupResult).toBe("dispatched");
     expect(dispatched).toHaveBeenCalledTimes(2);
     expect(dispatched.mock.calls[1]?.[0].msg.chat.id).toBe(-100364);
     expect(authorizeInboundMessage.mock.calls[1]?.[0]).toMatchObject({
@@ -225,6 +237,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       isForum: false,
     });
     expect(getChatRequests).toBe(1);
-    await vi.waitFor(() => expect(closedSocketCount).toBeGreaterThan(0));
+    await socketClosed;
+    expect(closedSocketCount).toBeGreaterThan(0);
   });
 });

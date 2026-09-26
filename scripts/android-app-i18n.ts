@@ -346,7 +346,7 @@ async function readAndroidResourceReferences(
   for (const entry of entries) {
     const fullPath = path.join(root, entry.name);
     if (entry.isDirectory()) {
-      // This walk is confined to app/src/main, so Gradle build output is never eligible.
+      // Source-set roots exclude Gradle build output.
       sources.push(...(await readAndroidResourceReferences(fullPath)));
       continue;
     }
@@ -1137,17 +1137,18 @@ function renderStringsXml(
     for (const [key, entry] of [...generated].toSorted(([left], [right]) =>
       compareText(left, right),
     )) {
-      const formatted =
-        (readKotlinInterpolations(entry.source)?.length ?? 0) > 0 ? "" : ' formatted="false"';
-      // Translation-memory text intentionally preserves technical tokens and source punctuation,
-      // so Android's English dictionary and typography suggestions do not apply to managed keys.
-      lines.push(
-        `    <string name="${key}"${withGeneratedTranslationLintIgnores(formatted)}>"${renderAndroidResourceValue(entry.source, entry.value)}"</string>`,
-      );
+      lines.push(renderGeneratedString(key, entry));
     }
   }
   lines.push("</resources>", "");
   return lines.join("\n");
+}
+
+function renderGeneratedString(key: string, entry: { source: string; value: string }): string {
+  const formatted =
+    (readKotlinInterpolations(entry.source)?.length ?? 0) > 0 ? "" : ' formatted="false"';
+  // Translation-memory text preserves technical tokens and source punctuation.
+  return `    <string name="${key}"${withGeneratedTranslationLintIgnores(formatted)}>"${renderAndroidResourceValue(entry.source, entry.value)}"</string>`;
 }
 
 function renderAssistantXml(items: readonly string[]): string {
@@ -1381,11 +1382,103 @@ function onlyManagedRowsPending(current: string, expected: string): boolean {
   return true;
 }
 
+function obsoleteGeneratedSources(
+  currentKotlin: string,
+  catalog: GeneratedCatalog,
+): Map<string, string> {
+  const obsolete = new Map<string, string>();
+  const suffix = "  )\n";
+  const prefix = renderKotlin(new Map()).slice(0, -suffix.length);
+  if (!currentKotlin.startsWith(prefix) || !currentKotlin.endsWith(suffix)) {
+    return obsolete;
+  }
+  const remaining = currentKotlin
+    .slice(prefix.length, -suffix.length)
+    .replace(
+      /^ {4}"((?:\\.|[^"\\])*)" to R\.string\.(native_[a-f0-9]{16}),\n/gmu,
+      (line, literal: string, key: string) => {
+        const source = decodeKotlinLiteral(literal);
+        if (
+          catalog.sources.has(source) ||
+          literal !== escapeKotlin(source) ||
+          key !== resourceKey(source) ||
+          readKotlinInterpolations(source)?.length !== 0 ||
+          obsolete.has(key)
+        ) {
+          return line;
+        }
+        obsolete.set(key, source);
+        return "";
+      },
+    );
+  return `${prefix}${remaining}${suffix}` === catalog.kotlin ? obsolete : new Map();
+}
+
+function removeObsoleteGeneratedStrings(
+  current: string,
+  expected: string,
+  obsolete: ReadonlyMap<string, string>,
+): string {
+  const header = `${GENERATED_HEADER}\n`;
+  const headerIndex = expected.indexOf(header);
+  const prefix = expected.slice(0, headerIndex + header.length);
+  const suffix = "</resources>\n";
+  if (headerIndex < 0 || !current.startsWith(prefix) || !current.endsWith(suffix)) {
+    return current;
+  }
+  const seen = new Set<string>();
+  const remaining = current
+    .slice(prefix.length, -suffix.length)
+    .replace(/^ {4}<string name="native_[a-f0-9]{16}"[^\n]*<\/string>\n/gmu, (line) => {
+      const entry = parseStrings(line)[0];
+      const source = entry && obsolete.get(entry.key);
+      if (!entry || source === undefined || seen.has(entry.key)) {
+        return line;
+      }
+      seen.add(entry.key);
+      const value = decodeAndroidResourceValue(entry.rawValue);
+      return value.trim() && `${renderGeneratedString(entry.key, { source, value })}\n` === line
+        ? ""
+        : line;
+    });
+  return `${prefix}${remaining}${suffix}`;
+}
+
 export async function syncAndroidAppI18n(
-  options: { check?: boolean; tolerateManagedPending?: boolean } = {},
+  options: {
+    check?: boolean;
+    tolerateManagedPending?: boolean;
+    reportObsolete?: (message: string) => void;
+  } = {},
 ) {
   const catalog = await buildAndroidAppI18nCatalog();
+  const currentKotlin = await readFile(GENERATED_KOTLIN_PATH, "utf8").catch(() => "");
+  const obsolete =
+    options.check && options.reportObsolete
+      ? obsoleteGeneratedSources(currentKotlin, catalog)
+      : new Map<string, string>();
+  if (obsolete.size > 0) {
+    const references = (
+      await Promise.all([
+        readAndroidResourceReferences(),
+        readAndroidResourceReferences(path.dirname(ANDROID_PLAY_SOURCE_ROOT)),
+        readAndroidResourceReferences(ANDROID_THIRD_PARTY_ROOT),
+      ])
+    )
+      .flat()
+      .filter((entry) => path.resolve(ROOT, entry.path) !== GENERATED_KOTLIN_PATH);
+    const unused = new Set(findUnusedAndroidResourceKeys(obsolete.keys(), references));
+    const base = await readStrings("values");
+    for (const key of obsolete.keys()) {
+      // Stale lookup rows must still compile, and direct resource callers stay blocking.
+      if (!unused.has(key) || !base.has(key)) {
+        obsolete.clear();
+        break;
+      }
+    }
+  }
   const drift: string[] = [];
+  const obsoleteFiles: string[] = [];
   let sawUnmanagedDrift = false;
   for (const [filePath, expected] of catalog.resources) {
     const current = await readFile(filePath, "utf8").catch(() => "");
@@ -1393,6 +1486,15 @@ export async function syncAndroidAppI18n(
       continue;
     }
     const relativeFilePath = path.relative(ROOT, filePath).split(path.sep).join("/");
+    if (
+      obsolete.size > 0 &&
+      filePath.startsWith(`${RESOURCE_ROOT}${path.sep}`) &&
+      filePath.endsWith(`${path.sep}strings.xml`) &&
+      removeObsoleteGeneratedStrings(current, expected, obsolete) === expected
+    ) {
+      obsoleteFiles.push(relativeFilePath);
+      continue;
+    }
     if (
       options.check &&
       options.tolerateManagedPending &&
@@ -1409,11 +1511,12 @@ export async function syncAndroidAppI18n(
       await writeFile(filePath, expected);
     }
   }
-  const currentKotlin = await readFile(GENERATED_KOTLIN_PATH, "utf8").catch(() => "");
   if (currentKotlin !== catalog.kotlin) {
     // The Kotlin map derives 1:1 from the same managed catalog: tolerate it
     // exactly when every resource delta above was managed-pending.
-    if (!(options.check && options.tolerateManagedPending && !sawUnmanagedDrift)) {
+    if (obsolete.size > 0) {
+      obsoleteFiles.push(path.relative(ROOT, GENERATED_KOTLIN_PATH).split(path.sep).join("/"));
+    } else if (!(options.check && options.tolerateManagedPending && !sawUnmanagedDrift)) {
       drift.push(path.relative(ROOT, GENERATED_KOTLIN_PATH).split(path.sep).join("/"));
       if (!options.check) {
         await writeFile(GENERATED_KOTLIN_PATH, catalog.kotlin);
@@ -1422,6 +1525,11 @@ export async function syncAndroidAppI18n(
   }
   if (options.check && drift.length > 0) {
     throw new Error(`Android generated localization drift:\n${drift.join("\n")}`);
+  }
+  if (obsoleteFiles.length > 0) {
+    options.reportObsolete?.(
+      `Android obsolete generated localization rows: ${obsoleteFiles.join(", ")}`,
+    );
   }
   if (catalog.contradictions.length > 0) {
     const limit = 20;
@@ -1496,7 +1604,9 @@ export async function verifyAndroidAppI18n() {
   );
 }
 
-export async function checkAndroidAppI18n(options: { tolerateManagedPending?: boolean } = {}) {
+export async function checkAndroidAppI18n(
+  options: { tolerateManagedPending?: boolean; reportObsolete?: (message: string) => void } = {},
+) {
   await verifyAndroidAppI18n();
   await syncAndroidAppI18n({ check: true, ...options });
   const localeStrings = await Promise.all(LOCALES.map((locale) => readStrings(locale)));

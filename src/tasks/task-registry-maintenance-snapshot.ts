@@ -2,14 +2,18 @@ import {
   collectCronHistoryOverflowTaskIds,
   shouldPruneTerminalTask,
 } from "./cron-history-retention.js";
-import type { TaskRegistryRead } from "./task-registry-read.js";
+import { isTaskRegistryTaskSettled, type TaskRegistryRead } from "./task-registry-read.js";
 import { cloneTaskRecord, compareTasksNewestFirst } from "./task-registry-records.js";
+import {
+  captureTaskRetentionSelection,
+  type TaskRetentionSelection,
+} from "./task-registry-retention.operation.js";
 import { tasks } from "./task-registry-state.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
 export type TaskRegistryMaintenanceRead = Pick<
   TaskRegistryRead,
-  "assertOwnerCurrent" | "assertCurrent" | "isTaskSettled"
+  "assertOwnerCurrent" | "assertCurrent"
 >;
 
 export const TASK_MAINTENANCE_BATCH_SIZE = 25;
@@ -21,29 +25,35 @@ export type TaskRegistryMaintenanceReader = {
 };
 
 // Raw records stay inside this synchronous snapshot. Maintenance carries only
-// IDs and retention decisions across awaits, then rereads and clones each task.
+// IDs and compact retention selections across awaits, then rereads and clones each task.
 export function getTaskRegistryMaintenanceSnapshot(read: TaskRegistryMaintenanceRead): {
   taskIds: readonly string[];
-  cronHistoryOverflowTaskIds: ReadonlySet<string>;
+  cronHistoryOverflowSelections: ReadonlyMap<string, TaskRetentionSelection>;
 } {
   read.assertCurrent();
-  const ordered = [...tasks.values()]
-    .map((task, insertionIndex) => ({ task, createdAt: task.createdAt, insertionIndex }))
-    .toSorted(compareTasksNewestFirst)
-    .map(({ task }) => task);
+  // Stable sorting keeps later insertions first when creation timestamps match.
+  const ordered = [...tasks.values()].toReversed().toSorted(compareTasksNewestFirst);
+  const overflowIds = collectCronHistoryOverflowTaskIds(ordered);
+  const taskIds: string[] = [];
+  const cronHistoryOverflowSelections = new Map<string, TaskRetentionSelection>();
+  for (const task of ordered) {
+    taskIds.push(task.taskId);
+    if (overflowIds.has(task.taskId)) {
+      cronHistoryOverflowSelections.set(task.taskId, captureTaskRetentionSelection(task, true));
+    }
+  }
   return {
-    taskIds: ordered.map((task) => task.taskId),
-    cronHistoryOverflowTaskIds: collectCronHistoryOverflowTaskIds(ordered),
+    taskIds,
+    cronHistoryOverflowSelections,
   };
 }
 
 export function getTaskRegistryMaintenanceTask(
-  read: TaskRegistryMaintenanceRead,
   taskId: string,
   now: number,
-  cronHistoryOverflowTaskIds: ReadonlySet<string>,
+  cronHistoryOverflowSelections: ReadonlyMap<string, TaskRetentionSelection>,
 ): TaskRecord | undefined | "needs-preparation" {
-  if (!read.isTaskSettled(taskId)) {
+  if (!isTaskRegistryTaskSettled(taskId)) {
     return "needs-preparation";
   }
   const task = tasks.get(taskId);
@@ -53,7 +63,7 @@ export function getTaskRegistryMaintenanceTask(
       task.runtime !== "acp" &&
       !(task.runtime === "cron" && task.status === "lost") &&
       typeof task.cleanupAfter === "number" &&
-      !shouldPruneTerminalTask(task, now, cronHistoryOverflowTaskIds))
+      !shouldPruneTerminalTask(task, now, cronHistoryOverflowSelections))
   ) {
     return undefined;
   }
@@ -65,7 +75,7 @@ export async function visitTaskRegistryMaintenanceTasks(
   visit: (
     task: TaskRecord,
     now: number,
-    cronHistoryOverflowTaskIds: ReadonlySet<string>,
+    cronHistoryOverflowSelections: ReadonlyMap<string, TaskRetentionSelection>,
     assertOwnerCurrent: () => void,
   ) => Promise<void>,
   prepareBatch?: (tasks: readonly TaskRecord[], now: number) => Promise<void>,
@@ -81,7 +91,8 @@ export async function visitTaskRegistryMaintenanceTasks(
   };
   let read = await prepareRead();
   const now = Date.now();
-  const { taskIds, cronHistoryOverflowTaskIds } = source.getTaskRegistryMaintenanceSnapshot(read);
+  const { taskIds, cronHistoryOverflowSelections } =
+    source.getTaskRegistryMaintenanceSnapshot(read);
   let needsPreparation = false;
   let deferred = 0;
   for (const [index, taskId] of taskIds.entries()) {
@@ -93,35 +104,28 @@ export async function visitTaskRegistryMaintenanceTasks(
     }
     if (needsPreparation) {
       read = await prepareRead(read);
+      // Revalidate after resuming; selection stays synchronous until the next await.
+      read.assertCurrent();
       needsPreparation = false;
     }
     if (prepareBatch && index % TASK_MAINTENANCE_BATCH_SIZE === 0) {
       const candidates = taskIds.slice(index, index + TASK_MAINTENANCE_BATCH_SIZE).flatMap((id) => {
-        const task = source.getTaskRegistryMaintenanceTask(
-          read,
-          id,
-          now,
-          cronHistoryOverflowTaskIds,
-        );
+        const task = source.getTaskRegistryMaintenanceTask(id, now, cronHistoryOverflowSelections);
         return task && task !== "needs-preparation" ? [task] : [];
       });
       await prepareBatch(candidates, now);
       read = await prepareRead(read);
+      read.assertCurrent();
     }
     let selected = source.getTaskRegistryMaintenanceTask(
-      read,
       taskId,
       now,
-      cronHistoryOverflowTaskIds,
+      cronHistoryOverflowSelections,
     );
     if (selected === "needs-preparation") {
       read = await prepareRead(read);
-      selected = source.getTaskRegistryMaintenanceTask(
-        read,
-        taskId,
-        now,
-        cronHistoryOverflowTaskIds,
-      );
+      read.assertCurrent();
+      selected = source.getTaskRegistryMaintenanceTask(taskId, now, cronHistoryOverflowSelections);
       if (selected === "needs-preparation") {
         deferred += 1;
         continue;
@@ -129,7 +133,7 @@ export async function visitTaskRegistryMaintenanceTasks(
     }
     if (selected) {
       // Consume the cloned candidate before yielding; effects retain their own mutation guards.
-      await visit(selected, now, cronHistoryOverflowTaskIds, read.assertOwnerCurrent);
+      await visit(selected, now, cronHistoryOverflowSelections, read.assertOwnerCurrent);
       read.assertOwnerCurrent();
       needsPreparation = true;
     }

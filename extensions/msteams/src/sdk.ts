@@ -1,5 +1,6 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
+import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import type { MSTeamsCloudName } from "./cloud.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
@@ -24,100 +25,14 @@ type MSTeamsRoutes = import("@microsoft/teams.apps/dist/routes/index.js").IRoute
 export type MSTeamsCardActionResponse =
   import("@microsoft/teams.api/dist/models/adaptive-card/adaptive-card-action-response.js").AdaptiveCardActionResponse;
 
-/**
- * Typed `on` registration. The route-specific overloads below are tsgo
- * workarounds — every typed SDK route is affected to some degree.
- *
- * Real tsc resolves `IRoutes["<route>"]` to the route-specific
- * `RouteHandler<X, InvokeResponse | …>` declared in the SDK (verified in
- * VS Code), but tsgo collapses `@microsoft/teams.api`'s `Activity`
- * discriminated union to `any` because its hashed declarations don't
- * resolve cleanly across deep subpaths. That turns
- * `ActivityRoutes = [K in Activity["type"]]?: RouteHandler<X>` into a
- * `[string]: RouteHandler<X, void>` index signature, and the intersection
- * in `IRoutes` then forces every route's `Out` to be `void`-compatible.
- * Routes whose declared return already includes `void` (`file.consent.*`,
- * `activity`, all the `signin.*` paths) coincidentally still typecheck;
- * routes whose declared return does not (`card.action`) blow up.
- *
- * Each overload here corresponds to a route we actually register from this
- * plugin, with the typed return the SDK expects at runtime. If we add a
- * new typed route, add a matching overload. The generic fallback at the
- * end keeps route-name validation for everything else.
- *
- * Tracking upstream — same family of tsgo discriminated-union resolution
- * bugs: https://github.com/microsoft/typescript-go/issues/1057 (Post-7.0).
- */
-/** Per-route ctx aliases. Pulled from SDK subpaths that don't go through the broken `Activity` union resolution. */
-type CardActionCtx = import("@microsoft/teams.apps/dist/contexts/index.js").IActivityContext<
-  import("@microsoft/teams.api/dist/activities/invoke/adaptive-card/action.js").IAdaptiveCardActionInvokeActivity
->;
-type FileConsentCtx = import("@microsoft/teams.apps/dist/contexts/index.js").IActivityContext<
-  import("@microsoft/teams.api/dist/activities/invoke/file-consent.js").IFileConsentInvokeActivity
->;
-type ActivityCtx = import("@microsoft/teams.apps/dist/contexts/index.js").IActivityContext;
-type SigninTokenExchangeCtx =
-  import("@microsoft/teams.apps/dist/contexts/index.js").IActivityContext<
-    import("@microsoft/teams.api/dist/activities/invoke/sign-in/token-exchange.js").ISignInTokenExchangeInvokeActivity
-  >;
-type SigninVerifyStateCtx = import("@microsoft/teams.apps/dist/contexts/index.js").IActivityContext<
-  import("@microsoft/teams.api/dist/activities/invoke/sign-in/verify-state.js").ISignInVerifyStateInvokeActivity
->;
-type MessageSubmitCtx = import("@microsoft/teams.apps/dist/contexts/index.js").IActivityContext<
-  import("@microsoft/teams.api/dist/activities/invoke/message/submit-action.js").IMessageSubmitActionInvokeActivity
->;
 type SigninEventCtx = import("@microsoft/teams.apps/dist/contexts/index.js").IActivitySignInContext;
 
-type MSTeamsAppOn = {
-  // Adaptive card actions (Action.Execute Universal Action Model). Typed
-  // return: InvokeResponse<'adaptiveCard/action'> | AdaptiveCardActionResponse.
-  (
-    name: "card.action",
-    cb: (ctx: CardActionCtx) => MSTeamsCardActionResponse | Promise<MSTeamsCardActionResponse>,
-  ): MSTeamsApp;
-  // File-consent accept/decline. Typed return is `InvokeResponse | void`,
-  // so a void-returning cb satisfies it; the overloads exist for parity
-  // with the other registered routes and so the call sites read uniformly.
-  (
-    name: "file.consent.accept" | "file.consent.decline",
-    cb: (ctx: FileConsentCtx) => void | Promise<void>,
-  ): MSTeamsApp;
-  // SSO sign-in invokes. The monitor registers guarded replacement routes and
-  // delegates back into the SDK handlers after OpenClaw sender policy passes.
-  (name: "signin.token-exchange", cb: (ctx: SigninTokenExchangeCtx) => unknown): MSTeamsApp;
-  (name: "signin.verify-state", cb: (ctx: SigninVerifyStateCtx) => unknown): MSTeamsApp;
-  // Feedback (thumbs up/down) on AI-generated messages — Teams delivers
-  // this as a `message/submitAction` invoke with `actionName === "feedback"`.
-  // Typed return is `InvokeResponse | void`, so a void-returning cb works.
-  (name: "message.submit", cb: (ctx: MessageSubmitCtx) => void | Promise<void>): MSTeamsApp;
-  // Activity catch-all. Default void return — used as our dispatch into
-  // the BotBuilder-shaped handler.
-  (name: "activity", cb: (ctx: ActivityCtx) => void | Promise<void>): MSTeamsApp;
-  // Generic fallback — any other route name validates against IRoutes.
-  <
-    Name extends Exclude<
-      keyof MSTeamsRoutes,
-      | "card.action"
-      | "file.consent.accept"
-      | "file.consent.decline"
-      | "signin.token-exchange"
-      | "signin.verify-state"
-      | "message.submit"
-      | "activity"
-    >,
-  >(
-    name: Name,
-    cb: Exclude<MSTeamsRoutes[Name], undefined>,
-  ): MSTeamsApp;
-};
+type MSTeamsAppOn = <Name extends keyof MSTeamsRoutes>(
+  name: Name,
+  cb: Exclude<MSTeamsRoutes[Name], undefined>,
+) => MSTeamsApp;
 
-/**
- * Structural interface for the Teams SDK App. Most of the surface is kept
- * loose to avoid tsgo resolution bugs with @microsoft/teams.api hashed
- * declaration files, but `on` mirrors the SDK's typed-route generic so
- * handlers (e.g. `app.on("file.consent.accept", (ctx) => …)`) get proper
- * route-name validation and ctx inference.
- */
+/** Teams SDK surface consumed by the plugin, with SDK-owned route and token contracts. */
 export type MSTeamsApp = {
   send(conversationId: string, activity: unknown): Promise<{ id?: string }>;
   /**
@@ -129,12 +44,12 @@ export type MSTeamsApp = {
   reply(conversationId: string, messageId: string, activity: unknown): Promise<{ id?: string }>;
   on: MSTeamsAppOn;
   event(name: "signin", cb: (ctx: SigninEventCtx) => void | Promise<void>): MSTeamsApp;
+  process: import("@microsoft/teams.apps").App["process"];
   initialize(): Promise<void>;
-  tokenManager: {
-    getGraphToken(): Promise<unknown>;
-    getBotToken(): Promise<unknown>;
-  };
+  tokenProvider: Pick<import("@microsoft/teams.api").ITokenProvider, "getAppToken">;
+  credentials?: Pick<import("@microsoft/teams.api").Credentials, "tenantId">;
   cloud?: {
+    botScope?: string;
     graphScope?: string;
   };
   api: {
@@ -150,14 +65,6 @@ export type MSTeamsApp = {
       };
     };
   };
-};
-
-/**
- * Token provider compatible with the existing codebase, wrapping the Teams
- * SDK App's public tokenManager.
- */
-type MSTeamsTokenProvider = {
-  getAccessToken: (scope: string) => Promise<string>;
 };
 
 type AzureAccessToken = {
@@ -182,22 +89,12 @@ const loadAzureIdentity = createLazyRuntimeModule(
   () => import(AZURE_IDENTITY_MODULE) as Promise<AzureIdentityModule>,
 );
 
-// tsgo misses these chained root-barrel types, so pair the public root runtime
-// exports with their exact published deep declarations.
 const loadSdkModules = createLazyRuntimeModule(() =>
   Promise.all([import("@microsoft/teams.apps"), import("@microsoft/teams.api")]).then(
     ([apps, api]) => ({
       App: apps.App,
-      ExpressAdapter: (
-        apps as unknown as {
-          ExpressAdapter: typeof import("@microsoft/teams.apps/dist/http/express-adapter.js").ExpressAdapter;
-        }
-      ).ExpressAdapter,
-      cloudFromName: (
-        api as unknown as {
-          cloudFromName: typeof import("@microsoft/teams.api/dist/auth/cloud-environment.js").cloudFromName;
-        }
-      ).cloudFromName,
+      ExpressAdapter: apps.ExpressAdapter,
+      cloudFromName: api.cloudFromName,
     }),
   ),
 );
@@ -381,16 +278,12 @@ function createCertificateApp(
 }
 
 /**
- * Build a token provider that uses the Teams SDK App's public tokenManager
+ * Build a token provider that uses the Teams SDK App's public token provider
  * for token acquisition.
  */
-export function createMSTeamsTokenProvider(app: MSTeamsApp): MSTeamsTokenProvider {
-  const tokenToString = (token: unknown): string => {
-    if (token == null) {
-      return "";
-    }
-    return (token as { toString(): string }).toString();
-  };
+export function createMSTeamsTokenProvider(
+  app: Pick<MSTeamsApp, "tokenProvider" | "credentials" | "cloud">,
+): MSTeamsAccessTokenProvider {
   return {
     async getAccessToken(scope: string): Promise<string> {
       if (
@@ -403,9 +296,16 @@ export function createMSTeamsTokenProvider(app: MSTeamsApp): MSTeamsTokenProvide
             "Microsoft Teams Graph operations are not supported for channels.msteams.cloud=China until Graph requests are routed through the Azure China Graph endpoint.",
           );
         }
-        return tokenToString(await app.tokenManager.getGraphToken());
+        const token = await app.tokenProvider.getAppToken(
+          app.cloud?.graphScope ?? "https://graph.microsoft.com/.default",
+          app.credentials?.tenantId || "common",
+        );
+        return token?.toString() ?? "";
       }
-      return tokenToString(await app.tokenManager.getBotToken());
+      const token = await app.tokenProvider.getAppToken(
+        app.cloud?.botScope ?? "https://api.botframework.com/.default",
+      );
+      return token?.toString() ?? "";
     },
   };
 }

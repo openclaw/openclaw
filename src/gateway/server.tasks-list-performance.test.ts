@@ -6,17 +6,20 @@ import {
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import * as inboundDispatch from "../auto-reply/dispatch.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { applyTaskRegistryMaintenanceRetention } from "../tasks/task-registry-maintenance-retention.js";
 import * as taskRegistryRead from "../tasks/task-registry-read.js";
 import {
   createTaskRecord,
-  deleteTaskRecordById,
   listTaskRecords,
   markTaskTerminalById,
+  publishTaskRecordAfterAtomicStore,
 } from "../tasks/task-registry.js";
 import {
   configureTaskRegistryRuntime,
   getTaskRegistryStore,
 } from "../tasks/task-registry.store.js";
+import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry.test-support.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { installGatewayTestHooks, onceMessage } from "./server.auth.test-helpers.js";
@@ -181,23 +184,16 @@ describe("tasks.list Gateway performance", () => {
       (task) => task.requesterSessionKey === OWNED_SESSION_KEY,
     );
     const initialOwnedPage = expectedTaskIds(ownedTasks, 10, 25);
-    const deletedTaskId = initialOwnedPage[0];
+    const changedTaskId = initialOwnedPage[0];
     const updatedTask = ownedTasks.find((task) => !initialOwnedPage.includes(task.taskId));
-    if (!deletedTaskId || !updatedTask) {
+    if (!changedTaskId || !updatedTask) {
       throw new Error("expected selected and unselected owned task fixtures");
     }
 
-    let onSnapshotLoad: (() => void) | undefined;
     const initializeTasks = () => {
       resetTaskRegistryForTests({ persist: false });
       configureTaskRegistryRuntime({
-        store: {
-          ...createInMemoryTaskRegistryStore(),
-          loadSnapshot: () => {
-            onSnapshotLoad?.();
-            return { tasks, deliveryStates: new Map() };
-          },
-        },
+        store: createInMemoryTaskRegistryStore({ tasks, deliveryStates: new Map() }),
       });
     };
     await withAuthenticatedTaskGateway(initializeTasks, async ({ admin, viewer }) => {
@@ -228,17 +224,26 @@ describe("tasks.list Gateway performance", () => {
         }
         return Reflect.apply(originalToSorted, this, [compareFn]) as T[];
       });
+      let pendingMutation: ReturnType<typeof setImmediate> | undefined;
       try {
         let mutationsApplied = false;
-        onSnapshotLoad = () => {
-          setImmediate(() => {
+        // Mutate once at the scan's first yield, not on every persistence read.
+        onAccessSlice = () => {
+          onAccessSlice = undefined;
+          pendingMutation = setImmediate(() => {
             const updated = markTaskTerminalById({
               taskId: updatedTask.taskId,
               status: "succeeded",
               endedAt: TASK_COUNT + 1,
               lastEventAt: TASK_COUNT + 1,
             });
-            const deleted = deleteTaskRecordById(deletedTaskId);
+            const current = getTaskRegistryStore().loadSnapshot().tasks.get(changedTaskId);
+            if (!current) {
+              throw new Error("Expected the selected task before metadata publication");
+            }
+            const changed = { ...current, task: "Changed during scan" };
+            getTaskRegistryStore().upsertTaskWithDeliveryState({ task: changed });
+            publishTaskRecordAfterAtomicStore(changed);
             const created = createTaskRecord({
               runtime: "cli",
               requesterSessionKey: OWNED_SESSION_KEY,
@@ -251,7 +256,7 @@ describe("tasks.list Gateway performance", () => {
               deliveryStatus: "pending",
               lastEventAt: TASK_COUNT + 2,
             });
-            mutationsApplied = updated !== null && deleted && created !== null;
+            mutationsApplied = updated !== null && created !== null;
           });
         };
         const listPromise = sendRpc<TasksListResult>(admin, "tasks-list", "tasks.list", {
@@ -260,7 +265,17 @@ describe("tasks.list Gateway performance", () => {
         const list = await listPromise;
 
         const listMaxSortedInput = Math.max(0, ...sortedInputLengths);
+        const persistedTasks = getTaskRegistryStore().loadSnapshot().tasks;
+        expect(persistedTasks.get(changedTaskId)?.task).toBe("Changed during scan");
+        expect(persistedTasks.get(updatedTask.taskId)).toMatchObject({
+          endedAt: TASK_COUNT + 1,
+          lastEventAt: TASK_COUNT + 1,
+        });
+        expect(
+          [...persistedTasks.values()].some((task) => task.runId === "run-created-during-scan"),
+        ).toBe(true);
         const currentTasks = listTaskRecords();
+        expect(currentTasks).toHaveLength(TASK_COUNT + 1);
         const adminExpected = expectedTaskIds(currentTasks, 0, 7);
         expect(mutationsApplied).toBe(true);
         expect(list.ok, JSON.stringify(list.error)).toBe(true);
@@ -277,7 +292,18 @@ describe("tasks.list Gateway performance", () => {
           cursor: tamperedCursor.join("."),
           limit: 7,
         });
-        expect(deleteTaskRecordById(updatedTask.taskId)).toBe(true);
+        const completed = persistedTasks.get(updatedTask.taskId);
+        if (!completed || completed.cleanupAfter === undefined) {
+          throw new Error("Expected the completed task's retention deadline");
+        }
+        expect(
+          await applyTaskRegistryMaintenanceRetention(
+            completed,
+            completed.cleanupAfter + 1,
+            new Map(),
+            () => {},
+          ),
+        ).toBe("pruned");
         const revisionCursor = cursor.split(".");
         revisionCursor[2] = String(Number(revisionCursor[2]) + 1);
         await expectCursorRejected(admin, "tasks-revision-mismatch", {
@@ -303,11 +329,20 @@ describe("tasks.list Gateway performance", () => {
           cursor: "x".repeat(TASKS_LIST_CURSOR_MAX_LENGTH + 1),
           limit: 7,
         });
+        const viewerExpected = expectedTaskIds(
+          listTaskRecords().filter((task) => task.requesterSessionKey === OWNED_SESSION_KEY),
+          0,
+          25,
+        );
         const sessionPage = await sendRpc<TasksListResult>(
           admin,
           "tasks-session-page",
           "tasks.list",
           { limit: 1, sessionKey: OWNED_SESSION_KEY },
+        );
+        expect(sessionPage.ok, JSON.stringify(sessionPage.error)).toBe(true);
+        expect(sessionPage.payload?.tasks.map((task) => task.id)).toEqual(
+          viewerExpected.slice(0, 1),
         );
         const sessionCursor = sessionPage.payload?.nextCursor;
         if (!sessionCursor) {
@@ -319,11 +354,6 @@ describe("tasks.list Gateway performance", () => {
           sessionKey: FOREIGN_SESSION_KEY,
         });
 
-        const viewerExpected = expectedTaskIds(
-          listTaskRecords().filter((task) => task.requesterSessionKey === OWNED_SESSION_KEY),
-          0,
-          25,
-        );
         sortedInputLengths.length = 0;
         const accessOrder: string[] = [];
         const taskRuntime = await import("../tasks/runtime-internal.js");
@@ -382,34 +412,26 @@ describe("tasks.list Gateway performance", () => {
         if (!convergingTaskId) {
           throw new Error("expected a converging task fixture");
         }
-        resetTaskRegistryForTests({ persist: false });
-        let convergingChurnStarted = false;
         let convergingRevision = 0;
         const convergingRevisionTarget = 1;
-        const convergeTaskRegistry = () => {
-          if (convergingRevision >= convergingRevisionTarget) {
-            return;
-          }
-          convergingRevision += 1;
-          markTaskTerminalById({
-            taskId: convergingTaskId,
-            status: "succeeded",
-            endedAt: TASK_COUNT + convergingRevision,
-          });
-          setImmediate(convergeTaskRegistry);
-        };
         configureTaskRegistryRuntime({
-          store: {
-            ...createInMemoryTaskRegistryStore(),
-            loadSnapshot: () => {
-              if (!convergingChurnStarted) {
-                convergingChurnStarted = true;
-                setImmediate(convergeTaskRegistry);
-              }
-              return { tasks: convergingTasks, deliveryStates: new Map() };
-            },
-          },
+          store: createInMemoryTaskRegistryStore({
+            tasks: convergingTasks,
+            deliveryStates: new Map(),
+          }),
         });
+        await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+        onAccessSlice = () => {
+          onAccessSlice = undefined;
+          pendingMutation = setImmediate(() => {
+            convergingRevision += 1;
+            markTaskTerminalById({
+              taskId: convergingTaskId,
+              status: "succeeded",
+              endedAt: TASK_COUNT + convergingRevision,
+            });
+          });
+        };
         const convergedRegistry = await sendRpc<TasksListResult>(
           admin,
           "tasks-converged-registry",
@@ -425,13 +447,13 @@ describe("tasks.list Gateway performance", () => {
           { sliceWorkMs: 3, expectedQueuedWork: [false, true, true] },
         ]) {
           const retryTasks = new Map([...createTaskSnapshot()].slice(0, 65));
-          resetTaskRegistryForTests({ persist: false });
           configureTaskRegistryRuntime({
             store: createInMemoryTaskRegistryStore({
               tasks: retryTasks,
               deliveryStates: new Map(),
             }),
           });
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           let preparations = 0;
           let mutations = 0;
           let retryCandidates = 0;
@@ -512,13 +534,13 @@ describe("tasks.list Gateway performance", () => {
         if (!churnTaskId) {
           throw new Error("expected a task churn fixture");
         }
-        resetTaskRegistryForTests({ persist: false });
         configureTaskRegistryRuntime({
           store: createInMemoryTaskRegistryStore({
             tasks: churnTasks,
             deliveryStates: new Map(),
           }),
         });
+        await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         let taskChurnRevision = 0;
         const registrySelections = vi.spyOn(taskRuntime, "listTaskRecordPage");
         // Invalidate each scan when it reads the fixture task. Counting free-running
@@ -582,17 +604,21 @@ describe("tasks.list Gateway performance", () => {
             });
           }
         };
-        resetTaskRegistryForTests({ persist: false });
+        const scopedStore = createInMemoryTaskRegistryStore({
+          tasks: scopedTasks,
+          deliveryStates: new Map(),
+        });
         configureTaskRegistryRuntime({
           store: {
-            ...createInMemoryTaskRegistryStore(),
+            ...scopedStore,
             loadSnapshot: () => {
               scopedChurn ??= mutateUnrelatedTask();
-              return { tasks: scopedTasks, deliveryStates: new Map() };
+              return scopedStore.loadSnapshot();
             },
           },
         });
         try {
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           // Repeated snapshot reads must share the fixture's one owned churn loop.
           getTaskRegistryStore().loadSnapshot();
           const scopedPage = await sendRpc<TasksListResult>(viewer, "tasks-scoped", "tasks.list", {
@@ -610,13 +636,10 @@ describe("tasks.list Gateway performance", () => {
         }
 
         const accessTasks = new Map([...createTaskSnapshot()].slice(0, 1_000));
-        resetTaskRegistryForTests({ persist: false });
         configureTaskRegistryRuntime({
-          store: {
-            ...createInMemoryTaskRegistryStore(),
-            loadSnapshot: () => ({ tasks: accessTasks, deliveryStates: new Map() }),
-          },
+          store: createInMemoryTaskRegistryStore({ tasks: accessTasks, deliveryStates: new Map() }),
         });
+        await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         let accessMutationCount = 0;
         // Invalidate every completed page before the handler checks access again.
         // A free-running RPC loop can leave a stable gap between its writes.
@@ -662,6 +685,7 @@ describe("tasks.list Gateway performance", () => {
           scopedRevisionAtStop,
         );
       } finally {
+        clearImmediate(pendingMutation);
         sortSpy.mockRestore();
         accessWork.mockRestore();
         workClock.mockRestore();

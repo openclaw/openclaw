@@ -147,6 +147,11 @@ function firstHookEvent(): Record<string, unknown> {
   return requireRecord(mockCall(triggerInternalHookMock)[0], "hook event");
 }
 
+const resetCommandConfig: OpenClawConfig = {
+  commands: { text: true },
+  channels: { whatsapp: { allowFrom: ["*"] } },
+};
+
 describe("handleCommands reset hooks", () => {
   let clearBootstrapSnapshotSpy: ReturnType<typeof vi.spyOn>;
 
@@ -171,10 +176,7 @@ describe("handleCommands reset hooks", () => {
     const cases = [
       {
         name: "text command with arguments",
-        params: buildResetParams("/new take notes", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
+        params: buildResetParams("/new take notes", resetCommandConfig),
         expectedEvent: { type: "command", action: "new" },
       },
       {
@@ -309,10 +311,7 @@ describe("handleCommands reset hooks", () => {
       error: "reset rejected",
     });
     resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue("agent:main:acp:bound");
-    const params = buildResetParams("/reset", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
+    const params = buildResetParams("/reset", resetCommandConfig);
 
     expect(await maybeHandleResetCommand(params)).toEqual({
       shouldContinue: false,
@@ -397,10 +396,7 @@ describe("handleCommands reset hooks", () => {
       });
       routeReplyMock.mockResolvedValueOnce(routeResult);
       const onObservedReplyDelivery = vi.fn();
-      const params = buildResetParams("/new", {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig);
+      const params = buildResetParams("/new", resetCommandConfig);
       params.opts = { onObservedReplyDelivery };
 
       const result = await maybeHandleResetCommand(params);
@@ -423,10 +419,7 @@ describe("handleCommands reset hooks", () => {
       suppressed: true,
     });
     const onObservedReplyDelivery = vi.fn();
-    const params = buildResetParams("/new", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
+    const params = buildResetParams("/new", resetCommandConfig);
     params.opts = { onObservedReplyDelivery };
 
     const result = await maybeHandleResetCommand(params);
@@ -446,10 +439,7 @@ describe("handleCommands reset hooks", () => {
       });
       routeReplyMock.mockResolvedValueOnce(routeResult);
       const onObservedReplyDelivery = vi.fn();
-      const params = buildResetParams("/new", {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig);
+      const params = buildResetParams("/new", resetCommandConfig);
       params.opts = { onObservedReplyDelivery };
 
       await maybeHandleResetCommand(params);
@@ -459,10 +449,7 @@ describe("handleCommands reset hooks", () => {
   );
 
   it("prefers the target session entry when emitting reset hooks", async () => {
-    const params = buildResetParams("/reset", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
+    const params = buildResetParams("/reset", resetCommandConfig);
     params.sessionEntry = {
       sessionId: "wrapper-session",
       updatedAt: Date.now(),
@@ -484,10 +471,7 @@ describe("handleCommands reset hooks", () => {
   it("marks soft reset turns and emits reset hooks", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-soft-reset-tombstone-"));
     const storePath = path.join(tempDir, "sessions.json");
-    const params = buildResetParams("/reset soft", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
+    const params = buildResetParams("/reset soft", resetCommandConfig);
     const sessionEntry: NonNullable<HandleCommandsParams["sessionEntry"]> = {
       sessionId: "session-1",
       lifecycleRevision: "soft-reset-revision",
@@ -590,32 +574,33 @@ describe("handleCommands reset hooks", () => {
       scopes: ["operator.write"],
       allowed: false,
     },
-    ...["/new Create a note", "/reset Create a note", "/reset soft Create a note"].flatMap((body) =>
-      (["text", "native"] as const).flatMap((source) => [
-        {
-          name: `${source} ${body} forwarded from Gateway to external origin`,
-          body,
-          source,
-          provider: "webchat",
-          surface: "webchat",
-          originatingChannel: "telegram",
-          scopes: ["operator.write"],
-          allowed: false,
-          silent: true,
-        },
-        {
-          name: `${source} ${body} from external Provider with internal Surface and origin`,
-          body,
-          source,
-          provider: "telegram",
-          surface: "webchat",
-          originatingChannel: "webchat",
-          commandAuthorized: false,
-          allowed: false,
-          silent: true,
-        },
-      ]),
-    ),
+    ...[
+      { body: "/new Create a note", source: "text" as const },
+      { body: "/reset soft Create a note", source: "native" as const },
+    ].flatMap(({ body, source }) => [
+      {
+        name: `${source} ${body} forwarded from Gateway to external origin`,
+        body,
+        source,
+        provider: "webchat",
+        surface: "webchat",
+        originatingChannel: "telegram",
+        scopes: ["operator.write"],
+        allowed: false,
+        silent: true,
+      },
+      {
+        name: `${source} ${body} from external Provider with internal Surface and origin`,
+        body,
+        source,
+        provider: "telegram",
+        surface: "webchat",
+        originatingChannel: "webchat",
+        commandAuthorized: false,
+        allowed: false,
+        silent: true,
+      },
+    ]),
   ])(
     "preserves reset authorization and denial routing: $name",
     async ({
@@ -688,10 +673,7 @@ describe("handleCommands reset hooks", () => {
   );
 
   it("clears both sessionStore and sessionEntry when they are distinct objects", async () => {
-    const params = buildResetParams("/reset soft", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
+    const params = buildResetParams("/reset soft", resetCommandConfig);
     params.sessionEntry = {
       sessionId: "session-direct",
       updatedAt: 1,
@@ -758,10 +740,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("acknowledges bare /reset without falling through to model execution", async () => {
-    const params = buildResetParams("/RESET", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
+    const params = buildResetParams("/RESET", resetCommandConfig);
 
     const result = await maybeHandleResetCommand(params);
 
@@ -773,10 +752,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("acknowledges bare /new without falling through to model execution", async () => {
-    const params = buildResetParams("/NEW", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
+    const params = buildResetParams("/NEW", resetCommandConfig);
 
     const result = await maybeHandleResetCommand(params);
 
@@ -788,10 +764,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("keeps reset tails falling through so the model receives the user input", async () => {
-    const params = buildResetParams("/Reset take notes", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
+    const params = buildResetParams("/Reset take notes", resetCommandConfig);
 
     const result = await maybeHandleResetCommand(params);
 

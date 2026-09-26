@@ -17,10 +17,7 @@ import {
   registerSubagentRun,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { clearSessionQueues, enqueueFollowupRun } from "../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
@@ -77,7 +74,7 @@ async function seedYieldedParent() {
       event: { runId: parentRunId, sessionId: parentId, ts: Date.now(), data },
     });
   }
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: childRunId,
     childSessionKey: childKey,
     requesterSessionKey: parentKey,
@@ -129,7 +126,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         sessionKey: brokenKey,
         defaultSessionId: "broken-child-session",
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "broken-child-run",
         childSessionKey: brokenKey,
         requesterSessionKey: parentKey,
@@ -247,7 +244,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         abortedLastRun: true,
         lastRunId: parentRunId,
       });
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       expect(getSubagentRunByChildSessionKey(childKey)?.killReconciliation).toMatchObject({
         suppressTaskDelivery: true,
       });

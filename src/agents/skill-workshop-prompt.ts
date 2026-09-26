@@ -1,6 +1,7 @@
 /**
  * System-prompt contribution for routing durable skill edits through the
- * Skill Workshop tool instead of direct filesystem writes.
+ * Skill Workshop tool, while edits the user asks for in skills they own stay
+ * ordinary file work.
  */
 export const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 
@@ -8,8 +9,8 @@ export const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 export function buildSkillWorkshopPromptSection(): string[] {
   return [
     "## Skill Workshop",
-    "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write Workshop proposal or Workshop-owned skill files directly.",
-    "Exception: user-requested edits to repository-owned skill source in an ordinary repository checkout are normal repository work—apply them with normal repository file tools, do not route them through Workshop, and never infer Workshop ownership from a `SKILL.md` filename, skill-like directory, or name collision with an installed skill.",
+    "Durable reusable skill/playbook/workflow work you start on your own: `skill_workshop`; never write Workshop proposal or Workshop-owned skill files directly.",
+    "Exception: when the user asks you to change a skill they own (repository skill source, the workspace `skills/` directory, project `.agents/skills/`, or a configured extra skill directory), edit it directly with normal file tools; do not route it through Workshop, and never infer Workshop ownership from a `SKILL.md` filename, skill-like directory, or name collision with an installed skill. Bundled, ClawHub-installed, and plugin-provided skills are replaced by their owners' updates: say so, and if the user wants the change kept, capture it as a Workshop skill.",
     "Exception: background Workshop maintenance may use normal file tools inside its provided Workshop directory when the run authorizes direct edits. Draft-only reviews continue to stage proposals.",
     "Used skill proved wrong or incomplete: read it and follow the available tool's publication and autonomous policy. Where supported, autonomous mode may disable repair, stage a proposal, or apply it. Without an applicable autonomous policy, unsolicited improvements stay pending proposals when supported; otherwise describe the suggestion without publishing. Capture only durable, evidenced procedure changes—never task artifacts, transient failures, or unresolved guesses.",
     "Publication-only create/update requires an explicit user request; never present it as a pending draft. Apply/reject/quarantine only explicit user ask.",

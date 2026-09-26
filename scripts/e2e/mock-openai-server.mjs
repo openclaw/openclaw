@@ -4,8 +4,9 @@ import { readFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
+import { resolveAgentPluginBundleResponse } from "./lib/agent-plugin-bundle-response.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
-import { summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
+import { readMockUserText, summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -14,6 +15,7 @@ import {
   writeJson,
   writeSse,
 } from "./lib/mock-openai-http.mjs";
+import { createTelegramBindingScenario } from "./lib/telegram-binding-scenario.mjs";
 
 const port =
   process.env.MOCK_PORT?.trim() === "0"
@@ -46,6 +48,7 @@ const LEGACY_MEDIA_PATTERN =
 const MEDIA_DATA_URL_PATTERN =
   /^data:([a-z][a-z0-9.+-]*\/[a-z0-9.+-]+)(?:;[^,]*)*;base64,([\s\S]*)$/iu;
 let scriptState;
+const telegramBindingScenario = createTelegramBindingScenario();
 
 function parseMediaDataUrl(value) {
   if (typeof value !== "string") {
@@ -551,7 +554,7 @@ function progressDraftEvents(body, bodyText) {
       return null;
     }
     return preambleThenToolCallEvents("Checking the workspace before answering.", "exec", {
-      command: "sleep 3 && echo openclaw-draft-proof",
+      command: "sleep 2 && echo openclaw-draft-proof",
     });
   }
   return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
@@ -782,6 +785,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
         ? "ALL_TOOLS.some((tool) => tool.source === 'mcp')"
         : "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
+      title: "Read the MCP fixture note",
       code: [
         'const files = await API.list("mcp");',
         'const root = await API.read("mcp/index.d.ts");',
@@ -842,22 +846,29 @@ function mcpAppConformanceEvents(body, bodyText) {
     : responseEvents("MCP_APP_CONFORMANCE_FAIL");
 }
 
-function agentPluginBundleEvents(body, bodyText) {
-  const allText = collectText(body).join("\n");
-  if (!/agent plugin bundle qa check/i.test(allText)) {
+function agentPluginBundleEvents(body, inferenceFacts) {
+  if (inferenceFacts?.purpose === "activity-recap") {
     return null;
   }
-  const toolOutput = collectFunctionCallOutputText(body);
-  if (!toolOutput) {
-    return hasDeclaredTool(bodyText, "weather-probe__weather_probe")
-      ? toolCallEvents("weather-probe__weather_probe", {})
-      : responseEvents("AGENT_BUNDLE_MCP_FAIL tool-not-declared");
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const userText = input.map(readMockUserText).findLast((text) => text !== undefined) ?? "";
+  if (!/agent plugin bundle qa check/i.test(userText)) {
+    return null;
   }
-  return toolOutput.includes("probe ok") &&
-    toolOutput.includes("PLUGIN_ROOT=") &&
-    toolOutput.includes("PLUGIN_DATA=")
-    ? responseEvents("AGENT_BUNDLE_MCP_OK")
-    : responseEvents("AGENT_BUNDLE_MCP_FAIL unexpected-tool-output");
+  const response = resolveAgentPluginBundleResponse(body);
+  return response.tool
+    ? toolCallEvents(response.tool.name, response.tool.args)
+    : responseEvents(response.text);
+}
+
+function telegramBindingEvents(body) {
+  const response = telegramBindingScenario(body);
+  if (!response) {
+    return null;
+  }
+  return response.spawn
+    ? toolCallEvents("sessions_spawn", response.spawn)
+    : responseEvents(response.text);
 }
 
 function countAutomaticSelection(events) {
@@ -924,6 +935,7 @@ const server = http.createServer((req, res) => {
         ? { response: controlSelection.models[body.model] }
         : undefined
       : controlSelection;
+    const inferenceFacts = scriptedRoute ? summarizeMockInferenceRequest(body) : undefined;
     if (
       writeRequestLogEntryOrFail(res, {
         requestLog,
@@ -934,7 +946,7 @@ const server = http.createServer((req, res) => {
           requestBytes: Buffer.byteLength(bodyText),
           body: boundedRequestLogBody(requestLogBody, requestLogBody),
           ...summarizeRequestContent(body),
-          ...(scriptedRoute ? { inferenceFacts: summarizeMockInferenceRequest(body) } : {}),
+          ...(inferenceFacts ? { inferenceFacts } : {}),
           ...(selectedResponse?.scriptEntry ? { scriptEntry: selectedResponse.scriptEntry } : {}),
         },
       })
@@ -953,10 +965,11 @@ const server = http.createServer((req, res) => {
     if (route === "responses") {
       if (!selectedResponse) {
         const events =
-          agentPluginBundleEvents(body, bodyText) ??
+          agentPluginBundleEvents(body, inferenceFacts) ??
           mcpAppConformanceEvents(body, bodyText) ??
           mcpCodeModeApiFileEvents(body, bodyText) ??
-          progressDraftEvents(body, bodyText);
+          progressDraftEvents(body, bodyText) ??
+          telegramBindingEvents(body);
         if (events) {
           countAutomaticSelection(events);
           writeResponsesEvents(res, body.stream, events);
@@ -1008,7 +1021,7 @@ const server = http.createServer((req, res) => {
             body.stream !== false,
             "Checking the workspace before answering.",
             "exec",
-            { command: "sleep 3 && echo openclaw-draft-proof" },
+            { command: "sleep 2 && echo openclaw-draft-proof" },
           );
           return;
         }

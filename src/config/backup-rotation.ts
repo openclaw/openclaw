@@ -1,9 +1,9 @@
 // Config publication stages candidates before consuming recovery history.
 import type fs from "node:fs";
 import path from "node:path";
+import { tempFile } from "@openclaw/fs-safe/advanced";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { isRootFileMissingFailure, openRootFileSync } from "../infra/boundary-file-read.js";
-import { tempFile } from "../infra/fs-safe-advanced.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 

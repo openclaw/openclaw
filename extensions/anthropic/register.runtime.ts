@@ -1,7 +1,3 @@
-/**
- * Anthropic provider runtime registration. It owns API-key/setup-token/Claude
- * CLI auth, dynamic model normalization, usage auth, media, and stream wrappers.
- */
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   OpenClawPluginApi,
@@ -35,11 +31,12 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS,
   CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
   CLAUDE_CLI_PROFILE_ID,
   CLAUDE_MODEL_ID_ALIASES,
 } from "./cli-constants.js";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
 import { createClaudeCodeVersionProbe } from "./cli-version.js";
 import {
   applyAnthropicConfigDefaults,
@@ -49,6 +46,7 @@ import { resolveFastModeSupport } from "./fast-mode-policy.js";
 import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { createAnthropicAuthMethods, createAnthropicProvider } from "./provider-contract-api.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import {
@@ -83,21 +81,18 @@ function classifyAnthropicFailoverDescriptor(value: string | undefined) {
       return undefined;
   }
 }
-const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-5";
-const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
-const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
-const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
-const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_1M_CONTEXT_TOKENS = 1_000_000;
 const ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS = 128_000;
-const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
-const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
-const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
-  ANTHROPIC_OPUS_46_MODEL_ID,
-  ANTHROPIC_OPUS_46_DOT_MODEL_ID,
-] as const;
-const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
-const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
+const ANTHROPIC_4X_TEMPLATE_REPLACEMENTS = Object.entries({
+  "claude-opus-4-8": "claude-opus-4-7",
+  "claude-opus-4.8": "claude-opus-4.7",
+  "claude-opus-4-7": "claude-opus-4-6",
+  "claude-opus-4.7": "claude-opus-4.6",
+  "claude-opus-4-6": "claude-opus-4-7",
+  "claude-opus-4.6": "claude-opus-4-6",
+  "claude-sonnet-4-6": "claude-sonnet-4-6",
+  "claude-sonnet-4.6": "claude-sonnet-4-6",
+});
 function buildAnthropicCatalogProvider() {
   return buildManifestModelProviderConfig({
     providerId: PROVIDER_ID,
@@ -158,50 +153,33 @@ function resolveAnthropicModelCost(modelId: string) {
   return manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost;
 }
 
-const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
-  ref.startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)
-    ? `anthropic/${ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
-    : ref,
-);
-
-function resolveAnthropic46ForwardCompatModel(params: {
-  ctx: ProviderResolveDynamicModelContext;
-  dashModelId: string;
-  dotModelId: string;
-  dashTemplateId: string;
-  dotTemplateId: string;
-  fallbackTemplateIds: readonly string[];
-}): ProviderRuntimeModel | undefined {
-  const trimmedModelId = params.ctx.modelId.trim();
+function resolveAnthropic4xForwardCompatModel(
+  ctx: ProviderResolveDynamicModelContext,
+): ProviderRuntimeModel | undefined {
+  const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   if (trimmedModelId !== lower) {
     return undefined;
   }
-  const is46Model =
-    lower === params.dashModelId ||
-    lower === params.dotModelId ||
-    lower.startsWith(`${params.dashModelId}-`) ||
-    lower.startsWith(`${params.dotModelId}-`);
-  if (!is46Model) {
+  const replacement = ANTHROPIC_4X_TEMPLATE_REPLACEMENTS.find(
+    ([modelId]) => lower === modelId || lower.startsWith(`${modelId}-`),
+  );
+  if (!replacement) {
     return undefined;
   }
-
-  const templateIds: string[] = [];
-  if (lower.startsWith(params.dashModelId)) {
-    templateIds.push(lower.replace(params.dashModelId, params.dashTemplateId));
-  }
-  if (lower.startsWith(params.dotModelId)) {
-    templateIds.push(lower.replace(params.dotModelId, params.dotTemplateId));
-  }
-  templateIds.push(...params.fallbackTemplateIds);
-
+  const [modelId, templateId] = replacement;
+  const family = modelId.startsWith("claude-sonnet-") ? "sonnet" : "opus";
   return cloneFirstTemplateModel({
     providerId: PROVIDER_ID,
     modelId: trimmedModelId,
-    templateIds,
-    ctx: params.ctx,
+    templateIds: [
+      lower.replace(modelId, templateId),
+      `claude-${family}-4-6`,
+      `claude-${family}-4.6`,
+    ],
+    ctx,
     patch:
-      normalizeLowercaseStringOrEmpty(params.ctx.provider) === CLAUDE_CLI_BACKEND_ID
+      normalizeLowercaseStringOrEmpty(ctx.provider) === CLAUDE_CLI_BACKEND_ID
         ? { provider: CLAUDE_CLI_BACKEND_ID }
         : undefined,
   });
@@ -283,7 +261,7 @@ function isAnthropicUnreleasedGenerationModel(modelId: string): boolean {
  * shaping follows without teaching the shared contracts about unknown ids.
  */
 function resolveAnthropicUnreleasedCanonicalModelId(modelId: string): string {
-  return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5" : "claude-opus-5";
+  return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5" : "claude-opus-5-5";
 }
 
 // Dynamic rows use the manifest as the provider-owned offline contract when a lifecycle registry
@@ -369,19 +347,6 @@ function buildAnthropicForwardCompatModel(
     ...(unreleasedGeneration
       ? { params: { canonicalModelId: resolveAnthropicUnreleasedCanonicalModelId(lower) } }
       : {}),
-    ...(supportsClaudeNativeXhighEffort({ id: trimmedModelId })
-      ? {
-          thinkingLevelMap: {
-            ...(requiresClaudeMandatoryAdaptiveThinking({ id: trimmedModelId })
-              ? { minimal: "low" as const }
-              : {}),
-            xhigh: "xhigh",
-            max: "max",
-          },
-        }
-      : supportsAnthropicNativeMaxEffort(trimmedModelId)
-        ? { thinkingLevelMap: { max: "max" } }
-        : {}),
   };
 }
 
@@ -390,44 +355,9 @@ function resolveAnthropicForwardCompatModel(
 ): ProviderRuntimeModel | undefined {
   return (
     resolveAnthropicSnapshotModel(ctx) ??
-    resolveAnthropic46ForwardCompatModel({
-      ctx,
-      dashModelId: ANTHROPIC_OPUS_48_MODEL_ID,
-      dotModelId: ANTHROPIC_OPUS_48_DOT_MODEL_ID,
-      dashTemplateId: ANTHROPIC_OPUS_47_MODEL_ID,
-      dotTemplateId: ANTHROPIC_OPUS_47_DOT_MODEL_ID,
-      fallbackTemplateIds: ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS,
-    }) ??
-    resolveAnthropic46ForwardCompatModel({
-      ctx,
-      dashModelId: ANTHROPIC_OPUS_47_MODEL_ID,
-      dotModelId: ANTHROPIC_OPUS_47_DOT_MODEL_ID,
-      dashTemplateId: ANTHROPIC_OPUS_46_MODEL_ID,
-      dotTemplateId: ANTHROPIC_OPUS_46_DOT_MODEL_ID,
-      fallbackTemplateIds: ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS,
-    }) ??
-    resolveAnthropic46ForwardCompatModel({
-      ctx,
-      dashModelId: ANTHROPIC_OPUS_46_MODEL_ID,
-      dotModelId: ANTHROPIC_OPUS_46_DOT_MODEL_ID,
-      dashTemplateId: ANTHROPIC_OPUS_47_MODEL_ID,
-      dotTemplateId: ANTHROPIC_OPUS_46_MODEL_ID,
-      fallbackTemplateIds: ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS,
-    }) ??
-    resolveAnthropic46ForwardCompatModel({
-      ctx,
-      dashModelId: ANTHROPIC_SONNET_46_MODEL_ID,
-      dotModelId: ANTHROPIC_SONNET_46_DOT_MODEL_ID,
-      dashTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
-      dotTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
-      fallbackTemplateIds: [ANTHROPIC_SONNET_46_MODEL_ID, ANTHROPIC_SONNET_46_DOT_MODEL_ID],
-    }) ??
+    resolveAnthropic4xForwardCompatModel(ctx) ??
     buildAnthropicForwardCompatModel(ctx)
   );
-}
-
-function isAnthropicGa1MModel(modelId: string): boolean {
-  return supportsClaude1MContext({ id: modelId });
 }
 
 function isAnthropicMandatoryClaude5Model(modelId: string): boolean {
@@ -437,26 +367,18 @@ function isAnthropicMandatoryClaude5Model(modelId: string): boolean {
   );
 }
 
-function isAnthropicSonnet5Model(modelId: string): boolean {
-  return resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined;
-}
-
-function isAnthropicOpus5Model(modelId: string): boolean {
-  return resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined;
-}
-
 // Claude 5 models ship 1M context as the model default (no [1m] CLI opt-in).
 function isAnthropicExact1MClaude5Model(modelId: string): boolean {
   return (
     isAnthropicMandatoryClaude5Model(modelId) ||
-    isAnthropicSonnet5Model(modelId) ||
-    isAnthropicOpus5Model(modelId)
+    resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined
   );
 }
 
 function resolveAnthropicFixedContextWindow(provider: string, modelId: string): number | undefined {
   return isAnthropicExact1MClaude5Model(modelId) ||
-    (isAnthropicGa1MModel(modelId) &&
+    (supportsClaude1MContext({ id: modelId }) &&
       (normalizeLowercaseStringOrEmpty(provider) !== CLAUDE_CLI_BACKEND_ID ||
         normalizeLowercaseStringOrEmpty(modelId).endsWith("[1m]")))
     ? ANTHROPIC_1M_CONTEXT_TOKENS
@@ -464,11 +386,7 @@ function resolveAnthropicFixedContextWindow(provider: string, modelId: string): 
 }
 
 function isAnthropic128kOutputModel(modelId: string): boolean {
-  return isAnthropicExact1MClaude5Model(modelId) || isAnthropicGa1MModel(modelId);
-}
-
-function isAnthropicLargeImageModel(modelId: string): boolean {
-  return supportsClaudeNativeXhighEffort({ id: modelId });
+  return isAnthropicExact1MClaude5Model(modelId) || supportsClaude1MContext({ id: modelId });
 }
 
 function isAnthropicMythosPreviewModel(modelId: string): boolean {
@@ -520,217 +438,114 @@ function hasConfiguredModelOverride(
   return false;
 }
 
-function applyAnthropicFixedContextWindow(params: {
-  config?: ProviderNormalizeResolvedModelContext["config"];
-  provider: string;
-  modelId: string;
-  contractModelId: string;
-  model: ProviderRuntimeModel;
-}): ProviderRuntimeModel | undefined {
-  const fixedContextWindow = resolveAnthropicFixedContextWindow(
-    params.provider,
-    params.contractModelId,
-  );
-  if (fixedContextWindow === undefined) {
-    return undefined;
-  }
-  if (hasConfiguredModelOverride(params.config, params.provider, params.modelId, "context")) {
-    return undefined;
-  }
-  const exactContextWindow = isAnthropicExact1MClaude5Model(params.contractModelId);
-  const nextContextWindow = exactContextWindow
-    ? fixedContextWindow
-    : Math.max(params.model.contextWindow ?? 0, fixedContextWindow);
-  const nextContextTokens = exactContextWindow
-    ? fixedContextWindow
-    : typeof params.model.contextTokens === "number"
-      ? Math.max(params.model.contextTokens, fixedContextWindow)
-      : fixedContextWindow;
-  if (
-    nextContextWindow === params.model.contextWindow &&
-    nextContextTokens === params.model.contextTokens
-  ) {
-    return undefined;
-  }
-  return {
-    ...params.model,
-    contextWindow: nextContextWindow,
-    contextTokens: nextContextTokens,
-  };
-}
-
-function applyAnthropicModernMaxTokens(params: {
-  modelId: string;
-  model: ProviderRuntimeModel;
-}): ProviderRuntimeModel | undefined {
-  // Catalog defaults must not raise an operator-configured output cap.
-  if (
-    params.model.maxTokensSource === "configured" ||
-    !isAnthropic128kOutputModel(params.modelId)
-  ) {
-    return undefined;
-  }
-  if ((params.model.maxTokens ?? 0) >= ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS) {
-    return undefined;
-  }
-  return {
-    ...params.model,
-    maxTokens: ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS,
-  };
-}
-
-function applyAnthropicThinkingLevelMap(params: {
-  modelId: string;
-  model: ProviderRuntimeModel;
-}): ProviderRuntimeModel | undefined {
-  const mandatoryClaude5 = requiresClaudeMandatoryAdaptiveThinking({ id: params.modelId });
-  const nativeXhigh = mandatoryClaude5 || supportsClaudeNativeXhighEffort({ id: params.modelId });
-  if (!supportsAnthropicNativeMaxEffort(params.modelId)) {
-    return undefined;
-  }
-  const current = params.model.thinkingLevelMap;
-  const nativeDefaults = isAnthropicMythosPreviewModel(params.modelId)
-    ? { max: "max" as const }
-    : {
-        ...(mandatoryClaude5 ? { minimal: "low" as const } : {}),
-        xhigh: nativeXhigh ? ("xhigh" as const) : null,
-        max: "max" as const,
-      };
-  const currentEfforts = current as Record<string, string | null | undefined> | undefined;
-  if (Object.keys(nativeDefaults).every((level) => currentEfforts?.[level] !== undefined)) {
-    return undefined;
-  }
-  return {
-    ...params.model,
-    thinkingLevelMap: {
-      ...nativeDefaults,
-      ...current,
-    },
-  };
-}
-
 function matchesAnthropicModernModel(modelId: string): boolean {
   return supportsClaudeAdaptiveThinking({ id: modelId }) || isAnthropicMythosPreviewModel(modelId);
-}
-
-function hasImageInput(input: unknown): boolean {
-  return Array.isArray(input) && input.includes("image");
-}
-
-function supportsAnthropicImageInput(modelId: string, modelName?: string): boolean {
-  return [modelId, modelName]
-    .filter((value): value is string => typeof value === "string")
-    .some((candidate) => matchesAnthropicModernModel(candidate));
-}
-
-function resolveAnthropicImageMediaInput(modelId: string, modelName?: string) {
-  if (!supportsAnthropicImageInput(modelId, modelName)) {
-    return undefined;
-  }
-  const refs = [modelId, modelName].filter((value): value is string => typeof value === "string");
-  const largeImageModel = refs.some((ref) => isAnthropicLargeImageModel(ref));
-  return {
-    image: {
-      maxSidePx: largeImageModel ? 2576 : 1568,
-      preferredSidePx: largeImageModel ? 2576 : 1568,
-      tokenMode: "provider" as const,
-    },
-  };
-}
-
-function applyAnthropicImageInputCapability(params: {
-  modelId: string;
-  model: ProviderRuntimeModel;
-}): ProviderRuntimeModel | undefined {
-  if (hasImageInput(params.model.input)) {
-    return undefined;
-  }
-  if (!supportsAnthropicImageInput(params.modelId, params.model.name)) {
-    return undefined;
-  }
-  return {
-    ...params.model,
-    input: ["text", "image"],
-  };
 }
 
 function normalizeAnthropicResolvedModel(
   ctx: ProviderNormalizeResolvedModelContext,
 ): ProviderRuntimeModel | undefined {
-  const contractModelId = resolveClaudeModelIdentity({
-    id: ctx.modelId,
-    params: ctx.model.params,
-  });
-  if (
-    isAnthropicMandatoryClaude5Model(contractModelId) &&
-    normalizeLowercaseStringOrEmpty(ctx.provider) !== PROVIDER_ID
-  ) {
+  const model = ctx.model;
+  const contractModelId = resolveClaudeModelIdentity({ id: ctx.modelId, params: model.params });
+  const provider = normalizeLowercaseStringOrEmpty(ctx.provider);
+  if (isAnthropicMandatoryClaude5Model(contractModelId) && provider !== PROVIDER_ID) {
     return undefined;
   }
-  const contractModel =
-    isAnthropicExact1MClaude5Model(contractModelId) && !ctx.model.reasoning
-      ? { ...ctx.model, reasoning: true }
-      : ctx.model;
-  const imageCapableModel =
-    applyAnthropicImageInputCapability({
-      modelId: contractModelId,
-      model: contractModel,
-    }) ?? contractModel;
-  const mediaInput = resolveAnthropicImageMediaInput(contractModelId, imageCapableModel.name);
-  const mediaInputModel = mediaInput
-    ? {
-        ...imageCapableModel,
-        mediaInput: {
-          ...mediaInput,
-          ...imageCapableModel.mediaInput,
-          image: {
-            ...mediaInput.image,
-            ...imageCapableModel.mediaInput?.image,
-          },
-        },
-      }
-    : imageCapableModel;
-  const outputModel =
-    applyAnthropicModernMaxTokens({
-      modelId: contractModelId,
-      model: mediaInputModel,
-    }) ?? mediaInputModel;
-  const thinkingLevelModel =
-    applyAnthropicThinkingLevelMap({
-      modelId: contractModelId,
-      model: outputModel,
-    }) ?? outputModel;
-  const contextWindowModel =
-    applyAnthropicFixedContextWindow({
-      config: ctx.config,
-      provider: ctx.provider,
-      modelId: ctx.modelId,
-      contractModelId,
-      model: thinkingLevelModel,
-    }) ?? thinkingLevelModel;
+  const patch: Partial<ProviderRuntimeModel> = {};
+  const exactContextWindow = isAnthropicExact1MClaude5Model(contractModelId);
+  if (exactContextWindow && !model.reasoning) {
+    patch.reasoning = true;
+  }
+  const imageRefs = [contractModelId, model.name].filter(
+    (value): value is string => typeof value === "string",
+  );
+  if (imageRefs.some(matchesAnthropicModernModel)) {
+    if (!Array.isArray(model.input) || !model.input.includes("image")) {
+      patch.input = ["text", "image"];
+    }
+    const sidePx = imageRefs.some((id) => supportsClaudeNativeXhighEffort({ id })) ? 2576 : 1568;
+    const mediaInput = {
+      image: {
+        maxSidePx: sidePx,
+        preferredSidePx: sidePx,
+        tokenMode: "provider" as const,
+      },
+    };
+    patch.mediaInput = {
+      ...mediaInput,
+      ...model.mediaInput,
+      image: { ...mediaInput.image, ...model.mediaInput?.image },
+    };
+  }
+  // Catalog defaults must not raise an operator-configured output cap.
+  if (
+    model.maxTokensSource !== "configured" &&
+    isAnthropic128kOutputModel(contractModelId) &&
+    !((model.maxTokens ?? 0) >= ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS)
+  ) {
+    patch.maxTokens = ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS;
+  }
+  if (supportsAnthropicNativeMaxEffort(contractModelId)) {
+    const current = model.thinkingLevelMap;
+    const preview = isAnthropicMythosPreviewModel(contractModelId);
+    const mandatory = requiresClaudeMandatoryAdaptiveThinking({ id: contractModelId });
+    if (
+      current?.max === undefined ||
+      (!preview && (current?.xhigh === undefined || (mandatory && current?.minimal === undefined)))
+    ) {
+      patch.thinkingLevelMap = {
+        ...(preview
+          ? { max: "max" as const }
+          : {
+              ...(mandatory ? { minimal: "low" as const } : {}),
+              xhigh:
+                mandatory || supportsClaudeNativeXhighEffort({ id: contractModelId })
+                  ? ("xhigh" as const)
+                  : null,
+              max: "max" as const,
+            }),
+        ...current,
+      };
+    }
+  }
+  const fixedContextWindow = resolveAnthropicFixedContextWindow(ctx.provider, contractModelId);
+  if (
+    fixedContextWindow !== undefined &&
+    !hasConfiguredModelOverride(ctx.config, ctx.provider, ctx.modelId, "context")
+  ) {
+    const contextWindow = exactContextWindow
+      ? fixedContextWindow
+      : Math.max(model.contextWindow ?? 0, fixedContextWindow);
+    const contextTokens = exactContextWindow
+      ? fixedContextWindow
+      : typeof model.contextTokens === "number"
+        ? Math.max(model.contextTokens, fixedContextWindow)
+        : fixedContextWindow;
+    if (contextWindow !== model.contextWindow || contextTokens !== model.contextTokens) {
+      patch.contextWindow = contextWindow;
+      patch.contextTokens = contextTokens;
+    }
+  }
   // Provider catalog defaults must not replace explicit operator pricing.
   const cost = resolveAnthropicModelCost(contractModelId);
-  const pricingModel =
-    normalizeLowercaseStringOrEmpty(ctx.provider) === PROVIDER_ID &&
+  if (
+    provider === PROVIDER_ID &&
     !hasConfiguredModelOverride(ctx.config, ctx.provider, ctx.modelId, "cost") &&
     cost &&
-    !modelCostsEqual(contextWindowModel.cost, cost)
-      ? { ...contextWindowModel, cost }
-      : contextWindowModel;
-  return pricingModel === ctx.model ? undefined : pricingModel;
+    !modelCostsEqual(model.cost, cost)
+  ) {
+    patch.cost = cost;
+  }
+  return Object.keys(patch).length > 0 ? { ...model, ...patch } : undefined;
 }
 
-/** Build the full Anthropic provider descriptor used by runtime registration. */
 export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
-  const defaultAnthropicModel = DEFAULT_ANTHROPIC_MODEL;
+  const defaultAnthropicModel = CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
+  const { cli, setupToken, apiKey: apiKeyMethod } = createAnthropicAuthMethods();
   return {
-    id: providerId,
-    label: "Anthropic",
+    ...createAnthropicProvider(),
     deprecatedProfileIds: [CLAUDE_CLI_PROFILE_ID],
-    docsPath: "/providers/models",
-    hookAliases: [CLAUDE_CLI_BACKEND_ID],
-    envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
     oauthProfileIdRepairs: [
       {
         legacyProfileId: "anthropic:default",
@@ -739,18 +554,10 @@ export function buildAnthropicProvider(): ProviderPlugin {
     ],
     auth: [
       {
-        id: "cli",
-        label: "Claude CLI",
-        hint: "Keep using a local Claude CLI login and run Anthropic models through the Claude CLI runtime",
-        kind: "custom",
+        ...cli,
         wizard: {
-          choiceId: "anthropic-cli",
-          choiceLabel: "Anthropic Claude CLI",
-          choiceHint: "Keep using an existing Claude Code CLI login on this host",
+          ...cli.wizard,
           assistantPriority: -20,
-          groupId: "anthropic",
-          groupLabel: "Anthropic",
-          groupHint: "Claude CLI + API key",
           modelAllowlist: {
             allowedKeys: [...CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS],
             initialSelections: [CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF],
@@ -769,19 +576,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
           }),
       },
       {
-        id: "setup-token",
-        label: "Anthropic setup-token",
-        hint: "Paste a long-lived token created with 'claude setup-token'",
-        kind: "token",
-        wizard: {
-          choiceId: "setup-token",
-          choiceLabel: "Anthropic setup-token",
-          choiceHint: "Token created by running 'claude setup-token' in your terminal",
-          assistantPriority: 40,
-          groupId: "anthropic",
-          groupLabel: "Anthropic",
-          groupHint: "Claude CLI + API key + token",
-        },
+        ...setupToken,
+        wizard: { ...setupToken.wizard, assistantPriority: 40 },
         run: async (ctx: ProviderAuthContext) =>
           await (await loadAuthRuntime()).runAnthropicSetupTokenAuth(ctx, defaultAnthropicModel),
         validateNonInteractive: async (ctx) =>
@@ -793,22 +589,16 @@ export function buildAnthropicProvider(): ProviderPlugin {
       },
       createProviderApiKeyAuthMethod({
         providerId,
-        methodId: "api-key",
-        label: "Anthropic API key",
-        hint: "Direct Anthropic API key",
+        methodId: apiKeyMethod.id,
+        label: apiKeyMethod.label,
+        hint: apiKeyMethod.hint,
         optionKey: "anthropicApiKey",
         flagName: "--anthropic-api-key",
         envVar: "ANTHROPIC_API_KEY",
         promptMessage: "Enter Anthropic API key",
         defaultModel: defaultAnthropicModel,
         expectedProviders: ["anthropic"],
-        wizard: {
-          choiceId: "apiKey",
-          choiceLabel: "Anthropic API key",
-          groupId: "anthropic",
-          groupLabel: "Anthropic",
-          groupHint: "Claude CLI + API key",
-        },
+        wizard: apiKeyMethod.wizard,
       }),
     ],
     catalog: {
@@ -852,7 +642,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
         }) ?? model
       );
     },
-    normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
+    normalizeResolvedModel: normalizeAnthropicResolvedModel,
     prepareSyntheticAuth: anthropicProviderDiscovery.prepareSyntheticAuth,
     ...buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }),
     isModernModelRef: ({ provider, modelId }) =>
@@ -877,7 +667,6 @@ export function buildAnthropicProvider(): ProviderPlugin {
   };
 }
 
-/** Register Anthropic provider, Claude CLI backend, and media understanding provider. */
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   const version = createClaudeCodeVersionProbe(api);
   api.registerCliBackend(buildAnthropicCliBackend(version));
@@ -897,4 +686,3 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     api.registerNodeInvokePolicy(policy);
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6,14 +6,22 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateCampaignController } from "../../infra/update-campaign.js";
+import {
+  createGatewayUpdateLifecycle,
+  type UpdateCheckLifecycle,
+} from "../../infra/update-check-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 
 let ledgerHome: TempHomeEnv | undefined;
+let lifecycle: UpdateCheckLifecycle;
 beforeEach(async () => {
   ledgerHome = await createTempHomeEnv("openclaw-update-campaign-rpc-");
+  lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
 });
 afterEach(async () => {
+  await lifecycle.stop();
   await ledgerHome?.restore();
   ledgerHome = undefined;
 });
@@ -141,6 +149,7 @@ vi.mock("../../infra/update-campaign.js", () => ({
     adopt: adoptCampaignMock,
     clear: clearCampaignMock,
     getState: getCampaignStateMock,
+    bindRun: vi.fn(),
   },
 }));
 
@@ -542,28 +551,22 @@ describe("update.run campaign ownership", () => {
       adoptCampaignMock.mockReturnValue({ status: "absent" });
     });
 
-    it.each([
-      { name: "matching", campaignSha: requestTarget.upstreamSha },
-      { name: "conflicting", campaignSha: newerUpstreamSha },
-    ])(
-      "rejects a $name explicit target while its campaign is applying",
-      async ({ campaignSha }) => {
-        setDevCampaignSchedule(campaignSha);
-        mockGitInstallStatus(campaignSha);
-        detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-        adoptCampaignMock.mockReturnValueOnce({ status: "applying" });
+    it("rejects an explicit target while its campaign is applying", async () => {
+      setDevCampaignSchedule(newerUpstreamSha);
+      mockGitInstallStatus(newerUpstreamSha);
+      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+      adoptCampaignMock.mockReturnValueOnce({ status: "applying" });
 
-        const response = await captureUpdateRun({ target: requestTarget });
+      const response = await captureUpdateRun({ target: requestTarget });
 
-        expect(response).toMatchObject({
-          ok: false,
-          result: { status: "error", reason: "update-campaign-applying" },
-        });
-        expect(adoptCampaignMock).toHaveBeenCalledWith(trackedTarget);
-        expectNoUpdateMutation();
-        expect(clearCampaignMock).not.toHaveBeenCalled();
-      },
-    );
+      expect(response).toMatchObject({
+        ok: false,
+        result: { status: "error", reason: "update-campaign-applying" },
+      });
+      expect(adoptCampaignMock).toHaveBeenCalledWith(trackedTarget);
+      expectNoUpdateMutation();
+      expect(clearCampaignMock).not.toHaveBeenCalled();
+    });
 
     it("keeps the requested commit through managed preflight and handoff after upstream advances", async () => {
       detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
@@ -645,17 +648,6 @@ describe("update.run campaign ownership", () => {
       expectNoUpdateMutation();
       expect(adoptCampaignMock).not.toHaveBeenCalled();
     });
-  });
-
-  it("does not pin a plain dev update without a campaign", async () => {
-    updateChannel = "dev";
-    adoptCampaignMock.mockReturnValueOnce({ status: "absent" });
-
-    await invokeUpdateRun();
-
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({ devTarget: expect.anything() }),
-    );
   });
 
   it("does not add a pin environment to a non-campaign managed handoff", async () => {

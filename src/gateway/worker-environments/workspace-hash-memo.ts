@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { compileFunction } from "node:vm";
 import { z } from "zod";
 
 export type WorkspaceHashMetrics = {
@@ -168,19 +169,20 @@ export function takeWorkspaceHashMemo(
   return memo;
 }
 
-/** Self-contained for the node script; preserve the largest hashes within both wire limits. */
-export function selectWorkerWorkspaceHashMemoEntries(
-  memo: ReadonlyMap<string, string>,
-  maxEntries: number,
-  maxBytes: number,
-): Array<[string, string]> {
-  const compareIdentity = ([left]: [string, string], [right]: [string, string]) =>
+// One source for host and standalone worker execution; transformed closures cannot
+// be serialized because their compiler-owned helpers stay in the parent module.
+export const WORKSPACE_HASH_MEMO_JS = String.raw`
+function workspaceStatIdentity(owner, stats) {
+  return [owner, stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(":");
+}
+function selectWorkerWorkspaceHashMemoEntries(memo, maxEntries, maxBytes) {
+  const compareIdentity = ([left], [right]) =>
     left < right ? -1 : left > right ? 1 : 0;
   const candidates = [...memo]
     .filter(([identity]) => identity.startsWith("worker:"))
     .map((entry) => ({ entry, size: Number(entry[0].split(":")[3]) }))
     .toSorted((left, right) => right.size - left.size || compareIdentity(left.entry, right.entry));
-  const selected: Array<[string, string]> = [];
+  const selected = [];
   let bytes = 2;
   for (const { entry } of candidates) {
     if (selected.length === maxEntries) {
@@ -193,7 +195,26 @@ export function selectWorkerWorkspaceHashMemoEntries(
     }
   }
   return selected.toSorted(compareIdentity);
-}
+}`;
+
+const {
+  workspaceStatIdentity,
+  selectWorkerWorkspaceHashMemoEntries,
+}: {
+  workspaceStatIdentity: (
+    owner: "gateway" | "worker",
+    stats: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint },
+  ) => string;
+  selectWorkerWorkspaceHashMemoEntries: (
+    memo: ReadonlyMap<string, string>,
+    maxEntries: number,
+    maxBytes: number,
+  ) => Array<[string, string]>;
+} = compileFunction(
+  `${WORKSPACE_HASH_MEMO_JS}\nreturn { workspaceStatIdentity, selectWorkerWorkspaceHashMemoEntries };`,
+)();
+
+export { workspaceStatIdentity };
 
 export function serializeRemoteWorkspaceHashMemo(
   memo: WorkspaceHashMemo,
@@ -225,17 +246,4 @@ export async function measureLocalWorkspaceReconciliation<T>(
   } finally {
     metrics.localReconciliationDurationMs += performance.now() - startedAt;
   }
-}
-
-export function workspaceStatIdentity(
-  owner: "gateway" | "worker",
-  stats: {
-    dev: bigint;
-    ino: bigint;
-    size: bigint;
-    mtimeNs: bigint;
-    ctimeNs: bigint;
-  },
-): string {
-  return `${owner}:${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
 }

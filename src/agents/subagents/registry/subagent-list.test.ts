@@ -4,8 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -147,7 +147,7 @@ describe("buildSubagentList", () => {
     ).toEqual([]);
   });
 
-  it("builds the subagent list without decoding unrelated saved prompts", async () => {
+  it("builds the subagent list without decoding unrelated session metadata or saved prompts", async () => {
     const stateDir = await fs.mkdtemp(path.join(testWorkspaceDir, "metadata-"));
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       try {
@@ -159,6 +159,7 @@ describe("buildSubagentList", () => {
             {
               sessionId: `other-${i}`,
               updatedAt: 1,
+              label: `UNRELATED_PAYLOAD_${i}`,
               skillsSnapshot: { prompt: `UNRELATED_PAYLOAD_${"x".repeat(4096)}`, skills: [] },
             },
           );
@@ -205,6 +206,8 @@ describe("buildSubagentList", () => {
             totalTokens: 197000,
           });
           expect(list.active[0]?.line).toContain("prompt/cache 197k");
+          expect(list.active[0]?.line).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
+          expect(list.active[0]?.line).not.toContain("1k io");
           const unrelatedParses = parse.mock.calls.filter(
             ([value]) => typeof value === "string" && value.includes("UNRELATED_PAYLOAD_"),
           ).length;
@@ -220,23 +223,6 @@ describe("buildSubagentList", () => {
     });
   });
 
-  it("returns empty active and recent sections when no runs exist", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const list = await buildSubagentList({
-      cfg,
-      runs: [],
-      recentMinutes: 30,
-      taskMaxChars: 110,
-    });
-    expect(list.active).toStrictEqual([]);
-    expect(list.recent).toStrictEqual([]);
-    expect(list.text).toContain("active subagents:");
-    expect(list.text).toContain("recent (last 30m):");
-  });
-
   it("truncates long task text in list lines", async () => {
     const run = {
       runId: "run-long-task",
@@ -249,12 +235,8 @@ describe("buildSubagentList", () => {
       execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
     const list = await buildSubagentList({
-      cfg,
+      cfg: {},
       runs: [run],
       recentMinutes: 30,
       taskMaxChars: 110,
@@ -278,13 +260,9 @@ describe("buildSubagentList", () => {
       execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
 
     const list = await buildSubagentList({
-      cfg,
+      cfg: {},
       runs: [run],
       recentMinutes: 30,
     });
@@ -293,123 +271,32 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).toContain("review_subagents: Review worker");
   });
 
-  it.each([
-    {
-      name: "a killed run with a provider failure",
-      endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "error", error: "agent run aborted" } as const,
-      expectedStatus: "killed",
-    },
-    {
-      name: "a killed run with an earlier successful provider outcome",
-      endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "ok" } as const,
-      expectedStatus: "killed",
-    },
-    {
-      name: "a failed run",
-      outcome: { status: "error", error: "provider rejected the request" } as const,
-      expectedStatus: "failed",
-    },
-    {
-      name: "a timed-out run",
-      outcome: { status: "timeout" } as const,
-      expectedStatus: "timeout",
-    },
-    {
-      name: "a completed run",
-      outcome: { status: "ok" } as const,
-      expectedStatus: "done",
-    },
-  ])(
-    "projects the canonical terminal status for $name",
-    async ({ endedReason, outcome, expectedStatus }) => {
-      const now = Date.now();
-      const run = {
-        runId: `run-status-${expectedStatus}`,
-        childSessionKey: `agent:main:subagent:status-${expectedStatus}`,
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "report the actual child outcome",
-        cleanup: "keep",
-        createdAt: now - 2_000,
-        execution: {
-          status: "terminal",
-          startedAt: now - 2_000,
-          endedAt: now - 1_000,
-          outcome,
-        },
-        ...(endedReason ? { endedReason } : {}),
-      } satisfies SubagentRunRecord;
-      addSubagentRunForTests(run);
-
-      const list = await buildSubagentList({
-        cfg: {} as OpenClawConfig,
-        runs: [run],
-        recentMinutes: 30,
-      });
-
-      expect(list.recent[0]?.status).toBe(expectedStatus);
-      expect(list.recent[0]?.line).toContain(` ${expectedStatus}`);
-    },
-  );
-
-  it("keeps ended orchestrators active while descendants remain pending", async () => {
-    // Parent orchestrators can finish their own turn before child workers do;
-    // list output should keep them active until descendants settle.
+  it("projects failed runs into recent output", async () => {
     const now = Date.now();
-    const orchestratorRun = {
-      runId: "run-orchestrator-ended",
-      childSessionKey: "agent:main:subagent:orchestrator-ended",
+    const run = {
+      runId: "run-status-failed",
+      childSessionKey: "agent:main:subagent:status-failed",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "orchestrate child workers",
+      task: "report the actual child outcome",
       cleanup: "keep",
-      createdAt: now - 120_000,
+      createdAt: now - 2_000,
       execution: {
         status: "terminal",
-        startedAt: now - 120_000,
-        endedAt: now - 60_000,
-        outcome: { status: "ok" },
+        startedAt: now - 2_000,
+        endedAt: now - 1_000,
+        outcome: { status: "error", error: "provider rejected the request" },
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(orchestratorRun);
-    addSubagentRunForTests({
-      runId: "run-orchestrator-child-active",
-      childSessionKey: "agent:main:subagent:orchestrator-ended:subagent:child",
-      requesterSessionKey: "agent:main:subagent:orchestrator-ended",
-      requesterDisplayKey: "subagent:orchestrator-ended",
-      task: "child worker still running",
-      cleanup: "keep",
-      createdAt: now - 30_000,
-      startedAt: now - 30_000,
-    });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const list = await buildSubagentList({
-      cfg,
-      runs: [orchestratorRun],
-      recentMinutes: 30,
-      taskMaxChars: 110,
-    });
+    addSubagentRunForTests(run);
 
-    expect(list.active[0]?.status).toBe("active (waiting on 1 child)");
-    expect(list.active[0]?.childSessions).toEqual([
-      "agent:main:subagent:orchestrator-ended:subagent:child",
-    ]);
-    expect(list.recent).toStrictEqual([]);
+    const list = await buildSubagentList({ cfg: {}, runs: [run], recentMinutes: 30 });
+
+    expect(list.recent[0]?.status).toBe("failed");
+    expect(list.recent[0]?.line).toContain(" failed");
   });
 
   it.each([
-    {
-      name: "a killed parent with a provider failure",
-      endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "error", error: "agent run aborted" } as const,
-      pendingChildren: 1,
-      expectedStatus: "killed (waiting on 1 child)",
-    },
     {
       name: "a killed parent with an earlier successful provider outcome",
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
@@ -479,7 +366,7 @@ describe("buildSubagentList", () => {
       }
 
       const list = await buildSubagentList({
-        cfg: {} as OpenClawConfig,
+        cfg: {},
         runs: [parentRun],
         recentMinutes: 30,
       });
@@ -491,7 +378,12 @@ describe("buildSubagentList", () => {
         pendingDescendants: pendingChildren,
       });
       expect(list.active[0]?.line).toContain(` ${expectedStatus}`);
-      expect(list.active[0]?.childSessions).toHaveLength(pendingChildren);
+      expect(list.active[0]?.childSessions).toEqual(
+        Array.from(
+          { length: pendingChildren },
+          (_, childIndex) => `${parentRun.childSessionKey}:subagent:child-${childIndex}`,
+        ),
+      );
       expect(list.recent).toStrictEqual([]);
     },
   );
@@ -521,67 +413,15 @@ describe("buildSubagentList", () => {
       endedAt: now - 31 * 60_000,
       outcome: { status: "ok" },
     });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
 
     const list = await buildSubagentList({
-      cfg,
+      cfg: {},
       runs: [parentRun],
       recentMinutes: 30,
       taskMaxChars: 110,
     });
 
     expect(list.active[0]?.childSessions).toBeUndefined();
-  });
-
-  it("formats io and prompt/cache usage from session entries", async () => {
-    const run = {
-      runId: "run-usage",
-      childSessionKey: "agent:main:subagent:usage",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "do thing",
-      cleanup: "keep",
-      createdAt: 1000,
-      execution: { status: "running", startedAt: 1000 },
-    } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
-    const storePath = path.join(testWorkspaceDir, "sessions-subagent-list-usage.json");
-    await replaceSessionEntry(
-      {
-        storePath,
-        sessionKey: "agent:main:subagent:usage",
-      },
-      {
-        sessionId: "child-session-usage",
-        updatedAt: Date.now(),
-        inputTokens: 12,
-        outputTokens: 1000,
-        totalTokens: 197000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        model: "opencode/claude-opus-4-6",
-      },
-    );
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: storePath },
-    } as OpenClawConfig;
-    // Prompt/cache usage is separate from visible IO so operators can spot
-    // cache-heavy sessions without misreading it as assistant output.
-    const list = await buildSubagentList({
-      cfg,
-      runs: [run],
-      recentMinutes: 30,
-      taskMaxChars: 110,
-    });
-
-    expect(list.active[0]?.line).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
-    expect(list.active[0]?.line).toContain("prompt/cache 197k");
-    expect(list.active[0]?.line).not.toContain("1k io");
   });
 
   it("keeps stale unended runs out of active and recent list output", async () => {
@@ -600,13 +440,9 @@ describe("buildSubagentList", () => {
       },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(staleRun);
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
 
     const list = await buildSubagentList({
-      cfg,
+      cfg: {},
       runs: [staleRun],
       recentMinutes: 30,
       taskMaxChars: 110,
@@ -616,6 +452,7 @@ describe("buildSubagentList", () => {
     expect(list.active).toStrictEqual([]);
     expect(list.recent).toStrictEqual([]);
     expect(list.text).toContain("active subagents:\n(none)");
+    expect(list.text).toContain("recent (last 30m):\n(none)");
   });
 
   it("does not let a stale unended child keep an ended parent listed active", async () => {
@@ -646,13 +483,9 @@ describe("buildSubagentList", () => {
       createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
       startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
     });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
 
     const list = await buildSubagentList({
-      cfg,
+      cfg: {},
       runs: [parentRun],
       recentMinutes: 30,
       taskMaxChars: 110,

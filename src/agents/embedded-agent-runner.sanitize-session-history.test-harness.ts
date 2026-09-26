@@ -153,7 +153,7 @@ export function makeReasoningAssistantMessages(opts?: {
   return messages as unknown as AgentMessage[];
 }
 
-export async function sanitizeWithOpenAIResponses(params: {
+async function sanitizeWithOpenAIResponses(params: {
   sanitizeSessionHistory: SanitizeSessionHistoryFn;
   messages: AgentMessage[];
   sessionManager: SessionManager;

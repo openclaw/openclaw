@@ -1,4 +1,5 @@
 import pMap, { pMapSkip } from "p-map";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
 import {
@@ -12,6 +13,7 @@ import {
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import type { CronJob } from "../types.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
 import {
@@ -35,7 +37,6 @@ import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { recoverCronRunProposals } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
-import type { InterruptedStartupRun } from "./startup-run-repair.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
@@ -54,10 +55,7 @@ import { collectRunnableJobs } from "./timer-runnable.js";
 
 /** Arms the cron timer for the next wake or a maintenance recheck. */
 export function armTimer(state: CronServiceState) {
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
-  state.timer = null;
+  stopTimer(state);
   if (state.stopped || state.schedulingPaused || state.startupCatchup) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler stopped");
     return;
@@ -93,9 +91,6 @@ export function armTimer(state: CronServiceState) {
   // Wake at least once a minute to avoid schedule drift and recover quickly
   // when the process was paused or wall-clock time jumps.
   const clampedDelay = Math.min(flooredDelay, MAX_CRON_TIMER_DELAY_MS);
-  // Intentionally avoid an `async` timer callback:
-  // Vitest's fake-timer helpers can await async callbacks, which would block
-  // tests that simulate long-running jobs. Runtime behavior is unchanged.
   setCronTimer(state, clampedDelay);
   state.deps.log.debug(
     {
@@ -112,21 +107,25 @@ function armRunningRecheckTimer(state: CronServiceState) {
   if (state.stopped || state.schedulingPaused) {
     return;
   }
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
   setCronTimer(state, MAX_CRON_TIMER_DELAY_MS);
 }
 
+export function stopTimer(state: CronServiceState) {
+  state.timer?.cancel();
+  state.timer = null;
+}
+
 function setCronTimer(state: CronServiceState, delayMs: number): void {
-  state.timer = setTimeout(() => {
-    // A timer owns its whole tick; no request-local lifetime may cross this boundary.
-    runInDetachedAsyncContext(() => {
-      void onTimer(state).catch((err: unknown) => {
+  state.timer = state.deps.scheduler.schedule({
+    id: `cron:${state.deps.storePath}:due`,
+    delayMs,
+    run: () => {
+      state.timer = null;
+      return runInDetachedAsyncContext(() => onTimer(state)).catch((err: unknown) => {
         state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
       });
-    });
-  }, delayMs);
+    },
+  });
 }
 
 /** Consume a released slot without routing overdue work through the refire floor. */
@@ -134,10 +133,7 @@ function requestImmediateCronRecheck(state: CronServiceState): Promise<void> | u
   if (state.stopped || state.schedulingPaused || !state.deps.cronEnabled) {
     return undefined;
   }
-  if (state.timer) {
-    clearTimeout(state.timer);
-    state.timer = null;
-  }
+  stopTimer(state);
   return onTimer(state).catch((err: unknown) => {
     state.deps.log.error({ err: String(err) }, "cron: immediate capacity recheck failed");
   });
@@ -156,9 +152,15 @@ export async function onTimer(state: CronServiceState) {
   try {
     // A restart signal can be rejected after temporarily closing admission.
     // Wait for that decision so the consumed timer is not silently lost.
-    admission = await beginGatewayRootWorkAdmissionWhenOpen("cron:timer-tick");
+    admission = await beginGatewayRootWorkAdmissionWhenOpen(
+      "cron:timer-tick",
+      state.deps.scheduler.signal,
+    );
   } catch (err) {
-    if (err instanceof GatewayDrainingError) {
+    if (
+      err instanceof GatewayDrainingError ||
+      (state.deps.scheduler.signal.aborted && isAbortError(err))
+    ) {
       return;
     }
     throw err;

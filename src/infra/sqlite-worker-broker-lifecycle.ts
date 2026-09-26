@@ -176,7 +176,6 @@ export function createSqliteWorkerLifecycle({
     if (actor.closing) {
       return actor.closing;
     }
-    const firstAttempt = actor.cleanupState === undefined;
     actor.cleanupState = "pending";
     actor.closing = (async () => {
       const errors: unknown[] = [];
@@ -192,8 +191,6 @@ export function createSqliteWorkerLifecycle({
           fail(actor.slot, error instanceof Error ? error : new Error(String(error)));
           await actor.slot.exit;
         }
-      } else if (firstAttempt && actor.slot.failed && !actor.slot.retiredAfterCompletion) {
-        errors.push(actor.slot.failed);
       }
       try {
         if (

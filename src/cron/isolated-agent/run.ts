@@ -163,6 +163,7 @@ export async function runCronIsolatedAgentTurn(
                 enabled: isDiagnosticsEnabled(params.cfg),
                 sessionId: prepared.context.runSessionId,
                 sessionKey: prepared.context.runSessionKey,
+                agentId: prepared.context.agentId,
                 channel: "cron",
                 source: "cron-isolated",
                 startedAtMs: turnStartedAtMs,

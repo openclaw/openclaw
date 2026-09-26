@@ -1,14 +1,9 @@
 // Legacy web tool config migrations into plugin-owned provider config.
 import { ensureRecord } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
-import {
-  cloneRecord,
-  hasOwnKey,
-  isRecord,
-  type JsonRecord,
-} from "./legacy-config-record-shared.js";
+import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
+import { isRecord, type JsonRecord } from "./legacy-config-record-shared.js";
 
-const DANGEROUS_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
   ["brave", "brave"],
   ["duckduckgo", "duckduckgo"],
@@ -80,7 +75,7 @@ function resolveWebSlot(raw: unknown, slot: string): JsonRecord | undefined {
 function retainedSource(source: JsonRecord, removedRecordKeys: ReadonlySet<string>): JsonRecord {
   const retained: JsonRecord = {};
   for (const [key, value] of Object.entries(source)) {
-    if (DANGEROUS_RECORD_KEYS.has(key) || (removedRecordKeys.has(key) && isRecord(value))) {
+    if (isBlockedObjectKey(key) || (removedRecordKeys.has(key) && isRecord(value))) {
       continue;
     }
     retained[key] = value;
@@ -98,13 +93,13 @@ function applyPluginMove(root: JsonRecord, move: PluginMove, changes: string[]):
   const config = ensureRecord(entry, "config");
   const existingValue = config[move.configKey];
   const existingWasRecord = isRecord(existingValue);
-  const existing = cloneRecord(existingWasRecord ? existingValue : undefined);
+  const existing = { ...(existingWasRecord ? existingValue : undefined) };
 
   if (!existingWasRecord) {
-    config[move.configKey] = cloneRecord(move.payload);
+    config[move.configKey] = { ...move.payload };
     changes.push(`Moved ${move.legacyPath} → ${move.targetPath}.`);
   } else if (move.mergeMode === "own-api-key") {
-    if (!hasOwnKey(existing, "apiKey")) {
+    if (!Object.hasOwn(existing, "apiKey")) {
       existing.apiKey = move.payload.apiKey;
       config[move.configKey] = existing;
       changes.push(`Merged ${move.legacyPath} → ${move.targetPath} (filled missing plugin auth).`);
@@ -112,7 +107,7 @@ function applyPluginMove(root: JsonRecord, move: PluginMove, changes: string[]):
       changes.push(`Removed ${move.legacyPath} (${move.targetPath} already set).`);
     }
   } else {
-    const merged = cloneRecord(existing);
+    const merged = { ...existing };
     mergeMissing(merged, move.payload);
     config[move.configKey] = merged;
     if (JSON.stringify(merged) !== JSON.stringify(existing) || activated) {
@@ -185,19 +180,19 @@ function searchMove(
 
 function prepareWebSearch(source: JsonRecord): PreparedSlot | null {
   const providerIds = legacySearchProviderIds();
-  if (!hasOwnKey(source, "apiKey") && !providerIds.some((id) => isRecord(source[id]))) {
+  if (!Object.hasOwn(source, "apiKey") && !providerIds.some((id) => isRecord(source[id]))) {
     return null;
   }
   const retained = retainedSource(source, new Set(["apiKey", ...providerIds]));
   delete retained.apiKey;
   const steps: MigrationStep[] = [];
-  const braveRecord = isRecord(source.brave) ? cloneRecord(source.brave) : undefined;
-  const bravePayload = cloneRecord(braveRecord);
-  if (hasOwnKey(source, "apiKey")) {
+  const braveRecord = isRecord(source.brave) ? source.brave : undefined;
+  const bravePayload = { ...braveRecord };
+  if (Object.hasOwn(source, "apiKey")) {
     bravePayload.apiKey = source.apiKey;
   }
   if (Object.keys(bravePayload).length > 0) {
-    const hasGlobalApiKey = hasOwnKey(source, "apiKey");
+    const hasGlobalApiKey = Object.hasOwn(source, "apiKey");
     steps.push({
       move: searchMove(
         "brave",
@@ -217,7 +212,7 @@ function prepareWebSearch(source: JsonRecord): PreparedSlot | null {
     if (providerId === "brave" || !isRecord(source[providerId])) {
       continue;
     }
-    const payload = cloneRecord(source[providerId]);
+    const payload = { ...source[providerId] };
     if (Object.keys(payload).length === 0) {
       continue;
     }
@@ -239,7 +234,7 @@ function prepareWebFetch(source: JsonRecord): PreparedSlot | null {
   if (!isRecord(source.firecrawl)) {
     return null;
   }
-  const payload = cloneRecord(source.firecrawl);
+  const payload = { ...source.firecrawl };
   delete payload.enabled;
   const retained = retainedSource(source, new Set(["firecrawl"]));
   return {
@@ -267,12 +262,12 @@ export function resolveLegacyXSearchModelTarget(model: unknown): string | undefi
 }
 
 function prepareXSearch(source: JsonRecord): PreparedSlot | null {
-  const hasAuth = hasOwnKey(source, "apiKey");
+  const hasAuth = Object.hasOwn(source, "apiKey");
   const modelTarget = resolveLegacyXSearchModelTarget(source.model);
   if (!hasAuth && !modelTarget) {
     return null;
   }
-  const retained = cloneRecord(source);
+  const retained = { ...source };
   const steps: MigrationStep[] = [];
   if (hasAuth) {
     delete retained.apiKey;
@@ -307,7 +302,7 @@ export function listLegacyWebSearchConfigPaths(raw: unknown): string[] {
   if (!source) {
     return [];
   }
-  const paths = hasOwnKey(source, "apiKey") ? ["tools.web.search.apiKey"] : [];
+  const paths = Object.hasOwn(source, "apiKey") ? ["tools.web.search.apiKey"] : [];
   for (const providerId of legacySearchProviderIds()) {
     if (isRecord(source[providerId])) {
       paths.push(

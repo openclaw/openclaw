@@ -240,14 +240,17 @@ function isOptionalDiaryContextReadError(err: unknown): boolean {
   return code === "EACCES" || code === "EPERM" || isEmptyDreamsReadError(err, code);
 }
 
-function getDiaryContextEntries(existing: string): string[] {
+function readDiaryBlocks(existing: string): string[] | null {
   const startIdx = existing.indexOf(DIARY_START_MARKER);
   const endIdx = existing.indexOf(DIARY_END_MARKER);
-  if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
-    return [];
+  if (startIdx < 0 || endIdx < startIdx) {
+    return null;
   }
-  const inner = existing.slice(startIdx + DIARY_START_MARKER.length, endIdx);
-  return splitDiaryBlocks(inner)
+  return splitDiaryBlocks(existing.slice(startIdx + DIARY_START_MARKER.length, endIdx));
+}
+
+function getDiaryContextEntries(existing: string): string[] {
+  return (readDiaryBlocks(existing) ?? [])
     .map(normalizeDiaryBlockBody)
     .filter((entry) => entry.length > 0);
 }
@@ -307,15 +310,13 @@ function joinDiaryBlocks(blocks: string[]): string {
 
 function stripBackfillDiaryBlocks(existing: string): { updated: string; removed: number } {
   const ensured = ensureDiarySection(existing);
-  const startIdx = ensured.indexOf(DIARY_START_MARKER);
-  const endIdx = ensured.indexOf(DIARY_END_MARKER);
-  if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+  const blocks = readDiaryBlocks(ensured);
+  if (!blocks) {
     return { updated: ensured, removed: 0 };
   }
-  const inner = ensured.slice(startIdx + DIARY_START_MARKER.length, endIdx);
   const kept: string[] = [];
   let removed = 0;
-  for (const block of splitDiaryBlocks(inner)) {
+  for (const block of blocks) {
     if (block.includes(BACKFILL_ENTRY_MARKER)) {
       removed += 1;
       continue;
@@ -376,13 +377,7 @@ export async function writeBackfillDiaryEntries(params: {
       const stripped = params.preserveExisting
         ? { updated: existing, removed: 0 }
         : stripBackfillDiaryBlocks(existing);
-      const startIdx = stripped.updated.indexOf(DIARY_START_MARKER);
-      const endIdx = stripped.updated.indexOf(DIARY_END_MARKER);
-      const inner =
-        startIdx >= 0 && endIdx > startIdx
-          ? stripped.updated.slice(startIdx + DIARY_START_MARKER.length, endIdx)
-          : "";
-      const preservedBlocks = splitDiaryBlocks(inner);
+      const preservedBlocks = readDiaryBlocks(stripped.updated) ?? [];
       const additions = params.entries.map((entry) =>
         buildBackfillDiaryEntry({
           isoDay: entry.isoDay,
@@ -443,17 +438,14 @@ export async function dedupeDreamDiaryEntries(params: {
     workspaceDir: params.workspaceDir,
     updater: (existing, dreamsPath) => {
       const ensured = ensureDiarySection(existing);
-      const startIdx = ensured.indexOf(DIARY_START_MARKER);
-      const endIdx = ensured.indexOf(DIARY_END_MARKER);
-      if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+      const blocks = readDiaryBlocks(ensured);
+      if (!blocks) {
         return {
           content: ensured,
           result: { dreamsPath, removed: 0, kept: 0 },
           shouldWrite: false,
         };
       }
-      const inner = ensured.slice(startIdx + DIARY_START_MARKER.length, endIdx);
-      const blocks = splitDiaryBlocks(inner);
       const seen = new Set<string>();
       const keptBlocks: string[] = [];
       let removed = 0;

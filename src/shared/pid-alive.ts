@@ -1,11 +1,88 @@
 // Native Node callers load this source closure without a TypeScript import resolver.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
+import { createRequire } from "node:module";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
 import { readFreeBsdProcessStartTime } from "./freebsd-process-identity.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
+declare const SEALED_RUNTIME_BUILD: boolean;
+let darwinNative:
+  | {
+      library: import("koffi").LibraryHandle;
+      query: ReturnType<import("koffi").LibraryHandle["func"]>;
+    }
+  | undefined;
+
+function readDarwinNativeIdentity(pid: number): { parentPid: number; startedAt: number } | null {
+  if (
+    process.platform !== "darwin" ||
+    (process.arch !== "arm64" && process.arch !== "x64") ||
+    pid > 0x7fffffff ||
+    (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
+  ) {
+    return null;
+  }
+  try {
+    if (!darwinNative) {
+      const koffi: typeof import("koffi").default = createRequire(import.meta.url)("koffi");
+      const library = koffi.load("/usr/lib/libproc.dylib");
+      const query = library.func(
+        "int proc_pidinfo(int pid, int flavor, uint64_t arg, _Out_ void *buffer, int buffersize)",
+      );
+      darwinNative = { library, query };
+    }
+    // Darwin's public PROC_PIDTBSDINFO ABI is 136 bytes on arm64 and x86_64.
+    // Query every foreign PID afresh; only the callable and its library are retained.
+    const bytes = Buffer.alloc(136);
+    if (darwinNative.query(pid, 3, 0, bytes, bytes.length) !== bytes.length) {
+      return null;
+    }
+    const parentPid = bytes.readUInt32LE(16);
+    const seconds = bytes.readBigUInt64LE(120);
+    if (
+      bytes.readUInt32LE(12) !== pid ||
+      parentPid > 0x7fffffff ||
+      seconds === 0n ||
+      seconds > BigInt(Number.MAX_SAFE_INTEGER) ||
+      bytes.readBigUInt64LE(128) >= 1_000_000n
+    ) {
+      return null;
+    }
+    // Published Darwin leases use ps lstart's epoch seconds, not microseconds.
+    return { parentPid, startedAt: Number(seconds) };
+  } catch {
+    // Missing native packages and denied queries retain the existing bounded ps path.
+    return null;
+  }
+}
+// Bound corrupted/cyclic ancestry while allowing nested service supervisors.
+export const MAX_ANCESTOR_WALK_DEPTH = 32;
+
+/** Project a best-effort ancestor chain without deciding liveness or authority. */
+export function collectProcessAncestorPids(
+  immediateParent: number,
+  readParentPid: (pid: number) => number | null,
+  throughPid?: number,
+): Set<number> {
+  const pids = new Set<number>([process.pid]);
+  if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
+    return pids;
+  }
+  pids.add(immediateParent);
+  let current = immediateParent;
+  for (let depth = 0; depth < MAX_ANCESTOR_WALK_DEPTH && current !== throughPid; depth++) {
+    const parent = readParentPid(current);
+    if (parent == null || parent <= 0 || pids.has(parent)) {
+      break;
+    }
+    pids.add(parent);
+    current = parent;
+  }
+  return pids;
+}
+
 // Cache only a successful self read: this identity lasts for the process.
 // Failed reads must retry, and foreign PIDs must stay fresh to detect PID reuse.
 let selfStartTime: number | null = null;
@@ -64,14 +141,31 @@ export function isPidDefinitelyDead(pid: number): boolean {
   return isZombieProcess(pid);
 }
 
-function getDarwinProcessStartTime(pid: number, env: NodeJS.ProcessEnv): number | null {
+function getDarwinProcessStartTime(
+  pid: number,
+  env: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+): number | null {
+  const started = performance.now();
+  const native = readDarwinNativeIdentity(pid);
+  if (native) {
+    return native.startedAt;
+  }
+  // The default bounds ps itself; explicit deadlines also pay for native loading.
+  const remainingMs =
+    timeoutMs === undefined
+      ? PROCESS_START_TIMEOUT_MS
+      : Math.ceil(timeoutMs - (performance.now() - started));
+  if (remainingMs <= 0) {
+    return null;
+  }
   try {
     const startedAt = childProcess
       .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
         env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: PROCESS_START_TIMEOUT_MS,
+        timeout: remainingMs,
         killSignal: "SIGKILL",
       })
       .trim();
@@ -79,6 +173,68 @@ function getDarwinProcessStartTime(pid: number, env: NodeJS.ProcessEnv): number 
     // a system timezone change cannot make a live lock owner look like PID reuse.
     const startedAtMs = Date.parse(`${startedAt} UTC`);
     return Number.isFinite(startedAtMs) ? Math.floor(startedAtMs / 1000) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read one Darwin PID's parent and birth together, without enumerating unrelated processes. */
+export function readDarwinProcessIdentity(
+  pid: number,
+  env: NodeJS.ProcessEnv = process.env,
+  timeoutMs?: number,
+): { parentPid: number; startedAt: number } | null {
+  if (process.platform !== "darwin" || !isValidPid(pid)) {
+    return null;
+  }
+  const started = performance.now();
+  const native = readDarwinNativeIdentity(pid);
+  if (native) {
+    return native;
+  }
+  const remainingMs =
+    timeoutMs === undefined
+      ? PROCESS_START_TIMEOUT_MS
+      : Math.ceil(timeoutMs - (performance.now() - started));
+  if (remainingMs <= 0) {
+    return null;
+  }
+  try {
+    const stdout = childProcess.execFileSync(
+      "/bin/ps",
+      ["-o", "pid=,ppid=,lstart=", "-p", String(pid)],
+      {
+        encoding: "utf8",
+        env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: remainingMs,
+        killSignal: "SIGKILL",
+        maxBuffer: 4096,
+      },
+    );
+    // A complete single-PID record is required; truncated or extra rows are unknown.
+    if (!stdout.endsWith("\n") || /[\r\n]/.test(stdout.slice(0, -1))) {
+      return null;
+    }
+    const match =
+      /^[ \t]*(\d+)[ \t]+(\d+)[ \t]+(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +(\d{1,2}) (\d{2}:\d{2}:\d{2}) (\d{4})[ \t]*$/.exec(
+        stdout.slice(0, -1),
+      );
+    if (!match || Number(match[1]) !== pid || match[5] === undefined) {
+      return null;
+    }
+    const parentPid = Number(match[2]);
+    const date = `${match[3]}, ${match[5].padStart(2, "0")} ${match[4]} ${match[7]} ${match[6]} GMT`;
+    const startedAtMs = Date.parse(date);
+    if (
+      !Number.isSafeInteger(parentPid) ||
+      parentPid < 0 ||
+      !Number.isFinite(startedAtMs) ||
+      new Date(startedAtMs).toUTCString() !== date
+    ) {
+      return null;
+    }
+    return { parentPid, startedAt: Math.floor(startedAtMs / 1000) };
   } catch {
     return null;
   }
@@ -111,7 +267,7 @@ export function getProcessStartTime(pid: number): number | null {
 export function getFileLockProcessStartTime(
   pid: number,
   env: NodeJS.ProcessEnv = process.env,
-  windowsTimeoutMs?: number,
+  timeoutMs?: number,
 ): number | null {
   if (!isValidPid(pid)) {
     return null;
@@ -122,9 +278,9 @@ export function getFileLockProcessStartTime(
   }
   const startTime =
     process.platform === "darwin"
-      ? getDarwinProcessStartTime(pid, env)
+      ? getDarwinProcessStartTime(pid, env, timeoutMs)
       : process.platform === "win32"
-        ? readWindowsProcessStartTimeSync(pid, windowsTimeoutMs, env)
+        ? readWindowsProcessStartTimeSync(pid, timeoutMs, env)
         : process.platform === "freebsd"
           ? readFreeBsdProcessStartTime(pid)
           : getProcessStartTime(pid);

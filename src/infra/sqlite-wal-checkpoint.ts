@@ -1,15 +1,17 @@
 import fs from "node:fs";
-import type { SQLOutputValue } from "node:sqlite";
+import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
-import { normalizeSqliteNumber } from "./sqlite-number.js";
+import { normalizeSqliteNumber, readFiniteSqliteNumber } from "./sqlite-number.js";
 import {
   readSqliteReaderDiagnosticsForPath,
   sqliteReaderDatabasePathKey,
   type SqliteReaderDiagnostic,
   type SqliteReaderDiagnostics,
 } from "./sqlite-reader-lifecycle.js";
+import { StateDatabaseCoordinatorContentionError } from "./state-database-coordinator-errors.js";
+import type { StateDatabaseCoordinatorOwner } from "./state-database-coordinator-owner.js";
 
 export type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
 
@@ -30,6 +32,7 @@ export type SqliteWalHealth = {
   consecutiveBlocked: number;
   warning: boolean;
   error?: string;
+  blockingOwner?: StateDatabaseCoordinatorOwner | "unknown";
   activeReaders?: SqliteReaderDiagnostic[];
   readerDiagnostics?: Array<Omit<SqliteReaderDiagnostics, "activeReaders">>;
 };
@@ -128,8 +131,25 @@ function readCheckpointResult(row: Record<string, SQLOutputValue> | undefined) {
   return { busy, logFrames, checkpointedFrames };
 }
 
+function checkpoint(database: DatabaseSync, mode: SqliteWalCheckpointMode) {
+  return database.prepare(`PRAGMA wal_checkpoint(${mode});`).get(); // sqlite-allow-raw -- WAL checkpoint primitive under caller-owned admission.
+}
+
+/** Offline maintenance must stop before compaction or recovery if truncation remains busy. */
+export function truncateSqliteWal(database: DatabaseSync, sqlitePath: string): void {
+  const row = checkpoint(database, "TRUNCATE");
+  const busy = readFiniteSqliteNumber(row?.busy ?? (row ? Object.values(row)[0] : undefined));
+  if (busy === undefined) {
+    throw new Error(`SQLite checkpoint returned an invalid result for ${sqlitePath}.`);
+  }
+  if (busy !== 0) {
+    throw new Error(`SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`);
+  }
+}
+
 /** The maintenance lifecycle owns this checkpoint result and its last observation. */
 export function createSqliteWalCheckpoint(
+  database: DatabaseSync,
   options: SqliteWalCheckpointOptions,
   journalSizeLimitBytes: number,
 ) {
@@ -148,12 +168,17 @@ export function createSqliteWalCheckpoint(
   });
 
   const recordCheckpointError = (error: unknown, observation = checkpointObservation()): void => {
+    const contention = error instanceof StateDatabaseCoordinatorContentionError;
+    const consecutiveBlocked = contention
+      ? (snapshot?.health.blockingOwner ? snapshot.health.consecutiveBlocked : 0) + 1
+      : 0;
     const failed: SqliteWalHealth = {
       ...observation,
       observedAtMs: Date.now(),
-      state: "error",
-      consecutiveBlocked: 0,
-      warning: true,
+      state: contention ? "blocked" : "error",
+      consecutiveBlocked,
+      warning: !contention || consecutiveBlocked >= 2,
+      ...(contention ? { blockingOwner: error.blockingOwner ?? ("unknown" as const) } : {}),
       error: formatErrorMessage(error),
     };
     snapshot = {
@@ -165,7 +190,9 @@ export function createSqliteWalCheckpoint(
     if (options.databasePath) {
       notifyCheckpoint(options.databasePath, snapshot);
     }
-    options.onCheckpointError?.(error);
+    if (!contention || consecutiveBlocked % 5 === 0) {
+      options.onCheckpointError?.(error);
+    }
   };
 
   const recordCheckpoint = (
@@ -234,10 +261,29 @@ export function createSqliteWalCheckpoint(
   };
 
   return {
-    record: recordCheckpoint,
+    adopt(this: void, received: SqliteWalCheckpointSnapshot): void {
+      if (snapshot && snapshot.observedAtNs >= received.observedAtNs) {
+        return;
+      }
+      snapshot = structuredClone(received);
+      if (options.databasePath) {
+        snapshot.health = observeSqliteWalCheckpointHealth(options.databasePath, snapshot.health);
+        notifyCheckpoint(options.databasePath, snapshot);
+      }
+    },
+    checkpoint(this: void, mode: SqliteWalCheckpointMode): boolean {
+      try {
+        return recordCheckpoint(mode, checkpoint(database, mode));
+      } catch (error) {
+        recordCheckpointError(error);
+        return false;
+      }
+    },
     recordError: recordCheckpointError,
-    inspectIdle(row: Record<string, SQLOutputValue> | undefined): boolean {
-      const { busy, logFrames, checkpointedFrames } = readCheckpointResult(row);
+    inspectIdle(this: void): boolean {
+      const { busy, logFrames, checkpointedFrames } = readCheckpointResult(
+        checkpoint(database, "PASSIVE"),
+      );
       // An incomplete PASSIVE checkpoint can belong to another connection's reader.
       // A local native reader instead refuses the checkpoint; non-WAL results are negative.
       return (

@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
@@ -183,19 +183,59 @@ export function makeChatHost(
   const { requestHandlers, ...hostOverrides } = overrides ?? {};
   const request = requestHandlers ? makeRequestMock(requestHandlers) : undefined;
   const settings = { lastActiveSessionKey: "", ...hostOverrides.settings };
+  let disposed = false;
+  const pendingEffects = new Set<() => void>();
   const renderLifecycle: RenderLifecycle = {
     invalidate: vi.fn(),
-    afterCommit: (effect) => {
+    afterCommit: (effect, onCancel) => {
+      if (disposed) {
+        onCancel?.();
+        return () => undefined;
+      }
       let active = true;
+      let committed = false;
+      let cleanup: (() => void) | undefined;
+      const complete = () => {
+        active = false;
+        cleanup = undefined;
+        pendingEffects.delete(cancel);
+      };
+      const cancel = () => {
+        if (!active) {
+          return;
+        }
+        const release = cleanup;
+        complete();
+        if (committed) {
+          release?.();
+        } else {
+          onCancel?.();
+        }
+      };
+      pendingEffects.add(cancel);
       renderLifecycle.invalidate();
       queueMicrotask(() => {
-        if (active) {
-          effect(() => undefined);
+        if (!active) {
+          return;
+        }
+        committed = true;
+        try {
+          const nextCleanup = effect(complete);
+          if (typeof nextCleanup === "function") {
+            if (active) {
+              cleanup = nextCleanup;
+            } else {
+              nextCleanup();
+            }
+          } else {
+            complete();
+          }
+        } catch (error) {
+          complete();
+          throw error;
         }
       });
-      return () => {
-        active = false;
-      };
+      return cancel;
     },
   };
   const host = {
@@ -294,5 +334,11 @@ export function makeChatHost(
   for (const sessionKey of Object.keys(pendingSettingsPatches ?? {})) {
     void patchChatSessionSettings(resolvedHost, sessionKey, {}).catch(() => undefined);
   }
+  onTestFinished(() => {
+    disposed = true;
+    for (const cancel of pendingEffects) {
+      cancel();
+    }
+  });
   return request ? Object.assign(resolvedHost, { request }) : resolvedHost;
 }

@@ -38,6 +38,14 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 import { CronCliError, type CronCliJobMatch } from "./cron-cli-error.js";
 
+export function parseCronStringOption(value: unknown, flag: string): string | undefined {
+  const parsed = normalizeOptionalString(value);
+  if (typeof value === "string" && !parsed) {
+    throw new CronCliError(`${flag} must not be blank`);
+  }
+  return parsed;
+}
+
 export function parseCronIntegerOption(
   value: unknown,
   flag: string,
@@ -154,17 +162,15 @@ function enrichCronRunEntriesForDisplay(value: unknown): unknown {
     if (cause) {
       extra.cause = cause;
     }
-    const tsIso = toLocalIsoTime(item.ts);
-    if (tsIso) {
-      extra.tsIso = tsIso;
-    }
-    const runAtIso = toLocalIsoTime(item.runAtMs);
-    if (runAtIso) {
-      extra.runAtIso = runAtIso;
-    }
-    const nextRunAtIso = toLocalIsoTime(item.nextRunAtMs);
-    if (nextRunAtIso) {
-      extra.nextRunAtIso = nextRunAtIso;
+    for (const [source, target] of [
+      ["ts", "tsIso"],
+      ["runAtMs", "runAtIso"],
+      ["nextRunAtMs", "nextRunAtIso"],
+    ] as const) {
+      const iso = toLocalIsoTime(item[source]);
+      if (iso) {
+        extra[target] = iso;
+      }
     }
     return Object.keys(extra).length > 0 ? Object.assign({}, item, extra) : item;
   });
@@ -450,18 +456,20 @@ export function parseAt(input: string, tz?: string): string | null {
   return null;
 }
 
-const CRON_ID_PAD = 36;
-const CRON_DECLARATION_PAD = 24;
-const CRON_NAME_PAD = 24;
-const CRON_SCHEDULE_PAD = 32;
-const CRON_NEXT_PAD = 10;
-const CRON_LAST_PAD = 10;
-const CRON_STATUS_PAD = 19;
-const CRON_TARGET_PAD = 9;
-const CRON_DELIVERY_PAD = 64;
-const CRON_AGENT_PAD = 10;
-const CRON_OWNER_PAD = 24;
-const CRON_MODEL_PAD = 20;
+const CRON_COLUMNS = [
+  ["id", "ID", 36],
+  ["declaration", "Declaration", 24],
+  ["name", "Name", 24],
+  ["schedule", "Schedule", 32],
+  ["next", "Next", 10],
+  ["last", "Last", 10],
+  ["status", "Status", 19],
+  ["target", "Target", 9],
+  ["delivery", "Delivery", 64],
+  ["agent", "Agent ID", 10],
+  ["owner", "Owner", 24],
+  ["model", "Model", 20],
+] as const;
 const TRUNCATED_SUFFIX = "...";
 
 const stringifyCell = (value: unknown, fallback = "-") => {
@@ -565,80 +573,38 @@ export function printCronList(
   }
 
   const rich = isRich();
-  const header = [
-    formatCell("ID", CRON_ID_PAD),
-    formatCell("Declaration", CRON_DECLARATION_PAD),
-    formatCell("Name", CRON_NAME_PAD),
-    formatCell("Schedule", CRON_SCHEDULE_PAD),
-    formatCell("Next", CRON_NEXT_PAD),
-    formatCell("Last", CRON_LAST_PAD),
-    formatCell("Status", CRON_STATUS_PAD),
-    formatCell("Target", CRON_TARGET_PAD),
-    formatCell("Delivery", CRON_DELIVERY_PAD),
-    formatCell("Agent ID", CRON_AGENT_PAD),
-    formatCell("Owner", CRON_OWNER_PAD),
-    formatCell("Model", CRON_MODEL_PAD),
-  ].join(" ");
+  const header = CRON_COLUMNS.map(([, label, width]) => formatCell(label, width)).join(" ");
 
   const lines = [rich ? theme.heading(header) : header];
   const now = Date.now();
 
   for (const job of jobs) {
     const state = job.state ?? {};
-    const idLabel = formatCell(job.id, CRON_ID_PAD);
-    const declarationLabel = formatCell(job.declarationKey, CRON_DECLARATION_PAD);
-    const nameLabel = formatCell(job.displayName ?? job.name, CRON_NAME_PAD);
-    const scheduleLabel = formatCell(
-      formatSchedule(job.schedule, job.trigger !== undefined),
-      CRON_SCHEDULE_PAD,
-    );
-    const nextLabel = formatCell(
-      job.enabled ? formatRelative(state.nextRunAtMs, now) : "-",
-      CRON_NEXT_PAD,
-    );
-    const lastLabel = formatCell(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
     const status = formatCronStatusForDisplay(job);
-    const statusLabel = formatCell(status.label, CRON_STATUS_PAD);
-    const targetLabel = formatCell(job.sessionTarget, CRON_TARGET_PAD);
     const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
-    const deliveryText = deliveryPreview
-      ? `${deliveryPreview.label} (${deliveryPreview.detail})`
-      : "-";
-    const deliveryLabel = formatCell(deliveryText, CRON_DELIVERY_PAD);
     const agentId = job.effectiveAgentId ?? job.agentId;
-    const agentLabel = formatCell(agentId ?? "unresolved", CRON_AGENT_PAD);
-    const ownerLabel = formatCell(job.owner?.sessionKey ?? job.owner?.agentId, CRON_OWNER_PAD);
-    const modelLabel = formatCell(
-      job.payload?.kind === "agentTurn" ? job.payload.model : undefined,
-      CRON_MODEL_PAD,
-    );
-
-    const coloredTarget =
-      job.sessionTarget === "main"
-        ? colorize(rich, theme.accent, targetLabel)
-        : colorize(rich, theme.accentBright, targetLabel);
-    const coloredAgent = agentId
-      ? colorize(rich, theme.info, agentLabel)
-      : colorize(rich, theme.muted, agentLabel);
-
-    const line = [
-      colorize(rich, theme.accent, idLabel),
-      colorize(rich, theme.muted, declarationLabel),
-      colorize(rich, theme.info, nameLabel),
-      colorize(rich, theme.info, scheduleLabel),
-      colorize(rich, theme.muted, nextLabel),
-      colorize(rich, theme.muted, lastLabel),
-      colorize(rich, status.color, statusLabel),
-      coloredTarget,
-      deliveryPreview
-        ? colorize(rich, theme.info, deliveryLabel)
-        : colorize(rich, theme.muted, deliveryLabel),
-      coloredAgent,
-      colorize(rich, job.owner ? theme.info : theme.muted, ownerLabel),
-      job.payload?.kind === "agentTurn" && job.payload.model
-        ? colorize(rich, theme.info, modelLabel)
-        : colorize(rich, theme.muted, modelLabel),
-    ].join(" ");
+    const model = job.payload?.kind === "agentTurn" ? job.payload.model : undefined;
+    const cells = {
+      id: [job.id, theme.accent],
+      declaration: [job.declarationKey, theme.muted],
+      name: [job.displayName ?? job.name, theme.info],
+      schedule: [formatSchedule(job.schedule, job.trigger !== undefined), theme.info],
+      next: [job.enabled ? formatRelative(state.nextRunAtMs, now) : "-", theme.muted],
+      last: [formatRelative(state.lastRunAtMs, now), theme.muted],
+      status: [status.label, status.color],
+      target: [job.sessionTarget, job.sessionTarget === "main" ? theme.accent : theme.accentBright],
+      delivery: [
+        deliveryPreview ? `${deliveryPreview.label} (${deliveryPreview.detail})` : "-",
+        deliveryPreview ? theme.info : theme.muted,
+      ],
+      agent: [agentId ?? "unresolved", agentId ? theme.info : theme.muted],
+      owner: [job.owner?.sessionKey ?? job.owner?.agentId, job.owner ? theme.info : theme.muted],
+      model: [model, model ? theme.info : theme.muted],
+    } satisfies Record<(typeof CRON_COLUMNS)[number][0], [unknown, typeof theme.info]>;
+    const line = CRON_COLUMNS.map(([key, , width]) => {
+      const [value, color] = cells[key];
+      return colorize(rich, color, formatCell(value, width));
+    }).join(" ");
 
     lines.push(line.trimEnd());
   }

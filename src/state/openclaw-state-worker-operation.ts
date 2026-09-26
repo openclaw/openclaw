@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { SqliteWorkerStateLifecycle } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import {
   runSqliteWorkerStoreOperation,
@@ -28,7 +30,7 @@ export function runWithOpenClawStateWorkerStore<T>(
   operation: (scope: Pick<Store, "execute">) => Promise<T>,
   assertCurrent?: (commandType?: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
-  requireStateLifecycle = false,
+  requireStateLifecycle: SqliteWorkerStateLifecycle = false,
 ): Promise<T> {
   const { admission } = context;
   return runSqliteWorkerStoreOperation<StoreOperations, T>(
@@ -42,4 +44,35 @@ export function runWithOpenClawStateWorkerStore<T>(
     createAdmission,
     requireStateLifecycle,
   );
+}
+
+/** Only native opening owns the caller scope; a cached actor must not retain it. */
+export function captureOpenClawStateWorkerOpeningGuard(
+  context: OpenClawStateWorkerContext,
+  assertCurrent?: () => void,
+) {
+  const admission: { assertCurrent?: () => void; refusal?: { error: unknown } } = {
+    assertCurrent,
+  };
+  let captured: (() => void) | undefined = AsyncLocalStorage.bind(() => {
+    context.admission.assertCurrent();
+    try {
+      assertCurrent?.();
+    } catch (error) {
+      admission.refusal = { error };
+      throw error;
+    }
+  });
+  return {
+    admission,
+    assertCurrent: () => {
+      if (!captured) {
+        throw new Error("Shared-state worker opening admission is closed");
+      }
+      captured();
+    },
+    releaseContext() {
+      captured = undefined;
+    },
+  };
 }

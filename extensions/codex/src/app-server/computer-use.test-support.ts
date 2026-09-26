@@ -232,7 +232,7 @@ export function createComputerUseRequest(params: {
   }) as CodexComputerUseRequest;
 }
 
-export function marketplaceEntry(marketplaceName: string, installed: boolean) {
+function marketplaceEntry(marketplaceName: string, installed: boolean) {
   return {
     name: marketplaceName,
     path: `/marketplaces/${marketplaceName}/.agents/plugins/marketplace.json`,

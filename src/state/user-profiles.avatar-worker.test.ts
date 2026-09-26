@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -16,10 +17,10 @@ import {
   readUserProfileIdentity,
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
+import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import {
   adoptTailscaleProfileAvatar,
   ensureProfileForEmail,
-  getProfileAvatar,
   linkEmail,
   setAvatar,
   setDisplayName,
@@ -337,14 +338,8 @@ it("adopts an avatar off-thread and publishes its catalog before identity observ
       });
     });
     const bytes = readFileSync(join(process.cwd(), "ui/public/favicon-32.png"));
-    const { DatabaseSync, StatementSync } = requireNodeSqlite();
-    const calls = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
     const adopted = await adoptTailscaleProfileAvatar(
       alias.id,
       "https://avatars.example.test/p",
@@ -365,8 +360,8 @@ it("adopts an avatar off-thread and publishes its catalog before identity observ
         identity: { profileId: profile.id, role: null, aliases: new Set([profile.id, alias.id]) },
       },
     ]);
-    expect(calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-    calls.forEach((call) => call.mockRestore());
+    sql.expectIdle();
+    sql.restore();
     expect(getProfileAvatar(profile.id)?.bytes).toEqual(Uint8Array.from(bytes));
   } finally {
     vi.restoreAllMocks();

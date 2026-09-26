@@ -144,7 +144,7 @@ describe("Cloudflare Access OIDC profile resolution", () => {
           emails: ["ada@example.test"],
           githubIdentity: { login: "canonical-ada" },
         });
-        expect(resolveUserProfileGitHubAttribution([profileId]).get(profileId)).toEqual({
+        expect((await resolveUserProfileGitHubAttribution([profileId])).get(profileId)).toEqual({
           accountId: 101,
           login: "canonical-ada",
         });
@@ -182,7 +182,9 @@ describe("Cloudflare Access OIDC profile resolution", () => {
           expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
             [GIT_COAUTHOR_PREFERENCE_KEY]: false,
           });
-          expect(resolveUserProfileGitHubAttribution([profile.id]).get(profile.id)).toBeNull();
+          expect(
+            (await resolveUserProfileGitHubAttribution([profile.id])).get(profile.id),
+          ).toBeNull();
         } finally {
           request.req.destroy();
         }
@@ -295,7 +297,9 @@ describe("Cloudflare Access OIDC profile resolution", () => {
         const result = await resolveAuthenticatedHttpUserProfile(request);
         expect(result.authenticatedUserProfile?.profileId).toBe(primary.id);
         expect(getUserProfileListItem(primary.id).githubIdentity?.login).toBe("primary");
-        expect(resolveUserProfileGitHubAttribution([primary.id]).get(primary.id)).toBeNull();
+        expect(
+          (await resolveUserProfileGitHubAttribution([primary.id])).get(primary.id),
+        ).toBeNull();
       } finally {
         request.req.destroy();
       }
@@ -336,7 +340,9 @@ describe("Cloudflare Access OIDC profile resolution", () => {
         const linked = await resolveAuthenticatedHttpUserProfile(request);
         expect(linked.authenticatedUserProfile?.profileId).toBe(maintainer.id);
         expect(linked.operatorRolePolicy?.scopes).toEqual(["operator.admin"]);
-        expect(resolveUserProfileGitHubAttribution([maintainer.id]).get(maintainer.id)).toBeNull();
+        expect(
+          (await resolveUserProfileGitHubAttribution([maintainer.id])).get(maintainer.id),
+        ).toBeNull();
 
         setUserProfileRole(maintainer.id, null);
         invalidateOperatorRolePolicy(maintainer.id);

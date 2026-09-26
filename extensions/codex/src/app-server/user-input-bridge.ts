@@ -116,7 +116,10 @@ export function createCodexUserInputBridge(params: {
       const timeoutMs = requestParams.isBlocking
         ? (params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS)
         : NONBLOCKING_USER_INPUT_TIMEOUT_MS;
-      const input = compileUserInputQuestions(requestParams.questions);
+      const input = structuredInput.compileQuestions({
+        questions: requestParams.questions,
+        intro: "Codex needs input:",
+      });
       const cancelValue = emptyUserInputResponse();
       return await enqueue(
         {
@@ -194,12 +197,6 @@ export function createCodexUserInputBridge(params: {
       await completion;
     },
   };
-}
-
-function compileUserInputQuestions(
-  questions: readonly AgentHarnessUserInputQuestion[],
-): StructuredInputCompileResult {
-  return structuredInput.compileQuestions({ questions, intro: "Codex needs input:" });
 }
 
 function readUserInputParams(value: JsonValue | undefined):

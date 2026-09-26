@@ -116,7 +116,7 @@ function renderChannelStatusBody(
     {
       title: localeKey
         ? t(`channels.${localeKey}.title`)
-        : (readStringField(props.snapshot?.channelLabels, key) ?? key),
+        : (readStringField(props.channels.channelsSnapshot?.channelLabels, key) ?? key),
       description: localeKey ? t(`channels.${localeKey}.subtitle`) : t("channels.generic.subtitle"),
       ...(accountCount !== undefined ? { count: accountCount } : {}),
     },
@@ -167,11 +167,11 @@ function renderChannelStatusBody(
           ? renderChannelActionRow(html`
               <button
                 class="btn"
-                ?disabled=${props.loading}
-                aria-busy=${String(props.loading)}
+                ?disabled=${props.channels.channelsLoading}
+                aria-busy=${String(props.channels.channelsLoading)}
                 @click=${() => props.onRefresh(true)}
               >
-                ${t(props.loading ? "common.refreshing" : "common.probe")}
+                ${t(props.channels.channelsLoading ? "common.refreshing" : "common.probe")}
               </button>
             `)
           : nothing
@@ -231,7 +231,7 @@ export function renderChannelDetail(params: {
   onSetup: () => void;
 }): TemplateResult {
   const body = renderChannelBody(params.channelId, params.props, params.data);
-  const statusIssues = params.props.snapshot?.statusIssues?.filter(
+  const statusIssues = params.props.channels.channelsSnapshot?.statusIssues?.filter(
     (issue) => issue.channel === params.channelId,
   );
   return html`
@@ -271,7 +271,7 @@ export function renderChannelDetail(params: {
         </div>
         <div class="channels-detail__body">
           ${
-            params.props.setupBlockedByDirtyConfig && params.props.configFormDirty
+            params.props.wizardHost.blockedByDirtyConfig && params.props.config.configFormDirty
               ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
               : nothing
           }

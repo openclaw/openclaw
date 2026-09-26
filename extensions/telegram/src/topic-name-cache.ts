@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { getTelegramRuntime } from "./runtime.js";
 
-export const TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES = 2_048;
+const TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES = 2_048;
 const STORE_NAMESPACE_PREFIX = "telegram.topic-name-cache";
 const TOPIC_NAME_CACHE_STATE_KEY = Symbol.for("openclaw.telegramTopicNameCacheState");
 const DEFAULT_TOPIC_NAME_CACHE_SCOPE = "default";
@@ -36,49 +36,26 @@ type TopicNamePersistentStore = {
   clear(): Promise<void>;
 };
 
-function createTopicNameStore(): TopicNameStore {
-  return new Map<string, TopicEntry>();
-}
-
 function createTopicNameStoreState(namespace: string): TopicNameStoreState {
   return {
     lastUpdatedAt: 0,
-    store: createTopicNameStore(),
+    store: new Map(),
     hydrated: false,
     persistentStore: openTopicNamePersistentStore(namespace),
   };
 }
 
 function getTopicNameCacheState(): TopicNameCacheState {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[TOPIC_NAME_CACHE_STATE_KEY] as TopicNameCacheState | undefined;
-  if (existing) {
-    return existing;
-  }
-  const state: TopicNameCacheState = { stores: new Map() };
-  globalStore[TOPIC_NAME_CACHE_STATE_KEY] = state;
-  return state;
+  return resolveGlobalSingleton(TOPIC_NAME_CACHE_STATE_KEY, () => ({ stores: new Map() }));
 }
 
 function cacheKey(chatId: number | string, threadId: number | string): string {
   return `${chatId}:${threadId}`;
 }
 
-function namespaceForScope(scope: string): string {
+function resolveTopicNameCacheNamespace(scope: string): string {
   const hash = createHash("sha256").update(scope).digest("hex").slice(0, 16);
   return `${STORE_NAMESPACE_PREFIX}.${hash}`;
-}
-
-export function resolveTopicNameCachePath(storePath: string): string {
-  return `${storePath}.telegram-topic-names.json`;
-}
-
-export function resolveTopicNameCacheScope(storePath: string): string {
-  return storePath;
-}
-
-export function resolveTopicNameCacheNamespace(scope: string): string {
-  return namespaceForScope(scope);
 }
 
 function openTopicNamePersistentStore(namespace: string): TopicNamePersistentStore {
@@ -126,7 +103,7 @@ function getTopicStoreState(scope?: string): TopicNameStoreState {
   if (existing) {
     return existing;
   }
-  const next = createTopicNameStoreState(namespaceForScope(stateKey));
+  const next = createTopicNameStoreState(resolveTopicNameCacheNamespace(stateKey));
   state.stores.set(stateKey, next);
   return next;
 }
@@ -209,19 +186,4 @@ export async function getTopicName(
     await state.persistentStore.register(key, entry);
   }
   return entry?.name;
-}
-
-export async function listTelegramLegacyTopicNameCacheEntries(params: {
-  persistedPath: string;
-  maxEntries?: number;
-}): Promise<Array<{ key: string; value: TopicEntry }>> {
-  const { value } = await readJsonFileWithFallback<Record<string, unknown>>(
-    params.persistedPath,
-    {},
-  );
-  return Object.entries(value)
-    .filter((entry): entry is [string, TopicEntry] => isTopicEntry(entry[1]))
-    .toSorted(([, left], [, right]) => right.updatedAt - left.updatedAt)
-    .slice(0, params.maxEntries ?? TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES)
-    .map(([key, entry]) => ({ key, value: entry }));
 }

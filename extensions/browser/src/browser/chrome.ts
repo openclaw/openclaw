@@ -10,19 +10,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   getFileLockProcessStartTime,
   isPidAlive,
   prepareOomScoreAdjustedSpawn,
 } from "openclaw/plugin-sdk/process-runtime";
+import { ensurePortAvailable, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { ensurePortAvailable } from "../infra/ports.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { redactToolPayloadText } from "../logging/redact.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { CONFIG_DIR } from "../utils.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { CONFIG_DIR, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
 import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";
@@ -73,7 +70,6 @@ import {
   getManagedBrowserMissingDisplayError,
   resolveManagedBrowserHeadlessMode,
   type ManagedBrowserHeadlessOptions,
-  type ManagedBrowserHeadlessSource,
   type ResolvedBrowserConfig,
   type ResolvedBrowserProfile,
 } from "./config.js";
@@ -84,6 +80,7 @@ import {
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
+import type { ManagedBrowserHeadlessSource } from "./profile.types.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
 const CHROME_SINGLETON_LOCK_PATHS = [

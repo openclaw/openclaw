@@ -26,6 +26,7 @@ import { addGatewayServiceCommands } from "../daemon-cli/register-service-comman
 import * as startRepair from "../daemon-cli/start-repair.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { registerGenerationRecoveryTests } from "./update-command-generation.test-support.js";
+import { registerRestartOutcomeTests } from "./update-command-restart-outcome.test-support.js";
 import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
   createServiceActivationFixture,
@@ -38,7 +39,6 @@ import {
   preservedActivationCases,
   registerInstallRootTransitionTests,
   registerPluginMaintenanceTests,
-  registerRestartOutcomeTests,
 } from "./update-command-service-transition.test-support.js";
 import {
   maybeRestartService,
@@ -72,7 +72,6 @@ const mocks = vi.hoisted(() => ({
   }),
   start: vi.fn(),
   install: vi.fn(),
-  script: vi.fn(),
   child: vi.fn<typeof import("../../process/exec.js").runCommandWithTimeout>(),
   health: vi.fn<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>(),
   doctor: vi.fn(),
@@ -99,6 +98,10 @@ vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
 vi.mock("../../daemon/launchd-current-service.js", () => ({
   isCurrentProcessLaunchdServiceLabel: () => mocks.inLaunchd,
   isCurrentProcessInsideLaunchdService: async () => mocks.inLaunchd,
+}));
+vi.mock("../../daemon/service-process-membership.js", () => ({
+  // The simulated manager's Gateway PID has no native cgroup on the test host.
+  inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
 }));
 vi.mock("../../daemon/launchd-restart-handoff.js", () => ({
   scheduleDetachedLaunchdRestartHandoff: mocks.handoff,
@@ -230,7 +233,6 @@ vi.mock("./update-command-config-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-config-snapshot.js")>()),
   createUpdateConfigSnapshot: mocks.configSnapshot,
 }));
-vi.mock("./restart-helper.js", () => ({ runRestartScript: mocks.script }));
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
     log: mocks.log,
@@ -475,7 +477,6 @@ describe("preserved update activation with real version guards", () => {
         serviceEnv: before.serviceEnv,
         gatewayPort: late ? 19001 : 19305,
         requireRunningServiceAfterRestart: true,
-        restartScriptPath: "/fixture/prepared-restart.sh",
         timeoutMs: 1000,
       });
       const allowed = !["uninspectable", "foreign"].includes(outcome);
@@ -522,7 +523,6 @@ describe("preserved update activation with real version guards", () => {
         );
       }
       expect(repair).not.toHaveBeenCalled();
-      expect(mocks.script).not.toHaveBeenCalled();
       expect(mocks.install).not.toHaveBeenCalled();
       expect(mocks.doctor).not.toHaveBeenCalled();
     },
@@ -914,14 +914,11 @@ describe("preserved update activation with real version guards", () => {
         serviceUpdateVerdict: verdict,
         serviceEnv: process.env,
         gatewayPort: lateDenial ? 19001 : 19305,
-        restartScriptPath:
-          scenario === "parent recovery refusal" ? null : "/fixture/prepared-restart.sh",
         requireRunningServiceAfterRestart: true,
         timeoutMs: 1000,
       });
       expect(mocks.error.mock.calls.flat().join("\n")).toContain("did not become healthy");
       expect(mocks.health.mock.calls.every(([args]) => args.port === 19305)).toBe(true);
-      expect(mocks.script).not.toHaveBeenCalled();
       expect(mocks.doctor).not.toHaveBeenCalled();
     } else {
       result = await runDaemonRestart({ json: true, preserveDefinition: true });

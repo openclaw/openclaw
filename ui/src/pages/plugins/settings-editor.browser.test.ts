@@ -432,14 +432,15 @@ describe("grouped editor field discovery", () => {
     });
     for (const name of ["Enabled", "Timeout", "Storage: Path"]) {
       const input = editor.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`)!;
-      const id = input.getAttribute("aria-describedby");
-      expect(id).toBeTruthy();
-      expect(document.getElementById(id!)?.textContent?.trim()).toBe(
-        input
-          .closest(".plugin-editor__row")
-          ?.querySelector(".plugin-editor__copy p")
-          ?.textContent?.trim(),
-      );
+      const ids = input.getAttribute("aria-describedby")?.trim().split(/\s+/u) ?? [];
+      const instructions = input
+        .closest(".plugin-editor__row")
+        ?.querySelector(".plugin-editor__copy p");
+      expect(instructions?.textContent?.trim()).toBeTruthy();
+      expect(ids).toContain(instructions?.id);
+      const descriptions = ids.map((id) => document.getElementById(id));
+      expect(descriptions).toContain(instructions);
+      expect(descriptions).not.toContain(null);
     }
   });
 
@@ -492,15 +493,12 @@ describe("plugin map layout", () => {
     });
     editor.style.width = width > 768 ? "880px" : "100%";
     try {
-      for (const title of editor.querySelectorAll<HTMLElement>(
-        ".cfg-map > .settings-row .settings-row__title",
-      )) {
-        const bounds = title.getBoundingClientRect();
-        expect(bounds.width).toBeGreaterThan(90);
-        expect(bounds.height).toBeLessThanOrEqual(
-          Number.parseFloat(getComputedStyle(title).lineHeight) * 2,
-        );
-      }
+      expect(
+        [...editor.querySelectorAll(".plugin-editor__title")].map((title) =>
+          title.textContent?.trim(),
+        ),
+      ).toEqual(["Empty overrides", "Populated overrides"]);
+      expect(editor.querySelector(".cfg-map > .settings-row .settings-row__title")).toBeNull();
       for (const add of editor.querySelectorAll<HTMLButtonElement>(
         ".cfg-map > .settings-row button",
       )) {

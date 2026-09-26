@@ -123,7 +123,7 @@ final class CookieSyncManager: NSObject {
         }
     }
 
-    private func scheduleReconcile(resetRetry: Bool, delay: Duration = .milliseconds(350)) {
+    private func scheduleReconcile(resetRetry: Bool, delay: TimeInterval = 0.35) {
         if resetRetry {
             self.retryAttempt = 0
             self.retryTask?.cancel()
@@ -131,13 +131,8 @@ final class CookieSyncManager: NSObject {
         }
         self.reconcileGeneration &+= 1
         let generation = self.reconcileGeneration
-        self.reconcileTask?.cancel()
-        self.reconcileTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: delay)
-            } catch {
-                return
-            }
+        // The shared scheduler uses the non-generic sleep entry point, avoiding Clock frame coalescing.
+        SimpleTaskSupport.schedule(task: &self.reconcileTask, delay: delay) { [weak self] in
             guard !Task.isCancelled, let self, generation == self.reconcileGeneration else { return }
             await self.reconcile(generation: generation)
         }
@@ -335,15 +330,8 @@ final class CookieSyncManager: NSObject {
         guard self.shouldBeActive else { return }
         self.retryAttempt += 1
         let delaySeconds = min(30, 1 << min(self.retryAttempt - 1, 5))
-        self.retryTask?.cancel()
-        self.retryTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .seconds(delaySeconds))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled, let self else { return }
-            self.scheduleReconcile(resetRetry: false, delay: .zero)
+        SimpleTaskSupport.schedule(task: &self.retryTask, delay: TimeInterval(delaySeconds)) { [weak self] in
+            self?.scheduleReconcile(resetRetry: false, delay: 0)
         }
     }
 

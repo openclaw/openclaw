@@ -18,6 +18,8 @@ export type ChatTranscriptPendingScrollOffset = {
 };
 
 export type TranscriptCallbacks = {
+  /** Retained panes can remain measurable while visually hidden. */
+  visuallyPresented?: () => boolean;
   onViewportResize?: () => void;
   onReaderScroll?: (towardEnd?: boolean) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */

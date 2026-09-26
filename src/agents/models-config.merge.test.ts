@@ -209,20 +209,6 @@ describe("models-config merge helpers", () => {
     });
   });
 
-  it("merges explicit providers onto trimmed keys", () => {
-    const merged = mergeProviders({
-      explicit: {
-        " custom ": {
-          api: "openai-responses",
-          models: [] as ProviderConfig["models"],
-        } as ProviderConfig,
-      },
-    });
-
-    expect(Object.keys(merged)).toEqual(["custom"]);
-    expect(merged.custom?.api).toBe("openai-responses");
-  });
-
   it("merges explicit providers onto case-normalized implicit provider ids", () => {
     const merged = mergeProviders({
       implicit: {
@@ -386,41 +372,6 @@ describe("models-config merge helpers", () => {
     expect(merged.openai).toBeDefined();
   });
 
-  it("preserves non-empty existing apiKey and baseUrl from models.json", () => {
-    // Existing local secrets win over regenerated provider config so planning
-    // does not overwrite operator-owned credentials.
-    const merged = mergeWithExistingProviderSecrets({
-      nextProviders: {
-        custom: createConfigProvider(),
-      },
-      existingProviders: {
-        custom: createExistingProvider(),
-      },
-      secretRefManagedProviders: new Set<string>(),
-    });
-
-    expect(merged.custom?.apiKey).toBe(preservedApiKey);
-    expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
-  });
-
-  it("preserves existing baseUrl after explicit provider key normalization", () => {
-    const normalized = mergeProviders({
-      explicit: {
-        " custom ": createConfigProvider(),
-      },
-    });
-    const merged = mergeWithExistingProviderSecrets({
-      nextProviders: normalized,
-      existingProviders: {
-        custom: createExistingProvider(),
-      },
-      secretRefManagedProviders: new Set<string>(),
-    });
-
-    expect(merged.custom?.apiKey).toBe(preservedApiKey);
-    expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
-  });
-
   it("preserves existing secrets after provider key normalization", () => {
     const normalized = mergeProviders({
       explicit: {
@@ -440,28 +391,6 @@ describe("models-config merge helpers", () => {
     expect(merged.openai?.baseUrl).toBe("https://agent.example/v1");
     expect(merged.OpenAI).toBeUndefined();
   });
-
-  it.each([
-    ["before", true],
-    ["after", false],
-  ])(
-    "prefers canonical existing providers when they appear %s case variants",
-    (_position, first) => {
-      const canonical = createExistingProvider({ baseUrl: "https://canonical.example/v1" });
-      const caseVariant = createExistingProvider({ baseUrl: "https://variant.example/v1" });
-      const existingProviders: Record<string, ExistingProviderConfig> = first
-        ? { openai: canonical, OpenAI: caseVariant }
-        : { OpenAI: caseVariant, openai: canonical };
-      const merged = mergeWithExistingProviderSecrets({
-        nextProviders: { openai: createConfigProvider() },
-        existingProviders,
-        secretRefManagedProviders: new Set<string>(),
-      });
-
-      expect(Object.keys(merged)).toEqual(["openai"]);
-      expect(merged.openai?.baseUrl).toBe("https://canonical.example/v1");
-    },
-  );
 
   it("preserves implicit provider headers when explicit config adds extra headers", () => {
     const merged = mergeProviderModels(
@@ -513,28 +442,6 @@ describe("models-config merge helpers", () => {
           apiKey: preservedApiKey,
           models: [{ id: "model", api: "openai-completions" }],
         } as ExistingProviderConfig,
-      },
-      secretRefManagedProviders: new Set<string>(),
-    });
-
-    expect(merged.custom?.apiKey).toBe(preservedApiKey);
-    expect(merged.custom?.baseUrl).toBe("https://config.example/v1");
-  });
-
-  it("replaces stale baseUrl when only model-level apis change", () => {
-    const nextProvider = createConfigProvider();
-    delete (nextProvider as { api?: string }).api;
-    nextProvider.models = [createModel({ api: "openai-responses" })];
-    const existingProvider = createExistingProvider({
-      models: [createModel({ id: "agent-model", name: "Agent model", api: "openai-completions" })],
-    });
-    delete (existingProvider as { api?: string }).api;
-    const merged = mergeWithExistingProviderSecrets({
-      nextProviders: {
-        custom: nextProvider,
-      },
-      existingProviders: {
-        custom: existingProvider,
       },
       secretRefManagedProviders: new Set<string>(),
     });

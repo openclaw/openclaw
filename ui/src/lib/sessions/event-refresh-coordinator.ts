@@ -28,7 +28,7 @@ export function createSessionEventRefreshCoordinator({
       return;
     }
     const now = Date.now();
-    const delay = debounce ? SESSION_EVENT_REFRESH_DEBOUNCE_MS : 0;
+    const delay = debounce ? SESSION_EVENT_REFRESH_DEBOUNCE_MS * (1 - 0.2 * Math.random()) : 0;
     timer = setTimeout(start, Math.max(delay, nextAllowed - now));
   };
 

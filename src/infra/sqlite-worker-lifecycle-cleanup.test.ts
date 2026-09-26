@@ -125,44 +125,46 @@ if (!isMainThread) {
       let current = true;
       const refused = new Error("Synthetic token authority revoked");
       // Begin the framed-result cleanup probe after the large mutation has settled.
-      const dispatch = vi
-        .spyOn(MessagePort.prototype, "postMessage")
-        .mockImplementation(function (this: MessagePort, message, transferList) {
-          const result = nativePost.call(this, message, transferList);
-          if (
-            !isRecord(message) ||
-            (length > SQLITE_WORKER_MAX_RESULT_BYTES
-              ? message.type !== "result-next"
-              : message.type !== "accepted" ||
-                (preparation
-                  ? message.admission !== undefined
-                  : !(message.admission instanceof MessagePort)))
-          ) {
-            return result;
-          }
-          dispatch.mockRestore();
-          const deadline = Date.now() + 5_000;
-          const pause = new Int32Array(new SharedArrayBuffer(4));
-          while (!fs.existsSync(entered)) {
-            if (Date.now() >= deadline) {
-              throw new Error("Worker did not reach its transaction grant");
-            }
-            Atomics.wait(pause, 0, 0, 1);
-          }
-          current = ownerCurrent;
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              nativeWrites += 1;
-              storeDeviceAuthTokenInDatabase(db, {
-                deviceId: "synthetic-native-device",
-                role: "operator",
-                token: "synthetic-native-token",
-              });
-            },
-            { env: state.env },
-          );
+      const dispatch = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
+        this: MessagePort,
+        message,
+        transferList,
+      ) {
+        const result = nativePost.call(this, message, transferList);
+        if (
+          !isRecord(message) ||
+          (length > SQLITE_WORKER_MAX_RESULT_BYTES
+            ? message.type !== "result-next"
+            : message.type !== "accepted" ||
+              (preparation
+                ? message.admission !== undefined
+                : !(message.admission instanceof MessagePort)))
+        ) {
           return result;
-        });
+        }
+        dispatch.mockRestore();
+        const deadline = Date.now() + 5_000;
+        const pause = new Int32Array(new SharedArrayBuffer(4));
+        while (!fs.existsSync(entered)) {
+          if (Date.now() >= deadline) {
+            throw new Error("Worker did not reach its transaction grant");
+          }
+          Atomics.wait(pause, 0, 0, 1);
+        }
+        current = ownerCurrent;
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            nativeWrites += 1;
+            storeDeviceAuthTokenInDatabase(db, {
+              deviceId: "synthetic-native-device",
+              role: "operator",
+              token: "synthetic-native-token",
+            });
+          },
+          { env: state.env },
+        );
+        return result;
+      });
       const token = "x".repeat(length);
       const mutate = () =>
         tokens.storeDeviceAuthToken({

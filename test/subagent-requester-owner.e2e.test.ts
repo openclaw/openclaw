@@ -17,6 +17,7 @@ import {
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import type { TaskEventPayload } from "../src/gateway/server-methods/task-summary.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { executeSqliteQuerySync } from "../src/infra/kysely-sync.js";
 import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
@@ -99,10 +100,25 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
       const sessionKey = `agent:${REQUESTER_AGENT_ID}:${REQUESTER_KEY}`;
       const statusRunId = "busy-parent-status";
       const statusReply = createDeferred<ChatEvent>();
+      const childCompleted = createDeferred();
+      let expectedChild: TasksListResult["tasks"][number] | undefined;
       const client = await connectGatewayClient({
         url: instance.url,
         token: instance.gatewayToken,
         onEvent: (event) => {
+          if (event.event === "task") {
+            const taskEvent = event.payload as TaskEventPayload;
+            if (
+              expectedChild &&
+              taskEvent.action === "upserted" &&
+              taskEvent.task.id === expectedChild.id &&
+              taskEvent.task.runId === expectedChild.runId &&
+              taskEvent.task.status === "completed"
+            ) {
+              childCompleted.resolve();
+            }
+            return;
+          }
           if (event.event !== "chat") {
             return;
           }
@@ -174,6 +190,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         const children = listed.tasks.filter((task) => task.runtime === "subagent");
         expect(children).toHaveLength(1);
         const child = children[0]!;
+        expectedChild = child;
         expect(child).toMatchObject({
           runId: run.taskRunId ?? run.runId,
           childSessionKey: run.childSessionKey,
@@ -236,16 +253,16 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         expect(modelServer.requestCount()).toBe(requestsBeforeStatus);
 
         childGate.resolve();
-        await vi.waitFor(
-          () => {
-            expect(loadSubagentRegistryFromSqlite().get(run.runId), instance.logs()).toMatchObject({
-              execution: { status: "terminal", outcome: { status: "ok" } },
-              completion: { resultText: CHILD_MARKER },
-              delivery: { status: "pending" },
-            });
-          },
-          { interval: 50, timeout: 30_000 },
+        await withTestTimeout(
+          childCompleted.promise,
+          30_000,
+          "child task completion was not published",
         );
+        expect(loadSubagentRegistryFromSqlite().get(run.runId), instance.logs()).toMatchObject({
+          execution: { status: "terminal", outcome: { status: "ok" } },
+          completion: { resultText: CHILD_MARKER },
+          delivery: { status: "pending" },
+        });
         const finished = await client.request<TasksGetResult>("tasks.get", { taskId: child.id });
         expect(finished.task).toMatchObject({
           id: child.id,
@@ -747,7 +764,7 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
         skills: [],
       },
     },
-    tools: { profile: "coding" },
+    tools: { profile: "coding", codeMode: false, toolSearch: false },
     models: {
       mode: "replace",
       providers: {
@@ -858,9 +875,16 @@ async function startProofModelServer(options?: {
       body += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
     }
     requestBodies.push(body);
+    const requestBody = JSON.parse(body) as { tools?: Array<{ type?: string; name?: string }> };
+    const respondWithTool = (name: string, args: Record<string, unknown>) => {
+      expect(requestBody.tools).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "function", name })]),
+      );
+      writeOpenAiResponsesSse(response, buildToolCallEvents(name, args));
+    };
     if (options?.yieldAfterSpawn && parentCheckedChildren && !parentYielded) {
       parentYielded = true;
-      writeOpenAiResponsesSse(response, buildToolCallEvents("sessions_yield", {}));
+      respondWithTool("sessions_yield", {});
       return;
     }
     const completion = [RESTORED_CHILD_RESULT, CHILD_MARKER].find((marker) =>
@@ -888,23 +912,20 @@ async function startProofModelServer(options?: {
       return;
     }
     if (body.includes(PARENT_PROMPT) && !body.includes("function_call_output")) {
-      writeOpenAiResponsesSse(
-        response,
-        buildToolCallEvents("sessions_spawn", {
-          task: CHILD_TASK,
-          label: "requester-owner-child",
-          ...(options?.placement ? { placement: options.placement } : {}),
-          thread: false,
-          mode: "run",
-          ...(options?.yieldAfterSpawn ? { completionTarget: "parent" } : {}),
-        }),
-      );
+      respondWithTool("sessions_spawn", {
+        task: CHILD_TASK,
+        label: "requester-owner-child",
+        ...(options?.placement ? { placement: options.placement } : {}),
+        thread: false,
+        mode: "run",
+        ...(options?.yieldAfterSpawn ? { completionTarget: "parent" } : {}),
+      });
       return;
     }
     if (options?.yieldAfterSpawn) {
       await options.yieldAfterSpawn;
       parentCheckedChildren = true;
-      writeOpenAiResponsesSse(response, buildToolCallEvents("subagents", { action: "list" }));
+      respondWithTool("subagents", { action: "list" });
       return;
     }
     writeOpenAiResponsesText(response, {

@@ -5,21 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import {
-  MigrationArtifactSchema,
-  readMigrationArtifactIdentity,
-  sameMigrationArtifact,
-  statMigrationPath,
-  type MigrationArtifactIdentity,
-} from "../commands/doctor-session-sqlite-artifact.js";
-import type { LegacySessionRecord } from "../commands/doctor-session-sqlite-discovery.js";
-import {
-  canonicalMigrationFilePath,
-  filterRestoreManifestTargets,
-  listSessionSqliteMigrationManifestPaths,
-  readSessionSqliteMigrationManifest,
-  resolveSessionSqliteMigrationRunsDir,
-} from "../commands/doctor-session-sqlite-migration-run.js";
-import {
+  isPrimarySessionTranscriptFileName,
   resolveTrajectoryPath,
   resolveTrajectoryPointerPath,
 } from "../config/sessions/artifacts.js";
@@ -39,6 +25,21 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import type { DeferredPluginMigration } from "./deferred-plugin-migrations.js";
 import { verifyDeferredSessionDatabase } from "./deferred-plugin-session-verification.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  MigrationArtifactSchema,
+  readMigrationArtifactIdentity,
+  sameMigrationArtifact,
+  statMigrationPath,
+  type MigrationArtifactIdentity,
+} from "./session-sqlite-migration-artifact.js";
+import {
+  canonicalMigrationFilePath,
+  filterRestoreManifestTargets,
+  listSessionSqliteMigrationManifestPaths,
+  readSessionSqliteMigrationManifest,
+  resolveSessionSqliteMigrationRunsDir,
+} from "./session-sqlite-migration-manifest.js";
+import type { TranscriptFileFingerprint } from "./session-sqlite-migration-readers.js";
 import { recordStartupMigrationWarnings } from "./state-migrations.messages.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
@@ -80,7 +81,7 @@ export type DeferredPluginSessionImport = z.infer<typeof receiptSchema>;
 export function captureDeferredPluginSessionSources(params: {
   storePath: string;
   indexIdentity: MigrationArtifactIdentity;
-  records: readonly Pick<LegacySessionRecord, "transcriptPath" | "sourceFingerprint">[];
+  records: readonly { transcriptPath?: string; sourceFingerprint?: TranscriptFileFingerprint }[];
   unreferencedJsonlFiles: readonly string[];
   referencedPaths?: ReadonlySet<string>;
 }): DeferredPluginSessionImport["sources"] {
@@ -137,14 +138,11 @@ export function preserveDeferredPluginSessionSource(params: {
     agentId: params.target.agentId,
     env: params.env,
   });
-  return (
-    readDeferredPluginSessionImport({
-      cfg: params.cfg,
-      target: params.target,
-      sqlitePath: params.target.sqlitePath ?? sqlite.path,
-      env: params.env,
-    }) !== undefined
-  );
+  return hasDeferredPluginSessionImport({
+    target: { ...params.target, sqlitePath: params.target.sqlitePath ?? sqlite.path },
+    sqlitePath: params.target.sqlitePath ?? sqlite.path,
+    env: params.env,
+  });
 }
 
 function sourceKey(target: SessionImportTarget): string {
@@ -257,6 +255,25 @@ function sameSourceContent(left: MigrationArtifactIdentity, right: MigrationArti
   return left.sha256 === right.sha256 && left.size === right.size;
 }
 
+/** Old receipts bind bytes, not row identities; only a proven original JSON value can rebind. */
+function preservesRecordedIndexValue(bytes: Buffer, identity: MigrationArtifactIdentity): boolean {
+  const value: unknown = JSON.parse(bytes.toString("utf8"));
+  const pretty = JSON.stringify(value, null, 2);
+  const candidates = [
+    bytes.subarray(0, identity.size),
+    bytes.subarray(-identity.size),
+    ...[JSON.stringify(value), pretty, pretty.replaceAll("\n", "\r\n")].flatMap((encoded) =>
+      ["", "\n", "\r\n"].map((ending) => Buffer.from(encoded + ending)),
+    ),
+  ];
+  return candidates.some(
+    (original) =>
+      original.length === identity.size &&
+      createHash("sha256").update(original).digest("hex") === identity.sha256 &&
+      isDeepStrictEqual(JSON.parse(original.toString("utf8")), value),
+  );
+}
+
 function assertVerifiedSessionSources(
   params: SessionImportSource,
   receipt: DeferredPluginSessionImport,
@@ -291,7 +308,7 @@ function assertVerifiedSessionSources(
         continue;
       }
       throw new Error(
-        `Retained session migration source changed: ${source.path}. Resolve the source conflict before running openclaw doctor --fix again; the verified import was not replayed.`,
+        `Retained session migration source changed: ${source.path}. Run openclaw doctor --fix to verify the current input or preserve it in the migration archive; canonical SQLite sessions were not replayed.`,
       );
     }
     verifiedPaths.set(source.path, verifiedPath);
@@ -303,8 +320,8 @@ function assertVerifiedSessionSources(
   // Doctor can replace an unavailable legacy index with the receipt's hash-bound source list.
   // A later index is new input and cannot inherit the completed import's authority.
   if (
-    (!index || (onSourceConflict && !sourcePath)) &&
-    !statMigrationPath(params.target.storePath)
+    (onSourceConflict && (!index || !sourcePath)) ||
+    (!index && !statMigrationPath(params.target.storePath))
   ) {
     return;
   }
@@ -344,8 +361,12 @@ function assertVerifiedSessionSources(
     }
     for (const candidate of transcriptCandidates) {
       if (statMigrationPath(candidate)) {
+        if (onSourceConflict) {
+          onSourceConflict(candidate);
+          continue;
+        }
         throw new Error(
-          `Retained session migration source changed: ${candidate}. A previously unimported transcript appeared; preserve it and resolve the source conflict before running openclaw doctor --fix again.`,
+          `Retained session migration source changed: ${candidate}. A previously unimported transcript appeared; run openclaw doctor --fix to preserve it in the migration archive.`,
         );
       }
     }
@@ -359,7 +380,7 @@ export function readDeferredPluginSessionImport(
     verification?: SessionSourceVerification;
     onSourceConflict?: (sourcePath: string, artifactPath?: string) => void;
     allowMissingIndex?: boolean;
-    purpose?: "readiness";
+    purpose?: "readiness" | "canonical";
   },
 ): DeferredPluginSessionImport | undefined {
   const receipt = readSessionImportReceipt(params);
@@ -367,6 +388,11 @@ export function readDeferredPluginSessionImport(
     return undefined;
   }
   let recorded = parseSessionImportReceipt(params, receipt, params.purpose);
+  // Canonical mutations have their own provenance checks; changed plugin inputs cannot undo
+  // core import completion or authorize replay of file-era metadata.
+  if (params.purpose === "canonical") {
+    return recorded;
+  }
   if (params.allowMissingIndex && !statMigrationPath(params.target.storePath)) {
     recorded = {
       ...recorded,
@@ -387,7 +413,16 @@ export function readDeferredPluginSessionImport(
       ),
     };
   }
-  assertVerifiedSessionSources(params, recorded, params.verification, params.onSourceConflict);
+  try {
+    assertVerifiedSessionSources(params, recorded, params.verification, params.onSourceConflict);
+  } catch (error) {
+    if (params.purpose !== "readiness") {
+      throw error;
+    }
+    recordStartupMigrationWarnings([
+      `Retained plugin session source awaits Doctor repair; canonical SQLite sessions remain available: ${String(error)}`,
+    ]);
+  }
   return recorded;
 }
 
@@ -415,7 +450,7 @@ function readSessionImportReceipt(
 function parseSessionImportReceipt(
   params: SessionImportSource,
   receipt: LegacyMigrationReceipt,
-  purpose?: "readiness",
+  purpose?: "readiness" | "canonical",
 ) {
   const recorded = receiptSchema.parse(JSON.parse(receipt.reportJson));
   if (recorded.databaseIdentity !== databaseIdentity(params.sqlitePath)) {
@@ -431,8 +466,12 @@ function parseSessionImportReceipt(
   return recorded;
 }
 
-/** Rebuild only derived source evidence; retain the original index hash and every conflict. */
-export function rebuildDeferredPluginSessionSourceIndex(params: SessionImportSource): boolean {
+/** Rebuild derived evidence from proven original index values or verified canonical transcripts. */
+export function rebuildDeferredPluginSessionSourceIndex(
+  params: SessionImportSource & {
+    onSourceConflict?: (sourcePath: string, artifactPath?: string, error?: unknown) => void;
+  },
+): boolean {
   const receipt = readSessionImportReceipt(params);
   if (!receipt) {
     return false;
@@ -441,12 +480,16 @@ export function rebuildDeferredPluginSessionSourceIndex(params: SessionImportSou
   const currentDatabaseIdentity = databaseIdentity(params.sqlitePath);
   const target = { ...params.target, sqlitePath: params.sqlitePath };
   const index = recorded.sources.find((source) => source.path === path.resolve(target.storePath));
+  let verifiedIndex = index;
   const archives = collectArchivedSources(target, params.env);
+  const verification: SessionSourceVerification = new Map();
+  const verifiedSourcePaths = new Set(recorded.sources.map((source) => source.path));
   const missingIndex =
     index && existingSessionSourcePaths(index.path, target, params.env, archives).length === 0;
   const sources = recorded.sources
     .filter((source) => !missingIndex || source !== index)
     .map((source) => {
+      let failure: unknown;
       const candidates = statMigrationPath(source.path)
         ? [source.path]
         : (archives.get(source.path) ?? []).map((archive) => archive.path);
@@ -456,17 +499,68 @@ export function rebuildDeferredPluginSessionSourceIndex(params: SessionImportSou
         }
         try {
           const identity = readMigrationArtifactIdentity(candidate);
-          if (
-            identity.size === source.identity.size &&
-            identity.sha256 === source.identity.sha256
-          ) {
+          if (sameSourceContent(identity, source.identity)) {
             return { path: source.path, identity };
           }
-        } catch {
+          if (
+            candidate !== source.path ||
+            (source.path !== path.resolve(target.storePath) &&
+              !isPrimarySessionTranscriptFileName(path.basename(source.path)))
+          ) {
+            continue;
+          }
+          const isIndex = source.path === path.resolve(target.storePath);
+          const indexPath =
+            !isIndex &&
+            verifiedIndex &&
+            resolveVerifiedSessionSource(verifiedIndex, target, params.env, verification);
+          if (isIndex) {
+            const issues: Array<{ code: string; message: string }> = [];
+            const current = readLegacySessionStoreEntries(params.target, issues, {
+              sourcePath: candidate,
+            });
+            if (!current.bytes || !preservesRecordedIndexValue(current.bytes, source.identity)) {
+              throw new Error(
+                `Cannot prove the retained index preserves its original entries, metadata, and transcript links: ${candidate}. ${issues.map((issue) => issue.message).join("; ")}`,
+              );
+            }
+          } else {
+            if (!indexPath || !verifiedIndex) {
+              throw new Error(
+                "Changed transcript has no verified retained index to establish its session owner.",
+              );
+            }
+            verifyDeferredSessionDatabase({
+              ...params,
+              sources: [
+                { originalPath: verifiedIndex.path, path: indexPath },
+                { originalPath: source.path, path: candidate },
+              ],
+              requireCompleteTranscript: true,
+              verifiedSourcePaths,
+            });
+          }
+          if (
+            !sameMigrationArtifact(readMigrationArtifactIdentity(candidate), identity) ||
+            (indexPath &&
+              verifiedIndex &&
+              !sameSourceContent(readMigrationArtifactIdentity(indexPath), verifiedIndex.identity))
+          ) {
+            continue;
+          }
+          if (isIndex) {
+            verifiedIndex = { path: source.path, identity };
+          }
+          return { path: source.path, identity };
+        } catch (error) {
           // An unreadable or aliased source remains protected with its recorded identity.
+          failure = error;
         }
       }
-      // Keeping the old hash makes a changed source a named conflict on every retry.
+      if (failure !== undefined) {
+        params.onSourceConflict?.(source.path, undefined, failure);
+      }
+      // Unverified content retains its old receipt until Doctor protects the current artifact.
       return source;
     });
   if (currentDatabaseIdentity !== recorded.databaseIdentity) {
@@ -493,12 +587,23 @@ export function rebuildDeferredPluginSessionSourceIndex(params: SessionImportSou
         throw new Error("Deferred session import changed before its source index was rebuilt.");
       }
       const reportJson = JSON.stringify(rebuilt);
+      const rebuiltIndex = rebuilt.sources.find(
+        (source) => source.path === path.resolve(target.storePath),
+      );
       const query = getNodeSqliteKysely<DB>(db);
       executeSqliteQuerySync(
         db,
         query
           .updateTable("migration_sources")
-          .set({ report_json: reportJson })
+          .set({
+            report_json: reportJson,
+            ...(rebuiltIndex
+              ? {
+                  source_sha256: rebuiltIndex.identity.sha256,
+                  source_size_bytes: rebuiltIndex.identity.size,
+                }
+              : {}),
+          })
           .where("source_key", "=", receipt.sourceKey),
       );
       executeSqliteQuerySync(
@@ -544,6 +649,7 @@ export function prepareDeferredPluginSessionImportReader(params: {
           sqlitePath: sqlite.path,
           env: params.env,
           database,
+          purpose: "canonical",
         }),
       };
       verified.set(key, prepared);

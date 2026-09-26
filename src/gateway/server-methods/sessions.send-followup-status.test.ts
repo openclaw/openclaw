@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
  */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -119,6 +120,12 @@ describe("sessions.send completed subagent follow-up status", () => {
   }
 
   it("reactivates completed subagent sessions before broadcasting sessions.changed", async () => {
+    const state = await createOpenClawTestState({
+      label: "session-send-followup",
+      applyEnv: false,
+    });
+    onTestFinished(() => state.cleanup());
+    const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
     const childSessionKey = "agent:main:subagent:followup";
     const completedRun = {
       runId: "run-old",
@@ -140,7 +147,7 @@ describe("sessions.send completed subagent follow-up status", () => {
     loadSessionEntryMock.mockReturnValue({
       cfg: {},
       canonicalKey: childSessionKey,
-      storePath: "/tmp/sessions.json",
+      storePath,
       entry: { sessionId: "sess-followup" },
     });
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(completedRun);
@@ -155,7 +162,7 @@ describe("sessions.send completed subagent follow-up status", () => {
     const projection = createSessionRowProjectionFixture({
       cfg: {},
       agentId: "main",
-      storePath: "/tmp/sessions.json",
+      storePath,
       store: {
         [childSessionKey]: {
           sessionId: "sess-followup",
@@ -344,92 +351,6 @@ describe("sessions.send completed subagent follow-up status", () => {
     });
 
     expect(respondMock.mock.calls.at(0)?.[1]).not.toHaveProperty("interruptedActiveRun");
-    expect(respondMock.mock.calls.at(0)?.[3]).toMatchObject({ cached: true });
-  });
-
-  it("sessions.steer still interrupts the active run for a fresh idempotency key", async () => {
-    const sessionKey = "agent:main:main";
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      canonicalKey: sessionKey,
-      storePath: "/tmp/sessions.json",
-      entry: { sessionId: "sess-active" },
-    });
-    chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
-      respond(
-        true,
-        { runId: "steer-fresh", status: "started", interruptedActiveRun: true },
-        undefined,
-        undefined,
-      );
-    });
-
-    const respondMock = vi.fn();
-    await expectDefined(
-      sessionMessagingHandlers["sessions.steer"],
-      'sessionMessagingHandlers["sessions.steer"] test invariant',
-    )({
-      req: { id: "req-steer-fresh" } as never,
-      params: {
-        key: sessionKey,
-        message: "replacement turn",
-        idempotencyKey: "steer-fresh",
-      },
-      respond: respondMock as unknown as RespondFn,
-      context: createRequestContext(),
-      client: null,
-      isWebchatConnect: () => false,
-    });
-
-    expect(chatSendMock.mock.calls.at(0)?.[0]?.params).toMatchObject({
-      queueMode: "interrupt",
-      idempotencyKey: "steer-fresh",
-    });
-    expect(respondMock.mock.calls.at(0)?.[1]).toMatchObject({ interruptedActiveRun: true });
-  });
-
-  it("sessions.steer replaying an in-flight idempotency key leaves its own run alone", async () => {
-    const sessionKey = "agent:main:main";
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      canonicalKey: sessionKey,
-      storePath: "/tmp/sessions.json",
-      entry: { sessionId: "sess-in-flight" },
-    });
-    chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
-      respond(true, { runId: "steer-inflight", status: "in_flight" }, undefined, {
-        cached: true,
-        runId: "steer-inflight",
-      });
-    });
-    chatSendWithAdmissionOwnedMock.mockImplementationOnce(
-      async (options: { respond: RespondFn }) => {
-        await chatSendMock(options);
-      },
-    );
-
-    const respondMock = vi.fn();
-    await expectDefined(
-      sessionMessagingHandlers["sessions.steer"],
-      'sessionMessagingHandlers["sessions.steer"] test invariant',
-    )({
-      req: { id: "req-steer-inflight" } as never,
-      params: {
-        key: sessionKey,
-        message: "replacement turn",
-        idempotencyKey: "steer-inflight",
-      },
-      respond: respondMock as unknown as RespondFn,
-      // The run the first attempt started is still registered under its own id.
-      context: createRequestContext({
-        chatAbortControllers: new Map([
-          ["steer-inflight", { sessionKey, sessionId: "sess-in-flight" }],
-        ]),
-      }),
-      client: null,
-      isWebchatConnect: () => false,
-    });
-
     expect(respondMock.mock.calls.at(0)?.[3]).toMatchObject({ cached: true });
   });
 

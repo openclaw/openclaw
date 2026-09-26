@@ -104,13 +104,11 @@ export function describePluginInstallSource(
       warnings.push("invalid-npm-spec");
     }
   }
-  if (defaultChoice === "clawhub" && !clawhub) {
-    warnings.push("default-choice-missing-source");
-  }
-  if (defaultChoice === "npm" && !npm) {
-    warnings.push("default-choice-missing-source");
-  }
-  if (defaultChoice === "local" && !localPath) {
+  if (
+    (defaultChoice === "clawhub" && !clawhub) ||
+    (defaultChoice === "npm" && !npm) ||
+    (defaultChoice === "local" && !localPath)
+  ) {
     warnings.push("default-choice-missing-source");
   }
   if (expectedIntegrity && !npm) {

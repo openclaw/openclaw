@@ -1,21 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.js";
 
+const hostTab = { targetId: "tab-1", target: "host", profile: "work" };
+const nodeTab = { ...hostTab, target: "node", node: "node-1" };
+
 describe("chat display tool-result detail projection", () => {
   it.each([
     [
       {
-        targetId: "tab-1",
-        target: "host",
-        profile: "work",
+        ...hostTab,
         url: "https://example.com",
         title: "Example",
         extra: "drop",
       },
       {
-        targetId: "tab-1",
-        target: "host",
-        profile: "work",
+        ...hostTab,
         url: "https://example.com",
         title: "Example",
       },
@@ -38,28 +37,18 @@ describe("chat display tool-result detail projection", () => {
         title: "t".repeat(511),
       },
     ],
-    [
-      { targetId: "tab-1", target: "host", profile: "work", url: 42, title: [] },
-      { targetId: "tab-1", target: "host", profile: "work" },
-    ],
+    [{ ...hostTab, url: 42, title: [] }, hostTab],
     ...[
       null,
       [],
       "tab-1",
-      {},
-      { targetId: "tab-1" },
-      { targetId: "tab-1", target: "sandbox", profile: "work" },
-      { targetId: "tab-1", target: "node", profile: "work" },
-      { targetId: "tab-1", target: "host", profile: "work", node: "node-1" },
+      { ...hostTab, target: "sandbox" },
+      { ...hostTab, target: "node" },
+      { ...hostTab, node: "node-1" },
+      ...[1, "", " padded "].map((targetId) => Object.assign({}, nodeTab, { targetId })),
       ...["targetId", "profile", "node"].flatMap((key) =>
-        [undefined, 1, "", "  ", " padded ", "x".repeat(key === "node" ? 257 : 129)].map(
-          (value) => ({
-            targetId: "tab-1",
-            target: "node",
-            profile: "work",
-            node: "node-1",
-            [key]: value,
-          }),
+        [undefined, "x".repeat(key === "node" ? 257 : 129)].map((value) =>
+          Object.assign({}, nodeTab, { [key]: value }),
         ),
       ),
     ].map((invalid) => [invalid, undefined] as const),

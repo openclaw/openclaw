@@ -14,80 +14,31 @@ import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { repairJson } from "@openclaw/ai/internal/runtime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Type } from "typebox";
+import { hasErrnoCode } from "../../../infra/errno.js";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
-import { normalizeToLF } from "../../line-endings.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { textResult } from "../../tools/common.js";
+import { textResult } from "../../tools/tool-results.js";
 import { decodeUtf8File } from "../../utf8-file.js";
 import type { ToolDefinition } from "../extensions/types.js";
-import {
-  applyEditsPreservingLineEndings,
-  computeEditsDiff,
-  EditNoChangeError,
-  type Edit,
-  type EditDiffError,
-  type EditDiffResult,
-  generateDiffString,
-  generateUnifiedPatch,
-  splitNoOpEdits,
-  stripBom,
-  validateNoOpEditTargets,
-} from "./edit-diff.js";
+import type { Edit, EditDiffError, EditDiffResult } from "./edit-diff.js";
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
+import { computeEditsDiff, planFileEdit } from "./file-tool-planning.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
 import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { editSchema, EditToolOutputSchema } from "./tool-schemas.js";
 
 type EditPreview = EditDiffResult | EditDiffError;
 
 type EditRenderState = {
   callComponent?: EditCallRenderComponent;
 };
-
-const replaceEditSchema = Type.Object(
-  {
-    oldText: Type.String({
-      description: "Exact original text; unique and non-overlapping in this call.",
-    }),
-    newText: Type.String({
-      description: "Replacement text.",
-    }),
-  },
-  {},
-);
-
-const editSchema = Type.Object(
-  {
-    path: Type.String({
-      description: "File path; relative/absolute.",
-    }),
-    edits: Type.Array(replaceEditSchema, {
-      description:
-        "Targeted replacements against original file; no overlap/nesting. Merge nearby changes.",
-    }),
-  },
-  {},
-);
-
-const EditToolOutputSchema = Type.Union([
-  Type.Object({ changed: Type.Literal(false) }, { additionalProperties: false }),
-  Type.Object(
-    {
-      changed: Type.Literal(true),
-      diff: Type.String(),
-      patch: Type.String(),
-      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
-    },
-    { additionalProperties: false },
-  ),
-]);
 
 const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
 const EDIT_MISMATCH_HINT_LIMIT = 800;
@@ -121,12 +72,7 @@ const defaultEditOperations: EditOperations = {
         mtimeMs: stat.mtimeMs,
       } as const;
     } catch (error) {
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        (error as { code?: unknown }).code === "ENOENT"
-      ) {
+      if (hasErrnoCode(error, "ENOENT")) {
         return null;
       }
       throw error;
@@ -426,7 +372,7 @@ export function createEditToolDefinition(
         }
         assertCurrent();
 
-        let realEdits: Edit[] = [];
+        let editCount = 0;
         let expectedContent: string | undefined;
 
         try {
@@ -449,26 +395,19 @@ export function createEditToolDefinition(
           }
           assertCurrent();
 
-          const { bom, text: content } = stripBom(rawContent);
-          const normalizedContent = normalizeToLF(content);
-          const editSets = splitNoOpEdits(normalizedContent, originalEdits, path);
-          const noOpEdits = editSets.noOpEdits;
-          realEdits = editSets.realEdits;
-          validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
-          // No-op: not terminal — the model may still be mid-task and needs a
-          // continuation, not an ended turn.
-          if (realEdits.length === 0) {
-            return textResult(
-              `No changes made to ${path}. The replacement text is identical to the original.`,
-              { changed: false } satisfies EditToolDetails,
-            );
-          }
-          const { baseContent, newContent, finalContent } = applyEditsPreservingLineEndings(
-            content,
-            realEdits,
-            path,
+          const plan = await planFileEdit(
+            { path, content: rawContent, edits: originalEdits },
+            signal,
           );
-          expectedContent = bom + finalContent;
+          if (signal?.aborted) {
+            throw new Error("Operation aborted");
+          }
+          assertCurrent();
+          if (!plan.changed) {
+            return textResult(plan.message, { changed: false } satisfies EditToolDetails);
+          }
+          editCount = plan.editCount;
+          expectedContent = plan.content;
           await ops.writeFile(absolutePath, expectedContent);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
@@ -481,24 +420,10 @@ export function createEditToolDefinition(
           }
 
           assertCurrent();
-          const diffResult = generateDiffString(baseContent, newContent);
-          const patch = generateUnifiedPatch(path, baseContent, newContent);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
-              },
-            ],
-            details: {
-              changed: true,
-              diff: diffResult.diff,
-              patch,
-              ...(diffResult.firstChangedLine === undefined
-                ? {}
-                : { firstChangedLine: diffResult.firstChangedLine }),
-            },
-          };
+          return textResult<EditToolDetails>(
+            `Successfully replaced ${editCount} block(s) in ${path}.`,
+            { changed: true, ...plan.receipt },
+          );
         } catch (error: unknown) {
           assertCurrent();
           const normalizedError = error instanceof Error ? error : new Error(String(error));
@@ -511,26 +436,13 @@ export function createEditToolDefinition(
             (await verifyPersistedUtf8File(absolutePath, expectedContent, ops))
           ) {
             assertCurrent();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
-                },
-              ],
-              details: { changed: true, diff: "", patch: "" },
-            };
+            return textResult<EditToolDetails>(
+              `Successfully replaced ${editCount} block(s) in ${path}.`,
+              { changed: true, diff: "", patch: "" },
+            );
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
             throw appendMismatchHint(normalizedError, currentContent);
-          }
-          // No-op: the edit matched but produced identical content. Not
-          // terminal — see the realEdits.length===0 case above.
-          if (normalizedError instanceof EditNoChangeError) {
-            return textResult(
-              `No changes made to ${path}. The replacement produced identical content.`,
-              { changed: false } satisfies EditToolDetails,
-            );
           }
           throw normalizedError;
         }
