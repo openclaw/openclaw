@@ -474,6 +474,24 @@ export default function createApplicationPlacementStartupRuntime(
         createdAt: entry.createdAt,
       });
     },
+    discard(sessionKey) {
+      const entry = findEntry(sessionKey)?.entry;
+      if (!entry) {
+        return;
+      }
+      // Discard is a deliberate terminal action: the placement owner retires the retained
+      // turn and clears its durable recovery so the startup cannot be resumed on reload or
+      // by a late completion. This is the removal path the ordinary outbox owner cannot
+      // reach for placement-owned turns. Clearing is message-scoped, so a newer submission
+      // that already rotated the durable recovery to a different message id is untouched.
+      clearSessionPlacementRecovery(
+        entry.owner.gatewayUrl,
+        entry.owner.recoveryScope,
+        entry.owner.sessionKey,
+        entry.owner.messageId,
+      );
+      retireEntry(entry);
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

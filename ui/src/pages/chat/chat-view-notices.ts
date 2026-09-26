@@ -19,6 +19,7 @@ registerNewSessionSetupEnglish();
 export type ChatPlacementStartupNoticeProps = {
   placementStartup?: ApplicationPlacementStartupStatus | null;
   onRetrySessionPlacementStartup?: () => void;
+  onDiscardSessionPlacementStartup?: () => void;
 };
 
 type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {

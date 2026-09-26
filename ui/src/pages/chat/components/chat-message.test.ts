@@ -931,9 +931,9 @@ describe("grouped chat rendering", () => {
 
   it.each([
     { state: "failed", actionLabel: undefined, retry: true, discard: true },
-    { state: "failed", actionLabel: "Check failure", retry: true, discard: false },
+    { state: "failed", actionLabel: "Check failure", retry: true, discard: true },
     { state: "unconfirmed", actionLabel: undefined, retry: true, discard: true },
-    { state: "unconfirmed", actionLabel: "Check delivery", retry: true, discard: false },
+    { state: "unconfirmed", actionLabel: "Check delivery", retry: true, discard: true },
     { state: "waiting-reconnect", actionLabel: undefined, retry: false, discard: true },
   ] as const)(
     "shows a $state footer with its diagnostic and recovery actions ($actionLabel)",

@@ -6,6 +6,7 @@ import {
   listSessionPlacementRecoveryStorageKeys,
   sessionPlacementRecoveryExactStorageKey,
 } from "../lib/sessions/session-placement-recovery-storage-key.ts";
+import { clearSessionPlacementRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type {
   SessionPlacementRecovery,
   SessionPlacementStartMode,
@@ -75,6 +76,7 @@ export type ApplicationPlacementStartupRuntime = {
   resumeRecovery: () => void;
   start: (input: PlacementStartupInput) => void;
   retry: (sessionKey: string) => void;
+  discard: (sessionKey: string) => void;
   pause: (sessionKey: string, error: string, recovery: PlacementStartupRecoveryAccess) => void;
   subscribe: (listener: () => void) => () => void;
   dispose: () => void;
@@ -400,6 +402,38 @@ export function createApplicationPlacementStartup(
         return resumeRecovery(pending, true);
       }
       runtime?.retry(sessionKey);
+    },
+    discard(sessionKey) {
+      const pending = preRuntimeEntries.get(sessionKey)?.()?.input;
+      if (pending) {
+        preRuntimeEntries.delete(sessionKey);
+        if (pending.persistRecovery) {
+          clearSessionPlacementRecovery(
+            pending.recovery.gatewayUrl,
+            pending.recovery.recoveryScope,
+            pending.recovery.sessionKey,
+            pending.recovery.messageId,
+          );
+        }
+        publish();
+        return;
+      }
+      if (runtime) {
+        runtime.discard(sessionKey);
+        return;
+      }
+      // Runtime not yet loaded: clear any durable row and evict the restored-recovery
+      // cache entry so the facade stops surfacing the discarded turn.
+      const client = readyClient();
+      if (client) {
+        clearSessionPlacementRecovery(
+          gateway.connection.gatewayUrl,
+          client.recoveryScope,
+          sessionKey,
+        );
+      }
+      pendingStoredRecovery?.refresh();
+      publish();
     },
     resumeRecovery,
     subscribe(listener) {
