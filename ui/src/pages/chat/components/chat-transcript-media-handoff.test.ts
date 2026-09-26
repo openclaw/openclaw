@@ -101,9 +101,10 @@ async function createCanonicalImageTranscript(
     text: "Cached text",
     createdAt: 1_000,
     runId: "canonical-image-send",
-    attachments: inlineUrls.map((dataUrl) => ({
+    attachments: inlineUrls.map((dataUrl, index) => ({
       id: crypto.randomUUID(),
       mimeType: "image/png",
+      fileName: `image-${index}.png`,
       dataUrl,
     })),
   };
@@ -124,10 +125,16 @@ async function createCanonicalImageTranscript(
   } else if (origin === "submitted") {
     reduceChatSessionProjection(owner, { type: "sendPending", runId: input.runId, message: local });
   }
-  const media = Array.from({ length: Math.max(...factIndexes) + 1 }, (_, index) =>
-    factIndexes.includes(index)
-      ? { path: `media://inbound/${crypto.randomUUID()}.png`, contentType: "image/png" }
-      : null,
+  const media: Array<{ path: string; contentType: string; fileName?: string } | null> = Array.from(
+    { length: Math.max(...factIndexes) + 1 },
+    (_, index) =>
+      factIndexes.includes(index)
+        ? {
+            path: `media://inbound/${crypto.randomUUID()}.png`,
+            contentType: "image/png",
+            fileName: `image-${factIndexes.indexOf(index)}.png`,
+          }
+        : null,
   );
   const props = {
     ...threadProps(
@@ -241,6 +248,7 @@ describe("canonical image presentation handoff", () => {
     async (origin) => {
       const fixture = await createCanonicalImageTranscript(undefined, undefined, origin);
       const displayed = expectDefined(fixture.displayed[0], "displayed inline image");
+      expect(displayed.alt).toBe("image-0.png");
       if (origin === "initial receipt") {
         fixture.publish();
         expectSameImageNodes(fixture.images(), [displayed]);
@@ -258,6 +266,7 @@ describe("canonical image presentation handoff", () => {
       expect(displayed.getAttribute("src")).toContain(
         encodeURIComponent(expectDefined(fixture.media[0], "canonical media fact").path),
       );
+      expect(displayed.alt).toBe("image-0.png");
       fixture.renderPane();
       expectSameImageNodes(fixture.images(), [displayed]);
       displayed.dispatchEvent(new Event("load"));
