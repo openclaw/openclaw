@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { ComputerUseV2ActionName } from "../../plugins/computer-use-contract.js";
+import type {
+  ComputerActResult,
+  ComputerUseV2ActionName,
+} from "../../plugins/computer-use-contract.js";
 import { COMPUTER_USE_V2_ACTION_NAMES } from "../../plugins/computer-use-contract.js";
 import { sleep } from "../../utils/sleep.js";
 import type { PreparedPairedComputerUse } from "../computer-use-node-capabilities.js";
@@ -204,6 +207,23 @@ export function createComputerTool(options?: {
           gatewayOpts,
           signal,
         });
+        const deliverObservation = async (
+          result: ComputerActResult,
+          observationAction = action,
+          precedingAction?: { action: ComputerToolAction; result: ComputerActResult },
+        ) => {
+          session.setTarget(resolved.target);
+          const projected = await projectComputerActResult({
+            result,
+            precedingAction,
+            target: resolved.target,
+            action: observationAction,
+            referenceWidth,
+            modelHasVision: options?.modelHasVision,
+          });
+          session.recordObservation(resolved, result, projected.imageCoordinates);
+          return projected.result;
+        };
 
         if (action === "screenshot" || action === "wait") {
           const noteLines: string[] = [];
@@ -244,16 +264,7 @@ export function createComputerTool(options?: {
           signal,
         });
         if (actResult.observation || isComputerObservationAction(action, params.dialogAction)) {
-          session.setTarget(resolved.target);
-          const projected = await projectComputerActResult({
-            result: actResult,
-            target: resolved.target,
-            action,
-            referenceWidth,
-            modelHasVision: options?.modelHasVision,
-          });
-          session.recordObservation(resolved, actResult, projected.imageCoordinates);
-          return projected.result;
+          return await deliverObservation(actResult);
         }
         // Browser preparation can launch a different window; its old native target is not an after-image.
         const windowRef = "windowRef" in wireParams ? wireParams.windowRef : undefined;
@@ -274,17 +285,10 @@ export function createComputerTool(options?: {
             if (!observation.ok || !observation.observation?.observationId) {
               throw new Error(computerActResultText("get_window_state", observation));
             }
-            session.setTarget(resolved.target);
-            const projected = await projectComputerActResult({
-              result: observation,
-              precedingAction: { action, result: actResult },
-              target: resolved.target,
-              action: "get_window_state",
-              referenceWidth,
-              modelHasVision: options?.modelHasVision,
+            return await deliverObservation(observation, "get_window_state", {
+              action,
+              result: actResult,
             });
-            session.recordObservation(resolved, observation, projected.imageCoordinates);
-            return projected.result;
           }
           return await captureAndDeliverScreenshot({
             noteLines: [computerActResultText(action, actResult)],

@@ -1,3 +1,4 @@
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
@@ -26,8 +27,10 @@ import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js"
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
+import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { optionalFiniteNumberSchema, optionalPositiveIntegerSchema } from "../schema/typebox.js";
-import { readFiniteNumberParam, readPositiveIntegerParam } from "./common.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import { readFiniteNumberParam, readPositiveIntegerParam, type AnyAgentTool } from "./common.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -50,6 +53,7 @@ import {
 } from "./image-tool.result.js";
 import {
   buildTextToolResult,
+  normalizeMediaReferenceList,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveMediaToolSandboxConfig,
   resolveMediaToolInboundRoots,
@@ -63,11 +67,6 @@ import {
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
-import {
-  createSandboxBridgeReadFile,
-  type AnyAgentTool,
-  type ToolFsPolicy,
-} from "./tool-runtime.helpers.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
@@ -460,33 +459,14 @@ export function createImageTool(options?: {
           signal?.throwIfAborted();
         };
         assertCurrent();
-        // MARK: - Normalize path + paths input and dedupe while preserving order
-        const pathCandidates: string[] = [];
-        if (typeof record.path === "string") {
-          pathCandidates.push(record.path);
-        }
-        if (Array.isArray(record.paths)) {
-          pathCandidates.push(...record.paths.filter((v): v is string => typeof v === "string"));
-        }
-
-        const seenImages = new Set<string>();
-        const pathInputs: string[] = [];
-        for (const candidate of pathCandidates) {
-          const trimmedCandidate = candidate.trim();
-          const normalizedForDedupe = trimmedCandidate.startsWith("@")
-            ? trimmedCandidate.slice(1).trim()
-            : trimmedCandidate;
-          if (!normalizedForDedupe || seenImages.has(normalizedForDedupe)) {
-            continue;
-          }
-          seenImages.add(normalizedForDedupe);
-          pathInputs.push(trimmedCandidate);
-        }
+        const pathInputs = normalizeMediaReferenceList([
+          ...(typeof record.path === "string" ? [record.path] : []),
+          ...filterStringEntries(record.paths),
+        ]);
         if (pathInputs.length === 0) {
           throw new Error("path required");
         }
 
-        // MARK: - Enforce max images cap
         const maxImages = readPositiveIntegerParam(record, "maxImages") ?? DEFAULT_MAX_IMAGES;
         if (pathInputs.length > maxImages) {
           return {
@@ -559,7 +539,6 @@ export function createImageTool(options?: {
           options?.fsPolicy?.workspaceOnly,
         );
 
-        // MARK: - Load and resolve each image
         const loadedImages: LoadedImageForTool[] = [];
 
         for (const pathRawInput of pathInputs) {
@@ -574,11 +553,7 @@ export function createImageTool(options?: {
 
           const normalizedRef = normalizeMediaReferenceSource(imageRaw);
 
-          // The tool accepts file paths, file/data URLs, or http(s) URLs. In some
-          // agent/model contexts, images can be referenced as pseudo-URIs like
-          // `image:0` (e.g. "first image in the prompt"). We don't have access to a
-          // shared image registry here, so fail gracefully instead of attempting to
-          // `fs.readFile("image:0")` and producing a noisy ENOENT.
+          // Pseudo-URIs such as image:0 have no registry here; reject them before filesystem access.
           const refInfo = classifyMediaReferenceSource(normalizedRef);
           const { isDataUrl, isHttpUrl } = refInfo;
           if (refInfo.hasUnsupportedScheme) {

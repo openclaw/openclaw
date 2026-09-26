@@ -119,9 +119,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedModel = normalizeOptionalString(p.model);
-    let personalAccounts: ReturnType<typeof prepareSessionModelAccountAccess>;
+    let personalAccounts: Awaited<ReturnType<typeof prepareSessionModelAccountAccess>>;
     try {
-      personalAccounts = prepareSessionModelAccountAccess(options, requestedModel);
+      personalAccounts = await prepareSessionModelAccountAccess(options, requestedModel);
     } catch (error) {
       if (!(error instanceof ModelAccountConnectAuthorityError)) {
         throw error;

@@ -9,7 +9,6 @@ import {
   existsSync,
   lstatSync,
   mkdtempSync,
-  promises as fs,
   readFileSync,
   readdirSync,
   rmSync,
@@ -17,6 +16,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { rm } from "node:fs/promises";
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
@@ -594,7 +594,8 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     baseEnv[FS_MODULE_CACHE_ROOT_ENV_KEY]?.trim() || baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
   const nodeCompileCacheRoot = baseEnv[NODE_COMPILE_CACHE_PATH_ENV_KEY]?.trim();
   let context: Awaited<ReturnType<typeof createWorkerContext>>;
-  let scratchReleased = true;
+  let unverifiedChild = false;
+  let scratchCleanupPending = options.scratchDir === undefined;
   let interrupted: NodeJS.Signals | undefined;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
@@ -613,11 +614,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     }
     const runner: typeof runChild =
       options.runChild ??
-      ((args, childEnv, label, timingKey) => {
-        // A portable leader's close event cannot release descendant-owned caches.
-        scratchReleased &&= context !== undefined;
-        return runChild(args, childEnv, label, timingKey, context);
-      });
+      ((args, childEnv, label, timingKey) => runChild(args, childEnv, label, timingKey, context));
     let nextIndex = 0;
     let exitCode = 0;
     const workers = Array.from({ length: concurrency }, async (_, cacheSlot) => {
@@ -754,6 +751,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                 : selection.configs || selection.includePatterns
                   ? "node-subset:"
                   : "";
+            unverifiedChild ||= !context;
             const code = await runner(
               args,
               childEnv,
@@ -820,22 +818,23 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     return exitCode;
   } finally {
     try {
-      let disposalCompleted = false;
-      try {
-        await context?.workerRun.dispose();
-        disposalCompleted = true;
-      } finally {
-        if (options.scratchDir === undefined) {
-          if (scratchReleased && disposalCompleted) {
-            await fs.rm(scratchDir, { recursive: true, force: true });
-          } else {
-            console.warn(
-              `[shard:cache] retained ${scratchDir}: descendant completion is unverified`,
-            );
-          }
+      await context?.workerRun.dispose();
+      if (scratchCleanupPending && !unverifiedChild) {
+        // Disposal proves compiler, borrower, and nested-resource settlement.
+        // Portable close-only launches cannot authorize deleting shared scratch.
+        try {
+          await rm(scratchDir, { recursive: true, force: true, maxRetries: 3 });
+          scratchCleanupPending = false;
+        } catch {
+          // Report retained scratch below without replacing the shard's result.
         }
       }
     } finally {
+      if (scratchCleanupPending) {
+        console.warn(
+          `[shard:cache] retained ${scratchDir}: descendant or scratch cleanup is unverified`,
+        );
+      }
       if (hostResources) {
         reportCiResourceSnapshot("end");
       }

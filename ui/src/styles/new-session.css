@@ -26,6 +26,12 @@ openclaw-new-session-page {
   z-index: 45;
 }
 
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
+  .new-session-page__incognito-rail {
+    top: calc((var(--rail-header-height) - 40px) / 2);
+  }
+}
+
 .new-session-page__draft-toggle {
   display: none;
 }

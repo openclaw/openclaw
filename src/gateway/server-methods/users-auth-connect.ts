@@ -31,7 +31,7 @@ type ConnectRequest = Pick<
   "client" | "context" | "signal" | "respond"
 >;
 
-function runConnectRequest(
+async function runConnectRequest(
   options: ConnectRequest,
   profileId: string | undefined,
   run: (
@@ -39,7 +39,7 @@ function runConnectRequest(
     action: ModelAccountConnectAction,
   ) => unknown,
   requiredScope: "operator.read" | "operator.write" | "operator.admin" = "operator.write",
-): void | Promise<void> {
+): Promise<void> {
   const fail = (error: unknown) => {
     const responseError =
       error instanceof ModelAccountConnectAuthorityError
@@ -54,15 +54,12 @@ function runConnectRequest(
     options.respond(false, undefined, responseError);
   };
   try {
-    const action = prepareUserModelAccountAction(options, profileId, requiredScope);
+    const action = await prepareUserModelAccountAction(options, profileId, requiredScope);
     const service = options.context.modelAccountConnectService;
     if (!service) {
       throw new Error("Model-account service is not running.");
     }
-    const result = run(service, action);
-    if (result instanceof Promise) {
-      return result.then((value) => options.respond(true, value)).catch(fail);
-    }
+    const result = await run(service, action);
     options.respond(true, result);
   } catch (error) {
     fail(error);

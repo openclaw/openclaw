@@ -57,6 +57,8 @@ const logNames = [
   "install.log",
   "update.json",
   "update.err",
+  "update-noop.json",
+  "update-noop.err",
   ...siblingRefusalLogs,
   ...restoredIndexLogs,
   ...backupRollbackLogs,
