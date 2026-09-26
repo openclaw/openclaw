@@ -26,7 +26,6 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import "../plugins/control-ui-contributions.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import "../styles/app-sidebar.css";
 import {

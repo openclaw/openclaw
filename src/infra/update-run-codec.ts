@@ -20,6 +20,9 @@ const RETAINED_STEP_NAMES = [
   "notice:verifying",
   "previous generation restoration",
   "post-update verification",
+  "diagnostic:database snapshot",
+  "diagnostic:database migration writes",
+  "diagnostic:database rollback",
   "task-delivery-recovery",
   "driver:adopted",
   "driver:identity-unavailable",
@@ -80,6 +83,9 @@ function boundedJson(
         const compacted = value.map((item) =>
           isRecord(item) &&
           item.step !== "task-delivery-recovery" &&
+          item.step !== "diagnostic:database snapshot" &&
+          item.step !== "diagnostic:database migration writes" &&
+          item.step !== "diagnostic:database rollback" &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
             ? { ...item, detail: undefined, failureFacts: undefined }
             : item,

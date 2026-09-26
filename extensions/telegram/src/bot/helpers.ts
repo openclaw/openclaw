@@ -1,5 +1,6 @@
 // Telegram helper module supports helpers behavior.
 import type { Chat, Message } from "grammy/types";
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import type {
   OpenClawConfig,
@@ -17,7 +18,6 @@ import {
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
 import {
-  firstDefined,
   isSenderAllowed,
   normalizeAllowFrom,
   resolveTelegramEffectiveDmPolicy,

@@ -138,16 +138,12 @@ describe("release readiness contract", () => {
       inputs({
         tag,
         npm_dist_tag: channel,
-        stable_soak_waiver: "Operator accepted missing soak",
-        lane_waiver: "Telegram lane blocked: operator approved",
         publish_openclaw_npm: true,
         publish_docker_only: false,
       }),
     );
     expect(value).toEqual({
       ...inputs({ tag, npm_dist_tag: channel }),
-      stable_soak_waiver: "Operator accepted missing soak",
-      lane_waiver: "Telegram lane blocked: operator approved",
       plugin_publish_scope: "all-publishable",
       publish_openclaw_npm: "true",
       publish_docker_only: "false",
@@ -158,6 +154,8 @@ describe("release readiness contract", () => {
 
   it.each([
     ["unsealed input", { prepared_plugins: "{}" }],
+    ["retired soak waiver", { stable_soak_waiver: "2026.9.2 approved" }],
+    ["retired lane waiver", { lane_waiver: "2026.9.2 approved" }],
     ["moving source", { tag: "main" }],
     ["missing source", { tag: "" }],
     ["wrong beta channel", { npm_dist_tag: "latest" }],

@@ -28,6 +28,11 @@ const COMPACTION_SUMMARY = [
   `## Pending user asks\n${RECOVERY_PROMPT}`,
   "## Exact identifiers\nqa-timeout-recovery-child",
 ].join("\n\n");
+const TURN_PREFIX_SUMMARY = [
+  `## Original Request\n${RECOVERY_PROMPT}`,
+  "## Early Progress\nThe existing worker is still running.",
+  "## Context for Suffix\nDeliver qa-timeout-recovery-child once; do not spawn another worker.",
+].join("\n\n");
 type SseEvent = {
   type: string;
   response?: Record<string, unknown>;
@@ -233,15 +238,19 @@ async function startProofProvider() {
       // Compaction serializes history into tool-free summary requests; their
       // quoted tool calls are not a fresh request to spawn another worker.
       if (!Array.isArray(body.tools) || body.tools.length === 0) {
+        // Split-turn context has its own format; the retained suffix owns the pending ask.
+        const summary = inputText.includes("This is the PREFIX of a turn")
+          ? TURN_PREFIX_SUMMARY
+          : COMPACTION_SUMMARY;
         // Multi-stage compaction can request more summaries. Keep the first
         // request's overlap evidence paired, just like the original child run.
         if (proof.compactionStartedAt !== undefined) {
-          writeSse(response, withUsage(buildAssistantEvents(COMPACTION_SUMMARY), 20));
+          writeSse(response, withUsage(buildAssistantEvents(summary), 20));
           return;
         }
         proof.compactionStartedAt = performance.now();
         compactionStarted.resolve();
-        if (await streamAssistantReply(response, COMPACTION_SUMMARY, compactionRelease.promise)) {
+        if (await streamAssistantReply(response, summary, compactionRelease.promise)) {
           proof.compactionReleasedAt = performance.now();
         }
         return;
@@ -269,6 +278,11 @@ async function startProofProvider() {
         return;
       }
       if (!inputText.includes("function_call_output")) {
+        expect(body.tools).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ type: "function", name: "sessions_spawn" }),
+          ]),
+        );
         writeSse(
           response,
           withUsage(
@@ -335,6 +349,8 @@ function withTimeoutConfig(config: OpenClawConfig): OpenClawConfig {
   }
   return {
     ...config,
+    // The synthetic provider tests timeout recovery, not deferred tool discovery.
+    tools: { ...config.tools, codeMode: false, toolSearch: false },
     agents: {
       ...config.agents,
       // The alternate model identifies the child, not a parent fallback.

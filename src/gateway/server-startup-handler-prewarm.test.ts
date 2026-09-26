@@ -17,6 +17,13 @@ const mocks = vi.hoisted(() => ({
     typeof import("../skills/loading/workspace-skill-loader.js").prepareWorkspaceSkillEntries
   >(async () => ({ entries: [] })),
   prewarmContextWindowCacheAfterReady: vi.fn(async () => {}),
+  getMemoryCapabilityRegistration: vi.fn<() => { pluginId: string } | undefined>(),
+  prewarmMemorySearchWorker: vi.fn(async () => {
+    mocks.events.push("memory-search");
+  }),
+  loadBundledPluginPublicArtifactModuleSync: vi.fn(() => ({
+    prewarmMemorySearchWorker: mocks.prewarmMemorySearchWorker,
+  })),
   loadCombinedSessionStoreForGatewayCore: vi.fn((_cfg: unknown, options: { agentId: string }) => {
     mocks.events.push(`sessions.load.${options.agentId}`);
     return {
@@ -73,6 +80,14 @@ vi.mock("../agents/context.js", () => ({
   prewarmContextWindowCacheAfterReady: mocks.prewarmContextWindowCacheAfterReady,
 }));
 
+vi.mock("../plugins/memory-state.js", () => ({
+  getMemoryCapabilityRegistration: mocks.getMemoryCapabilityRegistration,
+}));
+
+vi.mock("../plugins/public-surface-loader.js", () => ({
+  loadBundledPluginPublicArtifactModuleSync: mocks.loadBundledPluginPublicArtifactModuleSync,
+}));
+
 const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler-prewarm.js");
 const workspaces = {
   main: path.resolve("prewarm-main"),
@@ -87,6 +102,9 @@ beforeEach(() => {
   mocks.prewarmContextWindowCacheAfterReady.mockClear();
   mocks.loadCombinedSessionStoreForGatewayCore.mockClear();
   mocks.listManagedPlugins.mockClear();
+  mocks.getMemoryCapabilityRegistration.mockReset();
+  mocks.prewarmMemorySearchWorker.mockClear();
+  mocks.loadBundledPluginPublicArtifactModuleSync.mockClear();
 });
 
 afterEach(() => {
@@ -95,8 +113,9 @@ afterEach(() => {
 });
 
 describe("scheduleGatewayHandlerPrewarm", () => {
-  it("prepares first-use modules and primary skills without executing requests or rebuilding rows", async () => {
+  it("prepares first-use modules, primary skills, and Memory Core in sequence without executing requests", async () => {
     vi.useFakeTimers();
+    mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
     const cfg: OpenClawConfig = {
       agents: {
         entries: {
@@ -139,11 +158,49 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       );
       expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
       expect(mocks.loadCombinedSessionStoreForGatewayCore).not.toHaveBeenCalled();
+      expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledOnce();
+      expect(mocks.prewarmMemorySearchWorker).toHaveBeenCalledOnce();
+      const memoryCall = expectDefined(
+        mocks.prewarmMemorySearchWorker.mock.invocationCallOrder[0],
+        "memory retrieval preparation call",
+      );
+      expect(mocks.prewarmContextWindowCacheAfterReady.mock.invocationCallOrder[0]).toBeLessThan(
+        memoryCall,
+      );
+      expect(memoryCall).toBeLessThan(
+        expectDefined(
+          mocks.listManagedPlugins.mock.invocationCallOrder[0],
+          "plugin preparation call",
+        ),
+      );
       expect(mocks.listManagedPlugins).toHaveBeenCalledWith({ config: cfg });
     } finally {
       await sidecar.stop();
     }
   });
+
+  it.each([undefined, "memory-lancedb"])(
+    "skips retrieval preparation when Memory Core is inactive (%s)",
+    async (pluginId) => {
+      vi.useFakeTimers();
+      mocks.getMemoryCapabilityRegistration.mockReturnValue(pluginId ? { pluginId } : undefined);
+      const sidecar = scheduleGatewayHandlerPrewarm({
+        getConfig: () => ({ agents: { entries: {} } }),
+        log: { warn: vi.fn() },
+      });
+      try {
+        do {
+          await vi.runAllTimersAsync();
+          await vi.dynamicImportSettled();
+        } while (vi.getTimerCount() > 0);
+        expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
+        expect(mocks.prewarmMemorySearchWorker).not.toHaveBeenCalled();
+        expect(mocks.listManagedPlugins).toHaveBeenCalledOnce();
+      } finally {
+        await sidecar.stop();
+      }
+    },
+  );
 
   it("waits for gateway readiness before warming handler data", async () => {
     vi.useFakeTimers();
@@ -303,6 +360,7 @@ it("keeps the context cache delayed and uses current config after foreground wor
 
 it("skips optional discovery when foreground work arrives after idle admission", async () => {
   vi.useFakeTimers();
+  mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
   const handle = scheduleGatewayHandlerPrewarm({
     getConfig: () => ({ agents: { entries: { main: { workspace: workspaces.main } } } }),
     log: { warn: vi.fn() },
@@ -327,6 +385,7 @@ it("skips optional discovery when foreground work arrives after idle admission",
     } while (vi.getTimerCount() > 0);
     expect(mocks.prepareWorkspaceSkillEntries).not.toHaveBeenCalled();
     expect(mocks.ensureSkillsWatcher).not.toHaveBeenCalled();
+    expect(mocks.prewarmMemorySearchWorker).not.toHaveBeenCalled();
   } finally {
     await handle.stop();
   }

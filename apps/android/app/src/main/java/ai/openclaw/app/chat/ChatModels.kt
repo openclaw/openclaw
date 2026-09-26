@@ -616,6 +616,7 @@ data class ChatHistory(
   val messages: List<ChatMessage>,
   val sessionInfo: ChatSessionEntry? = null,
   val inFlightRun: ChatInFlightRun? = null,
+  val defaultModelRef: String? = null,
 )
 
 /**

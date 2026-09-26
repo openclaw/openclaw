@@ -273,14 +273,6 @@ function resolveTelegramWebhookClientIp(req: IncomingMessage, config?: OpenClawC
   return "unknown";
 }
 
-function resolveTelegramWebhookRateLimitKey(
-  req: IncomingMessage,
-  path: string,
-  config?: OpenClawConfig,
-): string {
-  return `${path}:${resolveTelegramWebhookClientIp(req, config)}`;
-}
-
 export async function startTelegramWebhook(opts: {
   token: string;
   accountId?: string;
@@ -435,16 +427,13 @@ export async function startTelegramWebhook(opts: {
     }
     // Shutdown must abort in-flight drain work (tombstone retries), not just
     // stop the next claim; the composed signal carries webhook stop + caller abort.
-    const webhookAbortSignal = opts.abortSignal
-      ? AbortSignal.any([shutdownAbortController.signal, opts.abortSignal])
-      : shutdownAbortController.signal;
     webhookIngressMonitor = createTelegramTransportIngressMonitor({
       spoolDir,
       bot,
       botInfo,
       accountId: opts.accountId ?? "default",
       pollIntervalMs: TELEGRAM_WEBHOOK_SPOOLED_DRAIN_INTERVAL_MS,
-      abortSignal: webhookAbortSignal,
+      abortSignal: accountAbortSignal,
       onLog: (message) => log(`webhook ${message}`),
       onError: (error) =>
         log(`[telegram][diag] webhook spool drain failed: ${formatErrorMessage(error)}`),
@@ -484,7 +473,7 @@ export async function startTelegramWebhook(opts: {
           req,
           res,
           rateLimiter: telegramWebhookRateLimiter,
-          rateLimitKey: resolveTelegramWebhookRateLimitKey(req, path, opts.config),
+          rateLimitKey: `${path}:${resolveTelegramWebhookClientIp(req, opts.config)}`,
         })
       ) {
         return;

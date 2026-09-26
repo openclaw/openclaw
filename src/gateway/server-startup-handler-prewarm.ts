@@ -74,6 +74,24 @@ function gatewayPrewarmItems(
       },
     },
     {
+      name: "memory-search",
+      load: async () => {
+        const { getMemoryCapabilityRegistration } = await import("../plugins/memory-state.js");
+        if (isCancelled() || getMemoryCapabilityRegistration()?.pluginId !== "memory-core") {
+          return;
+        }
+        const { loadBundledPluginPublicArtifactModuleSync } =
+          await import("../plugins/public-surface-loader.js");
+        if (isCancelled()) {
+          return;
+        }
+        const { prewarmMemorySearchWorker } = loadBundledPluginPublicArtifactModuleSync<{
+          prewarmMemorySearchWorker: () => Promise<void>;
+        }>({ dirName: "memory-core", artifactBasename: "prewarm-api.js" });
+        await prewarmMemorySearchWorker();
+      },
+    },
+    {
       name: "plugins",
       load: async () => {
         const { listManagedPlugins } = await import("../plugins/management-service.js");

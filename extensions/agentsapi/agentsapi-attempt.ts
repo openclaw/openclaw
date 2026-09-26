@@ -35,6 +35,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AgentsApiClient } from "./agentsapi-client.js";
+import { collectOutputs, prepareInputs, uploadInputs } from "./agentsapi-files.js";
 import { createAgentsApiMessageProjection } from "./agentsapi-messages.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
@@ -155,6 +156,7 @@ export async function runAgentsApiAttempt(
   let terminalTurnId: string | undefined;
   const toolCleanups: Array<(reason: string) => Promise<void>> = [];
   let toolSurface: ReturnType<typeof buildAgentsApiToolSurface> | undefined;
+  let outputMedia: Awaited<ReturnType<typeof collectOutputs>> | undefined;
   let startedToolCount = 0;
   let completedToolCount = 0;
   const handle = {
@@ -205,6 +207,12 @@ export async function runAgentsApiAttempt(
       (cleanup) => toolCleanups.push(cleanup),
     );
     toolSurface = surface;
+    const inputs = await prepareInputs(
+      params.media,
+      params.workspaceDir,
+      assertCurrent,
+      controller.signal,
+    );
     const fingerprint = createHash("sha256")
       .update(JSON.stringify([params.model.id, params.resolvedApiKey]))
       .digest("hex");
@@ -222,13 +230,15 @@ export async function runAgentsApiAttempt(
     }
     const client = new AgentsApiClient(params.resolvedApiKey!, assertOwnerCurrent);
     const reasoningEffort = resolveAgentsApiReasoningEffort(params);
+    const creatingSession = !remoteSessionId;
     if (!remoteSessionId) {
       remoteSessionId = await client.create(
         controller.signal,
         [
           "You are the OpenClaw assistant. Use your hosted Linux workspace for commands and files.",
           "OpenClaw functions run in the Gateway and use its workspace; your hosted VM owns shell commands and VM files.",
-          "Apps, connectors, file transfers, and image generation are unavailable.",
+          "Uploaded attachments are mapped to hosted VM paths in each user message. Files you finish writing under /workspace/outputs are transferred and attached to your final reply after your turn completes.",
+          "Gateway messaging functions cannot open VM paths. Complete your assistant turn to deliver VM output attachments. Image generation is unavailable.",
           params.extraSystemPrompt,
         ]
           .filter(Boolean)
@@ -236,6 +246,7 @@ export async function runAgentsApiAttempt(
         params.model.id,
         {
           functions: surface.declarations,
+          files: inputs.files,
           reasoning: {
             effort: reasoningEffort,
             ...(params.reasoningLevel && params.reasoningLevel !== "off"
@@ -249,6 +260,9 @@ export async function runAgentsApiAttempt(
     } else {
       await client.setReasoningEffort(remoteSessionId, reasoningEffort, controller.signal);
       assertCurrent();
+    }
+    if (!creatingSession && inputs.files.length) {
+      await uploadInputs(client, remoteSessionId, inputs.files, assertCurrent, controller.signal);
     }
     projection = createAgentsApiMessageProjection(
       projectionSettlement.params,
@@ -337,7 +351,12 @@ export async function runAgentsApiAttempt(
     });
     lifecycle.emitLifecycleStart({ provider: "openai", model: params.model.id });
     const result = await native.run(
-      buildCurrentInboundPrompt({ context: params.currentInboundContext, prompt: params.prompt }),
+      [
+        buildCurrentInboundPrompt({ context: params.currentInboundContext, prompt: params.prompt }),
+        inputs.mappingText,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
       async () => {
         await params.userTurnTranscriptRecorder?.persistApproved();
       },
@@ -358,8 +377,21 @@ export async function runAgentsApiAttempt(
     } else {
       const items = await client.items(remoteSessionId, result.turn.id, controller.signal);
       assertCurrent();
-      await projection.commit(result.turn, items);
-      assertCurrent();
+      try {
+        outputMedia = await collectOutputs(
+          client,
+          remoteSessionId,
+          result.turn.id,
+          assertCurrent,
+          controller.signal,
+          params.hostCapabilities.prepareReplyMedia,
+        );
+      } finally {
+        // Transfer failure must not discard the completed reply. The projection
+        // still requires current authority before publishing or persisting it.
+        await projection.commit(result.turn, items);
+        assertCurrent();
+      }
     }
   } catch (error) {
     terminal = timeout
@@ -478,6 +510,17 @@ export async function runAgentsApiAttempt(
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
     ...toolSurface?.delivery,
+    ...(outputMedia && {
+      hostOwnedToolMediaUrls: outputMedia.hostOwnedToolMediaUrls,
+      toolMediaUrls: [
+        ...new Set([...(toolSurface?.delivery.toolMediaUrls ?? []), ...outputMedia.toolMediaUrls]),
+      ],
+      // Verified hosted artifacts must not promote unrelated plugin media.
+      toolTrustedLocalMedia:
+        outputMedia.toolMediaUrls.length && !toolSurface?.delivery.toolMediaUrls?.length
+          ? true
+          : toolSurface?.delivery.toolTrustedLocalMedia,
+    }),
     cloudCodeAssistFormatError: false,
     attemptUsage: projection?.tokenUsage,
     agentHarnessResultClassification: projection?.resultClassification,

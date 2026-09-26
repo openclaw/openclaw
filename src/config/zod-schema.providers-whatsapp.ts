@@ -1,5 +1,4 @@
 // Defines WhatsApp provider schema fragments for config parsing.
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { buildGroupEntrySchema } from "../channels/plugins/config-schema.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
@@ -8,7 +7,11 @@ import {
   buildChannelReactionShape,
   buildChannelAccountSchemaParts,
 } from "./zod-schema.channel-messaging-common.js";
-import { ChannelDeliveryStreamingConfigSchema } from "./zod-schema.core.js";
+import {
+  ChannelDeliveryStreamingConfigSchema,
+  requireAllowlistAllowFrom,
+  requireOpenAllowFrom,
+} from "./zod-schema.core.js";
 
 const WhatsAppGroupEntrySchema = buildGroupEntrySchema(undefined, {
   omit: ["skills", "enabled", "allowFrom"],
@@ -52,48 +55,6 @@ const WhatsAppCommonShape = {
   pluginHooks: WhatsAppPluginHooksSchema,
 };
 
-function enforceOpenDmPolicyAllowFromStar(params: {
-  dmPolicy: unknown;
-  allowFrom: unknown;
-  ctx: z.RefinementCtx;
-  message: string;
-  path?: Array<string | number>;
-}) {
-  if (params.dmPolicy !== "open") {
-    return;
-  }
-  const allow = normalizeStringEntries(Array.isArray(params.allowFrom) ? params.allowFrom : []);
-  if (allow.includes("*")) {
-    return;
-  }
-  params.ctx.addIssue({
-    code: z.ZodIssueCode.custom,
-    path: params.path ?? ["allowFrom"],
-    message: params.message,
-  });
-}
-
-function enforceAllowlistDmPolicyAllowFrom(params: {
-  dmPolicy: unknown;
-  allowFrom: unknown;
-  ctx: z.RefinementCtx;
-  message: string;
-  path?: Array<string | number>;
-}) {
-  if (params.dmPolicy !== "allowlist") {
-    return;
-  }
-  const allow = normalizeStringEntries(Array.isArray(params.allowFrom) ? params.allowFrom : []);
-  if (allow.length > 0) {
-    return;
-  }
-  params.ctx.addIssue({
-    code: z.ZodIssueCode.custom,
-    path: params.path ?? ["allowFrom"],
-    message: params.message,
-  });
-}
-
 const WhatsAppAccountSchema = z
   .object({
     ...WhatsAppCommonShape,
@@ -124,17 +85,19 @@ export const WhatsAppConfigSchema = z
   .strict()
   .superRefine((value, ctx) => {
     const defaultAccount = resolveAccountEntry(value.accounts, "default");
-    enforceOpenDmPolicyAllowFromStar({
-      dmPolicy: value.dmPolicy,
+    requireOpenAllowFrom({
+      policy: value.dmPolicy,
       allowFrom: value.allowFrom,
       ctx,
+      path: ["allowFrom"],
       message:
         'channels.whatsapp.dmPolicy="open" requires channels.whatsapp.allowFrom to include "*"',
     });
-    enforceAllowlistDmPolicyAllowFrom({
-      dmPolicy: value.dmPolicy,
+    requireAllowlistAllowFrom({
+      policy: value.dmPolicy,
       allowFrom: value.allowFrom,
       ctx,
+      path: ["allowFrom"],
       message:
         'channels.whatsapp.dmPolicy="allowlist" requires channels.whatsapp.allowFrom to contain at least one sender ID',
     });
@@ -153,16 +116,16 @@ export const WhatsAppConfigSchema = z
         account.allowFrom ??
         (accountId === "default" ? undefined : defaultAccount?.allowFrom) ??
         value.allowFrom;
-      enforceOpenDmPolicyAllowFromStar({
-        dmPolicy: effectivePolicy,
+      requireOpenAllowFrom({
+        policy: effectivePolicy,
         allowFrom: effectiveAllowFrom,
         ctx,
         path: ["accounts", accountId, "allowFrom"],
         message:
           'channels.whatsapp.accounts.*.dmPolicy="open" requires channels.whatsapp.accounts.*.allowFrom (or channels.whatsapp.allowFrom) to include "*"',
       });
-      enforceAllowlistDmPolicyAllowFrom({
-        dmPolicy: effectivePolicy,
+      requireAllowlistAllowFrom({
+        policy: effectivePolicy,
         allowFrom: effectiveAllowFrom,
         ctx,
         path: ["accounts", accountId, "allowFrom"],

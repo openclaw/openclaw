@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   issueDeviceBootstrapToken,
@@ -10,6 +10,7 @@ import { persistDevicePairingStoreState } from "../../../infra/device-pairing-st
 import type { PairedDevice } from "../../../infra/device-pairing.types.js";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../../shared/device-bootstrap-profile.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createPresencePublisher } from "../presence-events.js";
 
 vi.mock("../health-state.js", () => ({
   buildGatewaySnapshot: vi.fn(() => ({
@@ -50,7 +51,7 @@ afterEach(() => {
 
 describe("sendGatewayHello setup completion ordering", () => {
   it.each([false, true])(
-    "persists setup status before presence publication (failure=%s)",
+    "confirms setup status before queued presence delivery (failure=%s)",
     async (presenceFails) => {
       await withOpenClawTestState(
         { label: "ws-setup-completion-order", layout: "state-only" },
@@ -88,6 +89,17 @@ describe("sendGatewayHello setup completion ordering", () => {
               throw new Error("test presence publication failure");
             }
           });
+          vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+          const presence = createPresencePublisher({
+            broadcast,
+            incrementPresenceVersion: () => 2,
+            getHealthVersion: () => 1,
+            prepare: () => undefined,
+          });
+          onTestFinished(() => {
+            presence.stop();
+            vi.useRealTimers();
+          });
           const context = {
             handler: {
               getClient: () => ({ presenceKey: "conn-setup-order", socket: { readyState: 1 } }),
@@ -97,8 +109,7 @@ describe("sendGatewayHello setup completion ordering", () => {
               events: [],
               buildRequestContext: () => ({
                 broadcast,
-                incrementPresenceVersion: () => 2,
-                getHealthVersion: () => 1,
+                publishPresence: presence.publish,
                 nodeRegistry: { get: () => undefined },
               }),
               refreshHealthSnapshot: vi.fn(async () => ({})),
@@ -151,11 +162,9 @@ describe("sendGatewayHello setup completion ordering", () => {
             setupId: issued.setupId,
           });
           releaseHandoff.resolve();
-          if (presenceFails) {
-            await expect(hello).rejects.toThrow("test presence publication failure");
-          } else {
-            await hello;
-          }
+          await hello;
+          expect(broadcast.mock.calls.some(([event]) => event === "presence")).toBe(false);
+          expect(() => vi.runOnlyPendingTimers()).not.toThrow();
           const completionAfterHandoff = await readDevicePairSetupCompletion({
             setupId: issued.setupId,
           });
@@ -223,7 +232,11 @@ describe("sendGatewayHello setup completion ordering", () => {
             connId: "conn-setup-send-failure",
             gatewayMethods: [],
             events: [],
-            buildRequestContext: () => ({ broadcast, nodeRegistry: { get: vi.fn() } }),
+            buildRequestContext: () => ({
+              broadcast,
+              publishPresence: vi.fn(),
+              nodeRegistry: { get: vi.fn() },
+            }),
             refreshHealthSnapshot: vi.fn(async () => ({})),
             close,
             advanceHandshakePhase: vi.fn(),
@@ -333,7 +346,11 @@ describe("sendGatewayHello setup completion ordering", () => {
             connId: "conn-setup-replaced",
             gatewayMethods: [],
             events: [],
-            buildRequestContext: () => ({ broadcast: vi.fn(), nodeRegistry: { get: vi.fn() } }),
+            buildRequestContext: () => ({
+              broadcast: vi.fn(),
+              publishPresence: vi.fn(),
+              nodeRegistry: { get: vi.fn() },
+            }),
             refreshHealthSnapshot: vi.fn(async () => ({})),
             close,
             advanceHandshakePhase: vi.fn(),
@@ -424,7 +441,11 @@ describe("sendGatewayHello setup completion ordering", () => {
             connId: "conn-generic-send-failure",
             gatewayMethods: [],
             events: [],
-            buildRequestContext: () => ({ broadcast: vi.fn(), nodeRegistry: { get: vi.fn() } }),
+            buildRequestContext: () => ({
+              broadcast: vi.fn(),
+              publishPresence: vi.fn(),
+              nodeRegistry: { get: vi.fn() },
+            }),
             refreshHealthSnapshot: vi.fn(async () => ({})),
             close,
             advanceHandshakePhase: vi.fn(),

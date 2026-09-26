@@ -292,6 +292,14 @@ type SessionEntryReadWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+export type SessionDiagnosticTextWorkerInput = {
+  kind: "session-diagnostic-text";
+  database: { agentId: string; path: string };
+  scope: SessionEntryReadScope & { agentId: string; databaseAgentId: string; sessionId: string };
+  continuation?: CanonicalSessionReaderContinuation;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
 type SessionEntryReadWorkerResult = {
   kind: "session-entry-read";
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
@@ -320,7 +328,7 @@ export type SessionExactEntriesWorkerInput = {
   env: NodeJS.ProcessEnv;
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
-  projection?: "full" | "backing" | "sharing" | "replacement" | "creation";
+  projection?: "full" | "backing" | "sharing" | "replacement" | "creation" | "list";
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
@@ -346,6 +354,7 @@ export type SessionExactEntriesWorkerResult = {
   replacement?: SessionEntryReplacementState & { databaseIdentity: string };
   creation?: import("./session-accessor.sqlite-creation-read.js").SessionCreationSnapshot & {
     databaseIdentity: string;
+    databasePath: string;
   };
   sharing?: {
     source: { agentId: string; path: string };
@@ -435,6 +444,7 @@ export type SessionHistoryWorkerInput =
   | SessionProgressCardWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
+  | SessionDiagnosticTextWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
   | SessionStoreTargetWorkerInput
@@ -485,6 +495,11 @@ export type SessionTranscriptWorkerValues = {
   "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
   "session-entry-list": SessionEntryListWorkerResult;
   "session-entry-read": SessionEntryReadWorkerResult;
+  "session-diagnostic-text": {
+    kind: "session-diagnostic-text";
+    text: string | undefined;
+    source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
+  };
   "session-exact-entries": SessionExactEntriesWorkerResult;
   "session-row-facts": SessionRowFactsWorkerResult;
   "session-store-target":
@@ -586,6 +601,9 @@ export type SessionHistoryWorkerDatabase = {
       unknown
     >
   >;
+  readDiagnosticText: (
+    input: Omit<SessionDiagnosticTextWorkerInput, "kind" | "database">,
+  ) => Promise<string | undefined>;
   readMembers: (
     input: Omit<SessionMembersWorkerInput, "kind" | "database">,
   ) => Promise<SessionMember[]>;

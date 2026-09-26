@@ -4,10 +4,14 @@ import { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
 import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
@@ -65,18 +69,40 @@ async function writeSmallArchive(
 }
 
 describe("standalone backup database completeness", () => {
-  it("persists all three WAL snapshots without workspaces and rejects each omission", async () => {
+  it("restores configured, registered, and discovered WAL databases without workspaces and rejects each omission", async () => {
     await withOpenClawTestState(
       { layout: "home", prefix: "backup-inventory-wal-", scenario: "minimal" },
       async (state) => {
+        const externalAgent = state.path("external-agent");
+        const linkedAgent = state.path("linked-agent");
+        const agentLink = state.statePath("agents", "linked");
+        const dormantWorkspace = state.statePath("agents", "dormant");
         await state.writeConfig({
-          agents: { defaults: { workspace: state.home }, list: [{ id: "main" }, { id: "worker" }] },
+          agents: {
+            defaults: { workspace: state.home },
+            entries: {
+              main: { default: true, workspace: dormantWorkspace },
+              external: { agentDir: externalAgent },
+            },
+          },
         });
-        const agentPaths = ["main", "worker"].map((agentId) => {
-          const databasePath = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
+        const agents = [
+          { agentId: "main", directory: state.agentDir(), registered: true },
+          { agentId: "worker", directory: state.agentDir("worker"), registered: true },
+          { agentId: "external", directory: externalAgent, registered: false },
+          { agentId: "dormant", directory: state.agentDir("dormant"), registered: false },
+          { agentId: "external", directory: state.agentDir("external"), registered: false },
+          { agentId: "linked", directory: path.join(linkedAgent, "agent"), registered: false },
+        ];
+        const agentPaths = agents.map(({ agentId, directory, registered }) => {
+          const databasePath = path.join(directory, "openclaw-agent.sqlite");
           openOpenClawAgentDatabase({ agentId, path: databasePath, env: state.env });
+          if (!registered) {
+            unregisterOpenClawAgentDatabase({ agentId, path: databasePath, env: state.env });
+          }
           return databasePath;
         });
+        await fs.symlink(linkedAgent, agentLink, process.platform === "win32" ? "junction" : "dir");
         const databasePaths = [resolveOpenClawStateSqlitePath(state.env), ...agentPaths];
         const writers: DatabaseSync[] = [];
         try {
@@ -89,7 +115,12 @@ describe("standalone backup database completeness", () => {
             db.prepare("INSERT INTO completeness_witness VALUES (?)").run(`committed-${index}`);
             expect((await fs.stat(databasePath + "-wal")).size).toBeGreaterThan(32);
           }
-          await fs.writeFile(path.join(state.home, "workspace-only.txt"), "exclude me");
+          const workspaceFiles = [state.home, dormantWorkspace].map((directory) =>
+            path.join(directory, "workspace-only.txt"),
+          );
+          for (const file of workspaceFiles) {
+            await fs.writeFile(file, "exclude me");
+          }
           const runtime = createTestRuntime();
           const archive = await backupCreateCommand(runtime, {
             output: state.path("full.tar.gz"),
@@ -101,8 +132,7 @@ describe("standalone backup database completeness", () => {
             backupVerifyCommand(runtime, { archive: archive.archivePath, json: true }),
           ).resolves.toMatchObject({ ok: true, sqliteInventoryVerified: true });
           const extracted = state.path("extracted");
-          await fs.mkdir(extracted);
-          await tar.x({ file: archive.archivePath, cwd: extracted });
+          await backupRestoreCommand(runtime, { archive: archive.archivePath, target: extracted });
           const manifest: BackupManifest = JSON.parse(
             await fs.readFile(path.join(extracted, archive.archiveRoot, "manifest.json"), "utf8"),
           );
@@ -110,18 +140,21 @@ describe("standalone backup database completeness", () => {
             { sourcePath: databasePaths[0], role: "global" },
             { sourcePath: databasePaths[1], role: "agent", agentId: "main" },
             { sourcePath: databasePaths[2], role: "agent", agentId: "worker" },
+            { sourcePath: databasePaths[3], role: "agent", agentId: "external" },
+            { sourcePath: databasePaths[4], role: "agent", agentId: "dormant" },
+            { sourcePath: databasePaths[5], role: "agent", agentId: "external" },
+            { sourcePath: databasePaths[6], role: "agent", agentId: "linked" },
           ]);
-          await expect(
-            fs.stat(
-              path.join(
-                extracted,
-                buildBackupArchivePath(
-                  archive.archiveRoot,
-                  path.join(state.home, "workspace-only.txt"),
-                ),
-              ),
-            ),
-          ).rejects.toMatchObject({ code: "ENOENT" });
+          const restoredLink = path.join(
+            extracted,
+            buildBackupArchivePath(archive.archiveRoot, agentLink),
+          );
+          expect((await fs.lstat(restoredLink)).isSymbolicLink()).toBe(true);
+          for (const file of workspaceFiles) {
+            await expect(
+              fs.stat(path.join(extracted, buildBackupArchivePath(archive.archiveRoot, file))),
+            ).rejects.toMatchObject({ code: "ENOENT" });
+          }
           const members = databasePaths.map((p) => buildBackupArchivePath(archive.archiveRoot, p));
           for (const [index, member] of members.entries()) {
             const snapshot = path.join(extracted, member);
@@ -150,7 +183,7 @@ describe("standalone backup database completeness", () => {
             await expect(
               backupVerifyCommand(createTestRuntime(), { archive: incomplete }),
             ).rejects.toThrow(
-              `Backup lacks verified canonical SQLite coverage for ${databasePaths[index < 3 ? index : 0]}.`,
+              `Backup lacks verified canonical SQLite coverage for ${databasePaths[index < databasePaths.length ? index : 0]}.`,
             );
           }
           for (const [index, writer] of writers.entries()) {

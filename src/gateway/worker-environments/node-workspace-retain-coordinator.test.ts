@@ -426,17 +426,41 @@ describe("node workspace retain coordinator", () => {
   });
 
   it("keeps workspace retention compatible when bundle cleanup is not advertised", async () => {
-    const { coordinator, invoke } = createHarness({
+    const currentBuild = vi.fn(async () => ({
+      bundleHash: "c".repeat(64),
+      openclawVersion: "2026.9.3",
+    }));
+    const { coordinator, invoke, warn } = createHarness({
       node: {
         ...node,
         workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
       },
+      bundleRetention: { currentBuild, isEnvironmentOwnedNode: () => false },
     });
 
-    await coordinator.start();
+    try {
+      await coordinator.start();
 
-    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleHashes");
-    await coordinator.stop();
+      expect(currentBuild).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(invoke.mock.calls[0]?.[0].params).toEqual({
+        version: 1,
+        gatewayNamespace: "gateway-test",
+        controllerId: expect.any(String),
+        sequence: 1,
+        retain: [
+          {
+            environmentId: "environment-1",
+            sessionId: "session-1",
+            generation: 7,
+            manifestRefs: [`sha256:${"a".repeat(64)}`],
+          },
+        ],
+      });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.stop();
+    }
   });
 
   it("fails safe to workspace-only retention when bundle ownership exceeds the wire bound", async () => {

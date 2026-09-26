@@ -190,7 +190,6 @@ export const GatewayConfigSchema = z
         allowExternalEmbedUrls: z.boolean().optional(),
         /** Fetch public-site favicons through the Gateway for Control UI links (default true). */
         automaticallyFetchFavicons: z.boolean().optional(),
-        /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
         /** Allowed browser origins for Control UI/WebChat websocket connections. */
         allowedOrigins: z.array(z.string()).optional(),
         /**

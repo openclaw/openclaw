@@ -3,14 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 import {
   mocks,
+  observeRecoveryContextLog,
   resetMocks,
   warnLogMessages,
 } from "./diagnostic-stuck-session-recovery.runtime.test-harness.js";
 
 describe("stuck session recovery reply ownership", () => {
-  beforeEach(() => {
-    resetMocks();
-  });
+  beforeEach(resetMocks);
 
   it("aborts stale reply work without an embedded handle when active abort recovery is enabled", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
@@ -21,6 +20,7 @@ describe("stuck session recovery reply ownership", () => {
     mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
     mocks.resetCommandLane.mockReturnValue(1);
 
+    const logged = observeRecoveryContextLog("queued-reply-session");
     await recoverStuckDiagnosticSession({
       sessionId: "queued-reply-session",
       sessionKey: "agent:main:main",
@@ -33,9 +33,10 @@ describe("stuck session recovery reply ownership", () => {
     expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("queued-reply-session", 15_000);
     expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+    await logged;
     expect(warnLogMessages()).toEqual([
-      "stuck session recovery: sessionId=queued-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=1",
       "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=1",
+      "stuck session recovery: sessionId=queued-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=1",
     ]);
   });
 
@@ -137,6 +138,7 @@ describe("stuck session recovery reply ownership", () => {
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
     mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
 
+    const logged = observeRecoveryContextLog("phantom-reply-session");
     const outcome = await recoverStuckDiagnosticSession({
       sessionId: "phantom-reply-session",
       sessionKey: "agent:main:main",
@@ -157,10 +159,11 @@ describe("stuck session recovery reply ownership", () => {
       aborted: true,
       drained: true,
     });
+    await logged;
     expect(warnLogMessages()).toEqual([
       "stuck session recovery reclaiming stale active reply work: sessionId=phantom-reply-session sessionKey=agent:main:main age=720s queueDepth=0 activeSessionId=phantom-reply-session",
-      "stuck session recovery: sessionId=phantom-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=0",
       "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=phantom-reply-session sessionKey=agent:main:main activeSessionId=phantom-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=0",
+      "stuck session recovery: sessionId=phantom-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=0",
     ]);
   });
 

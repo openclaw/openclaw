@@ -114,6 +114,82 @@ function expirePidReadiness(filePath: string, timeoutMs: number, commandOutcome:
   );
 }
 
+// Failure-only snapshots are later observations, not the facts used by isProcessAlive.
+function nestedCleanupFailureFacts(pids: number[], pidPaths: string[]) {
+  const errorCode = (error: unknown) =>
+    error && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code.slice(0, 32)
+      : "UNKNOWN";
+  const readStat = (file: string) => {
+    try {
+      const stat = fs.readFileSync(file, "utf8");
+      const fields = stat
+        .slice(stat.lastIndexOf(")") + 2)
+        .trim()
+        .split(/\s+/u);
+      // Omit comm and all free-form fields; kernel exit_code is raw wait status.
+      return {
+        state: fields[0],
+        parentPid: fields[1],
+        processGroupId: fields[2],
+        sessionId: fields[3],
+        flags: fields[6],
+        threadCount: fields[17],
+        startTimeTicks: fields[19],
+        exitCodeRaw: fields[49],
+      };
+    } catch (error) {
+      return { readError: errorCode(error) };
+    }
+  };
+  const startedAtMs = Date.now();
+  const processes = pids.slice(0, 3).map((pid, index) => {
+    const role = path.basename(pidPaths[index] ?? "unknown", ".pid");
+    if (process.platform !== "linux" || !Number.isSafeInteger(pid) || pid <= 1) {
+      return { role, pid, procUnavailable: true };
+    }
+    const proc = readStat("/proc/" + pid + "/stat");
+    const tids: string[] = [];
+    let threadReadError: string | undefined;
+    try {
+      const directory = fs.opendirSync("/proc/" + pid + "/task");
+      try {
+        // Bound enumeration as well as output; the extra entry reports truncation.
+        for (let count = 0; count < 17; count += 1) {
+          const entry = directory.readSync();
+          if (!entry) {
+            break;
+          }
+          tids.push(entry.name);
+        }
+      } finally {
+        directory.closeSync();
+      }
+    } catch (error) {
+      threadReadError = errorCode(error);
+    }
+    return {
+      role,
+      pid,
+      proc,
+      threads: tids.slice(0, 16).map((tid) => ({
+        tid,
+        proc: readStat("/proc/" + pid + "/task/" + tid + "/stat"),
+      })),
+      threadsTruncated: tids.length > 16,
+      threadReadError,
+    };
+  });
+  return {
+    observation: "after failed liveness assertion, before fixture rescue",
+    identity: "start times observed now; readiness receipts record only PIDs",
+    platform: process.platform,
+    startedAtMs,
+    completedAtMs: Date.now(),
+    processes,
+  };
+}
+
 describe("managed-child-process", () => {
   it("registers with the containing owner when the command creates its own TMP leaf", async () => {
     const root = createTempDir("managed-command-owner-");
@@ -326,10 +402,22 @@ ${publish(2)}
           ),
         });
         commandOutcomeAsserted = true;
-        expect(
-          pids.filter(isProcessAlive),
-          "timeout must join every nested child before rejection",
-        ).toEqual([]);
+        try {
+          expect(
+            pids.filter(isProcessAlive),
+            "timeout must join every nested child before rejection",
+          ).toEqual([]);
+        } catch (error) {
+          try {
+            console.error(
+              "[nested-cleanup-failure]",
+              JSON.stringify(nestedCleanupFailureFacts(pids, pidPaths)),
+            );
+          } catch {
+            // Diagnostic I/O must not replace the original assertion or skip its rescue.
+          }
+          throw error;
+        }
         if (runner === "preparation") {
           expect(
             stdout.mock.calls.some(([chunk]) => String(chunk) === "[nested] shutdown-tail"),

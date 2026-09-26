@@ -318,7 +318,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       const registryFactsReady = inOwnerContext(getSubagentSessionListReadSnapshotIdentity);
       for (const previous of new Set([...exact, ...matching(query, "id")])) {
         records.invalidateDatabaseFacts(previous);
-        if (previous.entry) {
+        if (previous.entry && change.scope !== "session-entry") {
           placementFacts.invalidate(previous.entry.sessionId);
         }
         const row = inOwnerContext(() => {
@@ -629,17 +629,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       return findSessionRowById(query, { disposed, lookup, matching });
     },
     describe,
-    readMembership(query: records.Lookup) {
-      if (disposed) {
-        return undefined;
-      }
-      const row = lookup(query);
-      if (row && isIncognitoSessionKey(row.key)) {
-        return describe(query)?.membership;
-      }
-      const members = row && membership.membership(row.storeTarget.storePath, row.key);
-      return members ? new Set(members) : undefined;
-    },
     ...createSessionRowAncestorReads({
       state: () => ({ cfg, context: metadata.current }),
       referenced,
@@ -682,6 +671,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       return needsMaterialization();
     },
     getPolicyConfig,
+    get sharingRevision() {
+      return disposed || topologyDirty ? undefined : (revisionToken ??= {});
+    },
     get state() {
       if (!disposed && !prepareRead()) {
         throw new Error("Session row topology changed; prepare current facts before reading");

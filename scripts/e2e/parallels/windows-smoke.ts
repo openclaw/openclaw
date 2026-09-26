@@ -42,6 +42,7 @@ import {
   windowsScopedEnvFunction,
 } from "./powershell.ts";
 import {
+  assertDevChannelUpdate,
   buildCommonSmokeSummary,
   expectedPackageBuildCommit,
   expectedPackageTargetVersion,
@@ -637,31 +638,11 @@ Invoke-OpenClaw update status --json`,
       `${windowsPortableGitPathScript}
 Invoke-OpenClaw update status --json`,
     );
-    const expectedBranch = this.devTargetCommit ? "HEAD" : "main";
-    for (const needle of [
-      '"installKind": "git"',
-      '"value": "dev"',
-      `"branch": "${expectedBranch}"`,
-    ]) {
-      if (!status.includes(needle)) {
-        throw new Error(`dev update status missing ${needle}`);
-      }
-    }
-    if (this.devTargetCommit) {
-      const checkoutHead =
-        this.guestPowerShell(`${windowsPortableGitPathScript}
+    assertDevChannelUpdate(status, this.devTargetCommit, () =>
+      this.guestPowerShell(`${windowsPortableGitPathScript}
 $checkoutPath = Join-Path $env:USERPROFILE 'openclaw'
-git.exe -C $checkoutPath rev-parse HEAD`)
-          .replaceAll("\r", "")
-          .trim()
-          .split("\n")
-          .at(-1) ?? "";
-      if (checkoutHead !== this.devTargetCommit) {
-        throw new Error(
-          `dev update checkout head ${checkoutHead || "<empty>"} did not match ${this.devTargetCommit}`,
-        );
-      }
-    }
+git.exe -C $checkoutPath rev-parse HEAD`),
+    );
   }
 
   private gatewayAction(action: "restart" | "stop"): Promise<void> {
