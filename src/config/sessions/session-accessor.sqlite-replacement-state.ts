@@ -54,7 +54,7 @@ export function prepareSessionEntryReplacementPublication(
 export function commitSessionEntryReplacementsInDatabase(
   database: OpenClawAgentDatabase,
   input: SessionEntryReplacementCommit,
-  assertCommitAllowed: () => void,
+  beforeReplacements: () => void,
 ): SessionEntryReplacementCommitted {
   if (
     input.includeLabelOwners !== undefined &&
@@ -78,7 +78,7 @@ export function commitSessionEntryReplacementsInDatabase(
       transactionEntries.set(sessionKey, transactionRow.entry);
     }
   }
-  assertCommitAllowed();
+  beforeReplacements();
   const previous = new Map<string, SessionEntry>();
   const current = new Map<string, SessionEntry>();
   const membershipInvalidatedKeys: string[] = [];
