@@ -26,11 +26,22 @@ async function runResponse(response: Response, signal?: AbortSignal) {
 
 describe("Anthropic SSE framing", () => {
   it.each(
-    ["\n", "\r\n", "\r"].flatMap((newline) =>
-      [false, true].map((fragmented) => ({ newline, fragmented })),
+    [
+      { name: "LF", newline: "\n", blankLine: "\n" },
+      { name: "CRLF", newline: "\r\n", blankLine: "\r\n" },
+      { name: "CR", newline: "\r", blankLine: "\r" },
+      { name: "LF/CRLF", newline: "\n", blankLine: "\r\n" },
+      { name: "CRLF/LF", newline: "\r\n", blankLine: "\n" },
+    ].flatMap(({ name, newline, blankLine }) =>
+      [false, true].map((fragmented) => ({ name, newline, blankLine, fragmented })),
     ),
-  )("parses $newline framing (fragmented=$fragmented)", async ({ newline, fragmented }) => {
-    const body = (await createAnthropicResponse(anthropicEvents).text()).replaceAll("\n", newline);
+  )("parses $name framing (fragmented=$fragmented)", async ({ newline, blankLine, fragmented }) => {
+    const body = anthropicEvents
+      .map(
+        (event) =>
+          `event: ${event.type}${newline}data: ${JSON.stringify(event)}${newline}${blankLine}`,
+      )
+      .join("");
     const encoder = new TextEncoder();
     const result = await runResponse(
       new Response(

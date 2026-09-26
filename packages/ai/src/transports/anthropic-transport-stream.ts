@@ -254,7 +254,8 @@ async function* parseAnthropicSseBody(
   const decoder = new TextDecoder();
   let buffer = "";
   let completed = false;
-  const delimiter = /\r\n\r\n|\n\n|\r\r/g;
+  // CRLF must remain one line ending even when the delimiter expression backtracks.
+  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
   let scanOffset = 0;
   try {
     while (!completed) {
