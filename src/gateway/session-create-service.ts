@@ -168,7 +168,6 @@ export async function createGatewaySession(
         })
       : params.commitGuard;
   commitGuard?.();
-  // Presentation titles do not claim labels.
   const displayName = truncateUtf16Safe(params.displayName?.trim() ?? "", 500).trimEnd();
   const label = normalizeOptionalString(params.label);
   const requestedKey = normalizeOptionalString(params.key);
