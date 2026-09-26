@@ -1,8 +1,8 @@
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import { expandToolGroups, resolveToolProfilePolicy } from "../agents/tool-policy-shared.js";
-import type { ClawOpenClawProfile } from "./types.js";
+import type { ClawOpenClawAgentSettings } from "./manifest-contract.js";
 
-type ClawToolSettings = NonNullable<ClawOpenClawProfile["agent"]["tools"]>;
+type ClawToolSettings = NonNullable<ClawOpenClawAgentSettings["tools"]>;
 type ClawToolProfileSelection = Omit<
   Pick<ClawToolSettings, "profile" | "allow" | "alsoAllow" | "deny">,
   "profile"
@@ -53,9 +53,9 @@ export function resolveClawToolProfileSnapshot(
 }
 
 export function materializeClawToolProfile(
-  settings: ClawOpenClawProfile["agent"],
+  settings: ClawOpenClawAgentSettings,
   options: { allowLegacyDynamicProfile?: boolean } = {},
-): ClawOpenClawProfile["agent"] {
+): ClawOpenClawAgentSettings {
   const tools = settings.tools;
   if (!tools) {
     return settings;

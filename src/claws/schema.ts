@@ -11,6 +11,12 @@ import { computeNextRunAtMs } from "../cron/schedule.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
+  CLAW_BOOTSTRAP_FILE_NAMES,
+  CLAW_SCHEMA_VERSION,
+  type ClawDiagnostic,
+  type ClawOpenClawAgentSettings,
+} from "./manifest-contract.js";
+import {
   conflictsWithClawPath,
   isCanonicalClawHubPackageName,
   isClawPackageManagerArtifactPinned,
@@ -24,12 +30,6 @@ import {
   isConcreteBundleMcpToolName,
   resolveClawToolProfileSnapshot,
 } from "./tool-profile-consent.js";
-import {
-  CLAW_BOOTSTRAP_FILE_NAMES,
-  CLAW_SCHEMA_VERSION,
-  type ClawDiagnostic,
-  type ClawOpenClawProfile,
-} from "./types.js";
 
 const nonEmptyString = z
   .string()
@@ -598,6 +598,11 @@ const manifestSchema = z
   });
 
 export type ClawOpenClawExtension = z.output<typeof openClawExtensionSchema>;
+export type ClawOpenClawProfile = {
+  schemaVersion: 1;
+  agent: ClawOpenClawAgentSettings;
+  extensions?: ClawOpenClawExtension[];
+};
 export type ClawPackage = z.output<typeof packageSchema>;
 export type ClawMcpServer = z.output<typeof mcpServerSchema>;
 export type ClawCronJob = z.output<typeof cronJobSchema>;

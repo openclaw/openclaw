@@ -119,7 +119,7 @@ export async function runHostedChannelSetup(
           ...(assertPersistentEffectCurrent ? { assertPersistentEffectCurrent } : {}),
           onPostWriteHook: channelSetup.onPostWriteHook,
         }),
-        afterWrite: channelSetup.runPostWriteHooks,
+        afterWrite: async (configPath) => await channelSetup.runPostWriteHooks(configPath),
       };
     },
   });

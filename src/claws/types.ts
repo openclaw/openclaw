@@ -1,89 +1,33 @@
 // Shared types for grouped OpenClaw Claw manifests and read-only add plans.
-import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 import type { AgentConfig } from "../config/types.agents.js";
-import type { ClawManifest, ClawOpenClawExtension, ClawPackage } from "./schema.js";
+import type { CLAW_SCHEMA_VERSION, ClawDiagnostic } from "./manifest-contract.js";
+import type {
+  ClawManifest,
+  ClawOpenClawExtension,
+  ClawOpenClawProfile,
+  ClawPackage,
+} from "./schema.js";
+
+export {
+  CLAW_BOOTSTRAP_FILE_NAMES,
+  CLAW_SCHEMA_VERSION,
+  type ClawDiagnostic,
+} from "./manifest-contract.js";
 
 export type {
   ClawCronJob,
   ClawManifest,
   ClawMcpServer,
   ClawOpenClawExtension,
+  ClawOpenClawProfile,
   ClawPackage,
 } from "./schema.js";
 
-export const CLAW_SCHEMA_VERSION = 1 as const;
 export const CLAW_ADD_PLAN_SCHEMA_VERSION = "openclaw.clawAddPlan.v1" as const;
 export const CLAW_INSPECT_RESULT_SCHEMA_VERSION = "openclaw.clawInspect.v1" as const;
 export const CLAW_OUTPUT_STABILITY = "experimental" as const;
 
-type ClawDiagnosticLevel = "error" | "warning";
-
-export type ClawDiagnostic = {
-  level: ClawDiagnosticLevel;
-  code: string;
-  phase: "parse" | "schema" | "policy" | "plan" | "mutation";
-  path: string;
-  message: string;
-};
-
 type ClawExtensionFormat = ClawOpenClawExtension["format"];
-
-export type ClawOpenClawProfile = {
-  schemaVersion: 1;
-  agent: {
-    model?: { primary: string; fallbacks?: string[] };
-    subagents?: { allowAgents?: string[]; delegationMode?: "suggest" | "prefer" };
-    groupChat?: {
-      mentionPatterns?: string[];
-    };
-    sandbox?: {
-      mode?: "off" | "non-main" | "all";
-      scope?: "session" | "agent" | "shared";
-      workspaceAccess?: "none" | "ro" | "rw";
-    };
-    tools?: {
-      profile?: ToolProfileId;
-      allow?: string[];
-      alsoAllow?: string[];
-      deny?: string[];
-      fs?: {
-        workspaceOnly?: true;
-      };
-    };
-    memory?: {
-      search?: {
-        enabled?: boolean;
-        rememberAcrossConversations?: boolean;
-        sources?: Array<"memory" | "sessions">;
-      };
-    };
-    heartbeat?: {
-      every?: string;
-      activeHours?: {
-        start?: string;
-        end?: string;
-        timezone?: string;
-      };
-      lightContext?: boolean;
-      isolatedSession?: boolean;
-      timeoutSeconds?: number;
-    };
-    humanDelay?: {
-      mode?: "off" | "natural" | "custom";
-      minMs?: number;
-      maxMs?: number;
-    };
-  };
-  extensions?: ClawOpenClawExtension[];
-};
-
-export const CLAW_BOOTSTRAP_FILE_NAMES = [
-  "AGENTS.md",
-  "SOUL.md",
-  "IDENTITY.md",
-  "TOOLS.md",
-  "HEARTBEAT.md",
-] as const;
 
 export type ClawAppliedExtension = {
   id: string;

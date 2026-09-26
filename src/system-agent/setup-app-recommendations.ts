@@ -143,11 +143,9 @@ function entrySearchText(entry: OfficialExternalPluginCatalogEntry): string {
     manifest?.plugin?.label,
     manifest?.channel?.id,
     manifest?.channel?.label,
-    ...(manifest?.providers ?? []).flatMap((provider) => [
-      provider.id,
-      provider.name,
-      ...(provider.aliases ?? []),
-    ]),
+    ...(manifest?.providers ?? []).flatMap((provider) =>
+      [provider.id, provider.name].concat(provider.aliases ?? []),
+    ),
   ]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join(" ")
