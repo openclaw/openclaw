@@ -91,6 +91,16 @@ describe("slack allowlist log formatting", () => {
     ).toBeNull();
   });
 
+  it("keeps id-only channel resolutions visible so the startup summary still confirms them", () => {
+    expect(
+      formatSlackChannelResolved({
+        input: "D0AFBKXS3CP",
+        resolved: true,
+        id: "D0AFBKXS3CP",
+      }),
+    ).toBe("D0AFBKXS3CP");
+  });
+
   it("keeps bare-name lookups that resolved to an id, even when the name matches the input", () => {
     expect(
       formatSlackChannelResolved({

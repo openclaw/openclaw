@@ -20,6 +20,13 @@ export type SlackChannelResolution = {
   archived?: boolean;
 };
 
+// Slack conversation ids are at least 9 characters: C = public channel,
+// G = private channel, D = direct message. Canonical ids are uppercase;
+// lowercase folded ids are unambiguous only when the second character is a
+// digit, which is the convention the Slack doctor already repairs.
+const SLACK_CANONICAL_CONVERSATION_ID_RE = /^[CDG][A-Z0-9]{8,}$/;
+const SLACK_LOWERCASE_CONVERSATION_ID_RE = /^[cdg][0-9][a-z0-9]{7,}$/;
+
 function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -32,7 +39,10 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
     return { id, name };
   }
   const prefixed = trimmed.replace(/^(slack:|channel:)/i, "");
-  if (/^[CG][A-Z0-9]+$/i.test(prefixed)) {
+  if (
+    SLACK_CANONICAL_CONVERSATION_ID_RE.test(prefixed) ||
+    SLACK_LOWERCASE_CONVERSATION_ID_RE.test(prefixed)
+  ) {
     return { id: prefixed.toUpperCase() };
   }
   const name = prefixed.replace(/^#/, "").trim();

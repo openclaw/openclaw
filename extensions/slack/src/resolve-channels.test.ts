@@ -40,16 +40,55 @@ describe("resolveSlackChannelAllowlist", () => {
     });
   });
 
-  it("returns stable channel ids without listing a workspace", async () => {
+  it("returns stable channel and DM ids without listing a workspace", async () => {
     const list = vi.fn();
     const res = await resolveSlackChannelAllowlist({
       token: "xoxb-test",
-      entries: ["C123", "channel:G456", "<#C789|general>"],
+      entries: ["C01234567", "channel:G01234567", "<#C09876543|general>", "D0AFBKXS3CP"],
       client: { conversations: { list } } as never,
     });
 
-    expect(res.map((entry) => entry.id)).toEqual(["C123", "G456", "C789"]);
+    expect(res.map((entry) => entry.id)).toEqual([
+      "C01234567",
+      "G01234567",
+      "C09876543",
+      "D0AFBKXS3CP",
+    ]);
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it("resolves DM ids while keeping short channel names on the name path", async () => {
+    const list = vi.fn().mockResolvedValue({
+      channels: [
+        { id: "C0GENERAL1", name: "general", is_archived: false },
+        { id: "C0DESIGN12", name: "design", is_archived: false },
+      ],
+    });
+    const res = await resolveSlackChannelAllowlist({
+      token: "xoxb-test",
+      entries: [
+        "D0AFBKXS3CP",
+        "channel:D0AG61APJ3B",
+        "d0afr1zrjhl",
+        "general",
+        "design",
+        "documentation",
+      ],
+      client: { conversations: { list } } as never,
+    });
+
+    const byInput = new Map(res.map((entry) => [entry.input, entry]));
+    expect(byInput.get("D0AFBKXS3CP")).toMatchObject({ resolved: true, id: "D0AFBKXS3CP" });
+    expect(byInput.get("channel:D0AG61APJ3B")).toMatchObject({
+      resolved: true,
+      id: "D0AG61APJ3B",
+    });
+    expect(byInput.get("d0afr1zrjhl")).toMatchObject({ resolved: true, id: "D0AFR1ZRJHL" });
+    expect(byInput.get("general")).toMatchObject({ resolved: true, id: "C0GENERAL1" });
+    expect(byInput.get("design")).toMatchObject({ resolved: true, id: "C0DESIGN12" });
+    // A long lowercase name must not be mistaken for a canonical id.
+    expect(byInput.get("documentation")).toMatchObject({ resolved: false });
+    expect(list).toHaveBeenCalledOnce();
   });
 
   it("preserves workspace-qualified channel ids without listing a workspace", async () => {
