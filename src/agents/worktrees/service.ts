@@ -1188,7 +1188,6 @@ export class ManagedWorktreeService {
 
   async removeIfLossless(id: string): Promise<boolean> {
     let record = this.requireLiveRecord(id);
-    let inspectedHead: string;
     const claimToken = randomUUID();
     const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
       // Retained/failed writes happen after this remover released or aborted its
@@ -1237,7 +1236,7 @@ export class ManagedWorktreeService {
     }
     try {
       record = await this.rebindLiveRepository(record);
-      inspectedHead = await requireManagedWorktreeHead(record, {});
+      const inspectedHead = await requireManagedWorktreeHead(record, {});
       const inspection = await inspectManagedWorktreeCheckout(record, "lossless", {
         env: this.env,
         getConfig: this.getConfig ?? getRuntimeConfig,
@@ -1253,12 +1252,6 @@ export class ManagedWorktreeService {
         recordOutcome(retainedOutcome);
         return false;
       }
-    } catch (error) {
-      abortWorktreeRemoval(this.env, id, claimToken);
-      recordOutcome("failed", error);
-      throw error;
-    }
-    try {
       await this.release(id);
       const result = await this.remove({
         id,

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
@@ -15,6 +16,7 @@ import {
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import { readCatalogCaptureFootprint } from "./test-helpers/catalog-capture-footprint.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import {
   loadCompletedFullCatalog,
@@ -173,6 +175,10 @@ it("admits cold native discovery during expired fleet provider renewal and prese
         fs.writeFileSync(clockFile, String(clock));
         fs.writeFileSync(registrations, "");
         fs.writeFileSync(
+          path.join(seed.root, "plugin", "payload.bin"),
+          Buffer.alloc(1024 * 1024, 1),
+        );
+        fs.writeFileSync(
           path.join(seed.root, "plugin", "openclaw.plugin.json"),
           JSON.stringify({
             id: PROVIDER_ID,
@@ -188,7 +194,7 @@ it("admits cold native discovery during expired fleet provider renewal and prese
 const fs = require("node:fs");
 const { getCachedLiveCatalogValue } = require("openclaw/plugin-sdk/provider-catalog-shared");
 module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
-  fs.appendFileSync(${JSON.stringify(registrations)}, JSON.stringify({ thread: require("node:worker_threads").threadId }) + "\\n");
+  fs.appendFileSync(${JSON.stringify(registrations)}, JSON.stringify({ thread: require("node:worker_threads").threadId, filename: __filename }) + "\\n");
   api.registerAgentHarness({
     id: ${JSON.stringify(HARNESS_ID)}, label: "Native fleet proof", authBootstrap: "harness",
     supports: () => ({ supported: true }), runAttempt: async () => ({ ok: false, error: "unused" }),
@@ -222,6 +228,20 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       );
     }
     const preparedRegistrations = fs.readFileSync(registrations, "utf8");
+    const registeredSources = preparedRegistrations
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { thread: number; filename: string });
+    const workerSources = registeredSources.filter((source) => source.thread !== threadId);
+    expect(workerSources).toHaveLength(1);
+    const filename = workerSources[0]!.filename;
+    const captureOffset = filename.indexOf(`${path.sep}openclaw-plugin-build-`);
+    expect(captureOffset).toBeGreaterThan(0);
+    const captureRoot = filename.slice(0, captureOffset);
+    expect(path.basename(captureRoot)).toMatch(/^openclaw-model-catalog-/);
+    const initialFootprint = readCatalogCaptureFootprint(captureRoot);
+    expect(initialFootprint.captures).toHaveLength(1);
+    expect(initialFootprint.bytes).toBeGreaterThanOrEqual(1024 * 1024);
     for (revision = 1; revision <= 3; revision++) {
       const nativeProvider = revision === 3 ? UNSEEN_NATIVE_PROVIDER : PROVIDER_ID;
       clock += 1001;
@@ -286,6 +306,10 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       held?.resolve();
       held = undefined;
       await publication;
+      // A stable registration count alone cannot detect growth inside a live capture.
+      const footprint = readCatalogCaptureFootprint(captureRoot);
+      expect(footprint).toEqual(initialFootprint);
+      console.info("Catalog expiry capture footprint", JSON.stringify({ revision, ...footprint }));
       const published = snapshots[0]!.readFullModelCatalog!()!;
       expect(published.entries).toEqual(
         expect.arrayContaining([

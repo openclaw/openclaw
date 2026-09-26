@@ -16,7 +16,7 @@ import {
   verifyPackageUpdateRecovery,
 } from "../../infra/update-global.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
-import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -439,6 +439,15 @@ export async function executeMutableUpdate(
         assertCurrent: assertExecutionCurrent,
         nodeRunner: params.packageUpdateNodeRunner,
         timeoutMs: params.timeoutMs,
+        onProgress: (step) => {
+          assertExecutionCurrent();
+          if (originalRun) {
+            recordUpdateRunStep(originalRun.runId, step, { env: originalRun.env });
+          }
+          defaultRuntime[opts.json ? "error" : "log"](
+            `${step.step}: ${step.detail ?? step.status}`,
+          );
+        },
         onStep: (step) => params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 }),
       });
       assertExecutionCurrent();

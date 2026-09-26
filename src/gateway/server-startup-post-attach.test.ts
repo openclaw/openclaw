@@ -260,8 +260,8 @@ vi.mock("./server-startup-handler-prewarm.js", () => ({
 const {
   startGatewayPostAttachRuntime: startGatewayPostAttachRuntimeImpl,
   startGatewaySidecars: startGatewaySidecarsImpl,
-  testing,
 } = await import("./server-startup-post-attach.js");
+const sentinelStartup = await import("./server-startup-restart-sentinel.js");
 const { scheduleContextCachePrewarm } = await import("./server-startup-context-cache-prewarm.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-method-policy.js");
 
@@ -884,7 +884,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const { promise: wake, resolve: finishWake } = createDeferred();
     hoisted.scheduleRestartSentinelWake.mockReturnValueOnce(wake);
 
-    const sidecar = testing.scheduleRestartSentinelWakeAfterReady({
+    const sidecar = sentinelStartup.scheduleRestartSentinelWakeAfterReady({
       deps: {} as never,
       log: { warn: vi.fn() },
     });
@@ -902,7 +902,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("cancels delayed restart sentinel recovery when the gateway closes", async () => {
     vi.useFakeTimers();
-    const sidecar = testing.scheduleRestartSentinelWakeAfterReady({
+    const sidecar = sentinelStartup.scheduleRestartSentinelWakeAfterReady({
       deps: {} as never,
       log: { warn: vi.fn() },
     });
@@ -1269,7 +1269,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         hoisted.refreshLatestUpdateRestartSentinel.mockClear();
 
-        const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
+        const result = await sentinelStartup.refreshLatestUpdateRestartSentinelIfPresent();
 
         expect(result).toBeNull();
         expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
@@ -1296,7 +1296,7 @@ describe("startGatewayPostAttachRuntime", () => {
         hoisted.refreshLatestUpdateRestartSentinel.mockClear();
         hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
 
-        const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
+        const result = await sentinelStartup.refreshLatestUpdateRestartSentinelIfPresent();
 
         expect(result).toBe(sentinel);
         expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();

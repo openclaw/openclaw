@@ -285,12 +285,13 @@ describe("worker environment service", () => {
       entries: { main: { sessionId: persisted.sessionId, updatedAt: support.testState.nowMs } },
       storePath: sessionStorePath,
     });
+    const config = { session: { store: sessionStorePath } };
     const described = await directSessionReq<{ session: GatewaySessionRow | null }>(
       "sessions.describe",
       { key: "main" },
       {
         context: {
-          getRuntimeConfig: () => ({ session: { store: sessionStorePath } }),
+          getRuntimeConfig: () => config,
           workerSessionPlacementService: placements,
         },
       },

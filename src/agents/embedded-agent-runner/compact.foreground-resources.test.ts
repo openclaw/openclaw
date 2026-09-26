@@ -330,20 +330,23 @@ it.for([
       try {
         expect(getAsyncWorkSignal()).toBeUndefined();
         const start = () =>
-          compactEmbeddedAgentSession({
-            ...target,
-            sessionTarget: target,
-            sessionFile: target.sessionKey,
-            workspaceDir: state.workspaceDir,
-            agentDir: state.agentDir(),
-            config,
-            provider: pluginId,
-            model: "model",
-            trigger: deferred ? "budget" : "manual",
-            ...(deferred ? { deferOwningContextEngineCompaction: true } : {}),
-            abortSignal: caller.signal,
-            enqueue: async (task) => await task(),
-          });
+          compactEmbeddedAgentSession(
+            {
+              ...target,
+              sessionTarget: target,
+              sessionFile: target.sessionKey,
+              workspaceDir: state.workspaceDir,
+              agentDir: state.agentDir(),
+              config,
+              provider: pluginId,
+              model: "model",
+              trigger: deferred ? "budget" : "manual",
+              ...(deferred ? { deferOwningContextEngineCompaction: true } : {}),
+              abortSignal: caller.signal,
+              enqueue: async (task) => await task(),
+            },
+            { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined } },
+          );
         const completion = parent ? parent.run(start) : start();
         pending = completion;
         if (deferred) {

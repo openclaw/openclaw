@@ -19,7 +19,6 @@ import {
   activeDurableStorageKeys,
   deleteVolatileSessionTab,
   forgetColdNativeActivity,
-  normalizeBrowserSessionKey,
   readColdNativeActivity,
   rememberColdNativeActivity,
   type SessionTabInteractionIdentity as InteractionIdentity,
@@ -81,7 +80,7 @@ function resolveInteractionIdentity(params: SessionTabParams): InteractionIdenti
   }
   const profile = normalizeOptionalLowercaseString(params.profile);
   return {
-    sessionKey: normalizeBrowserSessionKey(sessionKey) ?? "",
+    sessionKey: normalizeOptionalLowercaseString(sessionKey) ?? "",
     targetId,
     route: params.route ?? { kind: "browser-control" },
     ...(profile ? { profile } : {}),
@@ -384,13 +383,7 @@ export function untrackSessionBrowserTab(params: SessionTabParams): void {
     return;
   }
   const volatile = resolveVolatile(identity);
-  if (isVolatileRoute(identity.route)) {
-    if (volatile) {
-      deleteVolatileSessionTab(identity.sessionKey, volatile.tabKey);
-    }
-    return;
-  }
-  if (!getOptionalBrowserSessionTabStore()) {
+  if (isVolatileRoute(identity.route) || !getOptionalBrowserSessionTabStore()) {
     if (volatile) {
       deleteVolatileSessionTab(identity.sessionKey, volatile.tabKey);
     }

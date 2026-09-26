@@ -35,7 +35,6 @@ import {
   snapshotStructuredInput,
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
-import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
@@ -611,13 +610,7 @@ export {
 export type ToolProgressDetailMode = "explain" | "raw";
 
 /** Infer compact display metadata for one tool invocation from its name and arguments. */
-export function inferToolMetaFromArgs(
-  toolName: string,
-  args: unknown,
-  options?: { detailMode?: ToolProgressDetailMode },
-): string | undefined {
-  return inferToolMetaFromArgsCore(toolName, args, options);
-}
+export { inferToolMetaFromArgsCore as inferToolMetaFromArgs } from "../agents/tool-display.js";
 
 /** Inputs used to classify a finished harness turn with little or no visible assistant output. */
 export type AgentHarnessTerminalOutcomeInput = {

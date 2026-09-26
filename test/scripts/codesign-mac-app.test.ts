@@ -203,7 +203,7 @@ describe("codesign-mac-app temp file hygiene", () => {
         script.indexOf("else", script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]')),
       );
 
-      expect(script).toContain(
+      expect(readFileSync("scripts/lib/mac-signing-identity.sh", "utf8")).toContain(
         'ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"',
       );
       expect(script).toContain('ELEVATION_TEAM_ID="FWJYW4S8P8"');

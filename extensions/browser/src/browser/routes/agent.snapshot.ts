@@ -13,27 +13,26 @@ import {
   snapshotAria,
   snapshotRoleViaCdp,
 } from "../cdp.js";
+import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
   navigateChromeMcpPage,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
 } from "../chrome-mcp.js";
-import {
-  collectChromeMcpSnapshotUrls,
-  withChromeMcpLabels,
-  type ChromeMcpSnapshotOperation,
-} from "../chrome-mcp.snapshot-page.js";
-import {
-  buildChromeMcpRouteSnapshot,
-  flattenChromeMcpRouteSnapshot,
-} from "../chrome-mcp.snapshot-result.js";
+import { collectChromeMcpSnapshotUrls, withChromeMcpLabels } from "../chrome-mcp.snapshot-page.js";
+import { buildChromeMcpRouteSnapshot } from "../chrome-mcp.snapshot-result.js";
+import { flattenChromeMcpSnapshotToAriaResult } from "../chrome-mcp.snapshot.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
-import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
-import { getLoadedPwAiModule } from "../pw-ai-module.js";
+import {
+  getBrowserProfileCapabilities,
+  shouldUsePlaywrightForAriaSnapshot,
+  shouldUsePlaywrightForScreenshot,
+} from "../profile-capabilities.js";
+import { getLoadedPwAiModule, getPwAiModule } from "../pw-ai-module.js";
 import { finalizeRoleSnapshot, type RoleRefMap } from "../pw-role-snapshot.js";
 import type { BrowserObservedState } from "../pw-session-contracts.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
@@ -53,7 +52,6 @@ import { appendSnapshotUrls } from "../snapshot-urls.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import {
   browserNavigationPolicyForProfile,
-  getPwAiModule,
   handleRouteError,
   readBody,
   requirePwAi,
@@ -65,11 +63,7 @@ import {
   captureBrowserOperationTarget,
   resolveOperationTargetOutcome,
 } from "./agent.snapshot-target.js";
-import {
-  resolveSnapshotPlan,
-  shouldUsePlaywrightForAriaSnapshot,
-  shouldUsePlaywrightForScreenshot,
-} from "./agent.snapshot.plan.js";
+import { resolveSnapshotPlan } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -290,7 +284,7 @@ export function registerBrowserAgentSnapshotRoutes(
           res.json({ ok: true, path: imagePath, targetId: tab.targetId, url: tab.url, ...details });
         };
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          const operation: ChromeMcpSnapshotOperation = {
+          const operation: ChromeMcpTargetOperation = {
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
             targetId: tab.targetId,
@@ -403,7 +397,7 @@ export function registerBrowserAgentSnapshotRoutes(
       return;
     }
     const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
-    const pwModule = await getPwAiModule();
+    const pwModule = await getPwAiModule({ mode: "soft" });
     const hasPlaywright = Boolean(pwModule);
     const plan = resolveSnapshotPlan({
       profile: profileCtx.profile,
@@ -496,7 +490,7 @@ export function registerBrowserAgentSnapshotRoutes(
             };
           };
           if (usesChromeMcp) {
-            const operation: ChromeMcpSnapshotOperation = {
+            const operation: ChromeMcpTargetOperation = {
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
               targetId: tab.targetId,
@@ -505,7 +499,7 @@ export function registerBrowserAgentSnapshotRoutes(
             };
             const snapshot = await takeChromeMcpSnapshot(operation);
             if (plan.format === "aria") {
-              return jsonSnapshot(flattenChromeMcpRouteSnapshot(snapshot, plan.limit));
+              return jsonSnapshot(flattenChromeMcpSnapshotToAriaResult(snapshot, plan.limit));
             }
             const built = buildChromeMcpRouteSnapshot({
               root: snapshot,

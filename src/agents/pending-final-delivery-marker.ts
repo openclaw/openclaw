@@ -1,5 +1,6 @@
 /** Persists restart-recoverable final delivery markers for agent runs. */
 import { randomUUID } from "node:crypto";
+import type { CommandOwnerAssertion } from "../auto-reply/command-owner-authority.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -27,6 +28,7 @@ type PersistPendingFinalDeliveryMarkerParams = {
   payloads: ReplyPayload[];
   deliveryContext?: DeliveryContext;
   runOwnedSessionId: string;
+  commandOwnerReference?: CommandOwnerAssertion["recoveryReference"];
 };
 
 type PendingFinalDeliveryMarkerResult = {
@@ -87,7 +89,7 @@ export async function persistPendingFinalDeliveryMarker(
     entry: {
       ...entry,
       pendingFinalDelivery: {
-        ...(recoverableText
+        ...(recoverableText && params.commandOwnerReference === undefined
           ? { kind: "replayable" as const, text: recoverableText }
           : { kind: "transport-only" as const }),
         intentId,
@@ -121,6 +123,7 @@ export async function persistPendingFinalDeliveryMarker(
             }
           : {}),
         pendingFinalDeliveryCompletion: {
+          commandOwnerReference: params.commandOwnerReference,
           agentId: params.agentId,
           deliveryId,
           intentId,

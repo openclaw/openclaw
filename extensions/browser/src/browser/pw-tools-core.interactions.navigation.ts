@@ -8,7 +8,6 @@ import {
 } from "./navigation-guard.js";
 import {
   assertPageNavigationCompletedSafely,
-  ensurePageState,
   getPageForTargetId,
   isBrowserObservedDialogBlockedError,
   isPolicyDenyNavigationError,
@@ -96,7 +95,6 @@ export function resolveBoundedDelayMs(
 
 export async function getRestoredPageForTarget(opts: InteractionTargetOptions) {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   return page;
 }

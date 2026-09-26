@@ -64,6 +64,7 @@ suite.define(() => {
       const message = "Continue the saved cloud task";
       const privateKey = "agent:main:private-startup";
       const privateMessage = "Keep this unsent private task in memory";
+      const separateDraft = "Keep this separate private draft — café 雪 🦞";
       const gateway = await installMockGateway(page, {
         serverBuildId: buildId,
         workspaceGit: true,
@@ -291,6 +292,15 @@ suite.define(() => {
             JSON.stringify(recovery),
           );
           expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+          if (escape === "toast") {
+            await page.locator(".sidebar-brand__new-thread").click();
+            const privacy = page.getByRole("switch", { name: "Incognito" });
+            await privacy.waitFor();
+            if ((await privacy.getAttribute("aria-checked")) !== "true") {
+              await privacy.click();
+            }
+            await page.locator(".new-session-page__message").fill(separateDraft);
+          }
           const configRuntime = /\/assets\/config-page-[^/?]+\.js(?:\?.*)?$/;
           await page.route(configRuntime, (route) => route.abort("failed"));
           await navigateInApp(page, "appearance");
@@ -312,9 +322,40 @@ suite.define(() => {
           await page.unroute(configRuntime);
           // Only these explicit actions authorize discarding the unsaved Incognito start.
           if (escape === "toast") {
+            const automaticReload = page.waitForEvent("domcontentloaded");
             await page
               .locator("openclaw-toast-host")
               .getByRole("button", { name: "Discard unsaved starts and reload", exact: true })
+              .click();
+            const review = page.getByRole("button", { name: "Review private draft", exact: true });
+            const outcome = await Promise.race([
+              automaticReload.then(() => "reloaded" as const),
+              review.waitFor().then(() => "held" as const),
+            ]);
+            if (captureUiProofEnabled && outcome === "reloaded") {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(suite.artifactDir, "mixed-private-draft-lost.png"),
+              });
+            }
+            expect(
+              outcome,
+              "discarding a pending start must preserve a separate private draft",
+            ).toBe("held");
+            expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
+            await review.click();
+            const dialog = page.locator('openclaw-modal-dialog[label="Unsent Incognito draft"]');
+            expect(
+              await dialog.getByRole("textbox", { name: "Draft text", exact: true }).inputValue(),
+            ).toBe(separateDraft);
+            if (captureUiProofEnabled) {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(suite.artifactDir, "mixed-private-draft-preserved.png"),
+              });
+            }
+            await dialog
+              .getByRole("button", { name: "Discard this draft and refresh", exact: true })
               .click();
           } else {
             await navigateToControlUiSession(page, sessionKey);

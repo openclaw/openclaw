@@ -10,7 +10,11 @@ import {
   type NormalizedUsage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { calculateCost, type AssistantMessage } from "openclaw/plugin-sdk/llm";
-import type { AgentsApiEvent, AgentsApiItem } from "./agentsapi-client.js";
+import {
+  isAgentsApiTerminalTurn,
+  type AgentsApiEvent,
+  type AgentsApiItem,
+} from "./agentsapi-client.js";
 import { AgentsApiNativeToolProjection } from "./agentsapi-native-tool-projection.js";
 import {
   appendAgentsApiTranscriptMessage,
@@ -19,6 +23,7 @@ import {
   joinTextParts,
   readTextParts,
 } from "./agentsapi-transcript.js";
+import { aggregateAgentsApiUsage, makeAgentsApiZeroUsage } from "./agentsapi-usage.js";
 
 type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
 type NativeTurn = SDKTurn | NonNullable<AgentsApiEvent["turn"]>;
@@ -41,7 +46,7 @@ type NativeTextState = {
 
 /** Native identities keep saved-state recovery and live events on the same projection. */
 class AgentsApiMessageProjection {
-  readonly reply: AgentsApiReply = { assistantUsage: emptyUsage() };
+  readonly reply: AgentsApiReply = { assistantUsage: makeAgentsApiZeroUsage() };
   private readonly items = new Map<string, NativeTextState>();
   private readonly turnByItem = new Map<string, string>();
   private readonly eventIds = new Set<string>();
@@ -94,18 +99,11 @@ class AgentsApiMessageProjection {
     };
   }
 
-  get hadPotentialSideEffects(): boolean {
-    return this.nativeTools.hadPotentialSideEffects;
-  }
-
   get resultClassification(): AgentHarnessAttemptResult["agentHarnessResultClassification"] {
     return this.classification;
   }
 
   recordUsage(model: AgentHarnessAttemptParamsV2["model"], turns: SDKTurn[]): void {
-    const usage = emptyUsage();
-    let observed = false;
-    let reasoningTokens: number | undefined;
     // Canonical usage replaces observed usage by admitted turn identity. A failed
     // or partial REST read cannot discard terminal-event usage for omitted turns.
     const contributions = new Map(this.usageByTurn);
@@ -116,32 +114,9 @@ class AgentsApiMessageProjection {
       }
     }
     this.canonicalUsageRecorded = true;
-    for (const normalized of contributions.values()) {
-      observed = true;
-      usage.input += normalized.input ?? 0;
-      usage.output += normalized.output ?? 0;
-      usage.cacheRead += normalized.cacheRead ?? 0;
-      usage.cacheWrite += normalized.cacheWrite ?? 0;
-      usage.totalTokens +=
-        normalized.total ??
-        (normalized.input ?? 0) +
-          (normalized.output ?? 0) +
-          (normalized.cacheRead ?? 0) +
-          (normalized.cacheWrite ?? 0);
-      if (normalized.reasoningTokens !== undefined) {
-        reasoningTokens = (reasoningTokens ?? 0) + normalized.reasoningTokens;
-      }
-    }
-    if (observed) {
-      calculateCost(model, usage);
-      this.reply.usage = {
-        ...normalizeUsage(usage),
-        ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
-      };
-    } else {
-      this.reply.usage = { contextUsage: { state: "unavailable" } };
-    }
-    this.reply.assistantUsage = usage;
+    const aggregated = aggregateAgentsApiUsage(model, contributions.values());
+    this.reply.usage = aggregated.usage;
+    this.reply.assistantUsage = aggregated.assistantUsage;
   }
 
   get tokenUsage(): NormalizedUsage | undefined {
@@ -290,7 +265,7 @@ class AgentsApiMessageProjection {
     this.presentationEnabled = previousPresentation && options.presentation !== false;
     try {
       let transcriptReady = true;
-      const terminalTurn = isTerminalTurn(turn.status);
+      const terminalTurn = isAgentsApiTerminalTurn(turn.status);
       for (const projected of iterateAgentsApiTranscriptItems(
         turn.id,
         items,
@@ -313,7 +288,7 @@ class AgentsApiMessageProjection {
         );
       }
       this.recordTurnUsage(turn);
-      if (isTerminalTurn(turn.status)) {
+      if (isAgentsApiTerminalTurn(turn.status)) {
         for (const state of this.items.values()) {
           if (state.turnId !== turn.id || state.terminal) {
             continue;
@@ -383,7 +358,7 @@ class AgentsApiMessageProjection {
       assistantTexts: [text],
       reasoningText: this.reasoningText(),
       promptError: turn.error,
-      turnCompleted: isTerminalTurn(turn.status),
+      turnCompleted: isAgentsApiTerminalTurn(turn.status),
     });
     if (text) {
       this.reply.lastAssistant = await this.append({
@@ -401,6 +376,23 @@ class AgentsApiMessageProjection {
       this.assertCurrent();
     }
     this.finalTurnId = turn.id;
+  }
+
+  async commitUsage(turn: NativeTurn): Promise<void> {
+    this.assertCurrent();
+    if (this.reply.usage?.total === undefined) {
+      return;
+    }
+    // Tool termination suppresses another reply, but must retain its billing.
+    await this.append({
+      ...createAgentHarnessAssistantMessage(this.attribution(), "", {
+        aborted: false,
+        content: [],
+        timestamp: this.nextTimestamp(),
+      }),
+      usage: this.reply.assistantUsage,
+      idempotencyKey: `agentsapi:${this.remoteSessionId}:${turn.id}`,
+    });
   }
 
   private async recordItem(
@@ -662,7 +654,7 @@ class AgentsApiMessageProjection {
   }
 
   private attribution() {
-    return { api: "openai-responses" as const, provider: "openai", modelId: this.params.model.id };
+    return { api: "openai-agents" as const, provider: "openai", modelId: this.params.model.id };
   }
 
   private nextTimestamp(): number {
@@ -691,23 +683,6 @@ export function createAgentsApiMessageProjection(
   assertCurrent: () => void,
 ) {
   return new AgentsApiMessageProjection(params, remoteSessionId, emitEvent, assertCurrent);
-}
-
-function emptyUsage(): AssistantMessage["usage"] {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    // Turn billing sums hosted model calls; it is not a latest-call context snapshot.
-    contextUsage: { state: "unavailable" },
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
-
-function isTerminalTurn(status?: string): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 const INTERNAL_EVENT_TYPES = new Set([

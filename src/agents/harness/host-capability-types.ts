@@ -75,21 +75,33 @@ export type AgentHarnessHostCapabilities = Readonly<{
     message: import("../runtime/index.js").AgentMessage;
     maxChars: number;
   }) => Promise<{ text?: string; images: import("../../llm/types.js").ImageContent[] }>;
-  /** Stages reply attachments under captured sender policy while the harness reader is live. */
+  /** Stages reply attachments under captured policy and live run authority. */
   prepareReplyMedia?: (
     request: {
-      workspaceRoot?: string;
-      readWorkspaceFile: (
-        relativePath: string,
-        options: { maxBytes: number; signal: AbortSignal },
-      ) => Promise<Buffer>;
+      /** Additional native session or transport authority, retained through publication. */
+      assertCurrent?: () => void;
       signal?: AbortSignal;
     } & (
+      | ({
+          workspaceRoot?: string;
+          readWorkspaceFile: (
+            relativePath: string,
+            options: { maxBytes: number; signal: AbortSignal },
+          ) => Promise<Buffer>;
+        } & (
+          | {
+              kind: "attempt";
+              attempt: import("../embedded-agent-runner/run/attempt-result.js").EmbeddedRunAttemptWithReceiptEvidence;
+            }
+          | { kind: "payload"; payload: import("../../auto-reply/reply-payload.js").ReplyPayload }
+        ))
       | {
-          kind: "attempt";
-          attempt: import("../embedded-agent-runner/run/attempt-result.js").EmbeddedRunAttemptWithReceiptEvidence;
+          /** Already-admitted provider bytes, not permission to read a host path. */
+          kind: "artifact";
+          buffer: Buffer;
+          fileName: string;
+          assertCurrent: () => void;
         }
-      | { kind: "payload"; payload: import("../../auto-reply/reply-payload.js").ReplyPayload }
     ),
   ) => Promise<
     | {

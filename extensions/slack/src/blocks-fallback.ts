@@ -2,16 +2,8 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  renderSlackDataTableFallbackText,
-  renderSlackDataTableMrkdwnFallbackText,
-  renderSlackTableFallbackText,
-  renderSlackTableMrkdwnFallbackText,
-} from "./data-table.js";
-import {
-  renderSlackDataVisualizationFallbackText,
-  renderSlackDataVisualizationMrkdwnFallbackText,
-} from "./data-visualization.js";
+import { renderSlackDataTableFallbackText, renderSlackTableFallbackText } from "./data-table.js";
+import { renderSlackDataVisualizationFallbackText } from "./data-visualization.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackRichText } from "./rich-text.js";
 
@@ -189,17 +181,11 @@ export function renderSlackBlockFallbackText(
     case "actions":
       return readActionsText(block, options);
     case "data_visualization":
-      return options.nativeDataFormat === "plain"
-        ? renderSlackDataVisualizationFallbackText(block)
-        : renderSlackDataVisualizationMrkdwnFallbackText(block);
+      return renderSlackDataVisualizationFallbackText(block, options.nativeDataFormat !== "plain");
     case "data_table":
-      return options.nativeDataFormat === "plain"
-        ? renderSlackDataTableFallbackText(block)
-        : renderSlackDataTableMrkdwnFallbackText(block);
+      return renderSlackDataTableFallbackText(block, options.nativeDataFormat !== "plain");
     case "table":
-      return options.nativeDataFormat === "plain"
-        ? renderSlackTableFallbackText(block)
-        : renderSlackTableMrkdwnFallbackText(block);
+      return renderSlackTableFallbackText(block, options.nativeDataFormat !== "plain");
     default:
       return undefined;
   }

@@ -25,7 +25,11 @@ async function withSyntheticReader(
     readerId: string;
     ownerEmail: string;
     dispatch: (method: ReadMethod) => ReturnType<typeof dispatchGatewayMethodInProcessRaw>;
-    blockCatalog: () => { entered: Promise<void>; release: () => void };
+    blockCatalog: () => {
+      entered: Promise<void>;
+      readEntered: Promise<void>;
+      release: () => void;
+    };
   }) => Promise<void>,
   visibility: "shared" | "draft" = "shared",
 ) {
@@ -71,6 +75,7 @@ async function withSyntheticReader(
         return undefined;
       },
     });
+    let restoreReadiness: (() => void) | undefined;
     bindSessionRowProjection(context, () => projection);
     try {
       await projection.ensureMaterialized();
@@ -103,12 +108,26 @@ async function withSyntheticReader(
         blockCatalog: () => {
           catalogGate = createDeferred();
           catalogEntered = createDeferred();
+          const readEntered = createDeferred();
+          const ensureMaterialized = projection.ensureMaterialized.bind(projection);
+          const readiness = vi
+            .spyOn(projection, "ensureMaterialized")
+            .mockImplementationOnce(() => {
+              readEntered.resolve();
+              return ensureMaterialized();
+            });
+          restoreReadiness = () => readiness.mockRestore();
           sessionChanges.emit({ all: true, scope: "catalog" });
-          return { entered: catalogEntered.promise, release: () => catalogGate?.resolve() };
+          return {
+            entered: catalogEntered.promise,
+            readEntered: readEntered.promise,
+            release: () => catalogGate?.resolve(),
+          };
         },
       });
     } finally {
       catalogGate?.resolve();
+      restoreReadiness?.();
       await projection.ensureMaterialized();
       projection.dispose();
     }
@@ -170,11 +189,17 @@ describe("synthetic plugin session reads", () => {
       const pending = method === "sessions.list" ? dispatch(method) : undefined;
       try {
         await gate.entered;
+        if (pending) {
+          await gate.readEntered;
+        }
         setUserProfileRole(readerId, "blocked");
         if (pending) {
           gate.release();
+          await expect(pending).rejects.toThrow(
+            "Your operator role changed; reconnect before continuing.",
+          );
         }
-        const result = await (pending ?? dispatch(method));
+        const result = await dispatch(method);
         if (method === "sessions.list") {
           expect(result).toMatchObject({ ok: true, payload: { sessions: [] } });
         } else {

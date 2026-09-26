@@ -10,7 +10,7 @@ import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
 } from "./session-binding.js";
-import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
+import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
 
 export async function clearCodexBindingAfterInvalidImagePayload(
   bindingStore: CodexAppServerBindingStore,

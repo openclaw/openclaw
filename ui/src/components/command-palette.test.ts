@@ -245,7 +245,7 @@ describe("CommandPalette search", () => {
   );
 
   it.each([
-    { event: "config.changed", payload: {}, retainsChoices: false },
+    { event: "config.changed", payload: {}, retainsChoices: true },
     {
       event: "chat.metadata.changed",
       payload: { modelSelectionChanged: true },

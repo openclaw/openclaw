@@ -192,13 +192,13 @@ describe("owner-native execution lifecycle receipts", () => {
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const admission = vi
         .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit) =>
+        .mockImplementation((admit, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === stage) {
               revoked = true;
             }
             admit(request, grant);
-          }),
+          }, attachment),
         );
       try {
         await expect(

@@ -1,9 +1,11 @@
 import { EventEmitter } from "node:events";
 import { Command } from "commander";
+import * as cliRuntime from "openclaw/plugin-sdk/cli-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
-import * as cliCoreApiModule from "./core-api.js";
 
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -39,9 +41,7 @@ const systemProfileMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.spyOn(cliCoreApiModule, "callGatewayFromCli").mockImplementation(
-  gatewayMocks.callGatewayFromCli,
-);
+vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(gatewayMocks.callGatewayFromCli);
 
 vi.mock("../system-profile-api.js", () => ({
   assertSystemCookiePlatform: vi.fn(),
@@ -52,7 +52,7 @@ vi.mock("../system-profile-api.js", () => ({
   })),
 }));
 
-vi.spyOn(cliCoreApiModule, "runCommandWithRuntime").mockImplementation(
+vi.spyOn(cliRuntime, "runCommandWithRuntime").mockImplementation(
   async (_runtime, action, onError) => {
     try {
       await action();
@@ -61,9 +61,9 @@ vi.spyOn(cliCoreApiModule, "runCommandWithRuntime").mockImplementation(
     }
   },
 );
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(runtime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
+vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
 
 let registerBrowserCookieSyncCommand: typeof import("./browser-cli-cookie-sync.js").registerBrowserCookieSyncCommand;
 

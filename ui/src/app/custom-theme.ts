@@ -94,10 +94,7 @@ export function requireThemeId(value: string) {
 
 export function requireSafeCssValue(value: unknown, label: string) {
   const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    throw new Error(`Unsupported tweakcn token: ${label}`);
-  }
-  if (normalized.length > MAX_CSS_TOKEN_LENGTH) {
+  if (!normalized || normalized.length > MAX_CSS_TOKEN_LENGTH) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
   const lowered = normalized.toLowerCase();
@@ -138,11 +135,7 @@ function isSafeFontFamilyCharacter(char: string) {
 
 export function requireSafeFontFamilyValue(value: unknown, label: string) {
   const normalized = requireSafeCssValue(value, label);
-  if (
-    normalized.includes("(") ||
-    normalized.includes(")") ||
-    !Array.from(normalized).every(isSafeFontFamilyCharacter)
-  ) {
+  if (!Array.from(normalized).every(isSafeFontFamilyCharacter)) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
   return normalized;
@@ -153,7 +146,7 @@ export function makeTokenMap(entries: Array<[ModeTokenName, string]>): ThemeToke
 }
 
 function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): ThemeTokenMap | null {
-  if (!value || typeof value !== "object") {
+  if (!value) {
     return null;
   }
   const entries: Array<[ModeTokenName, string]> = [];
@@ -242,10 +235,6 @@ export function syncCustomThemeStyleTag(
   try {
     cssText = buildCustomThemeStyles(theme);
   } catch {
-    style?.remove();
-    return;
-  }
-  if (!cssText) {
     style?.remove();
     return;
   }

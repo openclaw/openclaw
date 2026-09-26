@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  type SessionsListParams,
   validateSessionsListParams,
   validateSessionsPreviewParams,
   validateSessionsResolveParams,
@@ -29,7 +28,7 @@ import {
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import type { SessionRowReadView } from "../session-row-prepared-read.js";
+import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import type { MaterializedRow } from "../session-row-projection-record.js";
 import {
@@ -271,7 +270,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     }
     await listProjectedSessions({
       projection,
-      opts: params as SessionsListParams,
+      opts: params,
       context,
       client,
       diagnostics,
@@ -291,8 +290,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsPreviewParams, "sessions.preview", respond)) {
       return;
     }
-    const keys = (Array.isArray(params.keys) ? params.keys : [])
-      .map((key) => normalizeOptionalString(key ?? ""))
+    const keys = params.keys
+      .map((key) => normalizeOptionalString(key))
       .filter((key): key is string => Boolean(key))
       .slice(0, 64);
     const limit = params.limit ?? 12;
@@ -307,27 +306,19 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!projection) {
       throw new Error("Session projection is unavailable before Gateway startup completes");
     }
-    const withPreviewRows = async <T>(
+    const withPreviewRows = <T>(
       requestedKeys: readonly string[],
       consume: (read: SessionRowReadView) => T,
-    ): Promise<T> => {
-      while (true) {
-        const prepared = await projection.withPreparedExactRows(
-          (cfg) =>
-            requestedKeys.flatMap((key) => {
-              const agent = resolveRequestedGlobalAgentId(cfg, key);
-              return agent.ok ? [{ key, agentId: agent.agentId }] : [];
-            }),
-          consume,
-        );
-        if (prepared.kind === "complete") {
-          return prepared.value;
-        }
-        const { certifySessionCanonicalValidationPending } =
-          await import("../../config/sessions/session-canonical-validation-readiness.js");
-        await certifySessionCanonicalValidationPending(prepared.database);
-      }
-    };
+    ): Promise<T> =>
+      withReadySessionRows(
+        projection,
+        (cfg) =>
+          requestedKeys.flatMap((key) => {
+            const agent = resolveRequestedGlobalAgentId(cfg, key);
+            return agent.ok ? [{ key, agentId: agent.agentId }] : [];
+          }),
+        consume,
+      );
     const previews: SessionsPreviewEntry[] = [];
     const buffered: Array<{
       preview: SessionsPreviewEntry;
@@ -428,7 +419,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       },
     );
   },
-  "sessions.resolve": async ({ params, respond, context, client }) => {
+  "sessions.resolve": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
@@ -444,6 +441,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         isCurrent: () => getSessionRowProjection(context) === projection,
       },
       (resolved) => {
+        sessionMutationAuthorization?.assertCurrent();
         if (!resolved.ok) {
           respond(false, undefined, resolved.error);
           return;

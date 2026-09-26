@@ -119,16 +119,12 @@ function clearEntryTimer(entry: GatewaySuspendCoordinatorEntry): void {
   }
 }
 
-function scheduleEntry(
-  entry: GatewaySuspendCoordinatorEntry,
-  delayMs: number,
-  callback: () => void,
-): void {
+function scheduleResume(entry: GatewaySuspendCoordinatorEntry, delayMs: number): void {
   clearEntryTimer(entry);
   const generation = entry.timerGeneration;
   entry.timer = setTimeout(() => {
-    if (entry.timerGeneration === generation) {
-      callback();
+    if (entry.timerGeneration === generation && COORDINATOR_STATE.current === entry) {
+      resumeAndReopen(entry);
     }
   }, delayMs);
   entry.timer.unref?.();
@@ -160,7 +156,7 @@ function enterSchedulerRecovery(entry: GatewaySuspendCoordinatorEntry): void {
     return;
   }
   if (entry.kind === "recovering") {
-    scheduleRecoveryRetry(entry);
+    scheduleResume(entry, GATEWAY_SCHEDULER_RECOVERY_RETRY_MS);
     return;
   }
   clearEntryTimer(entry);
@@ -172,15 +168,7 @@ function enterSchedulerRecovery(entry: GatewaySuspendCoordinatorEntry): void {
     warn: entry.warn,
   };
   COORDINATOR_STATE.current = recovery;
-  scheduleRecoveryRetry(recovery);
-}
-
-function scheduleRecoveryRetry(entry: GatewaySuspendCoordinatorEntry): void {
-  scheduleEntry(entry, GATEWAY_SCHEDULER_RECOVERY_RETRY_MS, () => {
-    if (COORDINATOR_STATE.current === entry) {
-      resumeAndReopen(entry);
-    }
-  });
+  scheduleResume(recovery, GATEWAY_SCHEDULER_RECOVERY_RETRY_MS);
 }
 
 function normalizeExpiredHeldSuspension(
@@ -193,11 +181,16 @@ function normalizeExpiredHeldSuspension(
   return COORDINATOR_STATE.current;
 }
 
+function currentSuspension(): GatewaySuspendCoordinatorEntry | null {
+  const current = COORDINATOR_STATE.current;
+  return current?.kind === "held" ? normalizeExpiredHeldSuspension(current) : current;
+}
+
 function armSchedulerRecovery(
   recovery: Omit<GatewaySchedulerRecovery, "kind">,
 ): GatewaySchedulerRecovery {
   const entry: GatewaySchedulerRecovery = { kind: "recovering", ...recovery };
-  scheduleRecoveryRetry(entry);
+  scheduleResume(entry, GATEWAY_SCHEDULER_RECOVERY_RETRY_MS);
   return entry;
 }
 
@@ -241,22 +234,14 @@ function armExpiry(held: Omit<HeldGatewaySuspension, "kind">): HeldGatewaySuspen
   if (remainingMs <= 0) {
     throw new Error("gateway suspension expired during preparation");
   }
-  scheduleEntry(entry, Math.ceil(remainingMs), () => {
-    if (COORDINATOR_STATE.current === entry) {
-      resumeAndReopen(entry);
-    }
-  });
+  scheduleResume(entry, Math.ceil(remainingMs));
   return entry;
 }
 
 function renewHeldSuspension(held: HeldGatewaySuspension, nowMs: number): void {
   held.expiresAtMs = nowMs + GATEWAY_SUSPEND_TTL_MS;
   held.deadlineAtMs = performance.now() + GATEWAY_SUSPEND_TTL_MS;
-  scheduleEntry(held, GATEWAY_SUSPEND_TTL_MS, () => {
-    if (COORDINATOR_STATE.current === held) {
-      resumeAndReopen(held);
-    }
-  });
+  scheduleResume(held, GATEWAY_SUSPEND_TTL_MS);
 }
 
 function refreshHeldSuspension(
@@ -320,11 +305,7 @@ export function prepareGatewaySuspend(params: {
   };
   const nowMs = (params.nowMs ?? Date.now)();
   const deadlineAtMs = performance.now() + GATEWAY_SUSPEND_TTL_MS;
-  const current = COORDINATOR_STATE.current;
-  if (current?.kind === "recovering") {
-    return schedulerRecoveryResult();
-  }
-  const existing = current ? normalizeExpiredHeldSuspension(current) : null;
+  const existing = currentSuspension();
   if (existing?.kind === "recovering") {
     return schedulerRecoveryResult();
   }
@@ -574,11 +555,7 @@ export function getGatewaySuspendStatus(
       retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
     };
   }
-  const current = COORDINATOR_STATE.current;
-  if (current?.kind === "recovering") {
-    return schedulerRecoveryResult();
-  }
-  const held = current ? normalizeExpiredHeldSuspension(current) : null;
+  const held = currentSuspension();
   if (held?.kind === "recovering") {
     return schedulerRecoveryResult();
   }
@@ -619,15 +596,7 @@ export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResume
       reason: retired.suspensionId === suspensionId ? "gateway-restarting" : "suspension-mismatch",
     };
   }
-  const current = COORDINATOR_STATE.current;
-  if (current?.kind === "recovering") {
-    return {
-      ok: false,
-      reason: "scheduler-resume-failed",
-      retryAfterMs: GATEWAY_SCHEDULER_RECOVERY_RETRY_MS,
-    };
-  }
-  const held = current ? normalizeExpiredHeldSuspension(current) : null;
+  const held = currentSuspension();
   if (held?.kind === "recovering") {
     return {
       ok: false,
@@ -659,7 +628,9 @@ export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResume
   };
 }
 
-function resetGatewaySuspendCoordinator(): void {
+// An in-process restart rebuilds scheduler and admission ownership. Resume and
+// discard the old suspension first so paused work cannot leak across lifecycles.
+export function resetGatewaySuspendCoordinatorForLifecycleRestart(): void {
   const current = COORDINATOR_STATE.current;
   const retired = COORDINATOR_STATE.retiredForLifecycleReset;
   COORDINATOR_STATE.current = null;
@@ -677,10 +648,4 @@ function resetGatewaySuspendCoordinator(): void {
     }
     entry.reopenAdmission();
   }
-}
-
-// An in-process restart rebuilds scheduler and admission ownership. Resume and
-// discard the old suspension first so paused work cannot leak across lifecycles.
-export function resetGatewaySuspendCoordinatorForLifecycleRestart(): void {
-  resetGatewaySuspendCoordinator();
 }

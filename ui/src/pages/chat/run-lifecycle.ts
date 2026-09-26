@@ -1,9 +1,12 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   reconcileSessionRunTerminal,
@@ -40,10 +43,10 @@ import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./i
 import type {
   CompactionStatus,
   FallbackStatus,
+  ToolStreamHost,
   WaitingApprovalStatus,
 } from "./tool-stream-contract.ts";
-// Control UI chat module implements run lifecycle behavior.
-import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
+import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
@@ -80,10 +83,7 @@ export type LocalTerminalReconcile = {
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
-type RunLifecycleHost = Omit<
-  Partial<Parameters<typeof resetToolStream>[0]>,
-  "hello" | "sessions"
-> & {
+type RunLifecycleHost = Omit<Partial<ToolStreamHost>, "hello" | "sessions"> & {
   sessionKey: string;
   agentsList?: UiSessionDefaultsHost["agentsList"];
   hello?: { snapshot?: unknown } | null;
@@ -143,15 +143,11 @@ type ChatAbortRunState = ChatAbortTargetState & {
 type ChatAbortHost = ChatAbortRunState &
   ChatInputHistoryState & {
     pendingAbort?: PendingChatAbort | null;
+    chatReplyTarget?: ChatReplyTarget | null;
     sessions?: Partial<Pick<SessionCapability, "deletionState">>;
   };
 
 const CHAT_STOP_COMMANDS = new Set(["/stop", "stop", "esc", "abort", "wait", "exit"]);
-
-function toSessionKey(value: string | null | undefined): string | null {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  return trimmed ? trimmed : null;
-}
 
 function setChatError(state: ChatAbortRunState, error: string | null) {
   state.lastError = error;
@@ -382,6 +378,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
   if (!opts?.preserveDraft) {
     host.chatMessage = "";
     host.chatMentions = [];
+    host.chatReplyTarget = null;
     resetChatInputHistoryNavigation(host);
   }
   if (pendingAbort) {
@@ -395,17 +392,6 @@ function clearTimer(timer: TimerHandle | number | null | undefined) {
   if (timer != null) {
     globalThis.clearTimeout(timer as TimerHandle);
   }
-}
-
-function canResetToolStream(
-  host: RunLifecycleHost,
-): host is RunLifecycleHost & Parameters<typeof resetToolStream>[0] {
-  return (
-    host.toolStreamById instanceof Map &&
-    Array.isArray(host.toolStreamOrder) &&
-    Array.isArray(host.chatToolMessages) &&
-    Array.isArray(host.chatStreamSegments)
-  );
 }
 
 function clearChatRunStatus(host: RunLifecycleHost) {
@@ -466,7 +452,7 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
 }
 
 function sessionKeysFor(host: RunLifecycleHost, options: ReconcileOptions): Set<string> {
-  const primary = toSessionKey(options.sessionKey) ?? host.sessionKey;
+  const primary = normalizeNullableString(options.sessionKey) ?? host.sessionKey;
   const keys = new Set(primary ? [primary] : []);
   if (uiSessionRowMatchesSelectedChat(host, "global", primary)) {
     keys.add("global");
@@ -477,7 +463,7 @@ function sessionKeysFor(host: RunLifecycleHost, options: ReconcileOptions): Set<
     }
   }
   for (const key of options.sessionKeys ?? []) {
-    const normalized = toSessionKey(key);
+    const normalized = normalizeNullableString(key);
     if (normalized) {
       keys.add(normalized);
     }
@@ -517,7 +503,7 @@ function reconcileSessionRows(
 export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions = {}) {
   const occurredAt = Date.now();
   const runId = options.runId ?? host.chatRunId ?? null;
-  const sessionKey = toSessionKey(options.sessionKey) ?? host.sessionKey;
+  const sessionKey = normalizeNullableString(options.sessionKey) ?? host.sessionKey;
   const agentId = options.agentId ?? resolveUiSelectedSessionAgentId(host, sessionKey);
   const sessionOptions = { ...options, agentId };
 

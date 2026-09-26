@@ -222,7 +222,7 @@ describe("legacy device identity Doctor migration", () => {
     ).toBe(true);
   });
 
-  it("keeps normal migration read-only and imports with explicit startup authority", async () => {
+  it("keeps normal migration read-only and imports only with Doctor authority", async () => {
     const { env, stateDir } = useStateDir();
     const sourcePath = await writeLegacy({ stateDir });
 
@@ -240,11 +240,11 @@ describe("legacy device identity Doctor migration", () => {
     const repaired = await migrateLegacyDeviceIdentity({
       detected: detectLegacyDeviceIdentity({
         stateDir,
-        allowLegacyDeviceIdentityImport: true,
+        doctorOnlyStateMigrations: true,
       }),
       env,
       stateDir,
-      allowLegacyDeviceIdentityImport: true,
+      doctorOnlyStateMigrations: true,
     });
 
     expect(repaired.changes).toContain("Migrated primary device identity to SQLite.");
@@ -364,13 +364,6 @@ describe("legacy device identity Doctor migration", () => {
     seedInvalidCanonical(env);
 
     expect(detectLegacyDeviceIdentity({ stateDir, env }).hasInvalidCanonical).toBe(false);
-    expect(
-      detectLegacyDeviceIdentity({
-        stateDir,
-        env,
-        allowLegacyDeviceIdentityImport: true,
-      }).hasInvalidCanonical,
-    ).toBe(false);
     const detected = detectLegacyDeviceIdentity({
       stateDir,
       env,
@@ -398,13 +391,6 @@ describe("legacy device identity Doctor migration", () => {
       identity_key: "primary",
       device_id: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
-    expect(
-      detectLegacyDeviceIdentity({
-        stateDir,
-        env,
-        doctorOnlyStateMigrations: true,
-      }).hasInvalidCanonical,
-    ).toBe(false);
   });
 
   it("repairs canonical identity metadata without rotating valid key material", async () => {

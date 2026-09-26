@@ -1,5 +1,3 @@
-// Gateway HTTP session history endpoint.
-// Serves JSON and SSE history snapshots backed by session transcripts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
@@ -91,10 +89,6 @@ function resolveSessionHistoryPath(url: URL): SessionHistoryPathResolution {
   } catch {
     return { error: "invalid-session-key", matched: true };
   }
-}
-
-function shouldStreamSse(req: IncomingMessage): boolean {
-  return hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
 }
 
 function resolveLimit(url: URL): Result<number | undefined, string> {
@@ -327,7 +321,7 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  const stream = shouldStreamSse(req);
+  const stream = hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
   if (
     !(await publishAuthorizedHistory((presentation) => {
       if (!stream) {
@@ -407,17 +401,7 @@ export async function handleSessionHistoryHttpRequest(
     if (streamResources.heartbeat) {
       clearInterval(streamResources.heartbeat);
     }
-    if (streamResources.unsubscribe) {
-      streamResources.unsubscribe();
-    }
-  }
-
-  function detachStreamListeners() {
-    req.off("close", handleRequestStreamClose);
-    req.off("error", handleRequestStreamError);
-    res.off("close", handleResponseStreamClose);
-    res.off("finish", handleResponseStreamFinish);
-    res.off("error", handleResponseStreamError);
+    streamResources.unsubscribe?.();
   }
 
   function closeStream() {
@@ -449,7 +433,11 @@ export async function handleSessionHistoryHttpRequest(
 
   function handleResponseStreamClose() {
     releaseStreamResources();
-    detachStreamListeners();
+    req.off("close", handleRequestStreamClose);
+    req.off("error", handleRequestStreamError);
+    res.off("close", handleResponseStreamClose);
+    res.off("finish", handleResponseStreamFinish);
+    res.off("error", handleResponseStreamError);
   }
 
   function handleResponseStreamError(error: Error) {

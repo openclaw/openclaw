@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { CONFIG_DIR } from "../../utils.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { SkillSnapshot } from "../types.js";
 import { getSkillsSnapshotVersion, getSkillsSourceVersion } from "./refresh-state.js";
@@ -299,6 +300,10 @@ describe("skills content rescan handoff", () => {
           workspaceDir: await fixture.createFixtureDirectory("late-subscriber"),
           config,
         };
+        if (phase === "replacement") {
+          // Runtime state initialization must not replace unrelated shared watchers.
+          await fs.mkdir(CONFIG_DIR, { recursive: true });
+        }
         await prepare(late);
         expect(seen).toHaveBeenCalledExactlyOnceWith({
           workspaceDir: late.workspaceDir,
@@ -811,6 +816,7 @@ describe("skills content rescan handoff", () => {
   )(
     "falls back after native capacity failure from $source during $phase coverage",
     ({ phase, source }) => {
+      vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
       vi.useFakeTimers();
       const watches = start(phase);
       watches[source].emit(

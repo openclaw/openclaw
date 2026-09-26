@@ -558,14 +558,14 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     managedCatalog.status === "ready" &&
     activeModelOption?.disabled !== true &&
     modelOptions.some((option) => !option.disabled);
-  const busy =
-    props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
-  const commonDisabled =
+  const busy = props.sending || Boolean(props.activeRunId) || props.stream !== null;
+  const modelControlsDisabled =
     !props.connected || busy || props.modelSwitching || !props.gatewayAvailable;
+  const commonDisabled = modelControlsDisabled || props.loading;
   const effortMutationDisabled = Boolean(props.effortMutationDisabledReason);
   // Loading owns the menu contents, not the trigger. Keeping the trigger
   // interactive lets the first gesture open the picker and observe that state.
-  const modelDisabled = commonDisabled || Boolean(props.modelMutationDisabledReason);
+  const modelDisabled = modelControlsDisabled || Boolean(props.modelMutationDisabledReason);
   const thinkingDisabled =
     commonDisabled ||
     effortMutationDisabled ||

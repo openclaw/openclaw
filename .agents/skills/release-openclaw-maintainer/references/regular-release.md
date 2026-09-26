@@ -2,7 +2,7 @@
 
 ## Orchestrated stable (default)
 
-`pnpm release:stable YYYY.M.PATCH` drives the whole fast path from
+`pnpm release:stable YYYY.M.PATCH` drives strict stable qualification and publication from
 `docs/reference/RELEASING.md` (cut → validate → publish → sync-beta →
 flip-github → macos → closeout) with state in
 `.artifacts/release-YYYY.M.PATCH/state.json`. Rerun to resume, `--from <phase>`
@@ -49,18 +49,17 @@ publication source, not registry eligibility or publication authority.
 
 Record and reuse the full trusted Tooling SHA. Beta-publish uses
 `release_profile=beta`, `run_release_soak=false` (`npm-beta-v1` for a qualifying
-canonical beta target). Stable-publish defaults to `release_profile=stable` with
-soak and performance dispatched in parallel; beta-profile evidence publishes a
-stable only with `stable_soak_waiver` (RELEASING.md "Publication modes"). Diagnose
+canonical beta target). Stable-publish requires `release_profile=stable` or `full` with
+soak and blocking performance. Beta-profile evidence cannot qualify stable. Diagnose
 failures and use the controller's bounded retry for affected required proof.
 Continue eligible parents to seal; a parent that produced its own sealed
 candidate artifacts requires a new parent with verified successful evidence
-reuse. Do not rerun advisory suites merely to obtain green results or infer a
+reuse. Do not rerun validation suites merely to obtain green results or infer a
 flake from an untouched test or passing replay. Only a confirmed product
 defect that a required lane blocks on creates a new Code SHA: the
 update/install path (previous stable updates to the candidate, install smoke,
 pack budget, worker bundle), the bytes to publish, or another required gate
-proven by diagnosis. A flake, an advisory lane, or a publish-tooling re-tag
+proven by diagnosis. A publish-tooling re-tag
 never does. Tooling,
 credentials, infrastructure or wrapper failure keeps the candidate and recovers
 the failed surface. Use [publication recovery](publication-recovery.md) for
@@ -71,7 +70,7 @@ for runs already deferred by historical workflows.
 An early `OpenClaw Performance` run is optional beta confidence:
 `target_ref=<code-sha>`, `profile=release`, `repeat=3`, deep profiling/live OpenAI
 off, `fail_on_regression=false`. It may overlap validation; performance remains
-advisory for every profile. Compare available agent-turn/resource,
+blocking when selected; stable/full requires blocking performance. Compare available agent-turn/resource,
 Gateway startup ready/listen/RSS/CPU and CLI startup metrics against earlier
 releases. Record regressions and investigate product impact without making
 performance evidence a publication or closeout gate.
@@ -107,15 +106,16 @@ its delta is release metadata only; record the skip, it is not a blocker. A
 prepare-only request does not
 authorize pushing publication tags: use an existing matching protected tooling
 ref where available, otherwise report that qualification still needs one.
-With publication/tag-push authority, create and push the protected lightweight `release-publish/<tooling-sha12>-<epoch>` tooling tag at the recorded
-Tooling SHA (see `docs/reference/RELEASING.md`). The push may print a
+With publication/tag-push authority, pass `--workflow-sha <tooling-sha>` to
+`pnpm release:candidate --` or `pnpm release:publish-preflight --` to reuse or
+mint the protected lightweight `release-publish/<tooling-sha12>-<epoch>` tag
+through the git refs API, verify it, and print the dispatch with `--ref <tag>`.
+Manual tag creation remains the fallback (see `docs/reference/RELEASING.md`). The push may print a
 `Cannot create ref due to creations being restricted` ruleset warning while the
 tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`
 and, only if missing, create it with
 `gh api -X POST repos/openclaw/openclaw/git/refs -f ref=refs/tags/<tag> -f sha=<tooling-sha>`.
-The tooling `main` must include #156816 (lane waiver forwarded to children) when
-a lane waiver is in force. Then consume existing validation against the untagged
-Release SHA:
+Consume successful qualifying validation against the untagged Release SHA:
 
 ```bash
 pnpm release:candidate -- \
@@ -124,18 +124,18 @@ pnpm release:candidate -- \
   --npm-dist-tag <beta-or-latest> \
   --publication-route <normal-or-prepared> \
   --full-release-run <release-sha-validation-run-id> \
-  --publish-workflow-ref release-publish/<tooling-sha12>-<epoch> \
+  --workflow-sha <tooling-sha> \
   --plugin-sdk-api-acknowledgement <reviewed-8-character-digest> \
   --skip-dispatch
 ```
 
 Match `--npm-dist-tag` and `--publication-route` to the frozen validation
 selection; the helper defaults to `beta` and `normal`.
-`--publish-workflow-ref` selects the publication tag, not the helper checkout.
-The same-checkout bootstrap fetches the workflow branch tip. Verify that the
-executing helper's Tooling SHA matches the recorded tag; if it differs, use
-only an owner-supported exact-tooling entry path, without moving the protected
-tag or silently changing qualification identity.
+`--workflow-sha` pins both the helper checkout and publication tag to the recorded
+Tooling SHA. Alternatively, `--publish-workflow-ref` selects an existing
+publication tag while the same-checkout bootstrap fetches the workflow branch
+tip; verify that the executing helper's Tooling SHA matches that tag, without
+moving it or silently changing qualification identity.
 
 Omit `--plugin-sdk-api-acknowledgement` when no API change exists. The helper
 completes package/install proof and prints the selected route's next command; do not dispatch
@@ -146,11 +146,8 @@ track. A final version never records `npm-beta-v1`, so the helper runs both
 for stable unless you pass `--skip-parallels --skip-telegram`; use
 `--run-parallels` only on explicit operator direction. Optional
 `--windows-node-tag <exact-source-tag>` records its approved installer digest
-map; stable candidates do not require Windows. The default stable candidate is
-validated with the beta profile and no soak: pass `--release-profile beta` and
-the operator-approved `--stable-soak-waiver '<reason>'` using the standard
-wording in `docs/reference/RELEASING.md`; the helper forwards it to the
-embedded preflight and the printed publish command.
+map; stable candidates do not require Windows. Stable candidates require stable/full evidence with soak and blocking
+performance. The embedded preflight enforces these requirements.
 
 For a prepare-only request, stop with the candidate, evidence, limitations, and
 printed next command. Do not create/push the final tag or publish/announce.
@@ -176,7 +173,7 @@ For `normal`, dispatch `.github/workflows/openclaw-release-publish.yml` using th
 helper's protected `release-publish/<tooling-sha12>-<epoch>` ref. Pass matching
 `npm_dist_tag`, `preflight_run_id`, `full_release_validation_run_id` and its
 exact successful `full_release_validation_run_attempt`. The sealed manifest
-supplies SDK acknowledgement, npm decisions, and approved soak-waiver defaults;
+supplies SDK evidence and npm decisions;
 explicit publisher inputs override them. The candidate helper retains its
 explicit SDK acknowledgement when needed. Optional Windows source tag and
 candidate-approved digests are supplied together or both omitted.
@@ -184,10 +181,11 @@ candidate-approved digests are supplied together or both omitted.
 Wait for `npm-release` environment approval, plugin npm then core npm, parallel
 ClawHub, npm postpublish verification, Docker publication, dependency/release
 evidence, and GitHub finalization. Reuse successful immutable child artifacts
-on recovery; never rebuild or republish successful versions. Each npm child
-needs its own `npm-release` approval and ClawHub children must never be
-approved by hand; watch `pending_deployments` on every child per
-`$release-openclaw-ci` (Publish children). Children run on hosted
+on recovery; never rebuild or republish successful versions. The parent's
+approval receipt lets the ClawHub child skip its gate; each npm child still
+needs its own `npm-release` approval (the workflow token cannot approve it).
+ClawHub children must never be approved by hand; watch `pending_deployments`
+on every child per `$release-openclaw-ci` (Publish children). Children run on hosted
 `ubuntu-latest`; if that pool is saturated, let jobs queue normally without
 cancelling PR CI. Blacksmith testbox runs use a separate pool.
 
@@ -233,8 +231,7 @@ failure without republishing npm.
 Run [postpublish confidence](validation.md#postpublish-confidence) against the
 exact published package. For a beta-to-latest promotion, retain available
 deferred-lane results, including published-package Telegram, while enforcing
-the shared required publication proofs. Ordinary test outcomes remain advisory;
-a direct stable publish under the soak waiver runs confidence after publication. Run safe
+the shared required publication proofs. All selected test outcomes must pass before publication. Run safe
 independent rosters concurrently while controlling local Docker/VM load.
 Classify failures before admitting a fix to the next beta; do not scan moving
 main or automatically rerun all groups. An operator's beta-attempt cap counts
@@ -246,12 +243,11 @@ publish blocker. Requested Discord announcements use
 Existing explicit posting authorization is required. Beta-only requests end
 after verification and any requested announcement.
 
-For an authorized stable promotion, reuse the matching beta's full confidence
-when still applicable. Run published npm verification, Docker install/update,
-macOS-only Parallels smoke and advisory QA signal; broaden only for stale
-proof, material stable/beta differences, or explicit retesting. Promote beta to
-latest through the restricted dist-tag workflow in
-[publication recovery](publication-recovery.md#registry-selectors). After either
+Stable publication and any dist-tag promotion to `latest` require exact
+stable/full validation with soak, blocking performance, and successful selected
+lanes. Matching beta-profile evidence never qualifies stable. Run published npm
+verification, Docker install/update, and the selected platform checks against
+the qualified stable candidate. After either
 publishing or promoting to latest, immediately repair the beta floor through
 that owner and verify each selector readback; preserve any newer beta.
 

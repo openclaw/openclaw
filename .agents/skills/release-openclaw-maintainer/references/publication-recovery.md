@@ -4,7 +4,9 @@ Use `$one-password` before any credential operation, and `$release-private`
 when available for maintainer credential locators. Core package publishing is
 GitHub OIDC trusted publishing; never substitute `NPM_TOKEN` or plugin OTP
 commands. GitHub's `npm-release` environment must be approved by
-`@openclaw/openclaw-release-managers`.
+`@openclaw/openclaw-release-managers` on the parent and on each npm child; the
+approved parent writes the attested release approval receipt that lets the
+ClawHub child run without its own gate.
 
 The regular and extended-stable publish parent runs from the protected
 `release-publish/<tooling-sha12>-<epoch>` tag minted at the pinned Tooling SHA;
@@ -80,12 +82,24 @@ packaging recovery keeps the original tag and follows
 
 ## Registry selectors
 
-Promote through the restricted release-ops
-`openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow.
-Unlike package publication, npm selector management requires `NPM_TOKEN`.
-Prefer repairing that workflow's token path. Point `latest`, `beta`, or
-`extended-stable` only at the operator-approved already-published version, then
-verify cache-bypassed registry readback.
+Beta-to-stable promotion and stable selector recovery remain supported after the
+exact final release passes stable/full validation, soak, and blocking performance.
+Beta-profile evidence or a publication waiver cannot replace those prerequisites.
+
+Use the restricted release-ops
+`openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow with
+`mode=promote_beta_to_latest` to promote an already-published final version from
+`beta` to `latest`, or `mode=sync_stable_dist_tags` to recover stable selectors.
+The operator must verify successful qualification for the exact target before
+dispatch. These modes check tag/package identity and selectors; they do not run
+or authenticate Full Release Validation. A `-beta.N` prerelease cannot be promoted
+through this final-version route.
+
+The same workflow supports the stable-to-beta floor and extended-stable promotion.
+Its `sync_beta_to_stable` mode only updates `beta` to the already-published stable
+version; it does not publish stable or substitute for stable validation. npm
+selector management requires `NPM_TOKEN`. Verify cache-bypassed registry readback
+after an approved change.
 
 To promote an already-published core version to `extended-stable`, use
 `mode=promote_extended_stable` with an exact public final release tag after

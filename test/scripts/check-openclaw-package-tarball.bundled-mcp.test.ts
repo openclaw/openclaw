@@ -188,7 +188,12 @@ describe("bundled browser MCP package", () => {
     {
       name: "unpinned dependency",
       manifest: { ...packageJson, dependencies: { [MCP_NAME]: "^1.9.0" } },
-      error: "must be pinned to 1.9.0",
+      error: "must be pinned to a supported patched version",
+    },
+    {
+      name: "bundle without a dependency pin",
+      manifest: { bundleDependencies: [MCP_NAME] },
+      error: "must be pinned to a supported patched version",
     },
     {
       name: "missing generic declared bundle",
@@ -236,6 +241,11 @@ describe("bundled browser MCP package", () => {
     }, 60_000);
 
     it.each([
+      {
+        file: "package.json",
+        change: "modify",
+        error: "bundled chrome-devtools-mcp must be ESM version 1.9.0",
+      },
       ...[
         "build/src/TextSnapshot.js",
         "build/src/McpPage.js",
@@ -275,7 +285,12 @@ describe("bundled browser MCP package", () => {
           mkdirSync(dirname(replacement), { recursive: true });
           writeFileSync(
             replacement,
-            Buffer.concat([readFileSync(join(sourceRoot(), file)), Buffer.from("\n")]),
+            file === "package.json"
+              ? JSON.stringify({
+                  ...JSON.parse(readFileSync(join(sourceRoot(), file), "utf8")),
+                  version: "1.8.0",
+                })
+              : Buffer.concat([readFileSync(join(sourceRoot(), file)), Buffer.from("\n")]),
           );
           chmodSync(replacement, 0o644);
         }

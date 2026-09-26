@@ -314,14 +314,16 @@ class ActivityPage extends OpenClawLightDomElement {
     client: GatewayBrowserClient,
     selector: RunInspectorSelector,
     previousState?: Extract<RunInspectorState, { status: "ready" }>,
+    pageKind: "executions" | "decisions" = "executions",
   ) {
     this.cancelInspectorRequest();
     const epoch = this.inspectorEpoch;
     const abort = new AbortController();
     this.inspectorAbort = abort;
     this.inspectorClient = client;
+    const pageStatus = pageKind === "decisions" ? "decisionPageStatus" : "executionPageStatus";
     this.runInspector = previousState
-      ? { ...previousState, executionPageStatus: "loading" }
+      ? { ...previousState, [pageStatus]: "loading" }
       : { status: "loading", waitingForGateway: false };
     const requestSelectorKey = inspectorRequestKey(this.routeData);
     const isCurrent = () =>
@@ -331,29 +333,43 @@ class ActivityPage extends OpenClawLightDomElement {
       gateway.snapshot.phase === "connected" &&
       this.routeData?.mode === "run" &&
       inspectorRequestKey(this.routeData) === requestSelectorKey;
-    const decisionCursor = this.routeData?.mode === "run" ? this.routeData.decisionCursor : null;
+    const decisionCursor =
+      pageKind === "decisions"
+        ? previousState?.result.nextDecisionCursor
+        : this.routeData?.mode === "run"
+          ? this.routeData.decisionCursor
+          : null;
     try {
-      const params =
-        selector.kind === "run"
+      const params = {
+        ...(selector.kind === "run"
           ? {
               runId: selector.id,
-              decisionLimit: 50,
               executionLimit: 50,
-              ...(decisionCursor ? { decisionCursor } : {}),
-              ...(previousState?.result.nextExecutionCursor
+              ...(pageKind === "executions" && previousState?.result.nextExecutionCursor
                 ? { executionCursor: previousState.result.nextExecutionCursor }
                 : {}),
             }
-          : {
-              executionId: selector.id,
-              decisionLimit: 50,
-              ...(decisionCursor ? { decisionCursor } : {}),
-            };
+          : { executionId: selector.id }),
+        decisionLimit: 50,
+        ...(decisionCursor ? { decisionCursor } : {}),
+      };
       const result = await client.request<AuditRunInspectResult>("audit.run.inspect", params, {
         signal: abort.signal,
       });
       if (isCurrent()) {
-        if (
+        if (previousState && pageKind === "decisions") {
+          const merged = mergeDecisionPage(previousState.result, result);
+          this.runInspector = merged
+            ? {
+                status: "ready",
+                result: merged,
+                receiptPageCursors: new Map([
+                  ...previousState.receiptPageCursors,
+                  ...receiptPageCursors(result.decisionDisplays, decisionCursor ?? undefined),
+                ]),
+              }
+            : { ...previousState, decisionPageStatus: "error" };
+        } else if (
           previousState?.result.identity.state === "ambiguous" &&
           result.identity.state === "ambiguous"
         ) {
@@ -394,7 +410,7 @@ class ActivityPage extends OpenClawLightDomElement {
         : this.isUnknownInspectMethod(error)
           ? { status: "unsupported" }
           : previousState
-            ? { ...previousState, executionPageStatus: "error" }
+            ? { ...previousState, [pageStatus]: "error" }
             : {
                 status: "error",
                 recovery:
@@ -448,57 +464,13 @@ class ActivityPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const cursor = inspectorState.result.nextDecisionCursor;
-    const selector = route.selector;
-    const client = snapshot.client;
-    const requestSelectorKey = inspectorRequestKey(route);
-    this.cancelInspectorRequest();
-    const epoch = this.inspectorEpoch;
-    const abort = new AbortController();
-    this.inspectorAbort = abort;
-    this.runInspector = { ...inspectorState, decisionPageStatus: "loading" };
-    const isCurrent = () =>
-      this.inspectorEpoch === epoch &&
-      this.context.gateway === gateway &&
-      gateway.snapshot.client === client &&
-      gateway.snapshot.phase === "connected" &&
-      inspectorRequestKey(this.routeData) === requestSelectorKey;
-    const params =
-      selector.kind === "run"
-        ? { runId: selector.id, decisionCursor: cursor, decisionLimit: 50, executionLimit: 50 }
-        : { executionId: selector.id, decisionCursor: cursor, decisionLimit: 50 };
-    void client
-      .request<AuditRunInspectResult>("audit.run.inspect", params, { signal: abort.signal })
-      .then((page) => {
-        if (!isCurrent()) {
-          return;
-        }
-        const result = mergeDecisionPage(inspectorState.result, page);
-        if (!result) {
-          this.runInspector = { ...inspectorState, decisionPageStatus: "error" };
-          return;
-        }
-        const cursors = new Map(inspectorState.receiptPageCursors);
-        for (const receipt of page.decisionDisplays) {
-          cursors.set(receipt.selectorId, cursor);
-        }
-        this.runInspector = { status: "ready", result, receiptPageCursors: cursors };
-      })
-      .catch((error: unknown) => {
-        if (!isCurrent() || abort.signal.aborted) {
-          return;
-        }
-        this.runInspector = isMissingOperatorReadScopeError(error)
-          ? { status: "unauthorized" }
-          : this.isUnknownInspectMethod(error)
-            ? { status: "unsupported" }
-            : { ...inspectorState, decisionPageStatus: "error" };
-      })
-      .finally(() => {
-        if (this.inspectorAbort === abort) {
-          this.inspectorAbort = null;
-        }
-      });
+    void this.loadRunInspector(
+      gateway,
+      snapshot.client,
+      route.selector,
+      inspectorState,
+      "decisions",
+    );
   }
 
   private restartRunInspector() {

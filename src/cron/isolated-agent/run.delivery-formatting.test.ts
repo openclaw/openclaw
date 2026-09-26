@@ -114,8 +114,8 @@ describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
       "rich",
     );
 
-    expect(prompt).toContain("### Delivery Context");
-    expect(prompt).toContain('"account_id": "rich"');
+    expect(prompt?.split("### Delivery Format")).toHaveLength(2);
+    expect(prompt).toContain('"schema": "openclaw.delivery_format.v1"');
     expect(prompt).toContain('"text_markup": "markdown_telegram_rich"');
     expect(prompt).toContain("Telegram rich ON.");
   });
@@ -126,6 +126,7 @@ describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
       "plain",
     );
 
+    expect(prompt?.split("### Delivery Format")).toHaveLength(2);
     expect(prompt).toContain('"text_markup": "markdown"');
     expect(prompt).toContain("Telegram rich OFF.");
   });

@@ -506,11 +506,14 @@ export function bindCommandHarnessCompletionAssertion(params: {
   }
   const guarded = {
     ...opts,
-    assertSourceCurrent: createHarnessCompletionSourceAssertion({
-      claim,
-      storePath,
-      priorAssertion: opts.assertSourceCurrent,
-    }),
+    assertSourceCurrent: Object.assign(
+      createHarnessCompletionSourceAssertion({
+        claim,
+        storePath,
+        priorAssertion: opts.assertSourceCurrent,
+      }),
+      { recoveryReference: opts.assertSourceCurrent?.recoveryReference },
+    ),
   };
   guarded.assertSourceCurrent();
   return guarded;
