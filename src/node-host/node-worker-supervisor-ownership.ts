@@ -138,7 +138,7 @@ export type NodeWorkerObservedTerminal = NodeWorkerActiveBase & {
   reconciliation?: Promise<NodeWorkerLaunchReceipt>;
 };
 
-export function createNodeWorkerObservedTerminal(
+function createNodeWorkerObservedTerminal(
   active: NodeWorkerRunningChild,
   outcome: NodeWorkerTerminalOutcome,
 ): NodeWorkerObservedTerminal {
