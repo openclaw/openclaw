@@ -1,5 +1,10 @@
 // Real audio workers share the invocation's compiled graph with the other subprocess fixtures.
 export const discordAudioTestEntrypoints = {
+  nativePool: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "audio-native-pool.test-support",
+    distWorkerPath: "extensions/discord/src/voice/audio-native-pool.test-support.js",
+  },
   lifecycle: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "audio-worker.runtime",

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { DAVESession } from "@discordjs/voice";
+import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 
 function vector(bytes: Buffer): Buffer {
   assert.ok(bytes.length < 16384);
@@ -15,6 +15,7 @@ function vector(bytes: Buffer): Buffer {
 
 /** Generate a real MLS membership rekey without captured payloads or fixed keys. */
 export function exerciseDaveRekey(): void {
+  const { DAVESession } = loadDiscordVoiceSdk();
   const externalSigner = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   const publicJwk = externalSigner.publicKey.export({ format: "jwk" });
   assert.ok(publicJwk.x && publicJwk.y);

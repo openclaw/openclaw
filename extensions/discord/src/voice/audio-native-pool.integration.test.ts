@@ -5,6 +5,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
 import { expect, it } from "vitest";
+import { discordAudioTestEntrypoints } from "./audio-worker-entrypoints.test-support.js";
 
 it.skipIf(process.platform !== "linux").each([
   [undefined, 1],
@@ -13,11 +14,7 @@ it.skipIf(process.platform !== "linux").each([
 ] as const)(
   "bounds the native DAVE pool after Worker exit with inherited limit %s",
   async (inherited, retainedThreads) => {
-    const url = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "audio-native-pool.test-support",
-      distWorkerPath: "extensions/discord/src/voice/audio-native-pool.test-support.js",
-    });
+    const url = resolveRuntimeWorkerUrl(discordAudioTestEntrypoints.nativePool);
     const env = { ...process.env };
     delete env.RAYON_NUM_THREADS;
     delete env.RAYON_RS_NUM_CPUS;
