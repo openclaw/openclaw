@@ -383,14 +383,6 @@ function carveOutKey(entry: Pick<CoercionHelperCarveOut, "file" | "kind" | "name
   return `${entry.file}\0${entry.name}\0${entry.kind}`;
 }
 
-function unwrapCallableInitializer(expression: ts.Expression) {
-  let current = unwrapExpression(expression);
-  while (ts.isSatisfiesExpression(current)) {
-    current = unwrapExpression(current.expression);
-  }
-  return current;
-}
-
 /** Returns true for tracked source files governed by the declaration guard. */
 export function isGovernedCoercionHelperPath(filePath: string) {
   return (
@@ -401,18 +393,21 @@ export function isGovernedCoercionHelperPath(filePath: string) {
 }
 
 function isCallableInitializer(expression: ts.Expression): boolean {
-  const initializer = unwrapCallableInitializer(expression);
+  let initializer = unwrapExpression(expression);
+  while (ts.isSatisfiesExpression(initializer)) {
+    initializer = unwrapExpression(initializer.expression);
+  }
   return ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer);
 }
 
 function unwrapDirectAliasInitializer(expression: ts.Expression): ts.Expression | undefined {
   let current = expression;
   while (true) {
-    if (ts.isParenthesizedExpression(current) || ts.isNonNullExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isSatisfiesExpression(current)) {
+    if (
+      ts.isParenthesizedExpression(current) ||
+      ts.isNonNullExpression(current) ||
+      ts.isSatisfiesExpression(current)
+    ) {
       current = current.expression;
       continue;
     }
@@ -433,14 +428,20 @@ export function findBannedCoercionHelperDeclarations(
     return [];
   }
   const declarations: CoercionHelperDeclaration[] = [];
-  const visit = (node: ts.Node): void => {
-    if (ts.isFunctionDeclaration(node) && node.name && BANNED_HELPER_NAMES.has(node.name.text)) {
+  const addDeclaration = (node: ts.PropertyName, kind: CoercionHelperDeclarationKind) => {
+    const name = getPropertyNameText(node);
+    if (name && BANNED_HELPER_NAMES.has(name)) {
       declarations.push({
         file,
-        kind: "function",
-        line: toLine(sourceFile, node.name),
-        name: node.name.text as BannedCoercionHelperName,
+        kind,
+        line: toLine(sourceFile, node),
+        name: name as BannedCoercionHelperName,
       });
+    }
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      addDeclaration(node.name, "function");
     } else if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
@@ -453,42 +454,13 @@ export function findBannedCoercionHelperDeclarations(
         (aliasInitializer !== undefined &&
           (ts.isIdentifier(aliasInitializer) || ts.isPropertyAccessExpression(aliasInitializer)))
       ) {
-        declarations.push({
-          file,
-          kind: "variable",
-          line: toLine(sourceFile, node.name),
-          name: node.name.text as BannedCoercionHelperName,
-        });
+        addDeclaration(node.name, "variable");
       }
     } else if (ts.isMethodDeclaration(node)) {
-      const name = getPropertyNameText(node.name);
-      if (name && BANNED_HELPER_NAMES.has(name)) {
-        declarations.push({
-          file,
-          kind: "method",
-          line: toLine(sourceFile, node.name),
-          name: name as BannedCoercionHelperName,
-        });
-      }
-    } else if (ts.isPropertyDeclaration(node) && node.initializer) {
-      const name = getPropertyNameText(node.name);
-      if (name && BANNED_HELPER_NAMES.has(name) && isCallableInitializer(node.initializer)) {
-        declarations.push({
-          file,
-          kind: "field",
-          line: toLine(sourceFile, node.name),
-          name: name as BannedCoercionHelperName,
-        });
-      }
-    } else if (ts.isPropertyAssignment(node)) {
-      const name = getPropertyNameText(node.name);
-      if (name && BANNED_HELPER_NAMES.has(name) && isCallableInitializer(node.initializer)) {
-        declarations.push({
-          file,
-          kind: "property",
-          line: toLine(sourceFile, node.name),
-          name: name as BannedCoercionHelperName,
-        });
+      addDeclaration(node.name, "method");
+    } else if (ts.isPropertyDeclaration(node) || ts.isPropertyAssignment(node)) {
+      if (node.initializer && isCallableInitializer(node.initializer)) {
+        addDeclaration(node.name, ts.isPropertyDeclaration(node) ? "field" : "property");
       }
     }
     node.forEachChild(visit);

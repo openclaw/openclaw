@@ -55,23 +55,9 @@ const generatedIgnores = [
   "vendor/**",
 ];
 
-const testIgnores = [
-  "**/*.test.ts",
-  "**/*.test.tsx",
-  "**/*.test.js",
-  "**/*.test.mjs",
-  "**/*.test.cjs",
-  "**/*.e2e.test.ts",
-  "**/*.e2e.test.tsx",
-  "**/*.e2e.test.js",
-  "**/*.e2e.test.mjs",
-  "**/*.e2e.test.cjs",
-  "**/*.live.test.ts",
-  "**/*.live.test.tsx",
-  "**/*.live.test.js",
-  "**/*.live.test.mjs",
-  "**/*.live.test.cjs",
-];
+const testIgnores = ["test", "e2e.test", "live.test"].flatMap((suffix) =>
+  [...sourceExtensions].map((extension) => `**/*.${suffix}${extension}`),
+);
 
 const commonArgs = [
   "--format",
@@ -156,24 +142,12 @@ const scans = [
     pattern: testPattern,
     ignore: generatedIgnores,
   },
-  {
-    name: "src-mixed",
-    targets: ["src"],
+  ...["src", "extensions", "test"].map((target) => ({
+    name: `${target}-mixed`,
+    targets: [target],
     pattern: sourcePattern,
     ignore: generatedIgnores,
-  },
-  {
-    name: "extensions-mixed",
-    targets: ["extensions"],
-    pattern: sourcePattern,
-    ignore: generatedIgnores,
-  },
-  {
-    name: "test-mixed",
-    targets: ["test"],
-    pattern: sourcePattern,
-    ignore: generatedIgnores,
-  },
+  })),
 ];
 
 let failed = !assertTargetCoverage();

@@ -158,7 +158,7 @@ const RETIRED_EXTENSION_TEST_HELPER_BRIDGE_FILES = [
 ];
 
 function isExtensionTestFile(filePath: string): boolean {
-  return /\.test\.[cm]?[jt]sx?$/u.test(filePath) || /\.e2e\.test\.[cm]?[jt]sx?$/u.test(filePath);
+  return /\.test\.[cm]?[jt]sx?$/u.test(filePath);
 }
 
 function isExtensionTestSupportFile(filePath: string): boolean {
@@ -173,12 +173,6 @@ function collectExtensionTestFiles(rootDir: string): string[] {
   return collectFilesSync(rootDir, {
     includeFile: (filePath) =>
       isExtensionTestFile(filePath) || isExtensionTestSupportFile(filePath),
-  });
-}
-
-function collectPluginHelperFiles(rootDir: string): string[] {
-  return collectFilesSync(rootDir, {
-    includeFile: isCodeFile,
   });
 }
 
@@ -225,39 +219,12 @@ function resolvesToExtensionLocalSrc(filePath: string, specifier: string): boole
   return resolved === localSrc || resolved.startsWith(`${localSrc}${path.sep}`);
 }
 
-function collectRelativeCoreImportOffenders(
+function collectRelativeImportOffenders(
   filePath: string,
   content: string,
-  opts: { includeDynamic: boolean },
+  resolvesToTarget: (filePath: string, specifier: string) => boolean,
+  hint: string,
 ): Offender[] {
-  const offenders: Offender[] = [];
-  const matches = [
-    ...content.matchAll(STATIC_RELATIVE_MODULE_PATTERN),
-    ...(opts.includeDynamic ? [...content.matchAll(DYNAMIC_RELATIVE_MODULE_PATTERN)] : []),
-    ...content.matchAll(MOCK_RELATIVE_MODULE_PATTERN),
-  ];
-  for (const match of matches) {
-    const specifier = match[1];
-    if (!specifier || !resolvesToRepoSrc(filePath, specifier)) {
-      continue;
-    }
-    offenders.push({
-      file: filePath,
-      hint: RELATIVE_CORE_HINT,
-      line: lineNumberForOffset(content, match.index ?? 0),
-      specifier,
-    });
-  }
-  return offenders;
-}
-
-function collectRootTestSupportLocalSrcImportOffenders(
-  filePath: string,
-  content: string,
-): Offender[] {
-  if (!isRootExtensionTestSupportFile(filePath)) {
-    return [];
-  }
   const offenders: Offender[] = [];
   const matches = [
     ...content.matchAll(STATIC_RELATIVE_MODULE_PATTERN),
@@ -266,12 +233,12 @@ function collectRootTestSupportLocalSrcImportOffenders(
   ];
   for (const match of matches) {
     const specifier = match[1];
-    if (!specifier || !resolvesToExtensionLocalSrc(filePath, specifier)) {
+    if (!specifier || !resolvesToTarget(filePath, specifier)) {
       continue;
     }
     offenders.push({
       file: filePath,
-      hint: ROOT_TEST_SUPPORT_LOCAL_SRC_HINT,
+      hint,
       line: lineNumberForOffset(content, match.index ?? 0),
       specifier,
     });
@@ -284,7 +251,7 @@ function main() {
   const pluginHelpersDir = path.join(process.cwd(), "test/helpers/plugins");
   const retiredChannelHelpersDir = path.join(process.cwd(), "test/helpers/channels");
   const files = collectExtensionTestFiles(extensionsDir);
-  const pluginHelperFiles = collectPluginHelperFiles(pluginHelpersDir);
+  const pluginHelperFiles = collectFilesSync(pluginHelpersDir, { includeFile: isCodeFile });
   const retiredChannelHelperFiles = fs.existsSync(retiredChannelHelpersDir)
     ? collectFilesSync(retiredChannelHelpersDir, { includeFile: isCodeFile })
     : [];
@@ -318,19 +285,24 @@ function main() {
       break;
     }
     offenders.push(
-      ...collectRelativeCoreImportOffenders(file, content, {
-        includeDynamic: true,
-      }),
+      ...collectRelativeImportOffenders(file, content, resolvesToRepoSrc, RELATIVE_CORE_HINT),
     );
-    offenders.push(...collectRootTestSupportLocalSrcImportOffenders(file, content));
+    if (isRootExtensionTestSupportFile(file)) {
+      offenders.push(
+        ...collectRelativeImportOffenders(
+          file,
+          content,
+          resolvesToExtensionLocalSrc,
+          ROOT_TEST_SUPPORT_LOCAL_SRC_HINT,
+        ),
+      );
+    }
   }
 
   for (const file of pluginHelperFiles) {
     const content = fs.readFileSync(file, "utf8");
     offenders.push(
-      ...collectRelativeCoreImportOffenders(file, content, {
-        includeDynamic: true,
-      }),
+      ...collectRelativeImportOffenders(file, content, resolvesToRepoSrc, RELATIVE_CORE_HINT),
     );
   }
 

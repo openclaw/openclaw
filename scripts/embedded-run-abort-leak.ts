@@ -69,28 +69,26 @@ function parseArgs(argv: string[]): Options {
   const seenValueFlags = new Set<string>();
   for (let i = 0; i < argv.length; i += 1) {
     const arg = expectDefined(argv[i], `embedded abort benchmark argument at index ${i}`);
-    const next = argv[i + 1];
+    let value = "";
     if (VALUE_FLAGS.has(arg)) {
       if (seenValueFlags.has(arg)) {
         fail(`${arg} was provided more than once`);
       }
       seenValueFlags.add(arg);
+      value = readValue(argv[++i], arg);
     }
     switch (arg) {
       case "--iters":
-        opts.iters = parsePositiveInt(readValue(next, arg), arg);
-        i += 1;
+        opts.iters = parsePositiveInt(value, arg);
         break;
       case "--batches":
-        opts.batches = parsePositiveInt(readValue(next, arg), arg);
-        i += 1;
+        opts.batches = parsePositiveInt(value, arg);
         break;
       case "--snap-dir":
-        opts.snapDir = readValue(next, arg);
-        i += 1;
+        opts.snapDir = value;
         break;
       case "--mode": {
-        const mode = readValue(next, arg);
+        const mode = value;
         if (
           mode === "production" ||
           mode === "closure-extracted" ||
@@ -103,20 +101,16 @@ function parseArgs(argv: string[]): Options {
             `--mode must be one of: production, closure-extracted, closure-inline, synthetic-leak`,
           );
         }
-        i += 1;
         break;
       }
       case "--max-rss-growth-mb":
-        opts.maxRssGrowthMb = parseNonNegativeInt(readValue(next, arg), arg);
-        i += 1;
+        opts.maxRssGrowthMb = parseNonNegativeInt(value, arg);
         break;
       case "--max-tracked-retention":
-        opts.maxTrackedRetention = parseNonNegativeInt(readValue(next, arg), arg);
-        i += 1;
+        opts.maxTrackedRetention = parseNonNegativeInt(value, arg);
         break;
       case "--scope-bytes":
-        opts.scopeBytes = parsePositiveInt(readValue(next, arg), arg);
-        i += 1;
+        opts.scopeBytes = parsePositiveInt(value, arg);
         break;
       case "--quiet":
         opts.quiet = true;
@@ -125,7 +119,6 @@ function parseArgs(argv: string[]): Options {
       case "-h":
         printUsage();
         process.exit(0);
-        break;
       default:
         fail(`Unknown arg: ${arg}`);
     }
@@ -295,7 +288,6 @@ async function main(): Promise<void> {
   }
 
   const startedAt = Date.now();
-  const samples: SampleRow[] = [];
 
   if (!opts.quiet) {
     process.stdout.write(
@@ -314,7 +306,7 @@ async function main(): Promise<void> {
     trackedFinalized: FINALIZED.count,
     snapshotPath: baselinePath,
   };
-  samples.push(baseline);
+  let final = baseline;
   if (!opts.quiet) {
     process.stdout.write(
       `  baseline rss=${fmtBytes(baseline.rssBytes)} heap=${fmtBytes(baseline.heapUsedBytes)}\n`,
@@ -337,7 +329,7 @@ async function main(): Promise<void> {
       trackedFinalized: FINALIZED.count,
       snapshotPath,
     };
-    samples.push(row);
+    final = row;
     if (!opts.quiet) {
       process.stdout.write(
         `  batch ${b} totalIters=${row.totalIters} ` +
@@ -347,10 +339,6 @@ async function main(): Promise<void> {
     }
   }
 
-  const final = samples[samples.length - 1];
-  if (!final) {
-    fail("no samples collected");
-  }
   const rssGrowthMb = (final.rssBytes - baseline.rssBytes) / 1024 / 1024;
   // Tracked retention: how many iter-allocated transcripts are STILL alive
   // (have not been finalized). Lower is better.

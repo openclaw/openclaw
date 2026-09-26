@@ -1,7 +1,6 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
 import { runTasksWithConcurrency } from "../src/utils/run-with-concurrency.js";
 import {
   createPublicationObservations,
@@ -29,7 +28,6 @@ const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
 const MAX_COLLECTION_MS = 300_000;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 
-type SelectedPackage = { name: string; version: string; targets: string[] };
 type NpmRead = {
   name: string;
   version: string | null;
@@ -50,22 +48,6 @@ class PublicationObservationFailure extends Error {
   constructor(registry: string, name: string, reason: string) {
     super(`${name}: required ${registry} observation ${reason}.`);
   }
-}
-
-function selectedPackages(source: PublicationSourceFact): SelectedPackage[] {
-  return (source.projection?.packages ?? []).map((entry) => {
-    if (
-      !isRecord(entry) ||
-      typeof entry.name !== "string" ||
-      !PACKAGE_NAME.test(entry.name) ||
-      typeof entry.version !== "string" ||
-      !Array.isArray(entry.targets) ||
-      !entry.targets.every((target): target is string => typeof target === "string")
-    ) {
-      throw new Error("Invalid verified publication package projection.");
-    }
-    return { name: entry.name, version: entry.version, targets: entry.targets };
-  });
 }
 
 function failureClass(error: unknown): string {
@@ -105,7 +87,7 @@ async function collectObservations(params: {
     throw new Error("Registry observations require verified publication source.");
   }
   const selection = source.publicationSelection;
-  const roster = selectedPackages(source);
+  const roster = source.projection?.packages ?? [];
   const prerequisites = Date.parse(params.prerequisitesCompletedAt);
   const startedAt = Date.now();
   if (!Number.isFinite(prerequisites) || prerequisites > startedAt) {

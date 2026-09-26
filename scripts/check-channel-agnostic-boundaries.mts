@@ -73,8 +73,6 @@ const comparisonOperators: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.ExclamationEqualsToken,
 ]);
 
-const allowedViolations = new Set<string>();
-
 type BoundaryViolation = { line: number; reason: string };
 type BoundaryOptions = {
   checkModuleSpecifiers?: boolean;
@@ -82,12 +80,6 @@ type BoundaryOptions = {
   checkChannelComparisons?: boolean;
   checkChannelAssignments?: boolean;
   moduleSpecifierMatcher?: (specifier: string) => boolean;
-};
-type ModuleSpecifierVisit = {
-  kind: string;
-  node: ts.Node;
-  specifier: string;
-  specifierNode: ts.Node;
 };
 function isChannelsPropertyAccess(node: ts.Node) {
   if (ts.isPropertyAccessExpression(node)) {
@@ -100,13 +92,7 @@ function isChannelsPropertyAccess(node: ts.Node) {
 }
 
 function readStringLiteral(node: ts.Node) {
-  if (ts.isStringLiteral(node)) {
-    return node.text;
-  }
-  if (ts.isNoSubstitutionTemplateLiteral(node)) {
-    return node.text;
-  }
-  return null;
+  return ts.isStringLiteralLikeNode(node) ? node.text : null;
 }
 
 function isChannelLiteralNode(node: ts.Node) {
@@ -154,7 +140,7 @@ export function findChannelAgnosticBoundaryViolations(
   if (checkModuleSpecifiers) {
     visitModuleSpecifiers(
       sourceFile,
-      ({ kind, node, specifier, specifierNode }: ModuleSpecifierVisit) => {
+      ({ kind, node, specifier, specifierNode }) => {
         if (moduleSpecifierMatcher(specifier)) {
           const verb =
             kind === "export"
@@ -336,22 +322,13 @@ export async function main() {
   for (const ruleSet of boundaryRuleSets) {
     const files = (
       await Promise.all(
-        ruleSet.sources.map(
-          async (sourcePath) =>
-            await collectTypeScriptFiles(sourcePath, {
-              ignoreMissing: true,
-            }),
+        ruleSet.sources.map((sourcePath) =>
+          collectTypeScriptFiles(sourcePath, { ignoreMissing: true }),
         ),
       )
     ).flat();
     for (const filePath of files) {
       const relativeFile = path.relative(repoRoot, filePath);
-      if (
-        allowedViolations.has(`${ruleSet.id}:${relativeFile}`) ||
-        allowedViolations.has(relativeFile)
-      ) {
-        continue;
-      }
       const content = await fs.readFile(filePath, "utf8");
       const sourceFile = parser.parseSourceFile(filePath, content);
       for (const violation of ruleSet.scan(content, relativeFile, sourceFile)) {

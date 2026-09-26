@@ -620,24 +620,6 @@ run_with_spinner() {
         else
             "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?
         fi
-        if [[ "$gum_status" -eq 0 ]]; then
-            if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then
-                GUM=""
-                GUM_STATUS="skipped"
-                GUM_REASON="gum raw mode unavailable"
-                ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-                if needs_stdin_isolation; then
-                    "$@" < /dev/null
-                else
-                    "$@"
-                fi
-                return $?
-            fi
-            if [[ -s "$gum_out" ]]; then
-                cat "$gum_out"
-            fi
-            return 0
-        fi
         if is_gum_raw_mode_failure "$gum_err" || is_gum_raw_mode_failure "$gum_out"; then
             GUM=""
             GUM_STATUS="skipped"
@@ -649,6 +631,12 @@ run_with_spinner() {
                 "$@"
             fi
             return $?
+        fi
+        if [[ "$gum_status" -eq 0 ]]; then
+            if [[ -s "$gum_out" ]]; then
+                cat "$gum_out"
+            fi
+            return 0
         fi
         if [[ -s "$gum_err" ]]; then
             cat "$gum_err" >&2
@@ -674,8 +662,6 @@ run_quiet_step() {
 
     local log
     mktempfile log
-    local showed_progress=false
-
     local cmd_exit=0
 
     if [[ -n "$GUM" ]] && gum_is_tty && ! is_shell_function "${1:-}"; then
@@ -687,11 +673,9 @@ run_quiet_step() {
         if (( cmd_exit == 0 )); then
             return 0
         fi
-        showed_progress=true
     else
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
-        showed_progress=true
         if needs_stdin_isolation; then
             "$@" < /dev/null >"$log" 2>&1 || cmd_exit=$?
         else
@@ -700,10 +684,6 @@ run_quiet_step() {
         if (( cmd_exit == 0 )); then
             return 0
         fi
-    fi
-
-    if [[ "$showed_progress" == "false" ]]; then
-        ui_info "${title}"
     fi
 
     ui_error "${title} failed — re-run with --verbose for details"
@@ -1527,20 +1507,19 @@ parse_args() {
                 HELP=1
                 shift
                 ;;
-            --install-method|--method)
+            --install-method|--method|--version|--git-dir|--dir)
                 if [[ $# -lt 2 || "${2:-}" == --* ]]; then
                     ui_error "Missing value for $1"
                     return 2
                 fi
-                INSTALL_METHOD="$2"
-                shift 2
-                ;;
-            --version)
-                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
-                    ui_error "Missing value for $1"
-                    return 2
-                fi
-                OPENCLAW_VERSION="$2"
+                case "$1" in
+                    --install-method|--method) INSTALL_METHOD="$2" ;;
+                    --version) OPENCLAW_VERSION="$2" ;;
+                    --git-dir|--dir)
+                        GIT_DIR="$2"
+                        GIT_DIR_EXPLICIT=${2:+1}
+                        ;;
+                esac
                 shift 2
                 ;;
             --beta)
@@ -1554,15 +1533,6 @@ parse_args() {
             --git|--github)
                 INSTALL_METHOD="git"
                 shift
-                ;;
-            --git-dir|--dir)
-                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
-                    ui_error "Missing value for $1"
-                    return 2
-                fi
-                GIT_DIR="$2"
-                GIT_DIR_EXPLICIT=${2:+1}
-                shift 2
                 ;;
             --no-git-update)
                 GIT_UPDATE=0
@@ -2527,37 +2497,26 @@ install_git() {
         run_quiet_step "Installing Git" brew install git
     elif [[ "$OS" == "linux" ]]; then
         require_sudo
+        local -a git_cmd=()
         if command -v apk &> /dev/null && is_alpine_linux; then
-            if is_root; then
-                run_quiet_step "Installing Git" apk add --no-cache git
-            else
-                run_quiet_step "Installing Git" sudo apk add --no-cache git
-            fi
+            git_cmd=(apk add --no-cache git)
         elif command -v apt-get &> /dev/null; then
             run_quiet_step "Updating package index" apt_get_update
-            run_quiet_step "Installing Git" apt_get_install git
+            git_cmd=(apt_get_install git)
         elif command -v pacman &> /dev/null && is_arch_linux; then
-            if is_root; then
-                run_quiet_step "Installing Git" pacman -Sy --noconfirm git
-            else
-                run_quiet_step "Installing Git" sudo pacman -Sy --noconfirm git
-            fi
+            git_cmd=(pacman -Sy --noconfirm git)
         elif command -v dnf &> /dev/null; then
-            if is_root; then
-                run_quiet_step "Installing Git" dnf install -y -q git
-            else
-                run_quiet_step "Installing Git" sudo dnf install -y -q git
-            fi
+            git_cmd=(dnf install -y -q git)
         elif command -v yum &> /dev/null; then
-            if is_root; then
-                run_quiet_step "Installing Git" yum install -y -q git
-            else
-                run_quiet_step "Installing Git" sudo yum install -y -q git
-            fi
+            git_cmd=(yum install -y -q git)
         else
             ui_error "Could not detect package manager for Git"
             exit 1
         fi
+        if [[ "${git_cmd[0]}" != "apt_get_install" ]] && ! is_root; then
+            git_cmd=(sudo "${git_cmd[@]}")
+        fi
+        run_quiet_step "Installing Git" "${git_cmd[@]}"
     fi
     ui_success "Git installed"
 }
@@ -2714,30 +2673,15 @@ resolve_git_openclaw_ref() {
     local resolved_version=""
 
     case "$requested" in
-        ""|latest)
+        ""|latest|next|beta)
             resolved_version="$(npm view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
             if [[ -n "$resolved_version" ]]; then
                 echo "v${resolved_version}"
-                return 0
+            elif [[ -z "$requested" || "$requested" == "latest" ]]; then
+                echo "main"
+            else
+                echo "$requested"
             fi
-            echo "main"
-            return 0
-            ;;
-        next|beta)
-            resolved_version="$(npm view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
-            if [[ -n "$resolved_version" ]]; then
-                echo "v${resolved_version}"
-                return 0
-            fi
-            echo "$requested"
-            return 0
-            ;;
-        main)
-            echo "main"
-            return 0
-            ;;
-        v[0-9]*)
-            echo "$requested"
             return 0
             ;;
         [0-9]*.[0-9]*.[0-9]*)

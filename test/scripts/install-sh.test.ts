@@ -3915,6 +3915,7 @@ EOF
 
 describe("install.sh macOS Homebrew Node behavior", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("aborts before brew link when Homebrew node installation fails at runtime", () => {
     const result = runInstallShell(`
@@ -3967,58 +3968,66 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     expect(result.stdout).not.toContain("Add this to your shell profile");
   });
 
-  it("falls back when gum reports raw-mode ioctl failures", () => {
-    expect(script).toContain("setrawmode|inappropriate ioctl");
-    expect(script).toContain(
-      '"$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?',
-    );
-    expect(script).toContain(
-      '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
-    );
-    expect(script).toContain(
-      'if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then',
-    );
-    expect(script).toContain(
-      'ui_warn "Spinner unavailable in this terminal; continuing without spinner"',
-    );
-    expect(script).toContain(
-      'if needs_stdin_isolation; then\n                    "$@" < /dev/null\n                else\n                    "$@"\n                fi\n                return $?',
-    );
-  });
-
-  it("reruns spinner-wrapped commands when gum reports ioctl failure", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-install-sh-gum-"));
-    try {
+  it.each([
+    {
+      failure: "inappropriate ioctl for device",
+      fd: 1,
+      gumStatus: 0,
+      isolate: true,
+      childStatus: 0,
+    },
+    { failure: "SetRawMode failed", fd: 2, gumStatus: 1, isolate: true, childStatus: 7 },
+    {
+      failure: "inappropriate ioctl for device",
+      fd: 2,
+      gumStatus: 0,
+      isolate: false,
+      childStatus: 9,
+    },
+    { failure: "SetRawMode failed", fd: 1, gumStatus: 1, isolate: false, childStatus: 0 },
+  ])(
+    "reruns spinner-wrapped commands after $failure on fd $fd (gum exit $gumStatus, isolate $isolate)",
+    ({ failure, fd, gumStatus, isolate, childStatus }) => {
+      const dir = tempDirs.make("openclaw-install-sh-gum-");
       const gumPath = join(dir, "gum");
       const commandPath = join(dir, "command");
       const markerPath = join(dir, "marker");
+      const stdinPath = join(dir, "stdin");
+      const inputLog = join(dir, "input");
+      const input = "installer input must follow its isolation policy\n";
+      writeFileSync(stdinPath, input);
       writeFileSync(
         gumPath,
-        "#!/usr/bin/env bash\nprintf 'inappropriate ioctl for device\\n'\nexit 0\n",
+        `#!/bin/bash\nprintf '%s\\n' '${failure}' >&${fd}\nexit ${gumStatus}\n`,
         { mode: 0o755 },
       );
-      writeFileSync(commandPath, `#!/usr/bin/env bash\nprintf 'ran' >"${markerPath}"\n`, {
-        mode: 0o755,
-      });
+      writeFileSync(
+        commandPath,
+        `#!/bin/bash\nprintf 'ran\\n' >>"$COMMAND_LOG"\ncat >"$INPUT_LOG"\nexit ${childStatus}\n`,
+        { mode: 0o755 },
+      );
 
-      const result = runInstallShell(`
+      const result = runInstallShell(
+        `
         set -euo pipefail
         source "${SCRIPT_PATH}"
+        exec < "$STDIN_FIXTURE_PATH"
+        needs_stdin_isolation() { return ${isolate ? 0 : 1}; }
         gum_is_tty() { return 0; }
         GUM="${gumPath}"
         run_with_spinner "Installing node" "${commandPath}"
-        cat "${markerPath}"
-      `);
+      `,
+        { COMMAND_LOG: markerPath, INPUT_LOG: inputLog, STDIN_FIXTURE_PATH: stdinPath },
+      );
 
-      expect(result.status).toBe(0);
+      expect(result.status).toBe(childStatus);
       expect(result.stdout).toContain(
         "Spinner unavailable in this terminal; continuing without spinner",
       );
-      expect(result.stdout).toContain("ran");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+      expect(readFileSync(markerPath, "utf8")).toBe("ran\n");
+      expect(readFileSync(inputLog, "utf8")).toBe(isolate ? "" : input);
+    },
+  );
 
   it("gum spin preserves supplied stdin when isolation is disabled", () => {
     // Force the non-isolating branch with known input, independently of the

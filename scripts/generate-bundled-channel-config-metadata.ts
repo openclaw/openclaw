@@ -5,6 +5,8 @@ import path from "node:path";
 import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
 import { loadBundledPluginPublicArtifactModuleSync } from "../src/plugins/public-surface-loader.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { formatGeneratedModule } from "./lib/format-generated-module.mts";
+import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
 import { loadChannelConfigSurfaceModule } from "./load-channel-config-surface.ts";
 
 const GENERATED_BY = "scripts/generate-bundled-channel-config-metadata.ts";
@@ -32,34 +34,6 @@ const { collectBundledPluginSources } = (await import(
     repoRoot?: string;
     requirePackageJson?: boolean;
   }) => BundledPluginSource[];
-};
-
-const { formatGeneratedModule } = (await import(
-  new URL("./lib/format-generated-module.mjs", import.meta.url).href
-)) as {
-  formatGeneratedModule: (
-    source: string,
-    options: {
-      repoRoot: string;
-      outputPath: string;
-      errorLabel: string;
-    },
-  ) => string;
-};
-
-const { writeGeneratedOutput } = (await import(
-  new URL("./lib/generated-output-utils.mjs", import.meta.url).href
-)) as {
-  writeGeneratedOutput: (params: {
-    repoRoot: string;
-    outputPath: string;
-    next: string;
-    check?: boolean;
-  }) => {
-    changed: boolean;
-    wrote: boolean;
-    outputPath: string;
-  };
 };
 
 type BundledChannelConfigMetadata = {
@@ -117,34 +91,19 @@ function resolvePackageChannelMeta(source: BundledPluginSource) {
   return channelMeta;
 }
 
-function resolveRootLabel(source: BundledPluginSource, channelId: string): string | undefined {
-  const channelMeta = resolvePackageChannelMeta(source);
-  if (channelMeta?.id === channelId && typeof channelMeta.label === "string") {
-    return channelMeta.label.trim();
+function resolveRootText(channelValue: unknown, manifestValue: unknown): string | undefined {
+  if (typeof channelValue === "string") {
+    return channelValue.trim();
   }
-  if (typeof source.manifest?.name === "string" && source.manifest.name.trim()) {
-    return source.manifest.name.trim();
-  }
-  return undefined;
+  return typeof manifestValue === "string" && manifestValue.trim()
+    ? manifestValue.trim()
+    : undefined;
 }
 
-function resolveRootDescription(
-  source: BundledPluginSource,
-  channelId: string,
-): string | undefined {
-  const channelMeta = resolvePackageChannelMeta(source);
-  if (channelMeta?.id === channelId && typeof channelMeta.blurb === "string") {
-    return channelMeta.blurb.trim();
-  }
-  if (typeof source.manifest?.description === "string" && source.manifest.description.trim()) {
-    return source.manifest.description.trim();
-  }
-  return undefined;
-}
+type PackageChannelMeta = ReturnType<typeof resolvePackageChannelMeta>;
 
-function resolveRootAliases(source: BundledPluginSource, channelId: string): string[] {
-  const channelMeta = resolvePackageChannelMeta(source);
-  if (channelMeta?.id !== channelId || !Array.isArray(channelMeta.aliases)) {
+function resolveRootAliases(channelMeta: PackageChannelMeta): string[] {
+  if (!Array.isArray(channelMeta?.aliases)) {
     return [];
   }
   return [
@@ -156,17 +115,9 @@ function resolveRootAliases(source: BundledPluginSource, channelId: string): str
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
-function resolveRootOrder(source: BundledPluginSource, channelId: string): number | undefined {
-  const channelMeta = resolvePackageChannelMeta(source);
-  const order = channelMeta?.id === channelId ? channelMeta.order : undefined;
-  return asFiniteNumber(order);
-}
-
-function resolveRootConfigurable(source: BundledPluginSource, channelId: string): boolean {
-  const channelMeta = resolvePackageChannelMeta(source);
+function resolveRootConfigurable(channelMeta: PackageChannelMeta): boolean {
   const exposure =
-    channelMeta?.id === channelId &&
-    channelMeta.exposure &&
+    channelMeta?.exposure &&
     typeof channelMeta.exposure === "object" &&
     !Array.isArray(channelMeta.exposure)
       ? (channelMeta.exposure as Record<string, unknown>)
@@ -174,12 +125,8 @@ function resolveRootConfigurable(source: BundledPluginSource, channelId: string)
   return exposure?.configured !== false;
 }
 
-function resolveRootChannelEnvVars(source: BundledPluginSource, channelId: string): string[] {
-  const channelMeta = resolvePackageChannelMeta(source);
-  if (channelMeta?.id !== channelId) {
-    return [];
-  }
-  const configuredState = channelMeta.configuredState;
+function resolveRootChannelEnvVars(channelMeta: PackageChannelMeta): string[] {
+  const configuredState = channelMeta?.configuredState;
   if (!configuredState || typeof configuredState !== "object" || Array.isArray(configuredState)) {
     return [];
   }
@@ -267,13 +214,15 @@ async function collectBundledChannelConfigMetadata(params?: { repoRoot?: string 
     if (!surface?.schema) {
       continue;
     }
+    const packageChannel = resolvePackageChannelMeta(source);
     for (const channelId of channelIds) {
-      const aliases = resolveRootAliases(source, channelId);
-      const order = resolveRootOrder(source, channelId);
-      const configurable = resolveRootConfigurable(source, channelId);
-      const channelEnvVars = resolveRootChannelEnvVars(source, channelId);
-      const label = resolveRootLabel(source, channelId);
-      const description = resolveRootDescription(source, channelId);
+      const channelMeta = packageChannel?.id === channelId ? packageChannel : undefined;
+      const aliases = resolveRootAliases(channelMeta);
+      const order = asFiniteNumber(channelMeta?.order);
+      const configurable = resolveRootConfigurable(channelMeta);
+      const channelEnvVars = resolveRootChannelEnvVars(channelMeta);
+      const label = resolveRootText(channelMeta?.label, source.manifest?.name);
+      const description = resolveRootText(channelMeta?.blurb, source.manifest?.description);
       const unsupportedSecretRefSurfacePatterns = resolveChannelUnsupportedSecretRefSurfacePatterns(
         source,
         channelId,
@@ -360,12 +309,12 @@ export const GENERATED_BUNDLED_CHANNEL_IDS: readonly BundledChannelIdMetadata[] 
     repoRoot,
   );
   return [
-    writeGeneratedOutput({ repoRoot, outputPath, next, check: params?.check }),
+    writeGeneratedOutput({ repoRoot, outputPath, next, check: params?.check === true }),
     writeGeneratedOutput({
       repoRoot,
       outputPath: IDS_OUTPUT_PATH,
       next: idsModule,
-      check: params?.check,
+      check: params?.check === true,
     }),
   ];
 }

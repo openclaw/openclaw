@@ -381,70 +381,27 @@ const VALUE_FLAGS = new Set([
   "--warmup",
 ]);
 
-function parseBoundedPositiveInt(
-  raw: string | undefined,
-  fallback: number,
-  label: string,
-  max: number,
-): number {
-  const value = parsePositiveInt(raw, fallback, label);
-  if (value > max) {
-    throw new CliArgumentError(`${label} must be at most ${max}`);
-  }
-  return value;
-}
-
-function parseBoundedNonNegativeInt(
-  raw: string | undefined,
-  fallback: number,
-  label: string,
-  max: number,
-): number {
-  const value = parseNonNegativeInt(raw, fallback, label);
-  if (value > max) {
-    throw new CliArgumentError(`${label} must be at most ${max}`);
-  }
-  return value;
-}
-
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   validateCliArgs(argv, { booleanFlags: BOOLEAN_FLAGS, valueFlags: VALUE_FLAGS });
   const provider = parseFlagValue(argv, "--provider") ?? "mock";
   if (provider !== "mock" && provider !== "openai") {
     throw new CliArgumentError("--provider must be mock or openai");
   }
+  const boundedInt = (flag: string, fallback: number, max: number, allowZero = false) => {
+    const parse = allowZero ? parseNonNegativeInt : parsePositiveInt;
+    const value = parse(parseFlagValue(argv, flag), fallback, flag);
+    if (value > max) {
+      throw new CliArgumentError(`${flag} must be at most ${max}`);
+    }
+    return value;
+  };
   const options: CliOptions = {
     provider,
-    agentCount: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--agent-count"),
-      1,
-      "--agent-count",
-      MAX_AGENT_COUNT,
-    ),
-    browserHistoryMessages: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--browser-history-messages"),
-      80,
-      "--browser-history-messages",
-      500,
-    ),
-    browserSessionClicks: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--browser-session-clicks"),
-      0,
-      "--browser-session-clicks",
-      20,
-    ),
-    cadenceMs: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--cadence-ms"),
-      DEFAULT_CADENCE_MS,
-      "--cadence-ms",
-      5_000,
-    ),
-    concurrency: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--concurrency"),
-      DEFAULT_CONCURRENCY,
-      "--concurrency",
-      MAX_CONCURRENCY,
-    ),
+    agentCount: boundedInt("--agent-count", 1, MAX_AGENT_COUNT),
+    browserHistoryMessages: boundedInt("--browser-history-messages", 80, 500),
+    browserSessionClicks: boundedInt("--browser-session-clicks", 0, 20, true),
+    cadenceMs: boundedInt("--cadence-ms", DEFAULT_CADENCE_MS, 5_000),
+    concurrency: boundedInt("--concurrency", DEFAULT_CONCURRENCY, MAX_CONCURRENCY),
     controlPlane: hasFlag(argv, "--control-plane"),
     cpuProfDir: resolveOutputPath(parseFlagValue(argv, "--cpu-prof-dir")),
     loadCpuProfDir: resolveOutputPath(parseFlagValue(argv, "--load-cpu-prof-dir")),
@@ -452,121 +409,36 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     diagnosticsTimeline: !hasFlag(argv, "--no-diagnostics-timeline"),
     activitySummaryDiagnostics: hasFlag(argv, "--activity-summary-diagnostics"),
     entry: resolveEntry(parseFlagValue(argv, "--entry"), DEFAULT_ENTRY),
-    historyBurst: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--history-burst"),
-      5,
-      "--history-burst",
-      32,
-    ),
-    historyClients: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--history-clients"),
-      0,
-      "--history-clients",
-      MAX_CONCURRENCY,
-    ),
-    historyMessages: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--history-messages"),
-      0,
-      "--history-messages",
-      500,
-    ),
-    historyMessageChars: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--history-message-chars"),
-      1_024,
-      "--history-message-chars",
-      65_536,
-    ),
+    historyBurst: boundedInt("--history-burst", 5, 32),
+    historyClients: boundedInt("--history-clients", 0, MAX_CONCURRENCY, true),
+    historyMessages: boundedInt("--history-messages", 0, 500, true),
+    historyMessageChars: boundedInt("--history-message-chars", 1_024, 65_536),
     json: hasFlag(argv, "--json"),
     maxControlMs: parseFlagValue(argv, "--max-control-ms")
-      ? parseBoundedPositiveInt(
-          parseFlagValue(argv, "--max-control-ms"),
-          2_000,
-          "--max-control-ms",
-          30_000,
-        )
+      ? boundedInt("--max-control-ms", 2_000, 30_000)
       : undefined,
     maxHandshakeMs: parseFlagValue(argv, "--max-handshake-ms")
-      ? parseBoundedPositiveInt(
-          parseFlagValue(argv, "--max-handshake-ms"),
-          2_000,
-          "--max-handshake-ms",
-          30_000,
-        )
+      ? boundedInt("--max-handshake-ms", 2_000, 30_000)
       : undefined,
     output: resolveOutputPath(parseFlagValue(argv, "--output")),
-    pluginCount: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--plugin-count"),
-      0,
-      "--plugin-count",
-      MAX_PLUGIN_COUNT,
-    ),
+    pluginCount: boundedInt("--plugin-count", 0, MAX_PLUGIN_COUNT, true),
     probeRounds:
       parseFlagValue(argv, "--probe-rounds") === undefined
         ? undefined
-        : parseBoundedPositiveInt(
-            parseFlagValue(argv, "--probe-rounds"),
-            1,
-            "--probe-rounds",
-            MAX_SAMPLES_PER_RUN,
-          ),
-    runs: parseBoundedPositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs", MAX_RUNS),
-    sessionCount: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--session-count"),
-      0,
-      "--session-count",
-      MAX_SESSION_COUNT,
-    ),
-    sessionUpdateClients: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--session-update-clients"),
-      4,
-      "--session-update-clients",
-      MAX_CONCURRENCY,
-    ),
-    sessionUpdates: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--session-updates"),
-      0,
-      "--session-updates",
-      MAX_SESSION_UPDATES,
-    ),
-    streamChunkDelayMs: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--stream-chunk-delay-ms"),
-      MOCK_RESPONSE_CHUNK_DELAY_MS,
-      "--stream-chunk-delay-ms",
-      30_000,
-    ),
-    subscribers: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--subscribers"),
-      0,
-      "--subscribers",
-      MAX_CONCURRENCY,
-    ),
-    timeoutMs: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--timeout-ms"),
-      DEFAULT_TIMEOUT_MS,
-      "--timeout-ms",
-      10 * 60_000,
-    ),
+        : boundedInt("--probe-rounds", 1, MAX_SAMPLES_PER_RUN),
+    runs: boundedInt("--runs", DEFAULT_RUNS, MAX_RUNS),
+    sessionCount: boundedInt("--session-count", 0, MAX_SESSION_COUNT, true),
+    sessionUpdateClients: boundedInt("--session-update-clients", 4, MAX_CONCURRENCY),
+    sessionUpdates: boundedInt("--session-updates", 0, MAX_SESSION_UPDATES, true),
+    streamChunkDelayMs: boundedInt("--stream-chunk-delay-ms", MOCK_RESPONSE_CHUNK_DELAY_MS, 30_000),
+    subscribers: boundedInt("--subscribers", 0, MAX_CONCURRENCY, true),
+    timeoutMs: boundedInt("--timeout-ms", DEFAULT_TIMEOUT_MS, 10 * 60_000),
     gatewayCpus: parseFlagValue(argv, "--gateway-cpus"),
-    agentWarmupTurns: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--agent-warmup-turns"),
-      0,
-      "--agent-warmup-turns",
-      MAX_WARMUP,
-    ),
+    agentWarmupTurns: boundedInt("--agent-warmup-turns", 0, MAX_WARMUP, true),
     toolEvents: hasFlag(argv, "--tool-events"),
-    turnsPerSession: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--turns-per-session"),
-      1,
-      "--turns-per-session",
-      MAX_TURNS_PER_SESSION,
-    ),
+    turnsPerSession: boundedInt("--turns-per-session", 1, MAX_TURNS_PER_SESSION),
     visibleObserver: hasFlag(argv, "--visible-observer"),
-    warmup: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--warmup"),
-      DEFAULT_WARMUP,
-      "--warmup",
-      MAX_WARMUP,
-    ),
+    warmup: boundedInt("--warmup", DEFAULT_WARMUP, MAX_WARMUP, true),
     workspaceFanout: hasFlag(argv, "--workspace-fanout"),
   };
   if (options.activitySummaryDiagnostics && provider !== "mock") {
@@ -1809,41 +1681,11 @@ function observeBenchmarkChild(child: ChildProcess) {
   });
 }
 
-async function runGatewaySample(options: {
-  provider: CliOptions["provider"];
-  output?: string;
-  agentCount: number;
-  agentWarmupTurns: number;
-  gatewayCpus?: string;
-  browserHistoryMessages: number;
-  browserSessionClicks: number;
-  cadenceMs: number;
-  concurrency: number;
-  controlPlane: boolean;
-  deadlineAt: number;
-  diagnosticsTimeline: boolean;
-  activitySummaryDiagnostics: boolean;
-  entry: string;
-  cpuProfDir?: string;
-  loadCpuProfDir?: string;
-  heapProfDir?: string;
-  historyBurst: number;
-  historyClients: number;
-  historyMessages: number;
-  historyMessageChars: number;
-  pluginCount: number;
-  probeRounds?: number;
-  sessionCount: number;
-  sessionUpdateClients: number;
-  sessionUpdates: number;
-  streamChunkDelayMs: number;
-  subscribers: number;
-  timeoutMs: number;
-  toolEvents: boolean;
-  turnsPerSession: number;
-  visibleObserver: boolean;
-  workspaceFanout: boolean;
-}): Promise<BenchmarkAttempt> {
+async function runGatewaySample(
+  options: Omit<CliOptions, "json" | "maxControlMs" | "maxHandshakeMs" | "runs" | "warmup"> & {
+    deadlineAt: number;
+  },
+): Promise<BenchmarkAttempt> {
   let runStartedAt = performance.now();
   const partialRun: BenchmarkPartialRun = {
     controlPlane: [],

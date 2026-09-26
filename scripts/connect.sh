@@ -133,19 +133,13 @@ download_installer() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --version)
+    --version|--prefix|--display-name)
       require_value "$1" "${2:-}"
-      VERSION="$2"
-      shift 2
-      ;;
-    --prefix)
-      require_value "$1" "${2:-}"
-      PREFIX="$2"
-      shift 2
-      ;;
-    --display-name)
-      require_value "$1" "${2:-}"
-      DISPLAY_NAME="$2"
+      case "$1" in
+        --version) VERSION="$2" ;;
+        --prefix) PREFIX="$2" ;;
+        --display-name) DISPLAY_NAME="$2" ;;
+      esac
       shift 2
       ;;
     -h|--help)

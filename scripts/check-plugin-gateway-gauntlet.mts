@@ -44,24 +44,23 @@ const DEFAULT_CPU_CORE_WARN = 0.9;
 const DEFAULT_HOT_WALL_WARN_MS = 30_000;
 const DEFAULT_MAX_RSS_WARN_MB = 1536;
 const DEFAULT_QA_PLUGIN_CHUNK_SIZE = 12;
-const SINGLE_VALUE_FLAGS = new Set([
-  "--build-timeout-ms",
-  "--command-timeout-ms",
-  "--cpu-core-warn",
-  "--hot-wall-warn-ms",
-  "--limit",
-  "--max-rss-warn-mb",
-  "--output-dir",
-  "--qa-cpu-regression-multiplier",
-  "--qa-plugin-chunk-size",
-  "--qa-timeout-ms",
-  "--qa-wall-regression-multiplier",
-  "--repo-root",
-  "--rss-anomaly-multiplier",
-  "--shard-index",
-  "--shard-total",
-  "--wall-anomaly-multiplier",
-]);
+const NUMERIC_FLAGS = {
+  "--build-timeout-ms": ["buildTimeoutMs", parsePositiveInt],
+  "--command-timeout-ms": ["commandTimeoutMs", parsePositiveInt],
+  "--cpu-core-warn": ["cpuCoreWarn", parsePositiveNumber],
+  "--hot-wall-warn-ms": ["hotWallWarnMs", parsePositiveInt],
+  "--limit": ["limit", parsePositiveInt],
+  "--max-rss-warn-mb": ["maxRssWarnMb", parsePositiveNumber],
+  "--qa-cpu-regression-multiplier": ["qaCpuRegressionMultiplier", parsePositiveNumber],
+  "--qa-plugin-chunk-size": ["qaPluginChunkSize", parsePositiveInt],
+  "--qa-timeout-ms": ["qaTimeoutMs", parsePositiveInt],
+  "--qa-wall-regression-multiplier": ["qaWallRegressionMultiplier", parsePositiveNumber],
+  "--rss-anomaly-multiplier": ["rssAnomalyMultiplier", parsePositiveNumber],
+  "--shard-index": ["shardIndex", parseNonNegativeInt],
+  "--shard-total": ["shardTotal", parsePositiveInt],
+  "--wall-anomaly-multiplier": ["wallAnomalyMultiplier", parsePositiveNumber],
+} as const;
+const SINGLE_VALUE_FLAGS = new Set([...Object.keys(NUMERIC_FLAGS), "--output-dir", "--repo-root"]);
 const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
@@ -121,9 +120,6 @@ type GauntletContext = {
 };
 type QaSummary = NonNullable<ReturnType<typeof readQaSuiteSummary>["summary"]>;
 
-/**
- * Parses plugin gateway gauntlet CLI arguments and env defaults.
- */
 export function parseArgs(argv: string[]) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const pluginIds: string[] = [];
@@ -163,6 +159,7 @@ export function parseArgs(argv: string[]) {
   };
   const envIds = normalizeCsvOrLooseStringList(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
   options.pluginIds.push(...envIds);
+  const numericFlags = Object.entries(NUMERIC_FLAGS);
   const seenSingleValueFlags = new Set<string>();
   parseArgv: for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -183,6 +180,12 @@ export function parseArgs(argv: string[]) {
       index += 1;
       return value;
     };
+    const numericFlag = numericFlags.find(([flag]) => flag === arg);
+    if (numericFlag) {
+      const [, [key, parse]] = numericFlag;
+      options[key] = parse(readValue(), arg);
+      continue;
+    }
     switch (arg) {
       case "--":
         break parseArgv;
@@ -195,62 +198,11 @@ export function parseArgs(argv: string[]) {
       case "--plugin":
         options.pluginIds.push(readValue());
         break;
-      case "--shard-total":
-        options.shardTotal = parsePositiveInt(readValue(), "--shard-total");
-        break;
-      case "--shard-index":
-        options.shardIndex = parseNonNegativeInt(readValue(), "--shard-index");
-        break;
-      case "--limit":
-        options.limit = parsePositiveInt(readValue(), "--limit");
-        break;
       case "--qa-scenario":
         options.qaScenarios.push(readValue());
         break;
-      case "--qa-plugin-chunk-size":
-        options.qaPluginChunkSize = parsePositiveInt(readValue(), "--qa-plugin-chunk-size");
-        break;
       case "--qa-baseline":
         options.qaBaseline = true;
-        break;
-      case "--cpu-core-warn":
-        options.cpuCoreWarn = parsePositiveNumber(readValue(), "--cpu-core-warn");
-        break;
-      case "--hot-wall-warn-ms":
-        options.hotWallWarnMs = parsePositiveInt(readValue(), "--hot-wall-warn-ms");
-        break;
-      case "--max-rss-warn-mb":
-        options.maxRssWarnMb = parsePositiveNumber(readValue(), "--max-rss-warn-mb");
-        break;
-      case "--wall-anomaly-multiplier":
-        options.wallAnomalyMultiplier = parsePositiveNumber(
-          readValue(),
-          "--wall-anomaly-multiplier",
-        );
-        break;
-      case "--rss-anomaly-multiplier":
-        options.rssAnomalyMultiplier = parsePositiveNumber(readValue(), "--rss-anomaly-multiplier");
-        break;
-      case "--qa-cpu-regression-multiplier":
-        options.qaCpuRegressionMultiplier = parsePositiveNumber(
-          readValue(),
-          "--qa-cpu-regression-multiplier",
-        );
-        break;
-      case "--qa-wall-regression-multiplier":
-        options.qaWallRegressionMultiplier = parsePositiveNumber(
-          readValue(),
-          "--qa-wall-regression-multiplier",
-        );
-        break;
-      case "--command-timeout-ms":
-        options.commandTimeoutMs = parsePositiveInt(readValue(), "--command-timeout-ms");
-        break;
-      case "--build-timeout-ms":
-        options.buildTimeoutMs = parsePositiveInt(readValue(), "--build-timeout-ms");
-        break;
-      case "--qa-timeout-ms":
-        options.qaTimeoutMs = parsePositiveInt(readValue(), "--qa-timeout-ms");
         break;
       case "--skip-prebuild":
         options.skipPrebuild = true;
@@ -368,18 +320,13 @@ export function buildObservationGuardFailures(
   if (!enabled) {
     return [];
   }
-  return observations
-    .filter((observation) => shouldPromoteObservationGuardFailure(observation))
-    .map((observation) => ({
-      kind: `observation:${observation.kind ?? "unknown"}`,
-      message: `Gauntlet observation threshold exceeded: ${observation.kind ?? "unknown"}`,
-      observation,
-    }));
+  return observations.filter(shouldPromoteObservationGuardFailure).map((observation) => ({
+    kind: `observation:${observation.kind ?? "unknown"}`,
+    message: `Gauntlet observation threshold exceeded: ${observation.kind ?? "unknown"}`,
+    observation,
+  }));
 }
 
-/**
- * Builds the command that prepares QA runtime artifacts before gauntlet probes.
- */
 export function createGauntletPrebuildCommand(repoRoot: string) {
   return {
     command: process.execPath,
@@ -432,9 +379,6 @@ function chunkArray<Value>(values: Value[], chunkSize: number) {
   return chunks;
 }
 
-/**
- * Converts an output path to a repo-relative path, rejecting paths outside the repo.
- */
 export function toRepoRelativePath(repoRoot: string, absolutePath: string) {
   const relativePath = path.relative(repoRoot, absolutePath);
   if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
@@ -474,12 +418,8 @@ function createIsolatedEnv(repoRoot: string, runRoot: string) {
   };
 }
 
-function hasUsrBinTime() {
-  return fs.existsSync("/usr/bin/time");
-}
-
 function timeWrapperArgs(command: string, args: string[]) {
-  if (!hasUsrBinTime()) {
+  if (!fs.existsSync("/usr/bin/time")) {
     return { command, args, mode: "none" };
   }
   if (process.platform === "darwin") {
@@ -488,9 +428,6 @@ function timeWrapperArgs(command: string, args: string[]) {
   return { command: "/usr/bin/time", args: ["-v", command, ...args], mode: "gnu" };
 }
 
-/**
- * Parses `/usr/bin/time` output into wall, CPU, and RSS metrics.
- */
 export function parseTimedMetrics(stderr: string, wallMs: number, mode: string) {
   let userSeconds: number | null = null;
   let systemSeconds: number | null = null;
@@ -574,9 +511,33 @@ function writeCommandLog(params: {
   return logPath;
 }
 
-/**
- * Runs one command with optional timing wrapper, bounded output, and log capture.
- */
+function boundedWriter(maxBytes: number, label: string, write: (text: string) => void) {
+  let bytes = 0;
+  let truncated = false;
+  return (buffer: Buffer) => {
+    if (truncated) {
+      return;
+    }
+    const markTruncated = () => {
+      write(`\n[${label} truncated after ${maxBytes} bytes]\n`);
+      truncated = true;
+    };
+    const remainingBytes = maxBytes - bytes;
+    if (remainingBytes <= 0) {
+      markTruncated();
+      return;
+    }
+    const captured = buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
+    if (captured.length > 0) {
+      write(captured.toString("utf8"));
+    }
+    bytes += captured.length;
+    if (buffer.length > remainingBytes) {
+      markTruncated();
+    }
+  };
+}
+
 export async function runMeasuredCommand(
   params: GauntletMeasuredCommandParams,
 ): Promise<GauntletMeasuredRow> {
@@ -587,14 +548,6 @@ export async function runMeasuredCommand(
   const started = performance.now();
   let stdout = "";
   let stderr = "";
-  let stdoutBytes = 0;
-  let stderrBytes = 0;
-  let stdoutRelayBytes = 0;
-  let stderrRelayBytes = 0;
-  let stdoutTruncated = false;
-  let stderrTruncated = false;
-  let stdoutRelayTruncated = false;
-  let stderrRelayTruncated = false;
   let spawnError: GauntletMeasuredRow["spawnError"] = null;
   let timedOut = false;
   let exitStatus: number | null = null;
@@ -608,82 +561,22 @@ export async function runMeasuredCommand(
     params.timeoutKillGraceMs ?? 5_000,
     MAX_TIMER_TIMEOUT_MS,
   );
-  const appendCapturedOutput = (streamName: "stdout" | "stderr", chunk: string | Uint8Array) => {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    const currentBytes = streamName === "stdout" ? stdoutBytes : stderrBytes;
-    const alreadyTruncated = streamName === "stdout" ? stdoutTruncated : stderrTruncated;
-    if (alreadyTruncated) {
-      return;
-    }
-    const remainingBytes = maxBufferBytes - currentBytes;
-    const appendTruncation = () => {
-      const message = `\n[${streamName} truncated after ${maxBufferBytes} bytes]\n`;
-      if (streamName === "stdout") {
-        stdout += message;
-        stdoutTruncated = true;
-      } else {
-        stderr += message;
-        stderrTruncated = true;
-      }
-    };
-    if (remainingBytes <= 0) {
-      appendTruncation();
-      return;
-    }
-    const capturedBuffer =
-      buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
-    if (streamName === "stdout") {
-      stdout += capturedBuffer.toString("utf8");
-      stdoutBytes += capturedBuffer.length;
-    } else {
-      stderr += capturedBuffer.toString("utf8");
-      stderrBytes += capturedBuffer.length;
-    }
-    if (buffer.length > remainingBytes) {
-      appendTruncation();
-    }
+  const capture = {
+    stdout: boundedWriter(maxBufferBytes, "stdout", (text) => {
+      stdout += text;
+    }),
+    stderr: boundedWriter(maxBufferBytes, "stderr", (text) => {
+      stderr += text;
+    }),
   };
-  const relayOutput = (streamName: "stdout" | "stderr", chunk: string | Uint8Array) => {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    const currentBytes = streamName === "stdout" ? stdoutRelayBytes : stderrRelayBytes;
-    const alreadyTruncated = streamName === "stdout" ? stdoutRelayTruncated : stderrRelayTruncated;
-    if (alreadyTruncated) {
-      return;
-    }
-    const write =
-      streamName === "stdout"
-        ? process.stdout.write.bind(process.stdout)
-        : process.stderr.write.bind(process.stderr);
-    const markTruncated = () => {
-      write(`\n[${streamName} relay truncated after ${maxRelayBytes} bytes]\n`);
-      if (streamName === "stdout") {
-        stdoutRelayTruncated = true;
-      } else {
-        stderrRelayTruncated = true;
-      }
-    };
-    const remainingBytes = maxRelayBytes - currentBytes;
-    if (remainingBytes <= 0) {
-      markTruncated();
-      return;
-    }
-    const relayedBuffer =
-      buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
-    if (relayedBuffer.length > 0) {
-      write(relayedBuffer.toString("utf8"));
-    }
-    if (streamName === "stdout") {
-      stdoutRelayBytes += relayedBuffer.length;
-    } else {
-      stderrRelayBytes += relayedBuffer.length;
-    }
-    if (buffer.length > remainingBytes) {
-      markTruncated();
-    }
+  const relay = {
+    stdout: boundedWriter(maxRelayBytes, "stdout relay", (text) => process.stdout.write(text)),
+    stderr: boundedWriter(maxRelayBytes, "stderr relay", (text) => process.stderr.write(text)),
   };
   const appendOutput = (streamName: "stdout" | "stderr", chunk: string | Uint8Array) => {
-    relayOutput(streamName, chunk);
-    appendCapturedOutput(streamName, chunk);
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    relay[streamName](buffer);
+    capture[streamName](buffer);
   };
   try {
     await runManagedCommand({
@@ -772,9 +665,6 @@ export async function runMeasuredCommand(
   };
 }
 
-/**
- * Reports whether gauntlet result rows contain work beyond the prebuild step.
- */
 export function hasGauntletWorkRows(rows: Array<Pick<GauntletMeasuredRow, "phase">>) {
   return rows.some((row) => row.phase !== "prebuild");
 }
@@ -900,15 +790,7 @@ async function runSlashHelpProbes(params: GauntletContext) {
     const aliases = selectSlashHelpAliases(plugin, params.includePluginOwnedCliAliases);
     for (const alias of aliases) {
       process.stderr.write(`[plugin-gauntlet] ${plugin.id} slash-help /${alias.name}\n`);
-      params.rows.push(
-        await runMeasuredCommand({
-          ...buildSlashHelpProbe({
-            ...params,
-            plugin,
-            alias,
-          }),
-        }),
-      );
+      params.rows.push(await runMeasuredCommand(buildSlashHelpProbe({ ...params, plugin, alias })));
     }
   }
 }

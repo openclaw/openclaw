@@ -89,15 +89,13 @@ function main() {
   }
 
   if (legacyBroadSubpathOffenders.size > 0) {
-    if (legacyBroadSubpathOffenders.size > 0) {
-      console.error(
-        "Bundled plugin source files must not import deprecated broad plugin-sdk subpaths.",
-      );
-      for (const [file, labels] of [...legacyBroadSubpathOffenders.entries()].toSorted(
-        ([left], [right]) => left.localeCompare(right),
-      )) {
-        console.error(`- ${relativeToCwd(file)} (${labels.join(", ")})`);
-      }
+    console.error(
+      "Bundled plugin source files must not import deprecated broad plugin-sdk subpaths.",
+    );
+    for (const [file, labels] of [...legacyBroadSubpathOffenders.entries()].toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      console.error(`- ${relativeToCwd(file)} (${labels.join(", ")})`);
     }
     console.error("Use focused openclaw/plugin-sdk/<domain> subpaths for bundled plugins.");
     process.exit(1);

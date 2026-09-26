@@ -73,10 +73,6 @@ function parseOptions(argv: string[]): WorkerOptions {
   };
 }
 
-function processMaxRssBytes(): number {
-  return Math.max(0, Math.round(process.resourceUsage().maxRSS * 1024));
-}
-
 async function waitForCondition(check: () => boolean): Promise<boolean> {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
@@ -539,21 +535,16 @@ function sweepRow(child: number, generation: number, now: number): SubagentRunRe
     archiveAtMs: current ? undefined : now - 1,
     terminalOwner: current ? "interrupted-recovery" : undefined,
     endedReason: current ? "subagent-error" : undefined,
-    execution: current
-      ? {
-          status: "terminal",
-          startedAt: now - 2_000,
-          endedAt: now - 1_000,
-          outcome: { status: "error", error: "interrupted recovery replay" },
-          suppressSessionEffects: true,
-        }
-      : {
-          status: "terminal",
-          startedAt: now - 2_000,
-          endedAt: now - 1_000,
-          outcome: { status: "error", error: "retired recovery generation" },
-          suppressSessionEffects: true,
-        },
+    execution: {
+      status: "terminal",
+      startedAt: now - 2_000,
+      endedAt: now - 1_000,
+      outcome: {
+        status: "error",
+        error: current ? "interrupted recovery replay" : "retired recovery generation",
+      },
+      suppressSessionEffects: true,
+    },
   };
 }
 
@@ -737,7 +728,7 @@ async function runScenario(
     memory: {
       rssStartBytes,
       rssEndBytes: process.memoryUsage().rss,
-      processMaxRssBytes: processMaxRssBytes(),
+      processMaxRssBytes: Math.max(0, Math.round(process.resourceUsage().maxRSS * 1024)),
     },
     invariant,
   };

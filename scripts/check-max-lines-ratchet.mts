@@ -198,13 +198,12 @@ export function main(
       throw new Error("--prune cannot be combined with --staged");
     }
 
-    let baselineSource;
+    let baseline;
     try {
-      baselineSource = loadRatchetSnapshot(root, BASELINE_PATH, args.staged, parseRatchetPaths);
+      baseline = loadRatchetSnapshot(root, BASELINE_PATH, args.staged, parseRatchetPaths);
     } catch {
       throw new Error("Missing " + BASELINE_PATH + (args.staged ? " in the index" : ""));
     }
-    const baseline = baselineSource;
     const { allRules, explicit: current } = collectCurrentSuppressionState(root, {
       staged: args.staged,
       envVarNames,

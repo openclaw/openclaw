@@ -1,4 +1,3 @@
-// Anthropic Prompt Probe script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 // Live prompt probe for Anthropic setup-token and Claude CLI prompt-path debugging.
 // Usage:
@@ -29,6 +28,7 @@ import {
   signalExitCode,
   terminateManagedChild,
 } from "./lib/managed-child-process.mts";
+import { sleep } from "./lib/sleep.mjs";
 
 const TRANSPORT = process.env.OPENCLAW_PROMPT_TRANSPORT?.trim() === "direct" ? "direct" : "gateway";
 const GATEWAY_PROMPT_MODE = "extra";
@@ -289,12 +289,6 @@ async function resolveSetupTokenSource(): Promise<TokenSource> {
     );
   }
   return { profileId: match.id, token: validateSetupToken(match.token) };
-}
-
-async function sleep(ms: number): Promise<void> {
-  return await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 async function withTimeout<T>(
@@ -713,11 +707,7 @@ async function startGatewayProcess(params: {
       terminateManagedChild(child, "SIGKILL", { useWindowsTaskkill: false });
     },
   });
-  return {
-    async stop(): Promise<boolean> {
-      return await stopOnce();
-    },
-  };
+  return { stop: stopOnce };
 }
 
 async function stopGatewayPromptChild(
@@ -986,7 +976,7 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
         sessionKey: `agent:main:prompt-probe-${randomUUID()}`,
         idempotencyKey: `idem-${randomUUID()}`,
         message: "Reply with exactly: PROMPT PROBE OK.",
-        ...(GATEWAY_PROMPT_MODE === "extra" ? { extraSystemPrompt: prompt } : {}),
+        extraSystemPrompt: prompt,
         deliver: false,
       },
       timeoutMs: 15_000,
