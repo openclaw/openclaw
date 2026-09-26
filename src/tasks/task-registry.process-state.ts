@@ -96,7 +96,7 @@ export type TaskProgressMember = {
   progressOrigin?: SubagentRunRecord["progressOrigin"];
 };
 
-export type TaskRegistryRestoreState =
+type TaskRegistryRestoreState =
   | { status: "uninitialized"; admission?: OpenClawStateDatabaseReadAdmission }
   | { status: "restoring" | "ready"; admission: OpenClawStateDatabaseReadAdmission }
   | {
