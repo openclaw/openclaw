@@ -92,6 +92,23 @@ describe("command-startup-policy", () => {
     }
   });
 
+  it.each(["infer", "capability"])(
+    "keeps %s gateway model runs out of local state migration",
+    (command) => {
+      const commandPath = [command, "model", "run"];
+      const argv = ["node", "openclaw", ...commandPath];
+      expect(resolvePolicy({ argv: [...argv, "--gateway"], commandPath })).toMatchObject({
+        skipConfigGuard: false,
+        validateConfigOnly: true,
+      });
+      for (const localArgs of [[], ["--local"]]) {
+        expect(
+          resolvePolicy({ argv: [...argv, ...localArgs], commandPath }).validateConfigOnly,
+        ).toBeUndefined();
+      }
+    },
+  );
+
   it("skips operator-state startup for local Claw authoring commands only", () => {
     for (const subcommand of ["create", "validate", "build", "dev"]) {
       const commandPath = ["claws", subcommand];

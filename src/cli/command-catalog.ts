@@ -16,6 +16,14 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
   return false;
 }
 
+const modelRunStartupPolicy = {
+  // Gateway model runs are RPC clients. The Gateway owns state migrations.
+  configGuard: ({ argv }: { argv: string[] }) =>
+    hasFlag(argv, "--gateway") && !hasFlag(argv, "--local")
+      ? ("validate" as const)
+      : ("run" as const),
+};
+
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
@@ -56,6 +64,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "default",
     },
   },
+  { commandPath: ["infer", "model", "run"], policy: modelRunStartupPolicy },
+  { commandPath: ["capability", "model", "run"], policy: modelRunStartupPolicy },
   {
     commandPath: ["transcripts"],
     // Lists, summaries, and artifact paths own stdout; startup notes must not corrupt them.
