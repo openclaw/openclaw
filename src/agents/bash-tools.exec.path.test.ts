@@ -251,6 +251,19 @@ describe("exec PATH login shell merge", () => {
     expect(value).not.toMatch(/^ok/);
   });
 
+  it("rejects the unsupported cwd alias before command execution", async () => {
+    // `cwd` is dropped by the schema, so a stale caller runs in the tool default instead.
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call-cwd-alias", {
+        command: "echo ok",
+        cwd: os.tmpdir(),
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      } as never),
+    ).rejects.toThrow('exec parameter "cwd" is unsupported; use "workdir" instead');
+  });
+
   it("merges login-shell PATH for host=gateway", async () => {
     if (isWin) {
       return;
