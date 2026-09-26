@@ -176,12 +176,14 @@ export function createPlacementTurnClaimWorkerOps(runtime: { path: string; now?:
                   throw new AggregateError(
                     [error, readError, cleanupError],
                     "Placement turn claim custody could not be settled; restart recovery is required",
+                    { cause: cleanupError },
                   );
                 }
               }
               throw new AggregateError(
                 [error, readError],
                 "Placement turn outcome readback failed",
+                { cause: readError },
               );
             }
           })();
