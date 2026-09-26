@@ -11,6 +11,7 @@ import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
+import { isOpenAIApiBaseUrl } from "./base-url.js";
 import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_VIDEO_BASE_URL = "https://api.openai.com/v1";
@@ -45,6 +46,12 @@ type OpenAIVideoResponse = {
     message?: string;
   } | null;
 };
+
+function isRetiredOpenAIVideoEndpoint(
+  cfg: Parameters<typeof resolveConfiguredOpenAIBaseUrl>[0],
+): boolean {
+  return isOpenAIApiBaseUrl(resolveConfiguredOpenAIBaseUrl(cfg));
+}
 
 function readOpenAIVideoFailureMessage(payload: OpenAIVideoResponse): string | undefined {
   return payload.status === "failed"
@@ -193,6 +200,7 @@ export function buildOpenAIVideoGenerationProvider({
     defaultModel: DEFAULT_OPENAI_VIDEO_MODEL,
     models: [DEFAULT_OPENAI_VIDEO_MODEL, "sora-2-pro"],
     isConfigured: (ctx) =>
+      !isRetiredOpenAIVideoEndpoint(ctx.cfg) &&
       isProviderApiKeyConfigured({
         provider: "openai",
         ...ctx,
