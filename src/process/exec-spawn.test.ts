@@ -209,7 +209,14 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
             expect(isChildProcessTreeAlive(child)).toBe(true);
             process.kill(descendantPid, "SIGKILL");
             expect(await waitForPidToExit(descendantPid)).toBe(true);
-            expect(isChildProcessTreeAlive(child)).toBe(false);
+            // A zombie descendant can be reported as "not running" (isPidAlive) before
+            // the parent actually reaps it and the process group truly disappears
+            // (isChildProcessTreeAlive). Wait for the group-absence condition itself,
+            // using the same 2000ms deadline / 25ms interval as waitForPidToExit,
+            // instead of assuming it follows immediately from PID liveness.
+            await expect
+              .poll(() => isChildProcessTreeAlive(child), { timeout: 2_000, interval: 25 })
+              .toBe(false);
             const kill = process.kill.bind(process);
             let groupReads = 0;
             retiredSignals = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
