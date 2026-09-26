@@ -75,11 +75,11 @@ export class RouteDraftComposerFocus {
       !matchesActivePane ||
       (data.draft === undefined && !data.focusComposer)
     ) {
-      return;
+      return undefined;
     }
     const pane = this.activePane(data.sessionKey);
     if (!pane?.presented) {
-      return;
+      return undefined;
     }
     // A retained pane can defer its commit beyond the page's update. Keep
     // the one-shot properties until that pane has consumed them.

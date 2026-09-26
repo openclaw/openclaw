@@ -304,7 +304,7 @@ describe("chat page retained sessions", () => {
       const pane = expectDefined(paneFor(retainedSessionKey), "retained main chat pane");
       const receivedDrafts: Array<string | undefined> = [];
       const focusRequests: boolean[] = [];
-      const paneCommit = createDeferred<void>();
+      const paneCommit = createDeferred();
 
       Object.defineProperties(pane, {
         updateComplete: { configurable: true, value: paneCommit.promise },
