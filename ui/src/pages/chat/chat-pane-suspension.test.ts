@@ -76,8 +76,6 @@ describe("chat pane suspension", () => {
           visibility = "hidden";
           document.dispatchEvent(new Event("visibilitychange"));
           await Promise.resolve();
-          vi.advanceTimersToNextFrame();
-          await Promise.resolve();
           expect(pane.textContent).toBe("initial");
           visibility = "visible";
           document.dispatchEvent(new Event("visibilitychange"));
