@@ -2235,6 +2235,8 @@ jobs:
             { check_name: "check-additional-runtime-topology-architecture", group: "runtime-topology-architecture", runner: "blacksmith-16vcpu-ubuntu-2404" },
           ].flatMap((row) => splitPrChecks && row.group === "runtime-topology-architecture"
             ? [1, 2, 3].map((stripe) => ({ ...row, check_name: `${row.check_name}-${stripe}`, architecture_stripe: stripe }))
+            : splitPrChecks && row.group === "extension-package-boundary"
+              ? [1, 2, 3].map((stripe) => ({ ...row, check_name: `${row.check_name}-${stripe}`, boundary_shard: `${stripe}/3` }))
             : [row]).filter(({ group }) => !narrowCheckScope ||
             (group === "prompt-snapshots" ? changedScopeHasPromptSnapshotImpact :
               narrowCheckScope.additionalGroups.includes(group)));
@@ -5461,6 +5463,7 @@ jobs:
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           ARCHITECTURE_STRIPE: ${{ matrix.architecture_stripe }}
+          EXTENSION_BOUNDARY_SHARD: ${{ matrix.boundary_shard }}
           TYPE_GRAPH_BOUNDARY_CHECKED: ${{ (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.type_graph_boundary_checked || needs.preflight.outputs.type_graph_boundary_checked) }}
           CHANGED_CORE_TEST_PATHS_JSON: ${{ needs.preflight.outputs.changed_core_test_paths_json }}
           COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -5577,8 +5580,14 @@ jobs:
                 fi
                 ;;
               extension-package-boundary)
-                run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile
-                run_check "test:extensions:package-boundary:canary" pnpm run test:extensions:package-boundary:canary
+                boundary_command=(pnpm run test:extensions:package-boundary:compile)
+                if [[ -n "${EXTENSION_BOUNDARY_SHARD:-}" ]]; then
+                  boundary_command=(env "GOMEMLIMIT=${GOMEMLIMIT:-6GiB}" "${boundary_command[@]}" "--shard=$EXTENSION_BOUNDARY_SHARD")
+                fi
+                run_check "test:extensions:package-boundary:compile" "${boundary_command[@]}"
+                if [[ -z "${EXTENSION_BOUNDARY_SHARD:-}" || "$EXTENSION_BOUNDARY_SHARD" == "1/3" ]]; then
+                  run_check "test:extensions:package-boundary:canary" pnpm run test:extensions:package-boundary:canary
+                fi
                 ;;
               runtime-topology-architecture)
                 if [ -n "${ARCHITECTURE_STRIPE:-}" ]; then

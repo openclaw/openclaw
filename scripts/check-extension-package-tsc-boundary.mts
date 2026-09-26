@@ -44,6 +44,7 @@ import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 type BoundaryMode = "all" | "compile" | "canary";
+type CompileShard = { index: number; count: number };
 type StepOutputCapture = { text: string; truncatedChars: number };
 type CompileTiming = { extensionId: string; elapsedMs: number };
 type SkippedCompileParams = { skippedCount?: number; totalCount?: number };
@@ -100,6 +101,28 @@ function parseMode(argv: string[]): BoundaryMode {
     throw new Error(`Unknown mode: ${mode}`);
   }
   return mode;
+}
+
+function parseCompileShard(argv: string[], mode: BoundaryMode): CompileShard | undefined {
+  const selectors = argv.filter((arg) => arg === "--shard" || arg.startsWith("--shard="));
+  if (selectors.length === 0) {
+    return undefined;
+  }
+  const match = /^--shard=([1-9]\d*)\/([1-9]\d*)$/u.exec(selectors[0]!);
+  const index = Number(match?.[1]);
+  const count = Number(match?.[2]);
+  if (
+    mode !== "compile" ||
+    selectors.length !== 1 ||
+    !Number.isSafeInteger(index) ||
+    !Number.isSafeInteger(count) ||
+    index > count
+  ) {
+    throw new Error(
+      "Compile sharding requires --mode=compile and --shard=N/TOTAL (1 <= N <= TOTAL)",
+    );
+  }
+  return { index: index - 1, count };
 }
 
 /**
@@ -495,7 +518,7 @@ function resolveBoundaryInputReceiptPath(extensionId: string, rootDir = repoRoot
 function resolveBoundaryTsStampPath(extensionId: string, rootDir = repoRoot) {
   return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.json`);
 }
-async function runCompileCheck(extensionIds: string[]) {
+async function runCompileCheck(extensionIds: string[], shard?: CompileShard) {
   const prepStartedAt = Date.now();
   process.stdout.write(
     `preparing plugin-sdk boundary artifacts for ${extensionIds.length} plugins\n`,
@@ -537,7 +560,16 @@ async function runCompileCheck(extensionIds: string[]) {
       }),
     )
     .toSorted((left, right) => right.sourceBytes - left.sourceBytes);
-  const steps = orderedExtensions
+  // Keep complete metadata and preparation above so striped and full runs share receipts.
+  const selectedExtensions = orderedExtensions.filter(
+    (_, index) => !shard || index % shard.count === shard.index,
+  );
+  if (shard) {
+    process.stdout.write(
+      `compile shard ${shard.index + 1}/${shard.count}: ${selectedExtensions.length} of ${extensionIds.length} plugins\n`,
+    );
+  }
+  const steps = selectedExtensions
     .map(({ extensionId, config }, index) => {
       const inputReceipt = resolveBoundaryInputReceiptPath(extensionId);
       const args = [
@@ -559,7 +591,7 @@ async function runCompileCheck(extensionIds: string[]) {
         skippedCompileCount += 1;
         if (verboseFreshLogs) {
           process.stdout.write(
-            `[${index + 1}/${extensionIds.length}] ${extensionId} (fresh; skipping)\n`,
+            `[${index + 1}/${selectedExtensions.length}] ${extensionId} (fresh; skipping)\n`,
           );
         }
         return null;
@@ -571,11 +603,11 @@ async function runCompileCheck(extensionIds: string[]) {
         label: extensionId,
         onStart() {
           startedAt = Date.now();
-          process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
+          process.stdout.write(`[${index + 1}/${selectedExtensions.length}] ${extensionId}\n`);
         },
         onSuccess(result) {
           process.stdout.write(
-            `[${index + 1}/${extensionIds.length}] ${extensionId} (${result.elapsedMs}ms)\n`,
+            `[${index + 1}/${selectedExtensions.length}] ${extensionId} (${result.elapsedMs}ms)\n`,
           );
           completed.push({ recordPath, config, args, startedAt, inputReceipt });
           compileTimings.push({
@@ -593,7 +625,7 @@ async function runCompileCheck(extensionIds: string[]) {
     process.stdout.write(
       formatSkippedCompileProgress({
         skippedCount: skippedCompileCount,
-        totalCount: extensionIds.length,
+        totalCount: selectedExtensions.length,
       }),
     );
   }
@@ -710,6 +742,7 @@ async function runCanaryCheck(extensionIds: string[]) {
 async function runBoundaryCheck(argv: string[]) {
   const startedAt = Date.now();
   const mode = parseMode(argv);
+  const shard = parseCompileShard(argv, mode);
   const optInExtensionIds = collectOptInExtensionIds();
   const canaryExtensionIds = collectCanaryExtensionIds(optInExtensionIds);
   const cleanupExtensionIds = optInExtensionIds;
@@ -726,7 +759,7 @@ async function runBoundaryCheck(argv: string[]) {
     cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
     if (mode === "all" || mode === "compile") {
       ({ prepElapsedMs, compileCount, skippedCompileCount, compileElapsedMs, compileTimings } =
-        await runCompileCheck(optInExtensionIds));
+        await runCompileCheck(optInExtensionIds, shard));
     }
     if (shouldRunCanary) {
       ({ canaryElapsedMs } = await runCanaryCheck(canaryExtensionIds));

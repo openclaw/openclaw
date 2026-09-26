@@ -5182,7 +5182,10 @@ describe("ci workflow guards", () => {
             "prompt-snapshots",
             "source-contracts",
             ...(eventName === "workflow_dispatch" ? ["plugin-sdk-api-diff"] : []),
-            "extension-package-boundary",
+            ...Array.from(
+              { length: eventName === "pull_request" ? 3 : 1 },
+              () => "extension-package-boundary",
+            ),
             ...Array.from(
               { length: eventName === "pull_request" ? 3 : 1 },
               () => "runtime-topology-architecture",
@@ -5197,6 +5200,15 @@ describe("ci workflow guards", () => {
             group: "source-contracts",
             runner: "blacksmith-4vcpu-ubuntu-2404",
           });
+        } else if (
+          !frozen &&
+          eventName === "pull_request" &&
+          row.group === "extension-package-boundary"
+        ) {
+          expect(["1/3", "2/3", "3/3"]).toContain(row.boundary_shard);
+          expect(row.check_name).toBe(
+            `check-additional-extension-package-boundary-${row.boundary_shard.split("/")[0]}`,
+          );
         } else if (
           !frozen &&
           eventName === "pull_request" &&
@@ -6095,6 +6107,82 @@ describe("ci workflow guards", () => {
       }
     }
     expect(calls).toEqual(scripts);
+  });
+
+  it("executes every boundary compile stripe and keeps one canary after compile failure", () => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      historicalCompatibility: false,
+      changedPaths: [],
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    const rows: Array<{ group: string; boundary_shard: string }> = JSON.parse(
+      manifest.outputs.check_additional_matrix!,
+    ).include.filter((row: { group: string }) => row.group === "extension-package-boundary");
+    expect(rows.map((row) => row.boundary_shard)).toEqual(["1/3", "2/3", "3/3"]);
+    const step = readCiWorkflow().jobs["check-additional-shard"].steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Run additional check shard",
+    );
+    const root = tempDirs.make("ci-extension-boundary-stripes-");
+    const bin = path.join(root, "bin");
+    const callsPath = path.join(root, "calls");
+    mkdirSync(bin);
+    writeExecutable(path.join(bin, "pnpm"), [
+      "#!/bin/sh",
+      'printf "%s\\t%s\\n" "$*" "${GOMEMLIMIT:-unset}" >> "$CALLS"',
+      '[ "$*" != "${FAIL_SCRIPT:-}" ]',
+    ]);
+    const runRow = (row: Record<string, unknown>, failScript = "", memoryLimit?: string) => {
+      const context = {
+        eventName: "pull_request" as const,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        matrix: row,
+      };
+      return runWorkflowShellScript(step.run, {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+          CALLS: callsPath,
+          FAIL_SCRIPT: failScript,
+          GOMEMLIMIT: memoryLimit,
+          ADDITIONAL_CHECK_GROUP: "extension-package-boundary",
+          EXTENSION_BOUNDARY_SHARD: String(
+            evaluateWorkflowExpression(step.env.EXTENSION_BOUNDARY_SHARD, context) ?? "",
+          ),
+        },
+      });
+    };
+    const compile = "run test:extensions:package-boundary:compile";
+    const canary = "run test:extensions:package-boundary:canary";
+    for (const failScript of ["", `${compile} --shard=1/3`, canary]) {
+      writeFileSync(callsPath, "");
+      const runs = rows.map((row) => runRow(row, failScript));
+      expect(runs.map(({ status }) => status)).toEqual(failScript ? [1, 0, 0] : [0, 0, 0]);
+      expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual([
+        `${compile} --shard=1/3\t6GiB`,
+        `${canary}\tunset`,
+        `${compile} --shard=2/3\t6GiB`,
+        `${compile} --shard=3/3\t6GiB`,
+      ]);
+    }
+    writeFileSync(callsPath, "");
+    const unsharded = runRow({ group: "extension-package-boundary" }, compile);
+    expect(unsharded.status, unsharded.stderr).toBe(1);
+    expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual([
+      `${compile}\tunset`,
+      `${canary}\tunset`,
+    ]);
+    writeFileSync(callsPath, "");
+    expect(rows.map((row) => runRow(row, "", "2GiB").status)).toEqual([0, 0, 0]);
+    expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual([
+      `${compile} --shard=1/3\t2GiB`,
+      `${canary}\t2GiB`,
+      `${compile} --shard=2/3\t2GiB`,
+      `${compile} --shard=3/3\t2GiB`,
+    ]);
   });
 
   it("executes the architecture owner's complete pipeline across PR stripes with bounded Go memory", () => {
