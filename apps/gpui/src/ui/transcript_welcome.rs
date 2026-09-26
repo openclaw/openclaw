@@ -27,9 +27,8 @@ impl AppView {
                         .channel
                         .as_deref()
                         .is_none_or(|channel| channel == "webchat")
-                    && row.parent_session_key.is_none()
                     && row.spawned_by.is_none()
-                    && row.kind.as_deref() != Some("cron")
+                    && !row.is_cron()
             })
             .collect();
         rows.sort_by(|a, b| {
@@ -109,6 +108,7 @@ impl AppView {
                                     let key = row.key.clone();
                                     Button::new(SharedString::from(format!("recent-{key}")))
                                         .ghost()
+                                        .accessibility_label(row.title())
                                         .w_full()
                                         .h(px(T::RECENT_HEIGHT))
                                         .rounded(px(T::RECENT_RADIUS))
