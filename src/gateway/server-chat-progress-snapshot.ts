@@ -28,8 +28,11 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
 
   // Native traversal owns getters and toJSON. Only already-observed primitives
   // are measured separately, so producer callbacks execute exactly once.
-  return JSON.stringify(event, function (this: object, key: string, value: unknown) {
+  return JSON.stringify(event, function (this: object, key: string, input: unknown) {
+    let value = input;
     if (types.isNumberObject(value)) {
+      // JSON's ToNumber rejects BigInt from custom coercion; Number() would accept it.
+      // oxlint-disable-next-line no-implicit-coercion
       value = +value;
     } else if (types.isStringObject(value)) {
       value = String(value);
