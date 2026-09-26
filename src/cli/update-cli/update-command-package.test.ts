@@ -15,15 +15,21 @@ import {
   writeUpdatePostInstallDoctorResult,
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import * as gitRunner from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
+import { defaultRuntime } from "../../runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import * as shared from "./shared.js";
 import { updateGitInstall } from "./update-command-git.js";
 import * as packageUpdate from "./update-command-package.js";
 import { runPackageInstallUpdate, stagePackageInstallUpdate } from "./update-command-package.js";
+import { UpdateCommandFailure, UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
+import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -138,11 +144,72 @@ it.each(["guidance", "staging"])(
         ].map((message) => ({ check: "npm", code: "EACCES", message })),
       ];
       if (consumer === "staging") {
-        await expect(stagePackageInstallUpdate(params)).rejects.toMatchObject({
+        const error = await stagePackageInstallUpdate(params).then(
+          () => undefined,
+          (cause: unknown) => cause,
+        );
+        assert(error instanceof shared.UpdatePreMutationError);
+        expect(error).toMatchObject({
           reason: "global-install-permission-denied",
           message: expect.stringContaining(globalRoot),
           failureFacts: permissionFacts,
         });
+        const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+        vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+        vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+        const report = {
+          root,
+          mode: "npm" as const,
+          installKind: "package" as const,
+          opts: { json: true, run },
+          controlPlaneUpdateSentinelMeta: null,
+          reason: error.reason,
+          message: error.message,
+          failureFacts: error.failureFacts,
+          stepResult: error.stepResult,
+        };
+        try {
+          const terminal = await reportPreMutationUpdateResult(report).catch(
+            (cause: unknown) => cause,
+          );
+          assert(terminal instanceof UpdateCommandFailure);
+          const recorded = getUpdateRun(run.runId, { env });
+          expect(recorded?.steps, "Both npm attempts must survive staging failure").toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                step: "global update",
+                status: "failed",
+                exitCode: 1,
+                failureFacts: expect.arrayContaining([
+                  expect.objectContaining({ code: "ERESOLVE" }),
+                ]),
+              }),
+              expect.objectContaining({
+                step: "global update (omit optional)",
+                status: "failed",
+                exitCode: 243,
+                failureFacts: permissionFacts,
+              }),
+            ]),
+          );
+          const preview = await prepareUpdateFailureReport(
+            { attemptId: run.runId, result: terminal.result, recordedRun: recorded },
+            { env },
+          );
+          expect(preview.body).toContain("package-install");
+          expect(preview.body).toContain("package-install-omit-optional");
+          expect(preview.body).toContain("ERESOLVE");
+          expect(preview.body).toContain("EACCES");
+          expect(preview.body).not.toContain(root);
+          for (const failure of [error, new UnreportedUpdateAdmissionOutcome(report)]) {
+            const serialized = JSON.stringify(failure);
+            expect(serialized).not.toContain("stdoutTail");
+            expect(serialized).not.toContain("stderrTail");
+            expect(serialized).not.toContain("stepResult");
+          }
+        } finally {
+          closeOpenClawStateDatabaseForTest();
+        }
       } else {
         const result = await runPackageInstallUpdate({
           ...params,

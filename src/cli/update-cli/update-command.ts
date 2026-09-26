@@ -305,6 +305,7 @@ async function updateCommandInternal(
       message: error.message,
       nextAction: error.nextAction,
       failureFacts: error.failureFacts,
+      stepResult: error.stepResult,
       recoverySteps: error.recoverySteps,
     });
   }
