@@ -1,5 +1,4 @@
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
-import { CLI_COMPACTION_GRACE_MS } from "../cli-watchdog-defaults.js";
 import type { FailoverError } from "../failover-error.js";
 import { cliBackendLog } from "./log.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
@@ -136,11 +135,6 @@ export function createCliPluginWatchdog(
           askUserDeadline === undefined
             ? BLOCKED_TOOL_CALL_ABORT_FLOOR_MS
             : Math.max(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS, askUserDeadline - lastOutputAtMs),
-        // lastOutputAtMs restarts on every stdout record, the compaction start record
-        // included, so this ceiling bounds silence since the last record. It is the
-        // compaction's own budget only while the compaction stays silent; a record
-        // emitted mid-compaction restarts it, exactly as one restarts tool grace.
-        compactionGraceMs: CLI_COMPACTION_GRACE_MS,
       });
       if (decision.deferMs !== undefined) {
         noOutputDeadlineMs = nowMs + decision.deferMs;

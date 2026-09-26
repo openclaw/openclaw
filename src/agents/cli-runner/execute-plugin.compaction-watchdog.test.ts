@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import type { RunExit } from "../../process/supervisor/types.js";
-import { CLI_COMPACTION_GRACE_MS, CLI_RESUME_WATCHDOG_DEFAULTS } from "../cli-watchdog-defaults.js";
+import { CLI_RESUME_WATCHDOG_DEFAULTS } from "../cli-watchdog-defaults.js";
 import {
   closePluginTestAdmissions,
   createExecution,
@@ -98,7 +98,7 @@ describe("plugin-owned CLI execution native compaction watchdog", () => {
     });
   });
 
-  it("terminates a compaction that starts and never ends at the compaction ceiling", async () => {
+  it("terminates a compaction that starts and never ends at the outstanding-work floor", async () => {
     vi.useFakeTimers();
     // No overall deadline in play: the no-output watchdog is the only thing that can
     // end this run, which is exactly the stalled-compaction case under review.
@@ -123,20 +123,19 @@ describe("plugin-owned CLI execution native compaction watchdog", () => {
     ).then((result) => (settled = result));
     await vi.waitFor(() => expect(received).toHaveLength(1));
 
-    // One tick short of the ceiling the run is still deferred, so the bound is the
-    // compaction ceiling and not some earlier coincidence.
-    await vi.advanceTimersByTimeAsync(CLI_COMPACTION_GRACE_MS - 2_000);
+    // One tick short of the floor the run is still deferred, so the bound is the
+    // outstanding-work floor and not some earlier coincidence.
+    await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - 2_000);
     expect(settled).toBeUndefined();
 
-    // Crossing it terminates, well inside the 15-minute blocked-tool floor that a
-    // latched compaction would otherwise have held.
+    // Crossing it terminates. A wedged compaction is detected at the same point a
+    // wedged tool call is, which is the accepted cost of not tuning a second value.
     await vi.advanceTimersByTimeAsync(4_000);
     expect(settled).toMatchObject({
       reason: "no-output-timeout",
       timedOut: true,
       noOutputTimedOut: true,
     });
-    expect(CLI_COMPACTION_GRACE_MS).toBeLessThan(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
     await run;
   });
 
@@ -174,20 +173,11 @@ describe("plugin-owned CLI execution native compaction watchdog", () => {
     compactionFinished.resolve();
     await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
 
-    // Floor of the band, measured: the reported silence sits above the budget the
-    // ceiling extends and below the ceiling itself. Any ceiling at or below the budget
-    // reproduces the report, so narrowing the constant past the measurement fails here
-    // rather than passing quietly.
+    // Measured, and the whole reason this case exists: the reported silence sits above
+    // the budget that killed the run and below the floor compaction now inherits. Both
+    // bounds are shipped constants, so neither is a number anyone had to choose here.
     expect(REPORTED_COMPACTION_SILENCE_MS).toBeGreaterThan(CLI_RESUME_WATCHDOG_DEFAULTS.maxMs);
-    expect(REPORTED_COMPACTION_SILENCE_MS).toBeLessThan(CLI_COMPACTION_GRACE_MS);
-
-    // Upper end of the band: the ceiling must stay under the blocked-tool floor it
-    // replaced, or compaction would gain nothing over borrowing that floor. This is a
-    // real constraint rather than a preference, and it is the only one on this side.
-    // The exact point between the floor and this bound is a judgment about how long to
-    // wait on a wedged compaction, and the PR description says so instead of dressing
-    // it up as a derivation.
-    expect(CLI_COMPACTION_GRACE_MS).toBeLessThan(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
+    expect(REPORTED_COMPACTION_SILENCE_MS).toBeLessThan(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
   });
 
   it("reproduces the reported termination when the watchdog cannot see the compaction", async () => {
@@ -256,16 +246,9 @@ describe("plugin-owned CLI execution native compaction watchdog", () => {
     ).then((result) => (settled = result));
     await vi.waitFor(() => expect(received).toHaveLength(1));
 
-    // Past the compaction ceiling and still running: the tool call, not compaction,
-    // is what governs the grace here.
-    await vi.advanceTimersByTimeAsync(CLI_COMPACTION_GRACE_MS + 60_000);
-    expect(settled).toBeUndefined();
-
     // One tick short of the blocked-tool floor the run is still deferred, so the
-    // bound is that floor exactly, not a cap applied some ticks late.
-    await vi.advanceTimersByTimeAsync(
-      BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - (CLI_COMPACTION_GRACE_MS + 60_000) - 2_000,
-    );
+    // bound is that floor exactly and compaction on the same tick did not shorten it.
+    await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - 2_000);
     expect(settled).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(4_000);
@@ -277,7 +260,7 @@ describe("plugin-owned CLI execution native compaction watchdog", () => {
     await run;
   });
 
-  it("measures the compaction ceiling from the last stdout record, not compaction start", async () => {
+  it("measures the compaction grace from the last stdout record, not compaction start", async () => {
     vi.useFakeTimers();
     const { context } = await createExecution({ timeoutMs: 60 * 60_000 });
     const received: string[] = [];
@@ -289,7 +272,7 @@ describe("plugin-owned CLI execution native compaction watchdog", () => {
         yield { type: "system", subtype: "status", status: "compacting" };
         // Claude Code is silent while it compacts, but the watchdog does not assume
         // so: any stdout record restarts the quiet clock, exactly as it does for a
-        // tool call, and the ceiling is the silence since that record.
+        // tool call, and the grace bounds the silence since that record.
         await midCompactionRecord.promise;
         yield { type: "stream_event", event: { type: "ping" } };
         await waitUntilAborted(execution);
@@ -303,17 +286,17 @@ describe("plugin-owned CLI execution native compaction watchdog", () => {
     ).then((result) => (settled = result));
     await vi.waitFor(() => expect(received).toHaveLength(1));
 
-    await vi.advanceTimersByTimeAsync(CLI_COMPACTION_GRACE_MS - 60_000);
+    await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - 60_000);
     midCompactionRecord.resolve();
     await vi.waitFor(() => expect(received).toHaveLength(2));
 
-    // The ceiling measured from compaction start has passed and the run is still
+    // The grace measured from compaction start has passed and the run is still
     // deferred, so that is not the clock in play.
     await vi.advanceTimersByTimeAsync(60_000 + 2_000);
     expect(settled).toBeUndefined();
 
-    // One tick short of a full ceiling after the mid-compaction record: still deferred.
-    await vi.advanceTimersByTimeAsync(CLI_COMPACTION_GRACE_MS - 62_000 - 2_000);
+    // One tick short of a full grace after the mid-compaction record: still deferred.
+    await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - 62_000 - 2_000);
     expect(settled).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(4_000);
@@ -398,10 +381,10 @@ describe("compaction reported as outstanding work", () => {
     expect(workChanged).toEqual([true, false, false]);
   });
 
-  it("reports the narrower compaction ceiling only while compaction is the sole work", async () => {
+  it("reports every work mix through the one-argument call shape untouched callers assert", async () => {
     vi.useFakeTimers();
     const { context } = await createExecution();
-    const reported: [boolean, number | undefined][] = [];
+    const onOutstandingWorkChange = vi.fn();
     let compacting = false;
     const compactionChangeListeners = new Set<() => void>();
     const onCompactionActiveChange = (listener: () => void) => {
@@ -420,10 +403,9 @@ describe("compaction reported as outstanding work", () => {
       async function* () {
         setCompacting(true);
         yield { type: "system", subtype: "status", status: "compacting" };
-        // Background work appears while compaction is still running: that work is not
-        // bounded by compaction, so the report must fall back to the default floor.
+        // Background work appears alongside the compaction, then drains again, so the
+        // report is exercised with compaction alone and with compaction plus other work.
         yield { type: "system", subtype: "background_tasks_changed", tasks: [{ id: "t1" }] };
-        // It drains while compaction is still running: back to the narrower ceiling.
         yield { type: "system", subtype: "background_tasks_changed", tasks: [] };
         setCompacting(false);
         yield { compact_result: "success" };
@@ -433,21 +415,14 @@ describe("compaction reported as outstanding work", () => {
         noOutputTimeoutMs: 10_000,
         compactionActive: () => compacting,
         onCompactionActiveChange,
-        onOutstandingWorkChange: (active, graceFloorMs) => {
-          reported.push([active, graceFloorMs]);
-        },
+        onOutstandingWorkChange,
       },
     );
     await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
 
-    // Exact sequence, not membership: the narrowed floor must appear only on the
-    // compaction-only reports and must never latch onto concurrent tool work.
-    expect(reported).toEqual([
-      [true, CLI_COMPACTION_GRACE_MS],
-      [true, undefined],
-      [true, CLI_COMPACTION_GRACE_MS],
-      [false, undefined],
-      [false, undefined],
-    ]);
+    // Compaction is reported as plain outstanding work and carries no extra argument,
+    // so a caller that asserts the exact call shape sees what it saw before this
+    // change. A second argument added back here fails on arity, not on value.
+    expect(onOutstandingWorkChange.mock.calls).toEqual([[true], [true], [true], [false], [false]]);
   });
 });

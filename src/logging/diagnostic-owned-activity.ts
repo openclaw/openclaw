@@ -73,8 +73,7 @@ export function beginDiagnosticBackendActivity(params: {
   assertCurrent: () => void;
 }): {
   observeOutput: (modelProgress: boolean) => boolean;
-  /** `graceFloorMs` narrows the allowance for work bounded tighter than a blocked tool. */
-  setOutstandingWork: (active: boolean, graceFloorMs?: number) => void;
+  setOutstandingWork: (active: boolean) => void;
   close: () => void;
 } {
   const { owner, noOutputTimeoutMs, assertCurrent } = params;
@@ -105,12 +104,12 @@ export function beginDiagnosticBackendActivity(params: {
       touchSessionActivity(activity, "model_call:stream_progress", now);
       return true;
     },
-    setOutstandingWork: (active, graceFloorMs) => {
+    setOutstandingWork: (active) => {
       if (!currentActivity()) {
         return;
       }
       const allowanceMs = active
-        ? Math.max(noOutputTimeoutMs, graceFloorMs ?? BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+        ? Math.max(noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
         : noOutputTimeoutMs;
       // Work-state changes preserve the last output's origin, not a new progress clock.
       backendActivity.deadlineAtMs += allowanceMs - quietAllowanceMs;

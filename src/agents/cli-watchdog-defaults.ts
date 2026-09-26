@@ -12,22 +12,3 @@ export const CLI_RESUME_WATCHDOG_DEFAULTS = {
   minMs: 60_000,
   maxMs: 180_000,
 } as const;
-
-// Native compaction is silent but busy, so it defers the no-output watchdog. It is
-// one summarization call over the transcript, not an open-ended tool call, so it
-// gets this ceiling instead of BLOCKED_TOOL_CALL_ABORT_FLOOR_MS: a start record with
-// no end record is detected here rather than a quarter hour later.
-//
-// Floor, measured: the compaction reported in #138644 consumed 180_444ms of stream
-// silence, so any ceiling at or below CLI_RESUME_WATCHDOG_DEFAULTS.maxMs reproduces
-// that report exactly. Upper bound, structural: it must stay under
-// BLOCKED_TOOL_CALL_ABORT_FLOOR_MS, the floor compaction used to borrow, or this gains
-// nothing. Both are asserted in execute-plugin.compaction-watchdog.test.ts against the
-// reported timing.
-//
-// The exact point between them is a judgment, not a derivation, and is deliberately
-// not dressed up as one here. It trades headroom for an unmeasured slower compaction
-// against how long a wedged one stays alive. Note what it does NOT trade against:
-// resolveRunStaleThresholdMs takes a Math.max that already includes this deadline, so
-// stale-run takeover waits for this ceiling at any value and cannot race it.
-export const CLI_COMPACTION_GRACE_MS = 5 * 60_000;

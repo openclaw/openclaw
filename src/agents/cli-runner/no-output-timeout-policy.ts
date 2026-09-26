@@ -11,23 +11,7 @@ type CliNoOutputTimeoutPolicyParams = {
   hasReplayUnsafeActivity: boolean;
   allowResumeControlOnlyRetry?: boolean;
   outstandingWorkGraceMs?: number;
-  compactionGraceMs?: number;
 };
-
-// Compaction on its own is a single summarization call, so it caps the grace at its
-// own narrower ceiling instead of holding the blocked-tool floor. Concurrent tool or
-// background work keeps the wider floor that work already had.
-function resolveOutstandingWorkGraceMs(
-  params: Pick<CliNoOutputTimeoutPolicyParams, "outstandingWorkGraceMs" | "compactionGraceMs">,
-  toolWork: boolean,
-): number | undefined {
-  if (params.outstandingWorkGraceMs === undefined || toolWork) {
-    return params.outstandingWorkGraceMs;
-  }
-  return params.compactionGraceMs === undefined
-    ? params.outstandingWorkGraceMs
-    : Math.min(params.outstandingWorkGraceMs, params.compactionGraceMs);
-}
 
 export const isReplaySafeCliResumeControlOnly = (useResume: boolean, ...unsafe: boolean[]) =>
   useResume && !unsafe.some(Boolean);
@@ -36,8 +20,10 @@ export function resolveCliNoOutputTimeoutDecision(params: CliNoOutputTimeoutPoli
   error: FailoverError;
 } {
   const toolWork = params.cliTimeout.activeToolCount + params.cliTimeout.backgroundTaskCount > 0;
+  // Native compaction is silent but busy, so it is outstanding work like any blocked
+  // call and inherits the same grace that work already holds on this path.
   const outstandingWork = toolWork || params.cliTimeout.compactionActive === true;
-  const graceMs = resolveOutstandingWorkGraceMs(params, toolWork);
+  const graceMs = params.outstandingWorkGraceMs;
   const deferMs =
     outstandingWork && graceMs !== undefined
       ? Math.max(params.timeoutMs, graceMs) - params.quietDurationMs

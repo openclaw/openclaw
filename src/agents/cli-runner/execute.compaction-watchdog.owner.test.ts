@@ -26,7 +26,6 @@ import { logSessionStateChange, startDiagnosticHeartbeat } from "../../logging/d
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 import type { CliBackendParseJsonlLifecycleEvent } from "../../plugins/cli-backend.types.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
-import { CLI_COMPACTION_GRACE_MS } from "../cli-watchdog-defaults.js";
 import { type CliWatchdogClock, defaultCliWatchdogClock } from "./execute-plugin-watchdog.js";
 import { executePreparedCliRun } from "./execute.js";
 import {
@@ -36,7 +35,7 @@ import {
 
 /** The production ceiling a resumed claude-cli turn actually runs with. */
 const NO_OUTPUT_TIMEOUT_MS = 180_000;
-/** Longer than the no-output budget, still inside the compaction ceiling. */
+/** Longer than the no-output budget, and short of the stuck-session abort floor. */
 const QUIET_ADVANCE_MS = 240_000;
 /** `resolveStuckSessionAbortMs` in `diagnostic.ts`: max(5 minutes, 3 x the 120s warn). */
 const STUCK_SESSION_ABORT_MS = 360_000;
@@ -44,7 +43,7 @@ const STUCK_SESSION_ABORT_MS = 360_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 /**
  * A plugin watchdog clock that never ticks. The watchdog is the other liveness
- * owner and would end a compaction-only stall at the ceiling before diagnostics
+ * owner and would end a compaction-only stall at the grace floor before diagnostics
  * recovery gets its turn, so a case observing the diagnostics owner alone mutes it.
  */
 const silencedWatchdogClock: CliWatchdogClock = {
@@ -128,14 +127,13 @@ it("holds the diagnostics recovery deadline open across a streamed compaction", 
 
     // The recovery timer owns its own clock: a deferred watchdog does not stop it.
     expect(recoverStuckSession).not.toHaveBeenCalled();
-    // Compaction alone gets its own ceiling here, not the blocked-tool floor a
-    // latched tool call holds, so a wedged compaction is reachable by recovery
-    // in minutes rather than a quarter hour.
+    // Compaction reaches this owner as ordinary outstanding work, so it holds the same
+    // blocked-tool floor a latched tool call holds. No compaction-specific value is
+    // carried across the hop for anyone to tune.
     expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
-      activeBackendLivenessDeadlineAtMs: startedAt + CLI_COMPACTION_GRACE_MS,
+      activeBackendLivenessDeadlineAtMs: startedAt + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
       lastProgressAgeMs: QUIET_ADVANCE_MS,
     });
-    expect(CLI_COMPACTION_GRACE_MS).toBeLessThan(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
 
     release.resolve();
     const clearedAt = await ended.promise;
@@ -225,7 +223,7 @@ it("requests recovery for a compaction that never ends once the stuck-session fl
   vi.setSystemTime(Date.parse("2026-09-24T00:00:00Z"));
   const recoverStuckSession = vi.fn();
   startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
-  // The watchdog would kill this run at the compaction ceiling first. Muting its
+  // The watchdog would kill this run at the grace floor first. Muting its
   // clock is the only double here: the compaction still streams as a backend record
   // and reaches diagnostics through the real wiring, so this is the outcome the
   // snapshot deadline above stands in for, observed directly.
@@ -269,13 +267,14 @@ it("requests recovery for a compaction that never ends once the stuck-session fl
   try {
     await started.promise;
     // Diagnostics reclaims a compaction-only stall at max(stuck-session abort floor,
-    // compaction ceiling), which is the 360s floor: the last heartbeat before it must
-    // stay quiet...
-    await vi.advanceTimersByTimeAsync(STUCK_SESSION_ABORT_MS - HEARTBEAT_INTERVAL_MS);
+    // the backend allowance), which compaction now inherits from outstanding work: the
+    // last heartbeat before the blocked-tool floor must stay quiet...
+    await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - HEARTBEAT_INTERVAL_MS);
     expect(recoverStuckSession).not.toHaveBeenCalled();
 
-    // ...and the first heartbeat past it must ask for recovery, a quarter hour short
-    // of the blocked-tool floor a latched compaction used to hold on this owner.
+    // ...and the first heartbeat past it must ask for recovery. This is the accepted
+    // cost of deleting the cap: a wedged compaction is reclaimed on the same clock as
+    // a wedged tool call, not on an earlier compaction-only one.
     await vi.advanceTimersByTimeAsync(2 * HEARTBEAT_INTERVAL_MS);
     expect(recoverStuckSession).toHaveBeenCalled();
     expect(recoverStuckSession.mock.calls[0]?.[0]).toMatchObject({
@@ -283,9 +282,9 @@ it("requests recovery for a compaction that never ends once the stuck-session fl
       sessionKey: "agent:main:compaction-owner-stuck",
       allowActiveAbort: true,
     });
-    expect(STUCK_SESSION_ABORT_MS + HEARTBEAT_INTERVAL_MS).toBeLessThan(
-      BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
-    );
+    // The stuck-session floor alone would not have reclaimed it: the wider backend
+    // allowance is what held recovery off, which is the hop this case covers.
+    expect(STUCK_SESSION_ABORT_MS).toBeLessThan(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
   } finally {
     finish.resolve();
     await Promise.allSettled([run]);
@@ -293,7 +292,7 @@ it("requests recovery for a compaction that never ends once the stuck-session fl
   }
 });
 
-it("keeps a parsed tool in flight during compaction on the tool clock, not the ceiling", async () => {
+it("keeps a parsed tool in flight during compaction on the tool clock", async () => {
   vi.useFakeTimers({
     toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
@@ -356,13 +355,13 @@ it("keeps a parsed tool in flight during compaction on the tool clock, not the c
     await waitForDiagnosticEventsDrained();
 
     // The plugin runner leaves parsed tools out of its outstanding-work report, so the
-    // compaction ceiling is still what it reports here. That is not a gap: the tool's
-    // own tool.execution.started event makes this a tool_call for diagnostics, and the
-    // tool branch of the stale threshold never reads the backend deadline.
+    // compaction's own allowance is still what it reports here. That is not a gap: the
+    // tool's own tool.execution.started event makes this a tool_call for diagnostics,
+    // and the tool branch of the stale threshold never reads the backend deadline.
     const snapshot = getDiagnosticSessionActivitySnapshot(context.params);
     expect(snapshot).toMatchObject({
       activeWorkKind: "tool_call",
-      activeBackendLivenessDeadlineAtMs: startedAt + CLI_COMPACTION_GRACE_MS,
+      activeBackendLivenessDeadlineAtMs: startedAt + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
     });
     expect(
       resolveRunStaleThresholdMs(snapshot, snapshot.lastProgressAgeMs ?? 0, STUCK_SESSION_ABORT_MS),

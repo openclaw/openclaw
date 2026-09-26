@@ -21,7 +21,6 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
-import { CLI_COMPACTION_GRACE_MS } from "../cli-watchdog-defaults.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
@@ -431,7 +430,7 @@ export async function executePluginOwnedProcess(params: {
   noOutputTimeoutMs: number;
   watchdogClock?: CliWatchdogClock;
   consumeStdout: (chunk: string) => void;
-  onOutstandingWorkChange?: (active: boolean, graceFloorMs?: number) => void;
+  onOutstandingWorkChange?: (active: boolean) => void;
   activeToolCount?: () => number;
   compactionActive?: () => boolean;
   onCompactionActiveChange?: (listener: () => void) => () => void;
@@ -494,16 +493,9 @@ export async function executePluginOwnedProcess(params: {
     // blocked-tool branch before the backend deadline is ever consulted. Counting
     // them again would double-report the same work.
     const toolWork = outstanding.approvals > 0 || outstanding.background > 0;
-    const compactionWork = params.compactionActive?.() ?? false;
-    // Compaction alone carries its narrower ceiling into diagnostics recovery too, so
-    // a wedged compaction cannot hold the blocked-tool floor on that path either.
-    if (!toolWork && compactionWork) {
-      params.onOutstandingWorkChange?.(true, CLI_COMPACTION_GRACE_MS);
-      return;
-    }
-    // Everything else keeps the single-argument call it already made, so a report that
-    // carries no narrowed floor is indistinguishable from one made before this change.
-    params.onOutstandingWorkChange?.(toolWork || compactionWork);
+    // Compaction joins the same report tool work already made, so diagnostics recovery
+    // holds a silent compaction open exactly as long as it holds a blocked tool call.
+    params.onOutstandingWorkChange?.(toolWork || (params.compactionActive?.() ?? false));
   };
   const updatePendingApproval = (delta: number) => {
     outstanding.approvals = Math.max(0, outstanding.approvals + delta);
