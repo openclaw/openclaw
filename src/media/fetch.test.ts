@@ -702,6 +702,45 @@ describe("readRemoteMediaBuffer", () => {
     }
   });
 
+  it("clamps an over-cap Retry-After instead of retrying on generic backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      // A valid but long Retry-After (over the 60s media cap) still marks the
+      // origin as rate-limited. The hint must be preserved (bounded at the cap)
+      // so the scheduler honors the caller's capped wait rather than retrying on
+      // generic backoff — here zero, which would immediately re-request a
+      // rate-limited origin.
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("rate limited", {
+            status: 429,
+            headers: { "retry-after": "61" },
+          }),
+        )
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+      const result = readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+        retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      });
+
+      // 61s is bounded to the media cap (60s), so the retry must not fire before
+      // the bounded delay elapses — and certainly not on the zero generic backoff.
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ buffer: Buffer.from("ok") });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves a caller-provided retryAfterMs callback for unheaded retries", async () => {
     vi.useFakeTimers();
     try {

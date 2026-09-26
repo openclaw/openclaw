@@ -34,8 +34,9 @@ const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
 // cleared once headers arrive, so healthy streaming bodies keep their own limits.
 const DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 15 * 60_000;
 
-// A rate-limited origin's Retry-After is honored up to this cap so a misbehaving
-// header cannot stall a media download past the caller's own retry budget.
+// A rate-limited origin's Retry-After is clamped to this cap so a misbehaving
+// header cannot propagate an unbounded hint; the scheduler then caps the honored
+// delay at the caller's own maxDelayMs (retryAfterMaxDelayMs defaults to it).
 const MAX_MEDIA_RETRY_AFTER_MS = 60_000;
 
 /** Remote media bytes plus metadata before they are persisted to the media store. */
@@ -443,8 +444,13 @@ function parseRetryAfterMs(res: Response): number | undefined {
   if (seconds === undefined) {
     return undefined;
   }
-  const delayMs = seconds * 1_000;
-  return delayMs <= MAX_MEDIA_RETRY_AFTER_MS ? delayMs : undefined;
+  // Clamp rather than discard an over-cap Retry-After: a valid long hint still
+  // marks the origin as rate-limited. The retry scheduler caps the honored delay
+  // at the caller's own maxDelayMs (retryAfterMaxDelayMs defaults to maxDelayMs),
+  // so a long or hostile header cannot stall a download past the caller's budget
+  // — and dropping the hint would retry on generic backoff instead of the
+  // caller's capped wait.
+  return Math.min(seconds * 1_000, MAX_MEDIA_RETRY_AFTER_MS);
 }
 
 // Caller-provided responses may already be partially read; discard their remaining bytes too.
