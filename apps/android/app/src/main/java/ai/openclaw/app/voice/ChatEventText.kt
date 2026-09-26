@@ -12,8 +12,7 @@ internal object ChatEventText {
   fun assistantTextFromPayload(payload: JsonObject): String? = assistantTextFromMessage(payload["message"])
 
   /** Local stream snapshots preserve whitespace and distinguish an empty rewrite from no text. */
-  fun assistantStreamTextFromPayload(payload: JsonObject): String? =
-    assistantTextParts(payload["message"])?.takeIf { it.isNotEmpty() }?.joinToString("\n")
+  fun assistantStreamTextFromPayload(payload: JsonObject): String? = assistantTextParts(payload["message"])?.takeIf { it.isNotEmpty() }?.joinToString("\n")
 
   /** Extracts text from assistant messages while ignoring non-assistant roles. */
   fun assistantTextFromMessage(messageEl: JsonElement?): String? =
