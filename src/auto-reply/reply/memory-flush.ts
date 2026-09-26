@@ -1,6 +1,7 @@
 // Builds memory flush prompts when conversation context exceeds model budget.
 import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anthropic";
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
@@ -36,6 +37,14 @@ export function resolveEffectivePromptTokens(
   // Flush gating projects the next input context by adding the previous
   // completion and the current user prompt estimate.
   return base + output + estimate;
+}
+
+export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
+  const trimmed = prompt?.trim();
+  const tokens = trimmed
+    ? estimateMessagesTokens([{ role: "user", content: trimmed, timestamp: Date.now() }])
+    : 0;
+  return Number.isFinite(tokens) && tokens > 0 ? Math.ceil(tokens) : undefined;
 }
 
 /** Resolves the blocking threshold using the selected reserve and server floor. */
