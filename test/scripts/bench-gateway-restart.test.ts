@@ -8,7 +8,6 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
-import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
 import * as gatewayBenchProbes from "../../scripts/lib/gateway-bench-probes.ts";
 import { parseProcessRssKb, requestProbeStatus } from "../../scripts/lib/gateway-bench-probes.ts";
 import {
@@ -27,7 +26,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../src/state/openclaw-state-db.js";
-import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 type RestartSampleFixture = Parameters<typeof testing.summarizeCase>[1][number];
 type ProbeFixture = RestartSampleFixture["initialHealthz"];
@@ -467,11 +465,6 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   it("reports deadline expiry separately from child exit", () => {
     expect(testing.resolveRestartDeadlineFailure(false)).toBe("restart_deadline_timeout");
     expect(testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
-  });
-
-  registerStopChildBehaviorTests({
-    stopChild,
-    queuedExitCode: 0,
   });
 
   it("marks clean and signaled pre-teardown child exits as benchmark failures", () => {
