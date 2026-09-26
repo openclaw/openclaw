@@ -10,9 +10,11 @@ import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import * as refreshState from "./refresh-state.js";
+import { toWatchRoot } from "./refresh-watch-path.js";
 import { useSkillsWatcherFixture } from "./refresh.watcher.test-support.js";
 
 const starts: Promise<void>[] = [];
+let onWatchEvent: ((event: unknown) => void) | undefined;
 let onSubscription:
   | ((root: Root, options: WatchOptions, subscription: WatchSubscription) => void)
   | undefined;
@@ -23,7 +25,32 @@ vi.mock("@openclaw/fs-safe/watch", async () => {
   ) as typeof import("@openclaw/fs-safe/watch");
   const watch: typeof actual.watch = (root, options) => {
     // Native delivery is the contract under test, not a periodic repair scan.
-    const subscription = actual.watch(root, { ...options, intervalMs: 2_147_483_647 });
+    const subscription = actual.watch(root, {
+      ...options,
+      intervalMs: 2_147_483_647,
+      onInvalidate(invalidation) {
+        onWatchEvent?.({
+          kind: "invalidation",
+          scopes: options.scopes.slice(0, 4),
+          reason: invalidation.reason,
+          changes: invalidation.changes?.slice(0, 8),
+        });
+        options.onInvalidate(invalidation);
+      },
+      onHealth(health) {
+        onWatchEvent?.({
+          kind: "health",
+          state: health.state,
+          mode: health.mode,
+          directories: health.directories,
+          failure: health.failure && {
+            operation: health.failure.operation,
+            code: health.failure.code,
+          },
+        });
+        options.onHealth?.(health);
+      },
+    });
     starts.push(subscription.ready);
     onSubscription?.(root, options, subscription);
     return subscription;
@@ -46,6 +73,7 @@ const nativeSupported =
 beforeEach(() => {
   starts.length = 0;
   onSubscription = undefined;
+  onWatchEvent = undefined;
 });
 
 it.skipIf(!nativeSupported)(
@@ -53,6 +81,7 @@ it.skipIf(!nativeSupported)(
   async () => {
     const workspaceDir = fixture.workspaceDir;
     const sourceRoot = path.join(workspaceDir, "skills");
+    const sourceKey = toWatchRoot(sourceRoot);
     const linkedRoot = await fixture.createFixtureDirectory("linked-source");
     await fs.rm(sourceRoot, { recursive: true });
     await fs.symlink(linkedRoot, sourceRoot, process.platform === "win32" ? "junction" : "dir");
@@ -67,7 +96,7 @@ it.skipIf(!nativeSupported)(
     vi.spyOn(source, "skillsObservationScope").mockImplementation(async (...args) => {
       const scope = await plan(...args);
       logicalTargets.set(scope, args[1].path);
-      if (!held && args[1].path === sourceRoot && scope.kind === "entry") {
+      if (!held && args[1].path === sourceKey && scope.kind === "entry") {
         held = true;
         planned.resolve();
         await release.promise;
@@ -75,7 +104,7 @@ it.skipIf(!nativeSupported)(
       return scope;
     });
     onSubscription = (root, options, subscription) => {
-      if (!options.scopes.some((scope) => logicalTargets.get(scope) === sourceRoot)) {
+      if (!options.scopes.some((scope) => logicalTargets.get(scope) === sourceKey)) {
         return;
       }
       if (options.scopes[0]?.kind === "entry") {
@@ -106,7 +135,7 @@ it.skipIf(!nativeSupported)(
       await replacement.ready;
       await Promise.resolve();
       expect(replacementAuthority).toBe(firstAuthority);
-      expect(registry.pathWatchers.get(sourceRoot)?.verified).toBe(true);
+      expect(registry.pathWatchers.get(sourceKey)?.verified).toBe(true);
       expect(read()).toEqual(["Replacement before registration"]);
       const changed = createDeferredCore();
       unsubscribe = refresh.registerSkillsChangeListener((event) => {
@@ -130,9 +159,11 @@ it.skipIf(!nativeSupported).each(["directory", "missing"] as const)(
   async (initialKind) => {
     const workspaceDir = fixture.workspaceDir;
     const sourceRoot = path.join(workspaceDir, "skills");
-    const companionRoot = path.join(sourceRoot, "skills");
+    const sourceKey = toWatchRoot(sourceRoot);
+    const companionKey = toWatchRoot(path.join(sourceRoot, "skills"));
     // No observation of the lexical source's authority can see target edits.
     const targetRoot = await fs.realpath(outside.make("skills-startup-target-"));
+    const targetKey = toWatchRoot(targetRoot);
     const write = (description: string) =>
       writeSkill({ dir: path.join(targetRoot, "guide"), name: "guide", description });
     await write("Discovered at admission");
@@ -170,13 +201,13 @@ it.skipIf(!nativeSupported).each(["directory", "missing"] as const)(
     vi.spyOn(source, "skillsObservationScope").mockImplementation(async (...args) => {
       const scope = await plan(...args);
       logicalTargets.set(scope, args[1].path);
-      if (args[1].path === sourceRoot) {
+      if (args[1].path === sourceKey) {
         expect(scope.kind).toBe("tree");
         planned.resolve();
         await release.promise;
-      } else if (args[1].path === companionRoot) {
+      } else if (args[1].path === companionKey) {
         await releaseCompanion.promise;
-      } else if (args[1].path === targetRoot) {
+      } else if (args[1].path === targetKey) {
         targetPlanned.resolve();
         await releaseTarget.promise;
       }
@@ -184,10 +215,10 @@ it.skipIf(!nativeSupported).each(["directory", "missing"] as const)(
     });
     onSubscription = (root, options, subscription) => {
       const logicalPath = logicalTargets.get(options.scopes[0]!);
-      if (logicalPath === sourceRoot) {
+      if (logicalPath === sourceKey) {
         lexicalAuthority = root;
         lexicalStarted.resolve(subscription);
-      } else if (logicalPath === targetRoot) {
+      } else if (logicalPath === targetKey) {
         targetSubscription = subscription;
       }
     };
@@ -201,7 +232,7 @@ it.skipIf(!nativeSupported).each(["directory", "missing"] as const)(
       if (event.reason === "watch-available") {
         available.resolve({
           covered: registry.hasVerifiedCoverage(watcherKey),
-          targetVerified: registry.pathWatchers.get(targetRoot)?.verified === true,
+          targetVerified: registry.pathWatchers.get(targetKey)?.verified === true,
           observedDirectories: targetSubscription?.health().directories ?? 0,
         });
       }
@@ -226,11 +257,11 @@ it.skipIf(!nativeSupported).each(["directory", "missing"] as const)(
       expect(lexical.health()).toMatchObject({ state: "ready", mode: "events" });
       // Assert before releasing any other source: the old handoff fails here,
       // rather than being rescued by another subscriber's startup/failure event.
-      expect(registry.pathWatchers.has(targetRoot)).toBe(true);
+      expect(registry.pathWatchers.has(targetKey)).toBe(true);
       await targetPlanned.promise;
       expect(registry.hasVerifiedCoverage(watcherKey)).toBe(false);
       expect(events.mock.calls.some(([event]) => event.reason === "watch-available")).toBe(false);
-      expect(await registry.pathWatchers.get(sourceRoot)?.authority).toBe(lexicalAuthority);
+      expect(await registry.pathWatchers.get(sourceKey)?.authority).toBe(lexicalAuthority);
       releaseCompanion.resolve();
       releaseTarget.resolve();
       const admitted = await available.promise;
@@ -254,7 +285,44 @@ it.skipIf(!nativeSupported).each(["directory", "missing"] as const)(
 
 it.skipIf(!nativeSupported)(
   "keeps native supporting create, atomic replacement and deletion out of discovery",
-  async () => {
+  async ({ onTestFailed }) => {
+    let phase = "ready";
+    const observations: unknown[] = [];
+    const owned: WatchSubscription[] = [];
+    onWatchEvent = (event) => {
+      if (observations.length === 24) {
+        observations.shift();
+      }
+      observations.push({ phase, event });
+    };
+    onSubscription = (_root, _options, subscription) => {
+      if (owned.length < 16) {
+        owned.push(subscription);
+      }
+    };
+    onTestFailed(() => {
+      console.error(
+        JSON.stringify({
+          owner: "skills",
+          case: "supporting-files",
+          platform: process.platform,
+          phase,
+          observations,
+          health: owned.map((subscription) => {
+            const health = subscription.health();
+            return {
+              state: health.state,
+              mode: health.mode,
+              directories: health.directories,
+              failure: health.failure && {
+                operation: health.failure.operation,
+                code: health.failure.code,
+              },
+            };
+          }),
+        }),
+      );
+    });
     const workspaceDir = fixture.workspaceDir;
     const skillDir = path.join(workspaceDir, "skills", "guide");
     const targetWorkspaceDir = await fixture.createFixtureDirectory("sandbox");
@@ -280,12 +348,14 @@ it.skipIf(!nativeSupported)(
     );
     await Promise.all(planning);
     await Promise.all(starts);
+    phase = "imports";
     const { buildSkillSnapshot } = await import("../loading/workspace-skill-prompt.js");
     const { syncWorkspaceSkills } = await import("../loading/workspace-skill-sync.runtime.js");
     const loadOptions = {
       bundledSkillsDir: "",
       managedSkillsDir: path.join(workspaceDir, "missing-managed"),
     };
+    phase = "snapshot";
     const skillsSnapshot = await buildSkillSnapshot(workspaceDir, loadOptions);
     const syncOptions = {
       sourceWorkspaceDir: workspaceDir,
@@ -293,6 +363,7 @@ it.skipIf(!nativeSupported)(
       skillsSnapshot,
       ...loadOptions,
     };
+    phase = "initial-sync";
     await syncWorkspaceSkills(syncOptions);
     const copiedScript = path.join(targetWorkspaceDir, "skills", "guide", "scripts", "run.sh");
     const sourceVersion = refreshState.getSkillsSourceVersion(workspaceDir);
@@ -311,26 +382,32 @@ it.skipIf(!nativeSupported)(
       }
     });
     try {
+      phase = "create";
       await fs.writeFile(scriptPath, "created");
       await supporting.promise;
+      phase += "-sync";
       await syncWorkspaceSkills(syncOptions);
       expect(await fs.readFile(copiedScript, "utf8")).toBe("created");
       expect(refreshState.getSkillsSourceVersion(workspaceDir)).toBe(sourceVersion);
 
       supporting = createDeferredCore();
+      phase = "replace";
       // Stay outside the admitted Root, not merely outside the selected source.
       // A vanished sibling under the watched Root is intentionally unknown detail.
       const replacement = path.join(outside.make("skills-atomic-source-"), "replacement-script");
       await fs.writeFile(replacement, "atomically replaced");
       await fs.rename(replacement, scriptPath);
       await supporting.promise;
+      phase += "-sync";
       await syncWorkspaceSkills(syncOptions);
       expect(await fs.readFile(copiedScript, "utf8")).toBe("atomically replaced");
       expect(refreshState.getSkillsSourceVersion(workspaceDir)).toBe(sourceVersion);
 
       supporting = createDeferredCore();
+      phase = "delete";
       await fs.unlink(scriptPath);
       await supporting.promise;
+      phase += "-sync";
       await syncWorkspaceSkills(syncOptions);
       await expect(fs.stat(copiedScript)).rejects.toMatchObject({ code: "ENOENT" });
       expect(refreshState.getSkillsSourceVersion(workspaceDir)).toBe(sourceVersion);
