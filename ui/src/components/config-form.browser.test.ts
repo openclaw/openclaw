@@ -353,6 +353,44 @@ describe("config form renderer", () => {
     expect(rowTitles).toEqual(["Token"]);
   });
 
+  it("localizes the security section heading", async () => {
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        security: {
+          type: "object",
+          description: "Security schema settings",
+          properties: {
+            enabled: { type: "boolean" },
+          },
+        },
+      },
+    });
+    await i18n.setLocale("zh-CN");
+
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { security: { enabled: false } },
+      activeSection: "security",
+      onPatch: vi.fn(),
+    });
+
+    expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe("安全");
+    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
+      "Security schema settings",
+    );
+
+    await i18n.setLocale("en");
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { security: { enabled: false } },
+      activeSection: "security",
+      onPatch: vi.fn(),
+    });
+    expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
+      "Security",
+    );
+  });
+
   it("renders boolean fields as named toggle rows", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
