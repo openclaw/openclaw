@@ -11,12 +11,14 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { isNodeHostStats } from "../../shared/node-host-stats.js";
+import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import type { NodeListNode, PairedNode } from "../../shared/node-list-types.js";
 import { shortenHomeInString } from "../../utils.js";
 import { formatPairingApproveCommand } from "../pairing-command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { formatVersionLabel } from "../version-format.js";
 import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
+import { formatPermissions } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
   callNodesGatewayCli,
@@ -24,7 +26,7 @@ import {
   nodesCallOpts,
   resolveNodeDiagnosticsId,
 } from "./rpc.js";
-import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
+import type { NodesRpcOpts } from "./types.js";
 
 type PairedNodeListRow = PairedNode & Partial<NodeListNode>;
 type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;

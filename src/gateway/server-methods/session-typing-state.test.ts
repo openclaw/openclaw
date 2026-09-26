@@ -17,6 +17,46 @@ afterEach(() => {
 });
 
 describe("session typing connection state", () => {
+  it("owns idle cleanup, refresh, stop, and reset without further input", () => {
+    const update = (key: string, typing = true) =>
+      updateTypingConnections({ key, connectionId: key, typing, now: Date.now() });
+
+    update("idle");
+    update("refreshed");
+    vi.advanceTimersByTime(2_000);
+    update("refreshed");
+    vi.advanceTimersByTime(500);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(update("idle", false)).toEqual({ typing: false });
+    vi.advanceTimersByTime(2_000);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(update("refreshed", false)).toEqual({ typing: false });
+
+    update("stopped");
+    update("stopped", false);
+    expect(vi.getTimerCount()).toBe(0);
+    update("reset");
+    clearSessionTypingState();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(update("reset", false)).toEqual({ typing: false });
+  });
+
+  it("cancels cleanup for capacity-evicted buckets without dropping refreshed peers", () => {
+    const update = (key: string, connectionId = key, typing = true) =>
+      updateTypingConnections({ key, connectionId, typing, now: Date.now() });
+
+    for (let index = 0; index < 2_048; index++) {
+      update(String(index));
+    }
+    update("0");
+    update("overflow");
+    expect(vi.getTimerCount()).toBe(2_048);
+    expect(update("1", "other", false)).toEqual({ typing: false });
+    expect(update("0", "other", false)).toEqual({ typing: true });
+    vi.advanceTimersByTime(2_500);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("retains the newest live preview across an actor's connections", () => {
     const key = "shared-preview";
 

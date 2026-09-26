@@ -1,7 +1,7 @@
-// Codex plugin module implements elicitation bridge behavior.
 import {
   embeddedAgentLog,
   type CodexBundleMcpThreadConfig,
+  type ExecApprovalDecision,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -23,7 +23,6 @@ import {
   sanitizeCodexApprovalVisibleText,
   truncateCodexApprovalDisplayText as truncateDisplayText,
   type AppServerApprovalOutcome,
-  type ExecApprovalDecision,
   type PluginApprovalOutcome,
 } from "./plugin-approval-roundtrip.js";
 import type {
@@ -48,7 +47,6 @@ type BridgeableApprovalElicitation = {
   allowedDecisions?: ExecApprovalDecision[];
 };
 
-type ElicitationApprovalOutcome = PluginApprovalOutcome;
 type CodexApprovalElicitationResult =
   | { kind: "not-mine" }
   | { kind: "handled"; response: CodexElicitationResponse };
@@ -272,26 +270,18 @@ function resolvePluginElicitation(params: {
   ) {
     return { kind: "decline", reason: "app_id_connector_id_mismatch" };
   }
-  if (appId) {
+  const matchedAppId = appId ?? (isCodexConnectorApproval ? connectorId : undefined);
+  if (matchedAppId) {
     if (!context) {
       return { kind: "decline", reason: "missing_policy_context" };
     }
     const matches = Object.entries(context.apps)
-      .filter(([id]) => codexAppIdentityKey(id) === codexAppIdentityKey(appId))
+      .filter(([id]) => codexAppIdentityKey(id) === codexAppIdentityKey(matchedAppId))
       .map(([, entry]) => entry);
     if (matches.some((entry) => entry.source === "account") && !isCodexConnectorApproval) {
       return { kind: "decline", reason: "account_app_source_mismatch" };
     }
-    return uniquePluginMatch(matches, "app_id");
-  }
-  if (isCodexConnectorApproval && connectorId) {
-    if (!context) {
-      return { kind: "decline", reason: "missing_policy_context" };
-    }
-    const matches = Object.entries(context.apps)
-      .filter(([id]) => codexAppIdentityKey(id) === codexAppIdentityKey(connectorId))
-      .map(([, entry]) => entry);
-    return uniquePluginMatch(matches, "connector_id");
+    return uniquePluginMatch(matches, appId ? "app_id" : "connector_id");
   }
 
   const serverName = readNonBlankStringField(requestParams, "serverName");
@@ -733,7 +723,7 @@ function buildElicitationResponse(
     BridgeableApprovalElicitation,
     "requestedSchema" | "meta" | "persistHintsMode"
   >,
-  outcome: ElicitationApprovalOutcome,
+  outcome: PluginApprovalOutcome,
 ): CodexElicitationResponse {
   const { requestedSchema, meta } = approvalPrompt;
   if (outcome === "cancelled") {
@@ -798,19 +788,16 @@ function buildAcceptedContent(
       readPersistFieldValue(property, meta, outcome, approvalPrompt.persistHintsMode ?? "legacy") ??
       readFallbackFieldValue(property, outcome);
 
+    if (isApprovalField(property)) {
+      sawApprovalField = true;
+    }
     if (next === undefined) {
-      if (isApprovalField(property)) {
-        sawApprovalField = true;
-      }
       if (property.required) {
         return undefined;
       }
       continue;
     }
 
-    if (isApprovalField(property)) {
-      sawApprovalField = true;
-    }
     content[name] = next;
   }
 

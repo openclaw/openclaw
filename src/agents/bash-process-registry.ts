@@ -224,7 +224,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
-  const aggregated = trimWithCap(session.aggregated + chunk, session.maxOutputChars);
+  const aggregated = tail(session.aggregated + chunk, session.maxOutputChars);
   session.truncated =
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
@@ -481,11 +481,6 @@ function capPendingStream(
     output.splice(writeIndex, index - writeIndex);
   }
   return pendingChars;
-}
-
-/** Keeps only the last `max` characters for bounded aggregate output storage. */
-function trimWithCap(text: string, max: number) {
-  return tail(text, max);
 }
 
 /** Lists backgrounded running sessions visible to reconnect/poll callers. */

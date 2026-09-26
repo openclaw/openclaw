@@ -11,7 +11,7 @@ import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTheme
-import ai.openclaw.app.uppercaseFirstGraphemeOrNull
+import ai.openclaw.app.ui.design.badgeInitials
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
@@ -81,7 +81,7 @@ private fun ChannelRow(channel: GatewayChannelSummary) {
   ClawListItem(
     title = channel.label,
     subtitle = channelSubtitle(channel),
-    leading = { ClawTextBadge(text = channelBadge(channel.label)) },
+    leading = { ClawTextBadge(text = badgeInitials(channel.label, fallback = "C")) },
     trailing = { ClawStatusPill(text = channelStatusText(channel), status = channelStatus(channel)) },
   )
 }
@@ -123,15 +123,6 @@ private fun channelStatus(channel: GatewayChannelSummary): ClawStatus =
     channel.enabled -> ClawStatus.Warning
     else -> ClawStatus.Neutral
   }
-
-private fun channelBadge(label: String): String =
-  label
-    .split(' ', '-', '_')
-    .filter { it.isNotBlank() }
-    .take(2)
-    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
-    .joinToString("")
-    .ifBlank { "C" }
 
 /** Chooses the first gateway warning or a generic partial-scan message. */
 private fun channelsWarningText(summary: GatewayChannelsSummary): String = summary.warnings.firstOrNull()?.takeIf { it.isNotBlank() } ?: nativeString("Some channel status checks did not complete.")

@@ -1,6 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-
-// Shared media-generation catalog contracts and static entry synthesis.
 
 /** Catalog kind for generated media model entries. */
 export type MediaGenerationCatalogKind =
@@ -46,19 +45,14 @@ export type MediaGenerationCatalogProvider<TCapabilities = unknown> = {
   catalogByModel?: Readonly<Record<string, MediaGenerationCatalogModelEntry<TCapabilities>>>;
 };
 
-/** Return unique configured models with default model first when present. */
-function uniqueModels(provider: { defaultModel?: string; models?: readonly string[] }): string[] {
-  return normalizeUniqueTrimmedStringList([provider.defaultModel, ...(provider.models ?? [])]);
-}
-
 /** Synthesize static catalog entries from provider metadata. */
 export function synthesizeMediaGenerationCatalogEntries<TCapabilities>(params: {
   kind: MediaGenerationCatalogKind;
   provider: MediaGenerationCatalogProvider<TCapabilities>;
   modes?: readonly string[];
 }): Array<MediaGenerationCatalogEntry<TCapabilities>> {
-  const defaultModel = normalizeUniqueTrimmedStringList([params.provider.defaultModel])[0];
-  return uniqueModels(params.provider).map((model) => {
+  const defaultModel = normalizeOptionalString(params.provider.defaultModel);
+  return listMediaGenerationProviderModels(params.provider).map((model) => {
     const modelCatalogEntry = params.provider.catalogByModel?.[model];
     const entry: MediaGenerationCatalogEntry<TCapabilities> = {
       kind: params.kind,
@@ -86,5 +80,5 @@ export function listMediaGenerationProviderModels(provider: {
   defaultModel?: string;
   models?: readonly string[];
 }): string[] {
-  return uniqueModels(provider);
+  return normalizeUniqueTrimmedStringList([provider.defaultModel, ...(provider.models ?? [])]);
 }

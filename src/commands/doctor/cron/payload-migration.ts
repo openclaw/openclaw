@@ -5,10 +5,8 @@ import {
   readStringValue as readString,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
 import {
-  classifyCronAgentTurnShellPrompt,
   hasCronShellToolAccess,
   parseCronAgentTurnCommandPrompt,
-  type CronAgentTurnShellPromptKind,
 } from "../../../cron/agent-turn-command-prompt.js";
 import { toCanonicalOpenAIModelRef } from "../shared/codex-route-model-ref.js";
 import {
@@ -30,21 +28,13 @@ const LEGACY_DELIVERY_HINT_FIELDS = [
 
 export function normalizePayloadKind(payload: UnknownRecord) {
   const raw = normalizeOptionalLowercaseString(payload.kind) ?? "";
-  if (raw === "agentturn") {
-    if (payload.kind !== "agentTurn") {
-      payload.kind = "agentTurn";
-      return true;
-    }
+  const kind =
+    raw === "agentturn" ? "agentTurn" : raw === "systemevent" ? "systemEvent" : undefined;
+  if (!kind || payload.kind === kind) {
     return false;
   }
-  if (raw === "systemevent") {
-    if (payload.kind !== "systemEvent") {
-      payload.kind = "systemEvent";
-      return true;
-    }
-    return false;
-  }
-  return false;
+  payload.kind = kind;
+  return true;
 }
 
 export function inferPayloadIfMissing(raw: UnknownRecord) {
@@ -139,48 +129,31 @@ export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: Unknown
 }
 
 export function stripLegacyTopLevelFields(raw: UnknownRecord) {
-  if ("model" in raw) {
-    delete raw.model;
+  const removed = { payload: false, delivery: false };
+  for (const [kind, fields] of [
+    [
+      "payload",
+      [
+        "model",
+        "thinking",
+        "timeoutSeconds",
+        "allowUnsafeExternalContent",
+        "message",
+        "text",
+        "command",
+        "timeout",
+      ],
+    ],
+    ["delivery", LEGACY_DELIVERY_HINT_FIELDS],
+  ] as const) {
+    for (const field of fields) {
+      if (field in raw) {
+        delete raw[field];
+        removed[kind] = true;
+      }
+    }
   }
-  if ("thinking" in raw) {
-    delete raw.thinking;
-  }
-  if ("timeoutSeconds" in raw) {
-    delete raw.timeoutSeconds;
-  }
-  if ("allowUnsafeExternalContent" in raw) {
-    delete raw.allowUnsafeExternalContent;
-  }
-  if ("message" in raw) {
-    delete raw.message;
-  }
-  if ("text" in raw) {
-    delete raw.text;
-  }
-  if ("deliver" in raw) {
-    delete raw.deliver;
-  }
-  if ("channel" in raw) {
-    delete raw.channel;
-  }
-  if ("to" in raw) {
-    delete raw.to;
-  }
-  if ("threadId" in raw) {
-    delete raw.threadId;
-  }
-  if ("bestEffortDeliver" in raw) {
-    delete raw.bestEffortDeliver;
-  }
-  if ("provider" in raw) {
-    delete raw.provider;
-  }
-  if ("command" in raw) {
-    delete raw.command;
-  }
-  if ("timeout" in raw) {
-    delete raw.timeout;
-  }
+  return removed;
 }
 
 type LegacyOpenAICodexCronModelRoute = {
@@ -216,28 +189,10 @@ export function collectLegacyOpenAICodexCronModelRoutes(
   return [...routes.values()];
 }
 
-/** Canonical OpenAI refs whose legacy cron shape implied the Codex runtime. */
-function collectLegacyOpenAICodexCronModelRefs(payload: UnknownRecord): string[] {
-  return [
-    ...new Set(
-      collectLegacyOpenAICodexCronModelRoutes(payload).map((route) => route.canonicalModelRef),
-    ),
-  ];
-}
-
-function normalizeChannel(value: string): string {
-  return normalizeOptionalLowercaseString(value) ?? "";
-}
-
 function readPositiveInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
-}
-
-/** Return true when a cron payload contains legacy Codex-route model refs. */
-export function hasLegacyOpenAICodexCronModelRef(payload: UnknownRecord): boolean {
-  return collectLegacyOpenAICodexCronModelRefs(payload).length > 0;
 }
 
 function migrateLegacyOpenAICodexModelRefs(
@@ -291,20 +246,12 @@ export function migrateLegacyCronPayload(
   }
 
   const channelValue = readString(payload.channel);
-  const providerValue = readString(payload.provider);
-
   const nextChannel =
-    typeof channelValue === "string" && channelValue.trim().length > 0
-      ? normalizeChannel(channelValue)
-      : typeof providerValue === "string" && providerValue.trim().length > 0
-        ? normalizeChannel(providerValue)
-        : "";
-
-  if (nextChannel) {
-    if (channelValue !== nextChannel) {
-      payload.channel = nextChannel;
-      mutated = true;
-    }
+    normalizeOptionalLowercaseString(channelValue) ??
+    normalizeOptionalLowercaseString(payload.provider);
+  if (nextChannel && channelValue !== nextChannel) {
+    payload.channel = nextChannel;
+    mutated = true;
   }
 
   if ("provider" in payload) {
@@ -361,10 +308,4 @@ export function migrateLegacyAgentTurnCommandPayload(payload: UnknownRecord): bo
   }
   Object.assign(payload, deliveryHints);
   return true;
-}
-
-export function classifyUnresolvedAgentTurnShellToolPrompt(
-  payload: UnknownRecord,
-): CronAgentTurnShellPromptKind | null {
-  return classifyCronAgentTurnShellPrompt(payload);
 }

@@ -34,7 +34,6 @@ class ChatPdfPreview extends OpenClawLightDomContentsElement {
 
   private loadVersion = 0;
   private abortController: AbortController | undefined;
-  private previewObjectUrl: string | undefined;
   private previewBytes: Uint8Array | undefined;
 
   override connectedCallback(): void {
@@ -75,9 +74,8 @@ class ChatPdfPreview extends OpenClawLightDomContentsElement {
   }
 
   private revokePreviewUrl(): void {
-    if (this.previewObjectUrl) {
-      URL.revokeObjectURL(this.previewObjectUrl);
-      this.previewObjectUrl = undefined;
+    if (this.previewUrl) {
+      URL.revokeObjectURL(this.previewUrl);
     }
     this.previewUrl = null;
     this.previewBytes = undefined;
@@ -118,10 +116,8 @@ class ChatPdfPreview extends OpenClawLightDomContentsElement {
         return;
       }
       this.revokePreviewUrl();
-      const objectUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
       this.previewBytes = nextBytes;
-      this.previewObjectUrl = objectUrl;
-      this.previewUrl = objectUrl;
+      this.previewUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
       this.status = "ready";
     } catch {
       if (version === this.loadVersion && this.isConnected) {

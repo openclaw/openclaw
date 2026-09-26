@@ -378,25 +378,13 @@ export async function safeCodexControlRequest(
   );
 }
 
-async function safeCodexModelList(
-  pluginConfig: unknown,
-  limit: number,
-  config?: AuthProfileOrderConfig,
-  agentDir?: string,
-) {
-  return await safeValue(
-    async () =>
-      await listCodexAppServerModels(requestOptions(pluginConfig, limit, config, agentDir)),
-  );
-}
-
 export async function readCodexStatusProbes(
   pluginConfig: unknown,
   config?: AuthProfileOrderConfig,
   agentDir?: string,
 ) {
   const [models, account, limits, mcps, skills] = await Promise.all([
-    safeCodexModelList(pluginConfig, 20, config, agentDir),
+    safeValue(() => listCodexAppServerModels(requestOptions(pluginConfig, 20, config, agentDir))),
     safeCodexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.account,

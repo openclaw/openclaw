@@ -9,9 +9,8 @@ import {
 import { CODEX_SESSION_OVERRIDABLE_LAYER_TYPES } from "./config-layer-policy.js";
 import type { ResolvedCodexPluginsPolicy } from "./config.js";
 import {
-  resolveOwnedAppApprovalOverrideKeys,
+  toCodexPluginOwnedAccountApp,
   type CodexPluginInventory,
-  type CodexPluginInventoryRecord,
   type CodexPluginOwnedApp,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
@@ -184,27 +183,6 @@ export async function readCodexThreadAdmissibleAccountApps(
       .toSorted((left, right) => left.id.localeCompare(right.id)),
     installedApps: snapshot.installedApps,
   };
-}
-
-export function toCodexPluginOwnedAccountApp(
-  app: CodexAppInventorySnapshot["apps"][number],
-  installedApp: v2.InstalledApp | undefined,
-): CodexPluginOwnedApp {
-  return {
-    id: app.id,
-    name: app.name,
-    accessible: true,
-    enabled: installedApp?.enabled ?? false,
-    needsAuth: false,
-    ...resolveOwnedAppApprovalOverrideKeys(app),
-  };
-}
-
-export function resolveCodexThreadConfigAppsForRecord(params: {
-  record: CodexPluginInventoryRecord;
-  inventory: CodexPluginInventory;
-}): CodexPluginOwnedApp[] {
-  return params.inventory.appInventory?.state === "missing" ? [] : params.record.apps;
 }
 
 type CodexPluginAppThreadAdmission = "ready" | "provisional" | "blocked";

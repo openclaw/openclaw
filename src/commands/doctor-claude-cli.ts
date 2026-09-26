@@ -125,32 +125,23 @@ function resolveClaudeCliWorkspaceTargets(params: {
 }): ClaudeCliWorkspaceTarget[] {
   const agentIds = resolveClaudeCliAgentIds(params.cfg);
   const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
-  const seen = new Set<string>();
-  return agentIds
-    .filter((agentId) => {
-      if (seen.has(agentId)) {
-        return false;
-      }
-      seen.add(agentId);
-      return true;
-    })
-    .map((agentId) => {
-      const workspaceDir =
-        params.workspaceDir && agentIds.length === 1 && agentId === defaultAgentId
-          ? params.workspaceDir
-          : resolveAgentWorkspaceDir(params.cfg, agentId, params.env);
-      const projectDir = resolveClaudeCliProjectDirForWorkspace({
-        workspaceDir,
-        homeDir: params.homeDir,
-      });
-      return {
-        agentId,
-        workspaceDir,
-        projectDir,
-        workspaceHealth: probeDirectoryHealth(workspaceDir),
-        projectDirHealth: probeDirectoryHealth(projectDir),
-      };
+  return agentIds.map((agentId) => {
+    const workspaceDir =
+      params.workspaceDir && agentIds.length === 1 && agentId === defaultAgentId
+        ? params.workspaceDir
+        : resolveAgentWorkspaceDir(params.cfg, agentId, params.env);
+    const projectDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir,
+      homeDir: params.homeDir,
     });
+    return {
+      agentId,
+      workspaceDir,
+      projectDir,
+      workspaceHealth: probeDirectoryHealth(workspaceDir),
+      projectDirHealth: probeDirectoryHealth(projectDir),
+    };
+  });
 }
 
 /**

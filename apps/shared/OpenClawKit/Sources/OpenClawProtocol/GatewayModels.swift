@@ -11479,18 +11479,22 @@ public struct PluginsRefreshResult: Codable, Sendable {
 
 public struct PluginsReloadParams: Codable, Sendable {
     public let plugins: [PluginReloadTarget]
+    public let waitfordrain: Bool?
     public let acknowledgecapabilities: [String: AnyCodable]?
 
     public init(
         plugins: [PluginReloadTarget],
+        waitfordrain: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil)
     {
         self.plugins = plugins
+        self.waitfordrain = waitfordrain
         self.acknowledgecapabilities = acknowledgecapabilities
     }
 
     private enum CodingKeys: String, CodingKey {
         case plugins
+        case waitfordrain = "waitForDrain"
         case acknowledgecapabilities = "acknowledgeCapabilities"
     }
 }

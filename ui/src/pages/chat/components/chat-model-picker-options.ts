@@ -11,6 +11,7 @@ import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
 import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
+import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
 
 registerModelControlsEnglish();
 
@@ -115,7 +116,6 @@ export function renderChatModelPickerOption(params: {
   selectedModelValue: string;
   selectedAgentRuntime?: string;
   sessionModelPinned: boolean;
-  onHighlight: (row: HTMLButtonElement) => void;
   onSelect: (entry: ChatModelPickerOption, event: MouseEvent) => void;
   onModelSetup?: () => void;
 }) {
@@ -184,8 +184,7 @@ export function renderChatModelPickerOption(params: {
     type="button"
     ?disabled=${params.disabled || (params.entry.disabled && !onModelSetup && !resetsPin)}
     data-chat-model-setup=${onModelSetup ? "true" : nothing}
-    @mouseenter=${(event: MouseEvent) =>
-      params.onHighlight(event.currentTarget as HTMLButtonElement)}
+    @mouseenter=${handleModelOptionMouseEnter}
     @click=${(event: MouseEvent) => {
       // A sign-in-gated model must not dead-end: the row routes to Model
       // Setup instead of silently ignoring the click on a disabled button.
@@ -256,7 +255,6 @@ export function renderChatModelPickerTargetOption(params: {
   groupId: string;
   groupLabel: string;
   index: number;
-  onHighlight: (row: HTMLButtonElement) => void;
   onSelect: (groupId: string, value: string, event: MouseEvent) => void;
 }) {
   return html`
@@ -271,8 +269,7 @@ export function renderChatModelPickerTargetOption(params: {
       aria-selected="false"
       type="button"
       ?disabled=${params.disabled}
-      @mouseenter=${(event: MouseEvent) =>
-        params.onHighlight(event.currentTarget as HTMLButtonElement)}
+      @mouseenter=${handleModelOptionMouseEnter}
       @click=${(event: MouseEvent) => params.onSelect(params.groupId, params.entry.value, event)}
     >
       <span

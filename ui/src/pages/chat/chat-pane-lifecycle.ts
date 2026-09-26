@@ -12,6 +12,10 @@ import {
 } from "../../app/question-prompt.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
+import {
+  WIDGET_PROMPT_EVENT,
+  type WidgetPromptEventDetail,
+} from "../../components/mcp-app-security.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -61,7 +65,6 @@ import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
-import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
@@ -350,10 +353,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(
       this.context.agentIdentity.subscribe(() => void pageState.loadAssistantIdentity()),
     );
-    chatState.restoreComposer({ preserveCurrent: true });
+    chatState.composerPersistence.restore({ preserveCurrent: true });
     const sessionHandoff = this.takeSessionHandoff(pageState.sessionKey);
     restorePaneStagedAttachments(this.context, this.paneId, pageState, mountGatewayOwner);
-    chatState.startComposerPersistence();
+    chatState.composerPersistence.start();
     if (sessionHandoff) {
       this.applySessionHandoff(pageState.sessionKey, sessionHandoff);
     }
@@ -473,14 +476,14 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       owner: () => this.stagedAttachmentGatewayOwner,
       region: () => this.inputRegion,
       presented: () => this.selected && this.presented,
-      pause: () => this.chatState.pauseComposerPersistence(),
+      pause: () => this.chatState.composerPersistence.stop(),
       takeAttachmentReads: () => this.chatState.takeAttachmentReads(),
       adoptAttachmentReads: (reads) => this.chatState.adoptAttachmentReads(reads, pageState),
       resume: (restore) => {
         if (restore) {
-          this.chatState.restoreComposer();
+          this.chatState.composerPersistence.restore();
         }
-        this.chatState.startComposerPersistence();
+        this.chatState.composerPersistence.start();
       },
     });
     this.composerPresentation = composerPresentation;
@@ -632,7 +635,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           this.paneId,
           this.state,
           this.stagedAttachmentGatewayOwner,
-          this.chatState.composerDraftRevision,
+          this.chatState.composerPersistence.draftRevision,
         );
       }
     }

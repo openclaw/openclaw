@@ -72,28 +72,12 @@ function savePreferences(preferences: SessionDiffPreferences): void {
   }
 }
 
-function statusLabel(file: SessionDiffFile): string {
-  switch (file.status) {
-    case "added":
-      return t("chat.sessionDiff.statusAdded");
-    case "deleted":
-      return t("chat.sessionDiff.statusDeleted");
-    case "renamed":
-      return t("chat.sessionDiff.statusRenamed");
-    default:
-      return t("chat.sessionDiff.statusModified");
-  }
-}
-
-function statusLetter(file: SessionDiffFile): string {
-  return file.status === "added"
-    ? "A"
-    : file.status === "deleted"
-      ? "D"
-      : file.status === "renamed"
-        ? "R"
-        : "M";
-}
+const FILE_STATUS_LABELS = {
+  added: ["A", "chat.sessionDiff.statusAdded"],
+  deleted: ["D", "chat.sessionDiff.statusDeleted"],
+  renamed: ["R", "chat.sessionDiff.statusRenamed"],
+  modified: ["M", "chat.sessionDiff.statusModified"],
+} as const;
 
 function diffStat(file: Pick<SessionDiffFile, "additions" | "deletions">) {
   const modified = Math.min(file.additions, file.deletions);
@@ -195,10 +179,6 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     return this.loader !== null && this.diffTask.status === TaskStatus.PENDING;
   }
 
-  private refresh(): Promise<void> {
-    return this.diffTask.run();
-  }
-
   private toggleFile(path: string): void {
     const next = new Set(this.collapsedPaths);
     if (next.has(path)) {
@@ -228,7 +208,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         y: placement.startsWith("top") ? bounds.top : bounds.bottom,
       },
       trigger,
-    } as SessionDiffMenuData;
+    };
   }
 
   private handleMenuAction(action: SessionDiffMenuAction): void {
@@ -322,7 +302,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
             type="button"
             aria-label=${t("chat.sessionDiff.refresh")}
             ?disabled=${this.loading}
-            @click=${() => void this.refresh()}
+            @click=${() => void this.diffTask.run()}
           >
             ${icons.refresh}
           </button>
@@ -480,6 +460,8 @@ class SessionDiffPanel extends OpenClawLightDomElement {
       ? (localEditorFilePath({ root: result.root, path: file.path }, this.execNode) ?? undefined)
       : undefined;
     const pathTitle = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
+    const [statusLetter, statusLabel] =
+      FILE_STATUS_LABELS[file.status] ?? FILE_STATUS_LABELS.modified;
     return html`
       <section class="session-diff__file" data-status=${file.status}>
         <div class="session-diff__file-header">
@@ -495,8 +477,8 @@ class SessionDiffPanel extends OpenClawLightDomElement {
             </span>
             <span
               class="session-diff__status session-diff__status--${file.status}"
-              title=${statusLabel(file)}
-              >${statusLetter(file)}</span
+              title=${t(statusLabel)}
+              >${statusLetter}</span
             >
             <span class="session-diff__path">
               ${

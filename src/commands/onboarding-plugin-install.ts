@@ -668,6 +668,20 @@ function isClawHubTrustWarning(message: string): boolean {
   );
 }
 
+function startPluginInstallProgress(prompter: WizardPrompter, safeLabel: string) {
+  const progress = prompter.progress(t("wizard.plugins.installingPlugin", { plugin: safeLabel }));
+  progress.update(t("wizard.plugins.preparingInstall"));
+  return {
+    progress,
+    updateProgress: (message: string) => {
+      const sanitized = sanitizeTerminalText(message).trim();
+      if (sanitized) {
+        progress.update(sanitized);
+      }
+    },
+  };
+}
+
 async function runInstallWatchdog<T>(install: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const controller = new AbortController();
   const ownedInstallPromise = install(controller.signal);
@@ -711,17 +725,7 @@ async function runOnboardingPluginInstallWithProgress(params: {
     beforePersistentEffect: params.beforePersistentEffect,
   });
   const safeLabel = sanitizeTerminalText(params.entry.label);
-  const progress = params.prompter.progress(
-    t("wizard.plugins.installingPlugin", { plugin: safeLabel }),
-  );
-  progress.update(t("wizard.plugins.preparingInstall"));
-  const updateProgress = (message: string) => {
-    const sanitized = sanitizeTerminalText(message).trim();
-    if (!sanitized) {
-      return;
-    }
-    progress.update(sanitized);
-  };
+  const { progress, updateProgress } = startPluginInstallProgress(params.prompter, safeLabel);
 
   try {
     const result = await runInstallWatchdog((signal) =>
@@ -952,17 +956,7 @@ async function installPluginFromClawHubSpecWithProgress(params: {
     beforePersistentEffect: params.beforePersistentEffect,
   });
   const safeLabel = sanitizeTerminalText(params.entry.label);
-  const progress = params.prompter.progress(
-    t("wizard.plugins.installingPlugin", { plugin: safeLabel }),
-  );
-  progress.update(t("wizard.plugins.preparingInstall"));
-  const updateProgress = (message: string) => {
-    const sanitized = sanitizeTerminalText(message).trim();
-    if (!sanitized) {
-      return;
-    }
-    progress.update(sanitized);
-  };
+  const { progress, updateProgress } = startPluginInstallProgress(params.prompter, safeLabel);
   let renderedTrustWarning = false;
   const renderTrustWarning = (message: string) => {
     logInstallWarningWithLineBreaks(params.runtime, message);

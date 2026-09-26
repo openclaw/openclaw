@@ -577,25 +577,6 @@ struct OpenClawProMark: View {
     }
 }
 
-struct ProProgressBar: View {
-    let progress: Double
-    var color: Color = OpenClawBrand.accentHot
-
-    var body: some View {
-        GeometryReader { proxy in
-            let clamped = max(0, min(self.progress, 1))
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.primary.opacity(0.10))
-                Capsule()
-                    .fill(self.color)
-                    .frame(width: proxy.size.width * clamped)
-            }
-        }
-        .frame(height: 3)
-    }
-}
-
 struct OpenClawGatewayCompactPill: View {
     @Environment(NodeAppModel.self) private var appModel
 

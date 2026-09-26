@@ -2,7 +2,7 @@
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { renderTable } from "../../../packages/terminal-core/src/table.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
-import type { PendingRequest } from "./types.js";
+import type { PendingRequest } from "../../shared/node-list-types.js";
 
 /** Render pending pairing requests with sanitized labels and relative request age. */
 export function renderPendingPairingRequestsTable(params: {

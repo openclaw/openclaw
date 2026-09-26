@@ -719,22 +719,27 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       hadUnresolvedTargets: false,
     };
   }
-  const gatewayExecSecretRefCredentialPaths = resolutionPolicy.allowExecSecretRefs
-    ? []
-    : collectActiveGatewayExecSecretRefCredentialPaths(params.config);
-  if (gatewayExecSecretRefCredentialPaths.length > 0) {
-    const fallback = await resolveCommandSecretRefsLocally({
+  const resolveLocally = (
+    allowedPaths = params.allowedPaths,
+    preflightDiagnostics = preflight.diagnostics,
+  ) =>
+    resolveCommandSecretRefsLocally({
       config: params.config,
       commandName: params.commandName,
       targetIds: params.targetIds,
       agentId: params.agentId,
-      preflightDiagnostics: preflight.diagnostics,
+      preflightDiagnostics,
       mode,
-      allowedPaths: params.allowedPaths,
+      allowedPaths,
       forcedActivePaths: params.forcedActivePaths,
       optionalActivePaths: params.optionalActivePaths,
       resolutionPolicy,
     });
+  const gatewayExecSecretRefCredentialPaths = resolutionPolicy.allowExecSecretRefs
+    ? []
+    : collectActiveGatewayExecSecretRefCredentialPaths(params.config);
+  if (gatewayExecSecretRefCredentialPaths.length > 0) {
+    const fallback = await resolveLocally();
     return {
       ...fallback,
       diagnostics: normalizeUniqueStringEntries([
@@ -760,18 +765,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   } catch (err) {
     let forcedActiveCompatFailure: Error | undefined;
     try {
-      const fallback = await resolveCommandSecretRefsLocally({
-        config: params.config,
-        commandName: params.commandName,
-        targetIds: params.targetIds,
-        agentId: params.agentId,
-        preflightDiagnostics: preflight.diagnostics,
-        mode,
-        allowedPaths: params.allowedPaths,
-        forcedActivePaths: params.forcedActivePaths,
-        optionalActivePaths: params.optionalActivePaths,
-        resolutionPolicy,
-      });
+      const fallback = await resolveLocally();
       const recoveredLocally = Object.values(fallback.targetStatesByPath).some(
         (state) => state === "resolved_local",
       );
@@ -883,18 +877,10 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   });
   if (analyzed.unresolved.length > 0) {
     try {
-      const localFallback = await resolveCommandSecretRefsLocally({
-        config: params.config,
-        commandName: params.commandName,
-        targetIds: params.targetIds,
-        agentId: params.agentId,
-        preflightDiagnostics: [],
-        mode,
-        allowedPaths: new Set(analyzed.unresolved.map((entry) => entry.path)),
-        forcedActivePaths: params.forcedActivePaths,
-        optionalActivePaths: params.optionalActivePaths,
-        resolutionPolicy,
-      });
+      const localFallback = await resolveLocally(
+        new Set(analyzed.unresolved.map((entry) => entry.path)),
+        [],
+      );
       const handledPaths = new Set<string>();
       const locallyResolvedPaths = new Set<string>();
       for (const unresolved of analyzed.unresolved) {

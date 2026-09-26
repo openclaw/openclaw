@@ -1368,31 +1368,21 @@ extension OnboardingWizardView {
 
     private func persistGatewayToken(_ value: String) {
         self.gatewayToken = value
-        let instanceId = GatewaySettingsStore.currentInstanceID()
-        guard !instanceId.isEmpty, let stableID = self.gatewayCredentialTargetStableID else { return }
-        self.gatewayCredentialFieldStableID = stableID
-        let saved = GatewaySettingsStore.updateGatewayCredentials(
-            token: value,
-            password: self.gatewayPassword,
-            gatewayStableID: stableID,
-            instanceId: instanceId)
-        self.pendingManualAuthOverride = saved
-            ? GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
-                current: self.pendingManualAuthOverride,
-                instanceId: instanceId,
-                targetStableID: stableID,
-                allowManualOverride: true)
-            : nil
+        self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
     }
 
     private func persistGatewayPassword(_ value: String) {
         self.gatewayPassword = value
+        self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
+    }
+
+    private func persistGatewayCredentials(for stableID: String?) {
         let instanceId = GatewaySettingsStore.currentInstanceID()
-        guard !instanceId.isEmpty, let stableID = self.gatewayCredentialTargetStableID else { return }
+        guard !instanceId.isEmpty, let stableID else { return }
         self.gatewayCredentialFieldStableID = stableID
         let saved = GatewaySettingsStore.updateGatewayCredentials(
             token: self.gatewayToken,
-            password: value,
+            password: self.gatewayPassword,
             gatewayStableID: stableID,
             instanceId: instanceId)
         self.pendingManualAuthOverride = saved
@@ -1471,17 +1461,13 @@ extension OnboardingWizardView {
         switch mode {
         case .homeNetwork:
             if hostIsDefaultLike { self.manualHost = "openclaw.local" }
-            self.manualTLS = true
-            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .remoteDomain:
             if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
-            self.manualTLS = true
-            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .developerLocal:
             if hostIsDefaultLike { self.manualHost = "localhost" }
-            self.manualTLS = false
-            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         }
+        self.manualTLS = mode != .developerLocal
+        if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
     }
 
     private func connectManual(setupAttemptID: UUID? = nil) async {

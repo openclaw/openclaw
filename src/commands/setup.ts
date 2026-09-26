@@ -16,9 +16,7 @@ import {
   configIncludeOwnsAgentRoster,
   hasResolvedRosterBeforeMigrations,
 } from "../config/agent-roster-provenance.js";
-import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
-import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -26,63 +24,10 @@ import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { shortenHomePath } from "../utils.js";
 
-type ConfigIO = {
-  configPath: string;
-  readConfigFileSnapshotForWrite: () => Promise<ReadConfigFileSnapshotForWriteResult>;
-};
-
-type ReplaceConfigFile = (
-  params: Parameters<ConfigIOModule["replaceConfigFile"]>[0],
-) => Promise<unknown>;
-
-type EnsureAgentWorkspace = (params: {
-  dir: string;
-  ensureBootstrapFiles?: boolean;
-  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
-}) => Promise<{ dir: string }>;
-
-type ConfigIOModule = typeof import("../config/config.js");
-
-// Keep setup's cold path small; config/workspace modules are loaded only when
-// their default dependency is actually needed.
+// Keep setup's cold path small; load each owner only when the command needs it.
 const loadAgentWorkspaceModule = createLazyPromise(() => import("../agents/workspace.js"));
 const loadConfigIOModule = createLazyPromise(() => import("../config/config.js"));
 const loadConfigLoggingModule = createLazyPromise(() => import("../config/logging.js"));
-
-async function createDefaultConfigIO(): Promise<ConfigIO> {
-  const { createConfigIO } = await loadConfigIOModule();
-  return createConfigIO();
-}
-
-async function ensureDefaultAgentWorkspace(
-  params: Parameters<EnsureAgentWorkspace>[0],
-): ReturnType<EnsureAgentWorkspace> {
-  const { ensureAgentWorkspace } = await loadAgentWorkspaceModule();
-  return ensureAgentWorkspace(params);
-}
-
-async function writeDefaultConfigFile(params: Parameters<ReplaceConfigFile>[0]): Promise<void> {
-  const { replaceConfigFile } = await loadConfigIOModule();
-  await replaceConfigFile(params);
-}
-
-async function formatDefaultConfigPath(configPath: string): Promise<string> {
-  const { formatConfigFilePath } = await loadConfigLoggingModule();
-  return formatConfigFilePath(configPath);
-}
-
-async function logDefaultConfigUpdated(
-  runtime: RuntimeEnv,
-  opts: { path?: string; suffix?: string },
-): Promise<void> {
-  const { logConfigUpdated } = await loadConfigLoggingModule();
-  logConfigUpdated(runtime, opts);
-}
-
-async function resolveDefaultSessionTranscriptsDir(agentId: string): Promise<string> {
-  const { resolveSessionTranscriptsDirForAgent } = await import("../config/sessions.js");
-  return resolveSessionTranscriptsDirForAgent(agentId);
-}
 
 /** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
@@ -94,7 +39,8 @@ export async function setupCommand(
       ? opts.workspace.trim()
       : undefined;
 
-  const io = await createDefaultConfigIO();
+  const { createConfigIO, replaceConfigFile } = await loadConfigIOModule();
+  const io = createConfigIO();
   const configPath = io.configPath;
   const prepared = await io.readConfigFileSnapshotForWrite();
   const snapshot = prepared.snapshot;
@@ -110,7 +56,7 @@ export async function setupCommand(
       });
     }
     runtime.error(
-      `Config invalid at ${await formatDefaultConfigPath(configPath)}. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
+      `Config invalid at ${(await loadConfigLoggingModule()).formatConfigFilePath(configPath)}. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
     );
     runtime.exit(1);
     return;
@@ -212,7 +158,7 @@ export async function setupCommand(
   if (configChanged) {
     // Preserve all existing config fields and touch only workspace/gateway mode
     // defaults that this command owns.
-    await writeDefaultConfigFile({
+    await replaceConfigFile({
       nextConfig: next,
       // Agent creation advanced the revision; keep rejecting foreign writes after it.
       ...(creationConfigHash ? { baseHash: creationConfigHash } : { snapshot }),
@@ -236,7 +182,7 @@ export async function setupCommand(
     });
     configStatus = snapshot.exists ? "updated" : "created";
     if (!opts?.json && !snapshot.exists) {
-      runtime.log(`Wrote ${await formatDefaultConfigPath(configPath)}`);
+      runtime.log(`Wrote ${(await loadConfigLoggingModule()).formatConfigFilePath(configPath)}`);
     } else if (!opts?.json) {
       const updates: string[] = [];
       if (shouldWriteWorkspace) {
@@ -246,7 +192,7 @@ export async function setupCommand(
         updates.push("set gateway.mode");
       }
       const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
-      await logDefaultConfigUpdated(runtime, {
+      (await loadConfigLoggingModule()).logConfigUpdated(runtime, {
         path: configPath,
         suffix,
       });
@@ -254,11 +200,15 @@ export async function setupCommand(
   } else {
     configStatus = "unchanged";
     if (!opts?.json) {
-      runtime.log(`Config OK: ${await formatDefaultConfigPath(configPath)}`);
+      runtime.log(
+        `Config OK: ${(await loadConfigLoggingModule()).formatConfigFilePath(configPath)}`,
+      );
     }
   }
 
-  const ws = await ensureDefaultAgentWorkspace({
+  const ws = await (
+    await loadAgentWorkspaceModule()
+  ).ensureAgentWorkspace({
     dir: workspace,
     ensureBootstrapFiles: !resolvedDefaults.skipBootstrap,
     skipOptionalBootstrapFiles: resolvedDefaults.skipOptionalBootstrapFiles,
@@ -267,7 +217,8 @@ export async function setupCommand(
     runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   }
 
-  const sessionsDir = await resolveDefaultSessionTranscriptsDir(selectedAgentId);
+  const { resolveSessionTranscriptsDirForAgent } = await import("../config/sessions.js");
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(selectedAgentId);
   await fs.mkdir(sessionsDir, { recursive: true });
   if (opts?.json) {
     writeRuntimeJson(runtime, {

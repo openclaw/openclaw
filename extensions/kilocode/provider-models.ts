@@ -1,5 +1,7 @@
-// Kilocode provider module implements model/runtime integration.
-import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import {
+  buildLiveModelProviderConfig,
+  readLiveModelCatalogStringField,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -146,14 +148,6 @@ function asGatewayModelEntry(value: unknown): GatewayModelEntry {
   return value as GatewayModelEntry;
 }
 
-function readGatewayModelId(value: unknown): string {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return "";
-  }
-  const id = (value as Partial<GatewayModelEntry>).id;
-  return typeof id === "string" ? id.trim() : "";
-}
-
 function readGatewayModelRows(body: unknown): readonly unknown[] {
   const data = (body as { data?: unknown } | undefined)?.data;
   if (!Array.isArray(data)) {
@@ -166,7 +160,7 @@ function projectKilocodeModels(rows: readonly unknown[]): ModelDefinitionConfig[
   const models: ModelDefinitionConfig[] = [];
   const discoveredIds = new Set<string>();
   for (const rawEntry of rows) {
-    const id = readGatewayModelId(rawEntry);
+    const id = readLiveModelCatalogStringField(rawEntry, "id");
     try {
       const entry = asGatewayModelEntry(rawEntry);
       if (

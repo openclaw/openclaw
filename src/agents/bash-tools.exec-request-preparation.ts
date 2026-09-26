@@ -243,7 +243,7 @@ export function createExecRequestPreparation(params: {
       return execParams;
     }
     if (isResolveExecEnvPrepared(execParams)) {
-      return markResolveExecEnvPrepared(execParams);
+      return execParams;
     }
     const hookRunner = getGlobalHookRunner();
     if (

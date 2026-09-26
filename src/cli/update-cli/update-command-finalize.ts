@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
@@ -47,6 +46,7 @@ import {
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
+  capturePreUpdateSourceConfig,
   persistRequestedUpdateChannel,
   preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
@@ -57,6 +57,7 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
   withPrePluginUpdateDoctorEnv,
 } from "./update-command-fresh-doctor.js";
+import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
 import {
   collectPostCorePluginAdvisories,
   collectPostCorePluginFailureFacts,
@@ -244,15 +245,7 @@ async function prepareUpdateFinalization(
     (await readPostCorePreUpdateSourceConfig({
       sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
       currentSnapshot: configSnapshot,
-    })) ??
-    (configSnapshot.valid
-      ? {
-          sourceConfig: configSnapshot.sourceConfig,
-          authoredConfig: isRecord(configSnapshot.parsed)
-            ? (configSnapshot.parsed as OpenClawConfig) // SAFETY: snapshot parser validated this config record.
-            : configSnapshot.sourceConfig,
-        }
-      : undefined);
+    })) ?? capturePreUpdateSourceConfig(configSnapshot);
   if (requestedChannel === "extended-stable" && installKind === "git") {
     await reportPreMutationUpdateResult({
       root,
@@ -521,36 +514,17 @@ async function updateFinalizeCommandInternal(
   } catch (error) {
     outcome = { error };
   }
-  if (maintenance && !("error" in outcome && hasCommandProcessCleanupError(outcome.error))) {
+  if (maintenance) {
     const owned = maintenance;
-    const failures = "error" in outcome ? [outcome.error] : [];
-    for (const restore of [
+    outcome = await settleUpdateDoctorMaintenance(
+      outcome,
       async () =>
         restoreMaintenance(
           (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
         ),
       () => owned.release(),
-    ]) {
-      if (failures.some(hasCommandProcessCleanupError)) {
-        break;
-      }
-      try {
-        await withCommandProcessScope(restore);
-      } catch (error) {
-        if (!failures.includes(error)) {
-          failures.push(error);
-        }
-      }
-    }
-    if (failures.length === 1) {
-      outcome = { error: failures[0] };
-    } else if (failures.length > 1) {
-      outcome = {
-        error: new AggregateError(failures, "Update finalization and service restoration failed", {
-          cause: failures[0],
-        }),
-      };
-    }
+      "Update finalization and service restoration failed",
+    );
   }
   if ("error" in outcome) {
     throw outcome.error;

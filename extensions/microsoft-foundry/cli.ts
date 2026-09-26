@@ -1,4 +1,3 @@
-// Microsoft Foundry plugin module implements cli behavior.
 import { execFileSync } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { runCommandWithTimeout, runExec } from "openclaw/plugin-sdk/process-runtime";
@@ -147,10 +146,6 @@ export async function getAccessTokenResultAsync(
 
 // Entra device codes default to 15 minutes; keep five minutes for az to finish.
 const AZ_LOGIN_TIMEOUT_MS = 20 * 60 * 1000;
-
-export async function azLoginDeviceCode(): Promise<void> {
-  return azLoginDeviceCodeWithOptions({});
-}
 
 export async function azLoginDeviceCodeWithOptions(params: {
   tenantId?: string;

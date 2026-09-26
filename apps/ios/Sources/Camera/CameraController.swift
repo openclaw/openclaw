@@ -27,11 +27,7 @@ actor CameraController {
                 "Microphone unavailable"
             case let .permissionDenied(kind):
                 "\(kind) permission denied"
-            case let .invalidParams(msg):
-                msg
-            case let .captureFailed(msg):
-                msg
-            case let .exportFailed(msg):
+            case let .invalidParams(msg), let .captureFailed(msg), let .exportFailed(msg):
                 msg
             }
         }
@@ -168,7 +164,7 @@ actor CameraController {
             CameraDeviceInfo(
                 id: device.uniqueID,
                 name: device.localizedName,
-                position: Self.positionLabel(device.position),
+                position: CameraCapturePipelineSupport.positionLabel(device.position),
                 deviceType: device.deviceType.rawValue)
         }
     }
@@ -219,10 +215,6 @@ actor CameraController {
             setupError,
             microphoneUnavailableError: .microphoneUnavailable,
             captureFailed: { .captureFailed($0) })
-    }
-
-    private nonisolated static func positionLabel(_ position: AVCaptureDevice.Position) -> String {
-        CameraCapturePipelineSupport.positionLabel(position)
     }
 
     private nonisolated static func discoverVideoDevices() -> [AVCaptureDevice] {

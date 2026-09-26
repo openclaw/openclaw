@@ -1,4 +1,3 @@
-// Deepinfra plugin module implements surface model catalogs behavior.
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogProviderContext,
@@ -43,7 +42,7 @@ function surfaceModelToVideoGenEntry(
 
 // Canonical DeepInfra-wide video-gen shape. Wire per-model hints
 // (metadata.supported_durations etc.) in here once the backend emits them.
-function buildDeepInfraVideoModelCapabilities(): VideoGenerationProviderCapabilities {
+export function buildDeepInfraVideoModelCapabilities(): VideoGenerationProviderCapabilities {
   return {
     providerOptions: {
       seed: "number",

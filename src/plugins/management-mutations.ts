@@ -554,6 +554,7 @@ export async function reloadManagedPlugin(
         config,
         pluginIds,
         reason: "reload",
+        ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.signal } : {}),
         ...(expected.size ? { expectedSourceDigests: Object.fromEntries(expected) } : {}),
         ...(resolved.every((target) => target.install !== undefined)
           ? {

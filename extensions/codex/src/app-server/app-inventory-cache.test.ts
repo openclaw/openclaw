@@ -554,6 +554,31 @@ describe("Codex app inventory cache", () => {
     expect(freshRead.snapshot?.apps).toEqual([app("fresh-app")]);
   });
 
+  it("does not republish a pre-clear refresh over the new inventory", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const staleInstalled = Promise.withResolvers<v2.AppsInstalledResponse>();
+    const apps = [app("fresh-app"), app("stale-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+    request.mockImplementationOnce(() => staleInstalled.promise);
+
+    const stale = cache.refreshNow({ key: "runtime", request, nowMs: 0 });
+    cache.clear();
+    await cache.refreshNow({
+      key: "runtime",
+      request,
+      nowMs: 1,
+      targetAppIds: ["fresh-app"],
+    });
+    staleInstalled.resolve(codexAppInventoryResponse("app/installed", [app("stale-app")]));
+    await stale;
+
+    const read = cache.read({ key: "runtime", request, nowMs: 2, suppressRefresh: true });
+    expect(read.state).toBe("fresh");
+    expect(read.snapshot?.apps).toEqual([app("fresh-app")]);
+  });
+
   it("discards a pre-invalidation refresh instead of republishing it as fresh", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";

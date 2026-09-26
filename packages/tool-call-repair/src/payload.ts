@@ -13,6 +13,8 @@ import {
   HARMONY_CHANNEL_MARKER,
   HARMONY_MESSAGE_MARKER,
   isPlainTextToolNameChar,
+  scanJsonObject,
+  type JsonObjectScanState,
   scanXmlishToolCall,
   skipHorizontalWhitespace,
   skipLineIndentation,
@@ -46,11 +48,7 @@ const HARMONY_CHANNELS = ["commentary", "analysis", "final"] as const;
 
 export type PlainTextJsonToolCallSpan = { end: number; start: number };
 export type PlainTextJsonToolCallSyntax = "harmony" | "named-bracket" | "tool-bracket";
-export type PlainTextJsonToolCallState = {
-  depth: number;
-  escaped: boolean;
-  inString: boolean;
-};
+export type PlainTextJsonToolCallState = JsonObjectScanState;
 export type PlainTextJsonToolCallCandidate = {
   json?: PlainTextJsonToolCallState;
   name: PlainTextJsonToolCallSpan;
@@ -263,47 +261,6 @@ function scanHarmonyOpening(text: string, start: number): PlainTextJsonToolCallO
   return { kind: "complete", cursor, value };
 }
 
-function scanJsonObject(
-  text: string,
-  start: number,
-): {
-  end: number;
-  kind: "complete" | "prefix";
-  state: PlainTextJsonToolCallState;
-} {
-  let depth = 0;
-  let escaped = false;
-  let inString = false;
-  for (let index = start; index < text.length; index += 1) {
-    const char = text[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-    } else if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return {
-          kind: "complete",
-          end: index + 1,
-          state: { depth, escaped, inString },
-        };
-      }
-    }
-  }
-  return { kind: "prefix", end: text.length, state: { depth, escaped, inString } };
-}
-
 /** Uncapped structural scan shared by parsing, stripping, and stream buffering. */
 export function scanPlainTextJsonToolCall(
   text: string,
@@ -337,51 +294,26 @@ export function scanPlainTextJsonToolCall(
   }
 
   const closingCandidate = candidate(value.syntax, value.name, true, payload, json.state);
-  if (value.syntax !== "named-bracket") {
-    const markerStart = skipWhitespace(text, json.end);
-    const name = text.slice(value.name.start, value.name.end);
-    const closings = [HARMONY_CALL_MARKER, END_TOOL_REQUEST, `[/${name}]`];
-    for (const closing of closings) {
-      if (text.startsWith(closing, markerStart)) {
-        return {
-          ...value,
-          kind: "complete",
-          payload,
-          end: markerStart + closing.length,
-        };
-      }
-      if (markerStart < text.length && isLiteralPrefixAt(text, markerStart, closing)) {
-        return { kind: "prefix", candidate: closingCandidate };
-      }
-    }
-    return {
-      ...value,
-      kind: "complete",
-      payload,
-      end: json.end,
-    };
-  }
-
+  const namedBracket = value.syntax === "named-bracket";
   const closingStart = skipWhitespace(text, json.end);
-  if (closingStart === text.length) {
+  if (namedBracket && closingStart === text.length) {
     return { kind: "prefix", candidate: closingCandidate };
   }
   const name = text.slice(value.name.start, value.name.end);
-  const closings = [END_TOOL_REQUEST, `[/${name}]`];
+  const closings = namedBracket
+    ? [END_TOOL_REQUEST, `[/${name}]`]
+    : [HARMONY_CALL_MARKER, END_TOOL_REQUEST, `[/${name}]`];
   for (const closing of closings) {
     if (text.startsWith(closing, closingStart)) {
-      return {
-        ...value,
-        payload,
-        kind: "complete",
-        end: closingStart + closing.length,
-      };
+      return { ...value, payload, kind: "complete", end: closingStart + closing.length };
     }
-    if (isLiteralPrefixAt(text, closingStart, closing)) {
+    if (closingStart < text.length && isLiteralPrefixAt(text, closingStart, closing)) {
       return { kind: "prefix", candidate: closingCandidate };
     }
   }
-  return { kind: "invalid", at: closingStart, candidate: closingCandidate };
+  return namedBracket
+    ? { kind: "invalid", at: closingStart, candidate: closingCandidate }
+    : { ...value, payload, kind: "complete", end: json.end };
 }
 
 /** Classifies one JSON/XML call candidate and provides monotonic scan progress. */
@@ -512,39 +444,6 @@ export function scanPlainTextToolCall(
   return { ...branches, at: next, kind: "invalid", next, overCap: false };
 }
 
-function parsePlainTextToolCallBlockAt(
-  text: string,
-  start: number,
-  options?: NormalizedPlainTextToolCallParseOptions,
-  structuralLineBreaks?: StructuralLineBreakOptions,
-): PlainTextToolCallBlock | null {
-  const scan = scanPlainTextJsonToolCall(text, start, structuralLineBreaks);
-  if (scan.kind !== "complete") {
-    return null;
-  }
-  const name = text.slice(scan.name.start, scan.name.end);
-  if (options?.allowedToolNames && !options.allowedToolNames.has(name)) {
-    return null;
-  }
-  const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
-  if (
-    utf8ByteLengthWithinLimit(text, scan.payload.start, scan.payload.end, maxPayloadBytes) === null
-  ) {
-    return null;
-  }
-  const argumentsValue = parseJsonArguments(text, scan.payload);
-  if (!argumentsValue) {
-    return null;
-  }
-  return {
-    arguments: argumentsValue,
-    end: scan.end,
-    name,
-    raw: text.slice(start, scan.end),
-    start,
-  };
-}
-
 function parseJsonArguments(
   text: string,
   payload: PlainTextJsonToolCallSpan,
@@ -577,57 +476,47 @@ function extractXmlishParameterValue(
   return value.slice(payloadStart).replace(/(?:\r\n|[\r\n])$/u, "");
 }
 
-function parseXmlishPlainTextToolCallBlockAt(
-  text: string,
-  start: number,
-  options?: NormalizedPlainTextToolCallParseOptions,
-  structuralLineBreaks?: StructuralLineBreakOptions,
-): PlainTextToolCallBlock | null {
-  const scan = scanXmlishToolCall(text, start, structuralLineBreaks);
-  if (scan.kind !== "complete") {
-    return null;
-  }
-  const name = text.slice(scan.name.start, scan.name.end);
-  if (options?.allowedToolNames && !options.allowedToolNames.has(name)) {
-    return null;
-  }
-
-  const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
-  if (
-    utf8ByteLengthWithinLimit(text, scan.payload.start, scan.payload.end, maxPayloadBytes) === null
-  ) {
-    return null;
-  }
-  const args = Object.fromEntries(
-    scan.parameters.map((parameter) => [
-      text.slice(parameter.name.start, parameter.name.end),
-      extractXmlishParameterValue(
-        text,
-        parameter.value.start,
-        parameter.value.end,
-        structuralLineBreaks,
-      ),
-    ]),
-  );
-  return {
-    arguments: args,
-    end: scan.end,
-    name,
-    raw: text.slice(start, scan.end),
-    start,
-  };
-}
-
 function parsePlainTextToolCallBlockAtAnySyntax(
   text: string,
   start: number,
   options?: NormalizedPlainTextToolCallParseOptions,
   structuralLineBreaks?: StructuralLineBreakOptions,
 ): PlainTextToolCallBlock | null {
-  return (
-    parsePlainTextToolCallBlockAt(text, start, options, structuralLineBreaks) ??
-    parseXmlishPlainTextToolCallBlockAt(text, start, options, structuralLineBreaks)
-  );
+  for (const scanCall of [scanPlainTextJsonToolCall, scanXmlishToolCall]) {
+    const scan = scanCall(text, start, structuralLineBreaks);
+    if (scan.kind !== "complete") {
+      continue;
+    }
+    const name = text.slice(scan.name.start, scan.name.end);
+    if (options?.allowedToolNames && !options.allowedToolNames.has(name)) {
+      continue;
+    }
+    const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
+    if (
+      utf8ByteLengthWithinLimit(text, scan.payload.start, scan.payload.end, maxPayloadBytes) ===
+      null
+    ) {
+      continue;
+    }
+    const args =
+      "parameters" in scan
+        ? Object.fromEntries(
+            scan.parameters.map((parameter) => [
+              text.slice(parameter.name.start, parameter.name.end),
+              extractXmlishParameterValue(
+                text,
+                parameter.value.start,
+                parameter.value.end,
+                structuralLineBreaks,
+              ),
+            ]),
+          )
+        : parseJsonArguments(text, scan.payload);
+    if (args) {
+      return { arguments: args, end: scan.end, name, raw: text.slice(start, scan.end), start };
+    }
+  }
+  return null;
 }
 
 function normalizeParseOptions(

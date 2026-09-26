@@ -1,10 +1,12 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  ExecApprovalDecision,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it, vi } from "vitest";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
-import type { ExecApprovalDecision } from "./plugin-approval-roundtrip.js";
 import type { JsonValue } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 

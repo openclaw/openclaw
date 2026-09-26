@@ -145,18 +145,13 @@ internal class VoiceNoteRecorderController(
 
         val durationMs =
           try {
-            engine.stop().coerceIn(0L, VOICE_NOTE_MAX_DURATION_MS)
+            val duration = engine.stop().coerceIn(0L, VOICE_NOTE_MAX_DURATION_MS)
+            normalizeM4aContainerBrand(file)
+            duration
           } catch (_: Throwable) {
             failLocked("Could not finish voice-note recording.")
             return false
           }
-
-        try {
-          normalizeM4aContainerBrand(file)
-        } catch (_: Throwable) {
-          failLocked("Could not finish voice-note recording.")
-          return false
-        }
 
         if (file.length() > VOICE_NOTE_MAX_BYTES) {
           failLocked("Voice note is too large. Record a shorter message.")
