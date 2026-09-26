@@ -630,7 +630,12 @@ change to stored history. Live turns, search results, and turns without an answe
 stay expanded. User messages,
 forwarded inputs, and structural markers remain boundaries for grouping.
 Clicking a reply's quoted original opens its containing **Worked for…** group,
-scrolls to the original message, and briefly highlights it.
+scrolls to the original message, and briefly highlights it. If a preview lookup
+failed temporarily, clicking the quote retries it and reports a retryable load
+error rather than claiming the source is missing. Missing or inaccessible sources
+share the same unavailable notice; an authorized source that exceeds the display
+limit reports that it is too large. Rendering alone does not repeatedly retry a
+failed lookup.
 
 On wide desktop panes, the conversation position rail provides keyboard shortcuts
 to messages. Tab enters at the current message, or the first marker if no message

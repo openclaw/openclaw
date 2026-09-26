@@ -303,7 +303,7 @@ async function handleChatSendWithOptions(
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
-    admitted.value.setPendingInputCleanup(() => {
+    admitted.value.addCleanup(() => {
       try {
         const pending =
           userTurnRecorder.getPendingInputMessage?.() &&

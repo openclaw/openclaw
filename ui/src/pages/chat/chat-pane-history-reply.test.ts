@@ -2,11 +2,108 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane, nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
 
 describe("chat pane reply-source history navigation", () => {
+  it.each([
+    ["not_found", "The original message is unavailable."],
+    ["not_visible", "The original message is unavailable."],
+    ["oversized", "The original message is too large to display."],
+  ])(
+    "reports a known %s reply source without scanning history",
+    async (unavailableReason, message) => {
+      const request = vi.fn().mockResolvedValue({ ok: false, unavailableReason });
+      const { pane, state } = createTestChatPane({
+        client: { request } as unknown as GatewayBrowserClient,
+        sessions: {} as SessionCapability,
+      });
+      state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
+      await pane.loadReplyMessage("source-message");
+      await pane.navigateToReplyMessage("source-message");
+      expect(state.lastError).toBe(message);
+      expect(request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["INVALID_REQUEST", "FORBIDDEN"])(
+    "reports a structured %s source rejection as unavailable without retrying",
+    async (code) => {
+      const request = vi
+        .fn()
+        .mockRejectedValue(
+          new GatewayRequestError({ code, message: "Source access is unavailable" }),
+        );
+      const { pane, state } = createTestChatPane({
+        client: { request } as unknown as GatewayBrowserClient,
+        sessions: {} as SessionCapability,
+      });
+      state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
+      await pane.loadReplyMessage("source-message");
+      await pane.navigateToReplyMessage("source-message");
+      expect(state.lastError).toBe("The original message is unavailable.");
+      expect(request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("retries a failed preview on an explicit click without treating transport failure as missing", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("Temporary connection failure"));
+    const { pane, state } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    await pane.loadReplyMessage("source-message");
+    await pane.navigateToReplyMessage("source-message");
+    expect(state.lastError).toBe(
+      "Could not load the original message. Click the reply to try again.",
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+    await pane.loadReplyMessage("source-message");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces a clicked pending preview and ignores its result after reconnect", async () => {
+    const deferred = createDeferred<{ ok: false; unavailableReason: "not_found" }>();
+    const request = vi.fn(() => deferred.promise);
+    const { pane, state } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const preview = pane.loadReplyMessage("source-message");
+    const navigation = pane.navigateToReplyMessage("source-message");
+    expect(request).toHaveBeenCalledOnce();
+    pane.connectionGeneration += 1;
+    state.connectionEpoch = pane.connectionGeneration;
+    deferred.resolve({ ok: false, unavailableReason: "not_found" });
+    await Promise.all([preview, navigation]);
+    expect(state.lastError).toBeNull();
+  });
+
+  it("recovers a failed preview on click and clears only its transport diagnostic", async () => {
+    const source = {
+      ...nativeHistoryMessage(1, "Original answer"),
+      __openclaw: { id: "source-message", seq: 1 },
+    };
+    const request = vi.fn().mockRejectedValue(new Error("Temporary connection failure"));
+    const { pane, state } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    vi.spyOn(pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
+    const reveal = vi.spyOn(pane.transcript, "revealMessage").mockReturnValue(true);
+    await pane.loadReplyMessage("source-message");
+    await pane.navigateToReplyMessage("source-message");
+    request.mockImplementation(async () => {
+      state.chatMessages = [source];
+      return { ok: true, message: source };
+    });
+    await pane.navigateToReplyMessage("source-message");
+    expect(state.lastError).toBeNull();
+    expect(reveal).toHaveBeenCalledWith("source-message");
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it("resolves an unloaded reply preview through chat.message.get", async () => {
     const message = {
       role: "assistant",

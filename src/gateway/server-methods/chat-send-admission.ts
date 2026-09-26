@@ -682,7 +682,7 @@ export async function admitChatSend(
       originatingRoute,
       rejectSessionRoutingChanged,
       retainGatewayWorkAdmission: retainedWork.retain,
-      setPendingInputCleanup: retainedWork.setPendingInputCleanup,
+      addCleanup: retainedWork.addCleanup,
       assertWorkAdmissionCurrent: () => {
         const queued = context.chatQueuedTurns.get(clientRunId);
         // Collect retires source cancellation while retaining the original
