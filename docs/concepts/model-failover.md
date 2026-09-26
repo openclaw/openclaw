@@ -38,7 +38,7 @@ policy. OpenClaw does not retry them with thinking disabled.
     Try the current provider with auth-profile rotation/cooldown rules. Runs apply bounded recovery to eligible transient failures before rotating profiles or advancing model fallback.
   </Step>
   <Step title="Advance on failover-worthy errors">
-    If that provider is exhausted with a failover-worthy error, move to the next model candidate.
+    If that provider is exhausted or reaches its auth-profile rotation limit with a failover-worthy error, move to the next model candidate.
   </Step>
   <Step title="Use fallback for the current turn">
     Run the winning fallback candidate without changing the session's selected provider/model.
@@ -328,13 +328,15 @@ State is stored in the per-agent SQLite auth state:
 }
 ```
 
-Overloaded and rate-limit errors allow one same-provider auth-profile rotation by default before advancing to the next configured model fallback. The active runtime first uses its eligible same-model recovery budget. Auth-profile rotation and model fallback still require evidence that replaying the original attempt is safe.
+Rate-limit errors allow one same-provider auth-profile rotation before advancing to the next configured model fallback, unless config contains a non-empty `auth.order[provider]`. With that explicit config, OpenClaw tries all eligible profiles in the resolved rotation order before model fallback. A stored order override still takes precedence over the config order, but a stored order alone does not remove the one-rotation limit.
+
+Overloaded errors retain the one-rotation limit even with explicit config order. The active runtime first uses its eligible same-model recovery budget. Trying more profiles can delay model fallback; existing retry budgets, run deadlines, profile pins, cooldowns, and replay-safety requirements still apply. No new setting is required.
 
 ## Model fallback
 
-If all profiles for a provider fail, OpenClaw moves to the next model in `agents.defaults.model.fallbacks` when the failure matches one of the failover reasons listed below. This includes `model_not_found` for HTTP 404 responses. It does not include a 404 whose response body identifies a more specific condition, such as context overflow, session expiry, billing, authentication, or request format. Provider errors that do not expose enough detail are still labeled precisely in fallback state. `empty_response` means the provider returned no usable message or status. `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`. `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.
+If all eligible profiles for a provider fail or the applicable rotation limit is reached, OpenClaw moves to the next model in `agents.defaults.model.fallbacks` when the failure matches one of the failover reasons listed below. This includes `model_not_found` for HTTP 404 responses. It does not include a 404 whose response body identifies a more specific condition, such as context overflow, session expiry, billing, authentication, or request format. Provider errors that do not expose enough detail are still labeled precisely in fallback state. `empty_response` means the provider returned no usable message or status. `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`. `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.
 
-Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits.
+Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow its one-rotation-then-fallback policy regardless of config order.
 
 The failover controller owns OpenClaw's transient recovery budget. Rate limits receive up to **10 total attempts** before auth-profile rotation or model fallback. Jittered exponential waits cap at 30 seconds, while provider `retry-after` and `retry-after-ms` hints remain minimum waits even beyond that cap. Other transient failures retain eight retries and a 90-second window for consecutive outages. A completed successful model response clears that window without resetting the total retry count; partial output and tool activity alone do not. Once that budget or window is exhausted, recovery proceeds to eligible auth-profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery and any fallback winner remain turn-local.
 

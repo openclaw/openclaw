@@ -43,6 +43,7 @@ function createController(
   fallbackConfigured = false,
   abortSignal?: AbortSignal,
   onRetryWait?: ControllerInput["runParams"]["onRetryWait"],
+  hasConfiguredAuthOrder = false,
 ) {
   return createEmbeddedRunFailoverRetryController({
     runParams: {
@@ -55,6 +56,7 @@ function createController(
     globalLane: "test",
     agentDir: "/tmp/openclaw-failover-retry-controller-test",
     fallbackConfigured,
+    hasConfiguredAuthOrder,
     profileFailureStore: { version: 1, profiles: {} },
     getLastProfileId: () => "openai:p1",
     getSessionId: () => "session:failover-retry-controller-test",
@@ -630,6 +632,23 @@ describe("createEmbeddedRunFailoverRetryController", () => {
       expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
     },
   );
+
+  it("exhausts configured rate-limit profiles without resetting the transient budget", async () => {
+    const advanceAuthProfile = vi
+      .fn<ControllerInput["advanceAuthProfile"]>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const controller = createController(advanceAuthProfile, true, undefined, undefined, true);
+    controller.observeAttempt({ providerRetryMaxRetries: 0 });
+
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(false);
+    await expect(controller.maybeRetryTransient({ reason: "rate_limit" })).resolves.toBe(false);
+    expect(rateLimitContext.logFallbackDecision).not.toHaveBeenCalled();
+    expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+  });
 
   it("escalates after one successful rate-limit rotation without advancing again", async () => {
     const advanceAuthProfile = vi.fn(async () => true);

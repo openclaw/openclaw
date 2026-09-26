@@ -228,6 +228,7 @@ export async function runPreparedEmbeddedLoop(
     agentDir,
     fallbackConfigured,
     profileFailureStore,
+    hasConfiguredAuthOrder: preparedRuntime.hasConfiguredAuthOrder,
     getLastProfileId: () => preparedRuntime.snapshot().lastProfileId,
     getSessionId: () => sessionPromptState.sessionId,
     harnessOwnsTransport: () => preparedRuntime.snapshot().pluginHarnessOwnsTransport,

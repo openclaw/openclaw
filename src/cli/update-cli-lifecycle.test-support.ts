@@ -10,6 +10,7 @@ import {
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../daemon/constants.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
+import * as containerEnvironment from "../infra/container-environment.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
@@ -172,6 +173,8 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    // These fixtures model native service hosts, independent of the test runner's deployment.
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
     retainUpdateRuntime.mockImplementation(async ({ assertCurrent }) => assertCurrent());
     systemdPolicy.mockResolvedValue(false);
     mockUpdateStateSnapshotWorker(fixtureStateDatabases);

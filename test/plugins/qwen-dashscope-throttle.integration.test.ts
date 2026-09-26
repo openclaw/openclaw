@@ -189,6 +189,7 @@ async function runThroughFailureRecovery(params: {
         globalLane: "qwen-dashscope-throttle-test",
         agentDir: state.agentDir(),
         fallbackConfigured: false,
+        hasConfiguredAuthOrder: false,
         profileFailureStore: profileStore,
         getLastProfileId: () => profileId,
         getSessionId: () => sessionId,

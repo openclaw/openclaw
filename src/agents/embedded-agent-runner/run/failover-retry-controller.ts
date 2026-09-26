@@ -80,6 +80,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   globalLane: string;
   agentDir: string;
   fallbackConfigured: boolean;
+  hasConfiguredAuthOrder: boolean;
   profileFailureStore: PreparedRuntime["profileFailureStore"];
   getLastProfileId: () => string | undefined;
   getSessionId: () => string;
@@ -188,7 +189,13 @@ export function createEmbeddedRunFailoverRetryController(input: {
     },
     advanceAuthProfile: input.advanceAuthProfile,
     advanceRateLimitAuthProfile: async (context: RateLimitAuthProfileContext): Promise<boolean> => {
-      if (rateLimitProfileRotations >= MAX_RATE_LIMIT_PROFILE_ROTATIONS && fallbackConfigured) {
+      // An authored config order opts into exhausting the finite candidate iterator.
+      // Implicit selection keeps the latency cap; overload has its own unchanged limit.
+      if (
+        !input.hasConfiguredAuthOrder &&
+        rateLimitProfileRotations >= MAX_RATE_LIMIT_PROFILE_ROTATIONS &&
+        fallbackConfigured
+      ) {
         const status = resolveFailoverStatus("rate_limit");
         log.warn(
           `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,

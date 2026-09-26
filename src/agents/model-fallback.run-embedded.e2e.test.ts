@@ -12,11 +12,11 @@ import { createModelFallbackAttemptMocks } from "./model-fallback.run-embedded.a
 import {
   CLOUDFLARE_502_ERROR_PAYLOAD,
   type EmbeddedAttemptParams,
-  LONG_RATE_LIMIT_ERROR_MESSAGE,
   makeModelFallbackConfig,
+  makeOverloadedProviderAttempt,
+  makePrimaryRateLimitAttempt,
   NO_ENDPOINTS_FOUND_ERROR_MESSAGE,
   NO_ERROR_DETAILS_MESSAGE,
-  OVERLOADED_ERROR_PAYLOAD,
   RATE_LIMIT_ERROR_MESSAGE,
   readFallbackUsageStats,
   REAL_TRANSPORT_PER_DAY_CAP_ERROR_MESSAGE,
@@ -243,7 +243,6 @@ async function runEmbeddedEntryFallback(params: {
 const {
   mockPrimaryOverloadedThenFallbackSuccess,
   mockPrimaryFailureThenFallbackSuccess,
-  mockPrimaryPromptErrorThenFallbackSuccess,
   mockPrimarySuspendingPromptErrorThenFallbackSuccess,
   mockPrimaryErrorThenFallbackSuccess,
   mockPrimaryStaleRateLimitTextSuccess,
@@ -269,22 +268,9 @@ function expectOpenAiThenGroqAttemptOrder(params?: { primaryAttempts?: number })
 }
 
 function mockAllProvidersOverloaded() {
-  runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
-    const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
-    if (attemptParams.provider === "openai" || attemptParams.provider === "groq") {
-      return makeEmbeddedRunnerAttempt({
-        providerRetryMaxRetries: 3,
-        assistantTexts: [],
-        lastAssistant: buildEmbeddedRunnerAssistant({
-          provider: attemptParams.provider,
-          model: attemptParams.provider === "openai" ? "mock-1" : "mock-2",
-          stopReason: "error",
-          errorMessage: OVERLOADED_ERROR_PAYLOAD,
-        }),
-      });
-    }
-    throw new Error(`Unexpected provider ${attemptParams.provider}`);
-  });
+  runEmbeddedAttemptMock.mockImplementation(async (params) =>
+    makeOverloadedProviderAttempt(params as EmbeddedAttemptParams),
+  );
 }
 
 function countProviderAttempts(provider: string) {
@@ -970,61 +956,49 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("caps overloaded profile rotations and escalates to cross-provider fallback (#58348)", async () => {
-    // When a provider has multiple auth profiles and all return overloaded_error,
-    // the runner should not exhaust all profiles before falling back. It should
-    // cap profile rotations at overloadedProfileRotations=1 and escalate
-    // to cross-provider fallback after its bounded same-profile retries.
-    await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
-      await writeFallbackMultiProfileAuthStore(agentDir);
-      mockPrimaryOverloadedThenFallbackSuccess();
+  it.each([false, true])(
+    "caps overloaded profile rotations (configured order: %s)",
+    async (configuredOrder) => {
+      // When a provider has multiple auth profiles and all return overloaded_error,
+      // the runner should not exhaust all profiles before falling back. It should
+      // cap profile rotations at overloadedProfileRotations=1 and escalate
+      // to cross-provider fallback after its bounded same-profile retries.
+      await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
+        await writeFallbackMultiProfileAuthStore(agentDir);
+        mockPrimaryOverloadedThenFallbackSuccess();
 
-      const result = await runEmbeddedFallback({
-        agentDir,
-        workspaceDir,
-        sessionKey: "agent:test:overloaded-multi-profile-cap",
-        runId: "run:overloaded-multi-profile-cap",
+        const result = await runEmbeddedFallback({
+          agentDir,
+          workspaceDir,
+          config: {
+            ...makeModelFallbackConfig(),
+            ...(configuredOrder
+              ? { auth: { order: { openai: ["openai:p1", "openai:p2", "openai:p3"] } } }
+              : {}),
+          },
+          sessionKey: "agent:test:overloaded-multi-profile-cap",
+          runId: "run:overloaded-multi-profile-cap",
+        });
+
+        // Should fall back to groq instead of exhausting all 3 openai profiles
+        expect(result.provider).toBe("groq");
+        expect(result.model).toBe("mock-2");
+        expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+        // With overloadedProfileRotations=1, we expect:
+        // - 1 initial openai attempt and 3 budgeted retries (p1)
+        // - 1 rotation to p2 (capped)
+        // - escalation to groq (1 attempt)
+        // The transient budget stays shared across the capped profile rotation.
+        expectAttemptOrder([
+          ...Array.from({ length: 4 }, () => ({ provider: "openai", authProfileId: "openai:p1" })),
+          { provider: "openai", authProfileId: "openai:p2" },
+          { provider: "groq", authProfileId: "groq:p1" },
+        ]);
+        expect(sleepWithAbortMock).toHaveBeenCalledTimes(3);
       });
-
-      // Should fall back to groq instead of exhausting all 3 openai profiles
-      expect(result.provider).toBe("groq");
-      expect(result.model).toBe("mock-2");
-      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
-
-      // With overloadedProfileRotations=1, we expect:
-      // - 1 initial openai attempt and 3 budgeted retries (p1)
-      // - 1 rotation to p2 (capped)
-      // - escalation to groq (1 attempt)
-      // The transient budget stays shared across the capped profile rotation.
-      expectAttemptOrder([
-        ...Array.from({ length: 4 }, () => ({ provider: "openai", authProfileId: "openai:p1" })),
-        { provider: "openai", authProfileId: "openai:p2" },
-        { provider: "groq", authProfileId: "groq:p1" },
-      ]);
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(3);
-    });
-  });
-
-  it("caps long-window rate-limit profile rotations and escalates to fallback (#58572)", async () => {
-    await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
-      await writeFallbackMultiProfileAuthStore(agentDir);
-
-      mockPrimaryErrorThenFallbackSuccess(LONG_RATE_LIMIT_ERROR_MESSAGE);
-
-      const result = await runEmbeddedFallback({
-        agentDir,
-        workspaceDir,
-        sessionKey: "agent:test:rate-limit-multi-profile-cap",
-        runId: "run:rate-limit-multi-profile-cap",
-      });
-
-      expect(result.provider).toBe("groq");
-      expect(result.model).toBe("mock-2");
-      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
-
-      expectProviderAttemptCounts({ openai: 2, groq: 1 });
-    });
-  });
+    },
+  );
 
   it("ignores stale classified rate-limit text when stopReason is not error", async () => {
     await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
@@ -1050,25 +1024,48 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("caps prompt-side long-window rate-limit rotations before cross-provider fallback", async () => {
-    await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
-      await writeFallbackMultiProfileAuthStore(agentDir);
-
-      mockPrimaryPromptErrorThenFallbackSuccess(LONG_RATE_LIMIT_ERROR_MESSAGE);
-
-      const result = await runEmbeddedFallback({
-        agentDir,
-        workspaceDir,
-        sessionKey: "agent:test:prompt-rate-limit-multi-profile-cap",
-        runId: "run:prompt-rate-limit-multi-profile-cap",
+  it.each([
+    ["assistant", false, false],
+    ["assistant", true, false],
+    ["assistant", true, true],
+    ["prompt", false, false],
+    ["prompt", true, false],
+    ["prompt", true, true],
+  ] as const)(
+    "rotates profiles after %s rate limits (configured order: %s, healthy third: %s)",
+    async (stage, configuredOrder, healthyThirdProfile) => {
+      await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
+        await writeFallbackMultiProfileAuthStore(agentDir);
+        mockPrimaryFailureThenFallbackSuccess((attempt) =>
+          makePrimaryRateLimitAttempt(attempt.authProfileId, stage, healthyThirdProfile),
+        );
+        const scenario = `${stage}-${configuredOrder}-${healthyThirdProfile}`;
+        const result = await runEmbeddedFallback({
+          agentDir,
+          workspaceDir,
+          sessionKey: `agent:test:rate-limit-${scenario}`,
+          runId: `run:rate-limit-${scenario}`,
+          config: {
+            ...makeModelFallbackConfig(),
+            ...(configuredOrder
+              ? { auth: { order: { openai: ["openai:p1", "openai:p2", "openai:p3"] } } }
+              : {}),
+          },
+        });
+        expect(result.provider).toBe(healthyThirdProfile ? "openai" : "groq");
+        expect(result.model).toBe(healthyThirdProfile ? "mock-1" : "mock-2");
+        expect(result.result.payloads?.[0]?.text).toBe(
+          healthyThirdProfile ? "third profile ok" : "fallback ok",
+        );
+        expectAttemptOrder([
+          { provider: "openai", authProfileId: "openai:p1" },
+          { provider: "openai", authProfileId: "openai:p2" },
+          ...(configuredOrder ? [{ provider: "openai", authProfileId: "openai:p3" }] : []),
+          ...(healthyThirdProfile ? [] : [{ provider: "groq", authProfileId: "groq:p1" }]),
+        ]);
       });
-
-      expect(result.provider).toBe("groq");
-      expect(result.model).toBe("mock-2");
-
-      expectProviderAttemptCounts({ openai: 2, groq: 1 });
-    });
-  });
+    },
+  );
 
   it("rotates Codex profiles on structured prompt rate limits before model fallback", async () => {
     await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {

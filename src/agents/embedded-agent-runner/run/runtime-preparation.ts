@@ -4,6 +4,7 @@ import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-ho
 import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
+import { resolveExplicitAuthOrderSelection } from "../../auth-profiles/order.js";
 import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveProviderEndpoint } from "../../provider-attribution.js";
@@ -216,6 +217,13 @@ export async function prepareEmbeddedRunRuntime(input: {
     preparedAuthAttempts,
   } = preparedAuthPlan;
   let { activePreparedAuthPlan } = preparedAuthPlan;
+  const { order: configuredAuthOrder } = resolveExplicitAuthOrderSelection({
+    storeOrder: undefined,
+    configuredOrder: params.config?.auth?.order,
+    providerKey: provider,
+    providerAuthKey:
+      activePreparedAuthPlan.harnessAuthProvider ?? activePreparedAuthPlan.providerForAuth,
+  });
   preparedThinkingCapabilityReady = true;
   applyResolvedRuntimeModel(models.runtime);
   const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
@@ -539,6 +547,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     preferredProfileId,
     profileCandidates,
     profileFailureStore: attemptAuthProfileStore,
+    hasConfiguredAuthOrder: (configuredAuthOrder?.length ?? 0) > 0,
     genericCompactionRecoveryAllowed,
     pluginHarnessOwnsAuthBootstrap,
     attemptedThinking,

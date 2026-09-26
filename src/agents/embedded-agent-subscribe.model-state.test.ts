@@ -248,6 +248,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         globalLane: "test",
         agentDir: "/tmp/async-progress",
         fallbackConfigured: false,
+        hasConfiguredAuthOrder: false,
         profileFailureStore: { version: 1, profiles: {} },
         getLastProfileId: () => undefined,
         getSessionId: () => "async-progress",
