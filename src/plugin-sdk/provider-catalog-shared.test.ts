@@ -99,6 +99,195 @@ describe("provider-catalog-shared live catalog cache", () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
+  it("does not admit a cancelled catalog consumer", async () => {
+    const reason = new Error("catalog owner closed");
+    const load = vi.fn(async () => "unexpected");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["cancelled"],
+        load,
+        signal: AbortSignal.abort(reason),
+      }),
+    ).rejects.toBe(reason);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: "Error", reason: new Error("first consumer closed") },
+    { kind: "non-Error", reason: { source: "catalog closed" } },
+  ])("preserves $kind cancellation without aborting another consumer", async ({ reason }) => {
+    const controller = new AbortController();
+    const pending = createDeferred<string>();
+    const started = createDeferred<AbortSignal | undefined>();
+    const load = vi.fn((signal?: AbortSignal) => {
+      started.resolve(signal);
+      return pending.promise;
+    });
+    const first = getCachedLiveCatalogValue({
+      keyParts: ["shared"],
+      load,
+      signal: controller.signal,
+    });
+    const second = getCachedLiveCatalogValue({ keyParts: ["shared"], load });
+    const acquisitionSignal = await started.promise;
+    controller.abort(reason);
+    await expect(first).rejects.toBe(reason);
+    expect(acquisitionSignal?.aborted).toBe(false);
+    pending.resolve("shared catalog");
+    await expect(second).resolves.toBe("shared catalog");
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { kind: "Error", reason: new Error("last consumer left") },
+    { kind: "non-Error", reason: { source: "catalog closed" } },
+  ])("does not cache a same-turn completion after $kind cancellation", async ({ reason }) => {
+    const controller = new AbortController();
+    const completion = createDeferred<string>();
+    const started = createDeferred<AbortSignal | undefined>();
+    const keyParts = ["same-turn-cancellation"];
+    const first = getCachedLiveCatalogValue({
+      keyParts,
+      signal: controller.signal,
+      load: (signal) => {
+        started.resolve(signal);
+        return completion.promise;
+      },
+    });
+    const acquisitionSignal = await started.promise;
+    controller.abort(reason);
+    const abortedSynchronously = acquisitionSignal?.aborted;
+    completion.resolve("abandoned result");
+    await Promise.allSettled([first]);
+    const load = vi.fn(async () => "replacement");
+    const replacement = await getCachedLiveCatalogValue({ keyParts, load });
+
+    expect(abortedSynchronously).toBe(true);
+    expect(acquisitionSignal?.reason).toBe(reason);
+    await expect(first).rejects.toBe(reason);
+    expect(replacement).toBe("replacement");
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("allows unrelated catalogs while abandoned loads remain unsettled", async () => {
+    const completion = createDeferred<string>();
+    const controllers = Array.from({ length: 99 }, () => new AbortController());
+    const signals: AbortSignal[] = [];
+    const load = (signal?: AbortSignal) => {
+      if (signal) {
+        signals.push(signal);
+      }
+      return completion.promise;
+    };
+    const pending = controllers.map((controller, index) =>
+      getCachedLiveCatalogValue({
+        keyParts: ["pending"],
+        load,
+        signal: controller.signal,
+        ttlMs: 1,
+        now: () => index * 2,
+      }),
+    );
+    const retained = getCachedLiveCatalogValue({
+      keyParts: ["pending"],
+      load,
+      ttlMs: 1,
+      now: () => 198,
+    });
+    try {
+      controllers.forEach((controller) => controller.abort(new Error("observer closed")));
+      await Promise.allSettled(pending);
+      expect(signals.filter((signal) => signal.aborted)).toHaveLength(99);
+      await expect(
+        getCachedLiveCatalogValue({ keyParts: ["overflow"], load: async () => "ready" }),
+      ).resolves.toBe("ready");
+      expect(signals.at(-1)?.aborted).toBe(false);
+    } finally {
+      completion.resolve("settled");
+      await Promise.allSettled([...pending, retained]);
+    }
+  });
+
+  it("preserves consumers when pending entries are evicted without rewarming them", async () => {
+    const controller = new AbortController();
+    const completion = createDeferred<string>();
+    const signals: AbortSignal[] = [];
+    const load = (signal?: AbortSignal) => {
+      if (signal) {
+        signals.push(signal);
+      }
+      return completion.promise;
+    };
+    const keyParts = ["evicted", 0];
+    const first = getCachedLiveCatalogValue({ keyParts, load, signal: controller.signal });
+    const survivor = getCachedLiveCatalogValue({ keyParts, load });
+    const pending = Array.from({ length: 99 }, (_, index) =>
+      getCachedLiveCatalogValue({ keyParts: ["evicted", index + 1], load }),
+    );
+    const settled = Promise.allSettled([first, survivor, ...pending]);
+    try {
+      await expect(
+        getCachedLiveCatalogValue({ keyParts: ["overflow"], load: async () => "ready" }),
+      ).resolves.toBe("ready");
+      const reason = new Error("evicted consumer closed");
+      controller.abort(reason);
+      await expect(first).rejects.toBe(reason);
+      expect(signals).toHaveLength(100);
+      expect(signals.every((signal) => !signal.aborted)).toBe(true);
+      completion.resolve("original");
+      await expect(survivor).resolves.toBe("original");
+      await settled;
+      await expect(
+        getCachedLiveCatalogValue({ keyParts, load: async () => "replacement" }),
+      ).resolves.toBe("replacement");
+    } finally {
+      completion.resolve("original");
+      controller.abort();
+      await settled;
+    }
+  });
+
+  it("replaces an abandoned load before physical settlement without losing the replacement", async () => {
+    const controller = new AbortController();
+    const completion = createDeferred<string>();
+    const load = vi.fn(() => completion.promise);
+    const keyParts = ["cancelled-shared"];
+    const first = getCachedLiveCatalogValue({ keyParts, load, signal: controller.signal });
+    const reason = new Error("last consumer left");
+    try {
+      controller.abort(reason);
+      const replacementLoad = vi.fn(async () => "replacement");
+      const replacement = getCachedLiveCatalogValue({ keyParts, load: replacementLoad });
+      const startedBeforeSettlement = replacementLoad.mock.calls.length;
+      completion.resolve("abandoned result");
+      await Promise.allSettled([first, replacement]);
+      await expect(first).rejects.toBe(reason);
+      expect(startedBeforeSettlement).toBe(1);
+      await expect(replacement).resolves.toBe("replacement");
+      expect(load).toHaveBeenCalledOnce();
+      await expect(getCachedLiveCatalogValue({ keyParts, load })).resolves.toBe("replacement");
+      expect(load).toHaveBeenCalledOnce();
+    } finally {
+      completion.resolve("abandoned result");
+      await Promise.allSettled([first, completion.promise]);
+    }
+  });
+
+  it("passes an uncached caller's signal without changing shared cache ownership", async () => {
+    const keyParts = ["uncached-cancellation"];
+    await getCachedLiveCatalogValue({ keyParts, load: async () => "cached" });
+    const controller = new AbortController();
+    const load = vi.fn(async (signal?: AbortSignal) => {
+      expect(signal).toBe(controller.signal);
+      return "uncached";
+    });
+    await expect(
+      getCachedLiveCatalogValue({ keyParts, load, ttlMs: 0, signal: controller.signal }),
+    ).resolves.toBe("uncached");
+    await expect(getCachedLiveCatalogValue({ keyParts, load })).resolves.toBe("cached");
+    expect(load).toHaveBeenCalledOnce();
+  });
+
   it.each([undefined, 64_000])(
     "retains slow successful catalogs without extending absolute expiry %s",
     async (absoluteExpiry) => {

@@ -160,12 +160,13 @@ export async function getCachedUpstreamProviderCatalog(
     // one upstream document and must not download it once per provider.
     keyParts: ["upstream-provider-catalog", params.endpoint],
     ttlMs: params.ttlMs ?? 300_000,
-    load: async () => {
+    signal: params.signal,
+    load: async (signal) => {
       const timeoutMs = params.timeoutMs ?? 15_000;
       const { response, release } = await (params.fetchGuard ?? fetchWithSsrFGuard)({
         url: params.endpoint,
         init: { headers: { Accept: "application/json" } },
-        signal: params.signal,
+        signal,
         timeoutMs,
         policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
         requireHttps: true,
@@ -434,7 +435,8 @@ export async function getCachedLiveProviderModelRows(
       liveModelCatalogAuthCacheKey(params),
     ],
     ttlMs: params.ttlMs,
-    load: async () => await fetchLiveProviderModelRows(params),
+    signal: params.signal,
+    load: async (signal) => await fetchLiveProviderModelRows({ ...params, signal }),
     shouldCache: params.shouldCacheRows,
   });
 }
