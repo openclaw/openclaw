@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { readWindowsProcessSnapshot } from "./schtasks-process-snapshot.js";
 import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
@@ -143,3 +144,59 @@ it.each([
       }
     }),
 );
+
+function lastProbeArgs(): readonly string[] {
+  return vi.mocked(spawnSync).mock.calls.at(-1)?.[1] ?? [];
+}
+
+function lastProbeInput(): unknown {
+  return vi.mocked(spawnSync).mock.calls.at(-1)?.[2]?.input;
+}
+
+describe("Scheduled Task probe command transport", () => {
+  it("launches a literal command body instead of an encoded one", () => {
+    vi.mocked(spawnSync).mockReturnValue({
+      pid: 0,
+      output: [null, JSON.stringify({ state: 3 }), ""],
+      stdout: JSON.stringify({ state: 3 }),
+      stderr: "",
+      status: 0,
+      signal: null,
+    });
+
+    expect(probeScheduledTaskState("OpenClaw Gateway")).toMatchObject({ status: "found" });
+
+    expect(vi.mocked(spawnSync).mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
+    const args = lastProbeArgs();
+    expect(args).not.toContain("-EncodedCommand");
+    expect(args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
+  });
+
+  it("passes the task name as stdin data so the command body stays constant", () => {
+    vi.mocked(spawnSync).mockReturnValue({
+      pid: 0,
+      output: [null, JSON.stringify({ state: 3 }), ""],
+      stdout: JSON.stringify({ state: 3 }),
+      stderr: "",
+      status: 0,
+      signal: null,
+    });
+
+    const hostileName = "OpenClaw Gateway & calc.exe";
+    probeScheduledTaskState(hostileName);
+    const firstArgs = lastProbeArgs();
+    const firstInput = lastProbeInput();
+    probeScheduledTaskState("A completely different task");
+    const secondArgs = lastProbeArgs();
+    const secondInput = lastProbeInput();
+
+    expect(firstInput).toBe(`${Buffer.from(hostileName, "utf8").toString("base64")}\n`);
+    expect(firstArgs).toEqual(secondArgs);
+    expect(firstInput).not.toBe(secondInput);
+    const commandLine = firstArgs.join(" ");
+    expect(commandLine).not.toContain(hostileName);
+    expect(commandLine).not.toContain(Buffer.from(hostileName, "utf8").toString("base64"));
+    // The body decodes the stdin payload; the raw task name must never ride in the command line.
+    expect(commandLine).toContain("[Console]::In.ReadLine()");
+  });
+});
