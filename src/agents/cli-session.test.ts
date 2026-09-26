@@ -397,6 +397,46 @@ describe("cli-session helpers", () => {
     ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
   });
 
+  it("upgrades plain-turn bindings to the session-stable policy hash with one reset", () => {
+    // A pre-fix plain agent turn hashed the policy without a reply mode; after
+    // the fix every turn kind hashes the session-stable mode instead.
+    const legacyPlainHash = hashCliSessionText(
+      JSON.stringify({ sourceReplyDeliveryMode: undefined, requireExplicitMessageTarget: false }),
+    );
+    const stableHash = hashCliSessionText(
+      JSON.stringify({ sourceReplyDeliveryMode: "automatic", requireExplicitMessageTarget: false }),
+    );
+
+    // First post-fix turn against the legacy binding resets once...
+    const legacyBinding = {
+      sessionId: "cli-session-1",
+      authEpochVersion: 2,
+      messageToolPolicyHash: legacyPlainHash,
+    };
+    expect(
+      resolveCliSessionReuse({
+        binding: legacyBinding,
+        authEpochVersion: 2,
+        messageToolPolicyHash: stableHash,
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: "message-policy" });
+
+    // ...and once the re-stored binding carries the stable hash, both a later
+    // plain turn and a chat turn reuse the same CLI session.
+    const upgradedBinding = {
+      sessionId: "cli-session-1",
+      authEpochVersion: 2,
+      messageToolPolicyHash: stableHash,
+    };
+    expect(
+      resolveCliSessionReuse({
+        binding: upgradedBinding,
+        authEpochVersion: 2,
+        messageToolPolicyHash: stableHash,
+      }),
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
+  });
+
   it("invalidates reuse when the task cwd changes", () => {
     const binding = {
       sessionId: "cli-session-1",
