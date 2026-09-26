@@ -19,6 +19,7 @@ import {
   writeOfficialChannelDocsIndex,
   writeOfficialChannelCatalogSource,
 } from "../scripts/write-official-channel-catalog.mts";
+import { normalizeClawHubSha256Integrity } from "../src/infra/clawhub-integrity.js";
 import { describePluginInstallSource } from "../src/plugins/install-source-info.js";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
 import { writeJsonFile } from "./helpers/temp-repo.js";
@@ -65,7 +66,7 @@ function writeExternalChannelDocs(repoRoot: string): void {
   };
   for (const entry of seed.entries) {
     const channel = entry.openclaw?.channel;
-    if (!channel?.docsPath || !channel.label) {
+    if (!channel?.docsPath?.startsWith("/") || !channel.label) {
       continue;
     }
     const title = channel.id === "openclaw-weixin" ? "WeChat" : channel.label;
@@ -712,7 +713,7 @@ describe("buildOfficialChannelCatalog", () => {
     );
   });
 
-  it("keeps third-party official external catalog npm sources pinned unless they track latest", () => {
+  it("keeps third-party official external catalog install sources pinned", () => {
     const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-policy-");
     const entries = buildOfficialChannelCatalog({ repoRoot }).entries.filter(
       (entry) => entry.source === "external" && !entry.name?.startsWith("@openclaw/"),
@@ -720,9 +721,16 @@ describe("buildOfficialChannelCatalog", () => {
 
     expect(entries.length).toBeGreaterThan(0);
     for (const entry of entries) {
-      const installSource = describePluginInstallSource(requireInstall(entry));
+      const install = requireInstall(entry);
+      const installSource = describePluginInstallSource(install);
       expect(installSource.warnings).toStrictEqual([]);
-      expect(requireNpmInstallSource(installSource).pinState).toBe("exact-with-integrity");
+      if (install.npmSpec) {
+        expect(requireNpmInstallSource(installSource).pinState).toBe("exact-with-integrity");
+      } else {
+        expect(installSource.npm).toBeUndefined();
+        expect(installSource.clawhub?.exactVersion).toBe(true);
+        expect(normalizeClawHubSha256Integrity(install.expectedIntegrity ?? "")).not.toBeNull();
+      }
     }
   });
 

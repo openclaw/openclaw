@@ -1,5 +1,6 @@
 // Defines official external install records for plugins.
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
@@ -164,6 +165,7 @@ export function isTrustedOfficialPluginInstallRecord(params: {
 function hasTrustedClawHubSourceAuthority(
   record: PluginInstallRecord,
   officialClawHubSpec: string | undefined,
+  officialExpectedIntegrity: string | undefined,
 ): boolean {
   const hasAuthorityMetadata =
     record.clawhubUrl !== undefined || record.clawhubChannel !== undefined;
@@ -171,7 +173,19 @@ function hasTrustedClawHubSourceAuthority(
     return isOfficialClawHubInstallRecord(record);
   }
   // Older official installs persisted only their catalog-backed ClawHub spec.
-  // Preserve that shipped shape, but do not let package-only records claim it.
+  // For a pinned catalog artifact, require the recorded digest before restoring
+  // authority; a matching package name alone cannot prove which code was installed.
+  if (officialExpectedIntegrity) {
+    const expectedIntegrity = normalizeClawHubSha256Integrity(officialExpectedIntegrity);
+    const recordedIntegrity = record.integrity
+      ? normalizeClawHubSha256Integrity(record.integrity)
+      : null;
+    if (!expectedIntegrity || recordedIntegrity !== expectedIntegrity) {
+      return false;
+    }
+  }
+  // Preserve the old spec-only shape for unpinned entries, but do not let
+  // package-only records claim official provenance.
   return Boolean(
     officialClawHubSpec &&
     record.spec &&
@@ -390,7 +404,11 @@ export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   }
   const recordedPackageNames = resolveRecordedClawHubPackageNames(params.record);
   if (
-    !hasTrustedClawHubSourceAuthority(params.record, officialClawHubSpec) ||
+    !hasTrustedClawHubSourceAuthority(
+      params.record,
+      officialClawHubSpec,
+      install?.expectedIntegrity,
+    ) ||
     !recordedPackageNames ||
     recordedPackageNames.length === 0 ||
     !recordedPackageNames.every((name) => officialNames.includes(name))

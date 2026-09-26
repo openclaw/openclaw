@@ -1,5 +1,6 @@
 /** Describes package-authored plugin install source metadata and pinning warnings. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { isExactSemverVersion, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type {
@@ -113,7 +114,10 @@ export function describePluginInstallSource(
   if (defaultChoice === "local" && !localPath) {
     warnings.push("default-choice-missing-source");
   }
-  if (expectedIntegrity && !npm) {
+  // Integrity belongs to npm when declared, otherwise to a ClawHub-only source.
+  const hasClawHubIntegrity =
+    !npmSpec && clawhub && expectedIntegrity && normalizeClawHubSha256Integrity(expectedIntegrity);
+  if (expectedIntegrity && !npm && !hasClawHubIntegrity) {
     warnings.push("npm-integrity-without-source");
   }
 

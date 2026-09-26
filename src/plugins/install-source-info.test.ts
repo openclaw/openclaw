@@ -25,6 +25,58 @@ describe("describePluginInstallSource", () => {
     });
   });
 
+  it.each([
+    "ab".repeat(32),
+    `sha256:${"ab".repeat(32)}`,
+    `sha256-${Buffer.alloc(32, 0xab).toString("base64")}`,
+  ])("accepts ClawHub-only integrity metadata %s", (expectedIntegrity) => {
+    const source = describePluginInstallSource({
+      clawhubSpec: "clawhub:@vendor/demo@1.2.3",
+      expectedIntegrity,
+      defaultChoice: "clawhub",
+    });
+    expect(source.clawhub).toMatchObject({ packageName: "@vendor/demo", exactVersion: true });
+    expect(source.npm).toBeUndefined();
+    expect(source.warnings).toEqual([]);
+  });
+
+  it("does not let ClawHub conceal integrity on an invalid declared npm source", () => {
+    expect(
+      describePluginInstallSource({
+        clawhubSpec: "clawhub:@vendor/demo@1.2.3",
+        npmSpec: "github:vendor/demo",
+        expectedIntegrity: `sha256:${"ab".repeat(32)}`,
+      }).warnings,
+    ).toEqual(["invalid-npm-spec", "npm-integrity-without-source"]);
+  });
+
+  it.each([
+    {},
+    { localPath: "extensions/demo" },
+    { clawhubSpec: "clawhub:@vendor/demo@1.2.3", expectedIntegrity: "not-a-hash" },
+  ])("preserves warnings for unusable integrity metadata %j", (install) => {
+    expect(
+      describePluginInstallSource({
+        expectedIntegrity: `sha256:${"ab".repeat(32)}`,
+        ...install,
+      }).warnings,
+    ).toEqual(["npm-integrity-without-source"]);
+  });
+
+  it("keeps npm integrity ownership when both sources are declared", () => {
+    const source = describePluginInstallSource({
+      clawhubSpec: "clawhub:@vendor/demo@1.2.3",
+      npmSpec: "@vendor/demo@1.2.3",
+      expectedIntegrity: "sha512-demo",
+      defaultChoice: "clawhub",
+    });
+    expect(source.npm).toMatchObject({
+      expectedIntegrity: "sha512-demo",
+      pinState: "exact-with-integrity",
+    });
+    expect(source.warnings).toEqual([]);
+  });
+
   it("marks exact npm specs with integrity as fully pinned", () => {
     expect(
       describePluginInstallSource({
