@@ -26,7 +26,7 @@ describe("Doctor artifact hash and loading agreement", () => {
       stdin: {
         contents: [
           'export { loadInstalledPluginIndex } from "./src/plugins/installed-plugin-index.ts";',
-          'export { writePersistedInstalledPluginIndexSync } from "./src/plugins/installed-plugin-index-store-write.ts";',
+          'export { writePersistedInstalledPluginIndex } from "./src/plugins/installed-plugin-index-store-write.ts";',
           'export { readPersistedInstalledPluginIndexSync } from "./src/plugins/installed-plugin-index-store.ts";',
           'export { loadPluginRegistrySnapshotWithMetadata } from "./src/plugins/plugin-registry-snapshot.ts";',
           'export { loadPluginMetadataSnapshot } from "./src/plugins/plugin-metadata-snapshot.ts";',
@@ -325,7 +325,7 @@ describe("Doctor artifact hash and loading agreement", () => {
         const owner = owners[row.mode ?? "dist"];
         const cache = owner.createPluginCache();
         owner.adoptProcessPluginCache(cache);
-        owner.withPluginCache(cache, () => {
+        await owner.withPluginCache(cache, async () => {
           const env = { HOME: row.root, OPENCLAW_STATE_DIR: path.join(row.root, "state"), OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(row.root, "extensions"), OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1", OPENCLAW_VERSION: "2026.9.2", VITEST: "true" };
           const config = { plugins: { entries: { demo: { enabled: true } }, ...(row.sourcePreferred ? { load: { paths: [row.pluginRoot] } } : {}) } };
           const candidate = { idHint: "demo", rootDir: row.pluginRoot, source: path.join(row.pluginRoot, "index.ts"), packageDir: row.pluginRoot, origin: row.origin ?? "bundled", packageManifest: row.packageManifest, ...(row.sourcePreferred ? { sourcePreferred: true } : {}) };
@@ -346,7 +346,7 @@ describe("Doctor artifact hash and loading agreement", () => {
             assert.equal(sourceIndex.plugins[0]?.doctorContractHash, row.sourceHash);
             const repeated = owner.loadInstalledPluginIndex({ candidates: [candidate], config, env });
             assert.equal(repeated.plugins[0]?.doctorContractHash, row.expectedHash);
-            owner.writePersistedInstalledPluginIndexSync(index, { env });
+            await owner.writePersistedInstalledPluginIndex(index, { env });
             const replacement = row.replacementBytes;
             fs.writeFileSync(path.join(row.root, row.expected), replacement);
             assert.equal(snapshot.index.plugins[0].doctorContractHash, row.expectedHash);

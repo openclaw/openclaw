@@ -13,7 +13,7 @@ import { autoMigrateLegacyPluginDoctorState } from "../infra/state-migrations.pl
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -183,7 +183,7 @@ describe("persisted plugin registry Doctor contract freshness", () => {
 
     const derived = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
     expect(derived.registrySource).toBe("derived");
-    writePersistedInstalledPluginIndexSync(derived.index, { stateDir });
+    await writePersistedInstalledPluginIndex(derived.index, { stateDir });
 
     const persisted = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
     const persistedPlugin = requirePlugin(persisted, pluginId);

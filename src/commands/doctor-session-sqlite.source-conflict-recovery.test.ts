@@ -29,7 +29,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("retained plugin session source recovery", () => {
   it("preserves a transcript when its index changes during archive publication", async () => {
     await withOpenClawTestState({ label: "retained-archive-owner-change" }, async (state) => {
-      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
       const options = { cfg, env: state.env, allAgents: true, mode: "import" as const };
       await runDoctorSessionSqlite(options);
       const transcript = path.join(path.dirname(storePath), "legacy-kept.jsonl");
@@ -71,7 +71,11 @@ describe("retained plugin session source recovery", () => {
 
   it("accepts an atomically replaced 67 KiB CRLF index with unchanged bytes", async () => {
     await withOpenClawTestState({ label: "retained-source-identical" }, async (state) => {
-      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default", "codex");
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
+        state,
+        "default",
+        "codex",
+      );
       const index = Buffer.from(
         `${JSON.stringify(JSON.parse(fs.readFileSync(storePath, "utf8")), null, 2).replaceAll("\n", "\r\n")}\r\n${" ".repeat(67 * 1024)}\r\n`,
       );
@@ -101,7 +105,11 @@ describe("retained plugin session source recovery", () => {
 
   it("reports existing rows and re-verifies a changed valid index without replaying stale metadata", async () => {
     await withOpenClawTestState({ label: "retained-source-reverify" }, async (state) => {
-      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default", "codex");
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
+        state,
+        "default",
+        "codex",
+      );
       const options = { cfg, env: state.env, allAgents: true };
       await runDoctorSessionSqlite({ ...options, mode: "import" });
       await upsertSessionEntryCore(
@@ -162,7 +170,7 @@ describe("retained plugin session source recovery", () => {
 
   it("reconciles a smaller retained index and reports only its differing session metadata", async () => {
     await withOpenClawTestState({ label: "retained-index-runtime-metadata" }, async (state) => {
-      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
       const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
       for (let index = 0; index < 10; index += 1) {
         entries[`agent:main:unchanged-${index}`] = {
@@ -242,7 +250,7 @@ describe("retained plugin session source recovery", () => {
     "binds changed shared transcripts to every indexed session (reversed: $reversed, foreign: $foreign)",
     async ({ reversed, foreign }) => {
       await withOpenClawTestState({ label: "retained-transcript-owner" }, async (state) => {
-        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
         const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
         const foreignPath = state.path("foreign-root/agents/main/sessions/legacy-deleted.jsonl");
         entries["agent:main:kept"].sessionFile = foreign ? foreignPath : "legacy-deleted.jsonl";
@@ -295,7 +303,7 @@ describe("retained plugin session source recovery", () => {
 
   it("does not rebind an index that swaps existing transcript ownership", async () => {
     await withOpenClawTestState({ label: "retained-index-owner" }, async (state) => {
-      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
       const options = { cfg, env: state.env, allAgents: true, mode: "import" as const };
       await runDoctorSessionSqlite(options);
       const events = loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" });
@@ -320,7 +328,7 @@ describe("retained plugin session source recovery", () => {
     "keeps a shared conflicting index until every owner is selected (truncated: %s)",
     async (truncated) => {
       await withOpenClawTestState({ label: "retained-shared-source" }, async (state) => {
-        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state);
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state);
         cfg.agents = {
           ownership: "explicit",
           defaults: { sessionStore: { agentId: "main" } },
@@ -386,7 +394,7 @@ describe("retained plugin session source recovery", () => {
 
   it("protects an unindexed source replaced with a later canonical transcript", async () => {
     await withOpenClawTestState({ label: "retained-unindexed-owner" }, async (state) => {
-      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
       const source = path.join(path.dirname(storePath), "legacy-later.jsonl");
       fs.writeFileSync(source, '{"type":"custom","unimported":true}\n');
       const options = { cfg, env: state.env, allAgents: true, mode: "import" as const };
@@ -421,7 +429,7 @@ describe("retained plugin session source recovery", () => {
     "protects an index with a %s despite matching canonical rows",
     async (kind) => {
       await withOpenClawTestState({ label: `retained-index-${kind}` }, async (state) => {
-        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
         const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
         if (kind === "removed-transcript-locator") {
           const nested = path.join(path.dirname(storePath), "history", "legacy-kept.jsonl");
@@ -472,7 +480,7 @@ describe("retained plugin session source recovery", () => {
     "archives %s bytes for recovery without blocking canonical sessions",
     async (kind) => {
       await withOpenClawTestState({ label: `retained-source-${kind}` }, async (state) => {
-        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
           state,
           kind === "invalid-shared-index" ? "external" : "default",
           "codex",

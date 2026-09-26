@@ -488,12 +488,16 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
       assertCompletionCurrent();
       await params.beforeCompletion?.(result.completedPluginIds, assertCompletionCurrent);
       assertCompletionCurrent();
-      recordDeferredPluginMigrations({
-        env: params.env,
-        pending: [],
-        resolvedPluginIds: result.completedPluginIds,
-        expectedPending,
-      });
+      await withPluginLifecycleLease(
+        { env: params.env, assertCurrent: maintenance.assertCurrent },
+        async () =>
+          recordDeferredPluginMigrations({
+            env: params.env,
+            pending: [],
+            resolvedPluginIds: result.completedPluginIds,
+            expectedPending,
+          }),
+      );
     }
     return result;
   } catch (error) {

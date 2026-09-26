@@ -5,7 +5,7 @@ import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrati
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
-export function seedDeferredPluginSessionSource(
+export async function seedDeferredPluginSessionSource(
   state: OpenClawTestState,
   layout: "external" | "default" | "legacy-root" = "external",
   pluginId = "fixture-plugin",
@@ -70,7 +70,7 @@ export function seedDeferredPluginSessionSource(
     agents: { entries: { main: { default: true } } },
     ...(layout === "external" ? { session: { store: storePath } } : {}),
   };
-  recordDeferredPluginMigrations({
+  await recordDeferredPluginMigrations({
     env: state.env,
     pending: [
       {

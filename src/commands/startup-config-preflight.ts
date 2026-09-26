@@ -80,10 +80,13 @@ async function prepareStartupConfig(
   let lease: StartupMigrationLease | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let heartbeatError: Error | undefined;
-  const assertLeaseCurrent = () => {
+  const assertHeartbeatCurrent = () => {
     if (heartbeatError) {
       throw heartbeatError;
     }
+  };
+  const assertLeaseCurrent = () => {
+    assertHeartbeatCurrent();
     lease?.heartbeat();
   };
   try {
@@ -121,6 +124,7 @@ async function prepareStartupConfig(
           measure,
           readPersistedSnapshot: readSnapshot,
           snapshotRead: read,
+          assertCurrent: assertHeartbeatCurrent,
         });
         read = persisted.snapshotRead;
       }

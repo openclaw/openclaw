@@ -574,6 +574,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/loader.gateway-bindings.test.ts",
   "src/infra/outbound/channel-bootstrap.lifecycle.test.ts",
   "src/plugins/setup-registry.lifecycle.test.ts",
+  "src/plugins/installed-plugin-index-store-write.custody.test.ts",
   "src/plugins/installed-plugin-index-store-write.receipt.test.ts",
   "src/plugins/install-record-commit.retention.test.ts",
   "src/plugins/management-service.policy-imports.test.ts",

@@ -51,7 +51,7 @@ describe("loadOpenClawPlugins", () => {
   it.each([
     {
       name: "does not reuse cached registries when env-resolved install paths change",
-      setup: () => {
+      setup: async () => {
         useNoBundledPlugins();
         const openclawHome = makePluginLoaderTempDir();
         const ignoredHome = makePluginLoaderTempDir();
@@ -65,7 +65,7 @@ describe("loadOpenClawPlugins", () => {
           body: `module.exports = { id: "tracked-install-cache", register() {} };`,
         });
 
-        refreshPersistedInstalledPluginIndex({
+        await refreshPersistedInstalledPluginIndex({
           stateDir,
           reason: "source-changed",
           installRecords: {
@@ -179,8 +179,8 @@ describe("loadOpenClawPlugins", () => {
         };
       },
     },
-  ])("$name", ({ setup }) => {
-    expectCacheMissThenHit(setup());
+  ])("$name", async ({ setup }) => {
+    expectCacheMissThenHit(await setup());
   });
 
   it("normalizes bundled plugin env overrides against the provided env", () => {

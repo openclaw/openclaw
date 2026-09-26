@@ -44,7 +44,7 @@ describe("installed plugin index policy refresh", () => {
       OPENCLAW_VERSION: "2026.4.25",
       VITEST: "true",
     };
-    const initial = refreshPersistedInstalledPluginIndex({
+    const initial = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -81,7 +81,7 @@ describe("installed plugin index policy refresh", () => {
       "utf8",
     );
 
-    const refreshed = refreshPersistedInstalledPluginIndex({
+    const refreshed = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       candidates: [candidate],
@@ -132,7 +132,7 @@ describe("installed plugin index policy refresh", () => {
       ...installRecords,
       package: { ...installRecords.package, source: "npm" },
     } satisfies InstalledPluginIndex["installRecords"];
-    const rebuilt = refreshPersistedInstalledPluginIndex({
+    const rebuilt = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       candidates: [candidate],
@@ -156,14 +156,14 @@ describe("installed plugin index policy refresh", () => {
       OPENCLAW_VERSION: "2026.4.25",
       VITEST: "true",
     };
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
       env,
     });
 
-    const refreshed = refreshPersistedInstalledPluginIndex({
+    const refreshed = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       candidates: [candidate, nextCandidate],
@@ -198,7 +198,7 @@ describe("installed plugin index policy refresh", () => {
         OPENCLAW_VERSION: "2026.4.25",
         VITEST: "true",
       };
-      const initial = refreshPersistedInstalledPluginIndex({
+      const initial = await refreshPersistedInstalledPluginIndex({
         reason: "manual",
         stateDir,
         candidates: [candidate],
@@ -207,7 +207,7 @@ describe("installed plugin index policy refresh", () => {
       });
       await writePersistedInstalledPluginIndex({ ...initial, plugins: [] }, { stateDir });
 
-      const refreshed = refreshPersistedInstalledPluginIndex({
+      const refreshed = await refreshPersistedInstalledPluginIndex({
         reason: "policy-changed",
         stateDir,
         candidates: [candidate],

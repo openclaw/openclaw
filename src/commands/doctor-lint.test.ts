@@ -662,7 +662,7 @@ describe("runDoctorLintCli", () => {
       OPENCLAW_STATE_DIR: stateDir,
     };
     await seedInstalledPluginIndex({}, { config, env, stateDir, workspaceDir: rootDir });
-    recordDeferredPluginMigrations({
+    await recordDeferredPluginMigrations({
       env,
       pending: [
         {

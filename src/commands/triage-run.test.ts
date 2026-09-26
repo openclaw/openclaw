@@ -162,7 +162,7 @@ describe("triage --run", () => {
     });
     finishUpdateRun(run.runId, { status: "failed", reason: "finalize:doctor" });
     if (pendingMigration) {
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         pending: [
           {
             pluginId: "codex",
