@@ -17,6 +17,7 @@ import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   forbidMainThreadSql,
   observeMainThreadSql,
@@ -85,6 +86,8 @@ async function setup() {
     "jobs.json",
   );
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     defaultAgentId: "main",
     cronEnabled: false,
