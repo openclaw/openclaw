@@ -45,6 +45,7 @@ impl AppView {
         self.composer_state.drafts.save(Draft {
             text: self.composer.read(cx).value().to_string(),
             attachments: self.composer_state.attachments.clone(),
+            reply: self.composer_state.reply.clone(),
         });
     }
 
@@ -68,6 +69,7 @@ impl AppView {
         self.composer_state.reading = 0;
         self.composer_state.error = None;
         self.composer_state.set_attachments(Vec::new());
+        self.composer_state.reply = None;
         self.composer_state.commands.clear();
         self.model_controls.reset_connection();
         self.composer_state.catalog_cache.clear();
@@ -116,6 +118,7 @@ impl AppView {
         self.model_controls.close_popups();
         self.composer_state.recall.reset();
         self.composer_state.set_attachments(draft.attachments);
+        self.composer_state.reply = draft.reply;
         self.composer
             .update(cx, |state, cx| state.set_value(draft.text, window, cx));
     }
@@ -404,6 +407,19 @@ impl AppView {
         if message.trim().is_empty() && attachments.is_empty() {
             return;
         }
+        let reply = self.composer_state.reply.clone();
+        let message = match &reply {
+            Some(reply) if reply.id.is_none() => format!(
+                "{}\n\n{message}",
+                reply
+                    .text
+                    .lines()
+                    .map(|line| format!("> {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            _ => message,
+        };
         let run_id = uuid::Uuid::new_v4().to_string();
         let Some(gateway) = self.composer_state.drafts.gateway().map(str::to_owned) else {
             return;
@@ -435,6 +451,10 @@ impl AppView {
         ) else {
             return;
         };
+        if let Some(message) = self.chat.messages.last_mut() {
+            message.reply_to = reply.as_ref().and_then(|reply| reply.id.clone());
+            message.reply_preview = reply.clone();
+        }
         let optimistic = self
             .chat
             .messages
@@ -450,10 +470,12 @@ impl AppView {
             idempotency_key: run_id.clone(),
             attachments: attachments.iter().map(Attachment::encoded).collect(),
             queue_mode,
+            reply_to_id: reply.and_then(|reply| reply.id),
         };
         self.composer_state.recall.record(message);
         self.composer_state.recall.reset();
         self.composer_state.set_attachments(Vec::new());
+        self.composer_state.reply = None;
         self.composer_state.error = None;
         self.composer_state.close_popups();
         self.model_controls.close_popups();

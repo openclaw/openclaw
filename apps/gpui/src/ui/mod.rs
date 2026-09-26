@@ -27,9 +27,14 @@ mod sidebar_agent_picker;
 mod sidebar_state;
 pub mod theme;
 mod transcript;
+mod transcript_activity;
+mod transcript_media;
 mod transcript_message;
+mod transcript_message_actions;
+mod transcript_notices;
 mod transcript_state;
 mod transcript_tools;
+mod transcript_welcome;
 mod web_state;
 mod webview_surface;
 

@@ -9,12 +9,29 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
 mod message;
-pub use message::Message;
+mod send;
+mod time;
+pub use time::{exact_time, relative_timestamp};
+pub mod notice;
+pub use message::{MediaRef, Message, MessageContent, ReplyTarget};
 
 #[derive(Clone, Debug)]
 pub struct ChatNote {
     pub text: String,
     pub error: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct TurnRecap {
+    pub run_id: String,
+    pub runtime_ms: u64,
+    pub output_tokens: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ManualCompaction {
+    pub operation_id: String,
+    pub started_at: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +105,9 @@ pub struct ChatState {
     pub phase_label: String,
     pub started_at: Option<u64>,
     pub output_tokens: u64,
+    pub turn_recap: Option<TurnRecap>,
+    pub compacting: bool,
+    pub manual_compaction: Option<ManualCompaction>,
     pub session_info: SessionInfo,
     pub dirty_from: Option<usize>,
     generation: u64,
@@ -222,6 +242,9 @@ impl ChatState {
             if self.active_run.as_deref() != run.map(|run| run.run_id.as_str()) || run.is_none() {
                 self.clear_stream();
             }
+            if run.is_some() && self.active_run.as_deref() != run.map(|run| run.run_id.as_str()) {
+                self.turn_recap = None;
+            }
             self.active_run = run.map(|run| run.run_id.clone());
             self.stream_text = run.map(|run| run.text.clone()).unwrap_or_default();
             self.started_at = run.and_then(|run| run.started_at);
@@ -266,123 +289,6 @@ impl ChatState {
         self.history_error = Some(error);
         true
     }
-    pub fn begin_send_with_attachments(
-        &mut self,
-        id: String,
-        text: String,
-        attachments: Vec<Attachment>,
-    ) -> Option<RequestScope> {
-        let scope = self.scope()?;
-        if text.trim().is_empty() && attachments.is_empty() {
-            return None;
-        }
-        self.messages.push(Message {
-            role: "user".into(),
-            text,
-            attachments,
-            send_id: Some(id.clone()),
-            run_id: Some(id.clone()),
-            pending: true,
-            timestamp: Some(now_ms()),
-            ..Default::default()
-        });
-        if self.active_run.is_none() {
-            self.clear_stream();
-            self.active_run = Some(id);
-            self.started_at = Some(now_ms());
-            self.phase_label = "Working".into();
-        }
-        self.note = None;
-        self.error_detail = None;
-        self.revision += 1;
-        Some(scope)
-    }
-    pub fn send_ack(&mut self, scope: &RequestScope, id: &str, payload: &Value) -> bool {
-        if !self.is_current(scope) || self.completed_runs.iter().any(|run| run == id) {
-            return false;
-        }
-        let Some((index, message)) = self
-            .messages
-            .iter_mut()
-            .enumerate()
-            .find(|(_, m)| m.send_id.as_deref() == Some(id))
-        else {
-            return false;
-        };
-        self.dirty_from = Some(self.dirty_from.map_or(index, |old| old.min(index)));
-        message.pending = false;
-        message.send_error = None;
-        if self.active_run.as_deref() == Some(id)
-            && let Some(run) = payload.get("runId").and_then(Value::as_str)
-        {
-            self.active_run = Some(run.to_owned());
-        }
-        true
-    }
-    pub fn send_failed(&mut self, scope: &RequestScope, id: &str, error: String) -> bool {
-        if !self.is_current(scope) {
-            return false;
-        }
-        let Some((index, message)) = self
-            .messages
-            .iter_mut()
-            .enumerate()
-            .find(|(_, m)| m.send_id.as_deref() == Some(id))
-        else {
-            return false;
-        };
-        self.dirty_from = Some(self.dirty_from.map_or(index, |old| old.min(index)));
-        message.pending = false;
-        message.send_error = Some(error.clone());
-        self.note = Some(ChatNote {
-            text: error,
-            error: true,
-        });
-        if self.active_run.as_deref() == Some(id) && self.sequence.is_none() {
-            self.active_run = None;
-        }
-        self.revision += 1;
-        true
-    }
-    pub fn restore_pending_messages(&mut self, messages: Vec<Message>) -> bool {
-        let first = self.messages.len();
-        for message in messages {
-            if message.role == "user"
-                && message.send_id.is_some()
-                && (message.pending || message.send_error.is_some())
-                && !self.messages.iter().any(|held| held.same_message(&message))
-            {
-                self.messages.push(message);
-            }
-        }
-        if self.messages.len() == first {
-            return false;
-        }
-        self.dirty_from = Some(self.dirty_from.map_or(first, |old| old.min(first)));
-        self.revision += 1;
-        true
-    }
-    pub fn discard_send(&mut self, id: &str) {
-        self.dirty_from = self
-            .messages
-            .iter()
-            .position(|message| message.send_id.as_deref() == Some(id));
-        self.messages.retain(|m| m.send_id.as_deref() != Some(id));
-        self.revision += 1;
-    }
-    pub fn retry_send(&mut self, id: &str) {
-        if let Some((index, message)) = self
-            .messages
-            .iter_mut()
-            .enumerate()
-            .find(|(_, m)| m.send_id.as_deref() == Some(id))
-        {
-            self.dirty_from = Some(self.dirty_from.map_or(index, |old| old.min(index)));
-            message.pending = true;
-            message.send_error = None;
-        }
-        self.note = None;
-    }
     pub fn apply_event(&mut self, payload: &Value) -> EventOutcome {
         let state = payload
             .get("state")
@@ -402,6 +308,7 @@ impl ChatState {
             return outcome;
         }
         if self.active_run.is_none() {
+            self.turn_recap = None;
             self.clear_stream();
         }
         let sequence = payload.get("seq").and_then(Value::as_u64);
@@ -524,6 +431,63 @@ impl ChatState {
         }
         outcome
     }
+    pub fn apply_session_operation(&mut self, payload: &Value) -> EventOutcome {
+        let mut outcome = EventOutcome::default();
+        if self.selected_session.is_none()
+            || !self.event_matches(payload)
+            || payload.get("operation").and_then(Value::as_str) != Some("compact")
+        {
+            return outcome;
+        }
+        let Some(operation_id) = payload
+            .get("operationId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+        else {
+            return outcome;
+        };
+        match payload.get("phase").and_then(Value::as_str) {
+            Some("start") => {
+                let Some(started_at) = payload.get("ts").and_then(Value::as_u64) else {
+                    return outcome;
+                };
+                if self.manual_compaction.as_ref().is_some_and(|held| {
+                    held.operation_id == operation_id || held.started_at > started_at
+                }) {
+                    return outcome;
+                }
+                self.manual_compaction = Some(ManualCompaction {
+                    operation_id: operation_id.to_owned(),
+                    started_at,
+                });
+            }
+            Some("end") => {
+                if self.manual_compaction.is_none() {
+                    // The operator may have left and returned while compaction ran.
+                    outcome.terminal =
+                        payload.get("completed").and_then(Value::as_bool) == Some(true);
+                    return outcome;
+                }
+                if self
+                    .manual_compaction
+                    .as_ref()
+                    .is_none_or(|held| held.operation_id != operation_id)
+                {
+                    return outcome;
+                }
+                self.manual_compaction = None;
+                outcome.terminal = payload.get("completed").and_then(Value::as_bool) == Some(true);
+            }
+            _ => return outcome,
+        }
+        self.dirty_from = Some(
+            self.dirty_from
+                .map_or(self.messages.len(), |old| old.min(self.messages.len())),
+        );
+        outcome.changed = true;
+        outcome
+    }
+
     fn event_matches(&self, payload: &Value) -> bool {
         self.selected_session.as_deref() == payload.get("sessionKey").and_then(Value::as_str)
             && payload
@@ -550,6 +514,14 @@ impl ChatState {
             return false;
         }
         if self.completed_runs.iter().any(|run| run == &event.run_id) {
+            if event.stream == "usage"
+                && let Some(tokens) = event.data.output_tokens
+                && let Some(recap) = self.turn_recap.as_mut()
+                && recap.run_id == event.run_id
+            {
+                recap.output_tokens = Some(tokens);
+                return true;
+            }
             // A late result may settle a known interrupted call without restarting its run.
             if event.stream == "tool"
                 && event.data.phase == "result"
@@ -570,6 +542,13 @@ impl ChatState {
             }
             return false;
         }
+        if self
+            .active_run
+            .as_deref()
+            .is_some_and(|run| run != event.run_id)
+        {
+            return false;
+        }
         match event.stream.as_str() {
             "tool" => {
                 if self
@@ -580,6 +559,7 @@ impl ChatState {
                     return false;
                 }
                 if self.active_run.is_none() {
+                    self.turn_recap = None;
                     self.clear_stream();
                 }
                 self.active_run = Some(event.run_id.clone());
@@ -630,6 +610,7 @@ impl ChatState {
                 true
             }
             "compaction" => {
+                self.compacting = event.data.phase == "start";
                 self.phase_label = if event.data.phase == "start" {
                     "Compacting conversation"
                 } else {
@@ -642,6 +623,15 @@ impl ChatState {
         }
     }
     fn finish_run(&mut self) {
+        let recap = self
+            .active_run
+            .as_ref()
+            .zip(self.started_at)
+            .map(|(run, start)| TurnRecap {
+                run_id: run.clone(),
+                runtime_ms: now_ms().saturating_sub(start),
+                output_tokens: (self.output_tokens > 0).then_some(self.output_tokens),
+            });
         if let Some(run) = self.active_run.take() {
             self.completed_runs.push_back(run);
             if self.completed_runs.len() > 128 {
@@ -649,8 +639,10 @@ impl ChatState {
             }
         }
         self.clear_stream();
+        self.turn_recap = if self.note.is_none() { recap } else { None };
     }
     fn clear_stream(&mut self) {
+        self.compacting = false;
         self.stream_text.clear();
         self.stream_thinking.clear();
         self.live_tools.clear();

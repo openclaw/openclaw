@@ -6,6 +6,7 @@ pub mod colors;
 pub mod conversation;
 pub mod primitives;
 pub mod shell;
+pub mod transcript;
 
 #[derive(Clone, Copy)]
 pub struct Typography {
@@ -97,7 +98,6 @@ pub mod space {
     pub const REM_SM: Rems = rems(primitives::rem::SM);
     pub const REM_MD: Rems = rems(primitives::rem::MD);
     pub const REM_LG: Rems = rems(primitives::rem::LG);
-    pub const REM_ROOMY: Rems = rems(primitives::rem::ROOMY);
     pub const REM_XL: Rems = rems(primitives::rem::XL);
     pub const REM_XXL: Rems = rems(primitives::rem::XXL);
 }

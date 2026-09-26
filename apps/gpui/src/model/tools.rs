@@ -1,3 +1,6 @@
+#[path = "tool_presentation.rs"]
+mod presentation;
+pub use presentation::{DiffKind, ToolKind, group_summary};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -9,6 +12,7 @@ pub struct ToolCall {
     pub name: String,
     pub args: Value,
     pub output: String,
+    pub result: Value,
     pub complete: bool,
     pub inactive: bool,
     pub is_error: bool,
@@ -61,7 +65,7 @@ impl ToolCall {
             "Running"
         } else if self.interrupted() {
             "Interrupted"
-        } else if self.is_error {
+        } else if self.failed() {
             "Error"
         } else {
             "Done"
@@ -100,12 +104,32 @@ impl ToolCall {
         };
         let (label, detail) = match name.to_lowercase().as_str() {
             "read" | "read_file" | "readfile" | "notebook_read" => ("Read", path().map(basename)),
-            "write" | "write_file" | "create_file" => ("Wrote", path().map(basename)),
-            "edit" | "edit_file" | "multiedit" | "multi_edit" => ("Edited", path().map(basename)),
-            "exec" | "bash" | "shell" | "run_command" | "run_terminal_cmd" => (
-                "Ran",
-                arg(&["command", "cmd"]).map(|command| format!("`{}`", compact(command))),
+            "write" | "write_file" | "create_file" => (
+                if self.running() {
+                    "Writing"
+                } else if self.failed() || self.interrupted() {
+                    "Write"
+                } else {
+                    "Wrote"
+                },
+                path().map(basename),
             ),
+            "edit" | "edit_file" | "multiedit" | "multi_edit" => (
+                if self.running() {
+                    "Editing"
+                } else if self.failed() || self.interrupted() {
+                    "Edit"
+                } else {
+                    "Edited"
+                },
+                path().map(basename),
+            ),
+            "exec" | "bash" | "shell" | "run_command" | "run_terminal_cmd" | "exec_command" => {
+                if let Some(title) = arg(&["title"]).filter(|title| !title.trim().is_empty()) {
+                    return compact(title);
+                }
+                ("$", arg(&["command", "cmd"]).map(compact))
+            }
             "ls" | "list" | "list_dir" => ("Listed", path().map(basename)),
             "grep" | "search" | "find" | "glob" | "codebase_search" => (
                 "Searched",
@@ -230,12 +254,6 @@ fn matches_bridge_child(parent: &ToolCall, child: &ToolCall) -> bool {
         })
 }
 
-pub fn tools_elapsed_ms(calls: &[ToolCall]) -> Option<u64> {
-    let first = calls.iter().filter_map(|call| call.started_at).min()?;
-    let last = calls.iter().filter_map(|call| call.ended_at).max()?;
-    Some(last.saturating_sub(first))
-}
-
 pub fn apply_tool_event(calls: &mut Vec<ToolCall>, event: &ToolEvent, receipt: u64) -> bool {
     let data = &event.data;
     if event.stream != "tool"
@@ -279,17 +297,16 @@ pub fn apply_tool_event(calls: &mut Vec<ToolCall>, event: &ToolEvent, receipt: u
             call.inactive = false;
             call.started_at = Some(event.ts);
         }
-        "update" => call.output = output_text(&data.partial_result),
+        "update" => {
+            call.output = output_text(&data.partial_result);
+            call.result = data.partial_result.clone();
+        }
         "result" => {
             call.output = output_text(&data.result);
+            call.result = data.result.clone();
             call.complete = true;
             call.inactive = false;
-            call.is_error = data.is_error
-                || data
-                    .result
-                    .get("exitCode")
-                    .and_then(Value::as_i64)
-                    .is_some_and(|code| code != 0);
+            call.is_error = data.is_error || call.exit_code().is_some_and(|code| code != 0);
             call.ended_at = Some(event.ts);
         }
         _ => unreachable!(),
@@ -392,6 +409,7 @@ pub fn history_call(
             .to_owned(),
         args,
         complete: result,
+        result: if result { block.clone() } else { Value::Null },
         output: if result {
             output_text(block)
         } else {
@@ -428,6 +446,7 @@ fn merge_call(held: &mut ToolCall, next: &ToolCall, prefer_next_on_tie: bool) {
     if !held.complete && next.complete || newer && held.complete == next.complete {
         if !next.output.is_empty() || next.complete {
             held.output = next.output.clone();
+            held.result = next.result.clone();
         }
         held.complete = next.complete;
         held.is_error = next.is_error;
@@ -538,160 +557,4 @@ pub fn reconcile_live_history(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn collapsed_tool_summaries_humanize_common_tools_without_dumping_json() {
-        for (name, args, expected) in [
-            (
-                "read",
-                json!({"file_path":"/tmp/proof-note.txt"}),
-                "Read proof-note.txt",
-            ),
-            (
-                "write",
-                json!({"path":"C:\\notes\\proof.txt","content":"body"}),
-                "Wrote proof.txt",
-            ),
-            (
-                "edit",
-                json!({"filePath":"/tmp/proof.txt","newText":"body"}),
-                "Edited proof.txt",
-            ),
-            (
-                "exec",
-                json!({"command":"echo hi\necho bye"}),
-                "Ran `echo hi`",
-            ),
-            ("bash", json!({"command":"echo hi"}), "Ran `echo hi`"),
-            ("ls", json!({"path":"/tmp/project"}), "Listed project"),
-            (
-                "grep",
-                json!({"pattern":"needle","path":"src"}),
-                "Searched needle",
-            ),
-            (
-                "web_search",
-                json!({"query":"GPUI layout"}),
-                "Searched the web for GPUI layout",
-            ),
-            (
-                "web_fetch",
-                json!({"url":"https://example.com/guide"}),
-                "Fetched https://example.com/guide",
-            ),
-            (
-                "ask_user",
-                json!({"questions":[{"question":"Which task?"}]}),
-                "Asked a question",
-            ),
-            (
-                "apply_patch",
-                json!({"input":"*** Begin Patch\n*** Update File: /tmp/proof.txt\n@@\n-old\n+new\n*** End Patch"}),
-                "Patched proof.txt",
-            ),
-            (
-                "sessions_spawn",
-                json!({"label":"Research","task":"many paragraphs"}),
-                "Started session Research",
-            ),
-            (
-                "sessions_history",
-                json!({"sessionKey":"agent:qa:main"}),
-                "Read session agent:qa:main",
-            ),
-            (
-                "sessions_search",
-                json!({"query":"release notes"}),
-                "Searched sessions for release notes",
-            ),
-            (
-                "custom_tool",
-                json!({"nested":{"private":"details"},"target":"concise"}),
-                "custom_tool concise",
-            ),
-            (
-                "custom_tool",
-                json!({"nested":{"private":"details"},"flag":true}),
-                "custom_tool",
-            ),
-            (
-                "tool_call",
-                json!({"id":"openclaw:core:ask_user","args":{"questions":[]}}),
-                "Asked a question",
-            ),
-        ] {
-            let tool = ToolCall {
-                name: name.into(),
-                args,
-                ..Default::default()
-            };
-            assert_eq!(tool.summary(), expected, "{name}");
-        }
-    }
-
-    #[test]
-    fn live_tool_rejects_duplicate_and_late_updates_and_retains_start_identity() {
-        let mut calls = Vec::new();
-        for (seq, data) in [
-            (
-                1,
-                json!({"phase":"start","name":"read","args":{"path":"/tmp/sample"}}),
-            ),
-            (
-                2,
-                json!({"phase":"update","name":"wrong","partialResult":{"content":[{"type":"text","text":"partial"}]}}),
-            ),
-            (
-                3,
-                json!({"phase":"result","result":{"content":[{"type":"text","text":"complete"}]},"isError":true}),
-            ),
-        ] {
-            let mut value =
-                json!({"runId":"run","stream":"tool","seq":seq,"ts":seq*100,"data":data});
-            value["data"]["toolCallId"] = json!("call");
-            let event = serde_json::from_value(value).unwrap();
-            assert!(apply_tool_event(&mut calls, &event, seq));
-            assert!(!apply_tool_event(&mut calls, &event, seq));
-        }
-        assert_eq!(calls[0].name, "read");
-        assert_eq!(calls[0].summary(), "Read sample");
-        assert_eq!(calls[0].output, "complete");
-        assert!(calls[0].is_error);
-        assert_eq!(calls[0].duration_ms(), Some(200));
-        let overlapping = [
-            ToolCall {
-                started_at: Some(100),
-                ended_at: Some(2400),
-                ..calls[0].clone()
-            },
-            ToolCall {
-                started_at: Some(200),
-                ended_at: Some(2300),
-                ..calls[0].clone()
-            },
-        ];
-        assert_eq!(tools_elapsed_ms(&overlapping), Some(2300));
-    }
-
-    #[test]
-    fn history_pairs_results_and_preserves_ambiguous_reused_call_ids() {
-        let fixtures = [
-            json!({"role":"assistant","runId":"one","content":[{"type":"toolCall","id":"call","name":"read","arguments":{"path":"a"}}]}),
-            json!({"role":"assistant","runId":"two","content":[{"type":"toolUse","id":"call","name":"read","input":{"path":"b"}}]}),
-            json!({"role":"toolResult","runId":"two","toolCallId":"call","toolName":"read","content":[{"type":"text","text":"result b"}]}),
-            json!({"role":"toolResult","toolCallId":"unknown","content":"unmatched"}),
-        ];
-        let mut messages = fixtures
-            .iter()
-            .filter_map(super::super::chat::Message::from_value)
-            .collect();
-        pair_history(&mut messages);
-        assert_eq!(messages.len(), 3);
-        assert!(!messages[0].tools[0].complete);
-        assert_eq!(messages[1].tools[0].output, "result b");
-        assert_eq!(messages[2].tools[0].output, "unmatched");
-    }
-}
+mod tests;

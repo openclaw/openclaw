@@ -351,6 +351,14 @@ impl AppView {
         if let Some(person) = &self.sidebar_state.people.self_user {
             specs.push(avatars::person_avatar(person, &auth.gateway_url));
         }
+        for person in self
+            .chat
+            .messages
+            .iter()
+            .filter_map(|message| message.sender_person.as_ref())
+        {
+            specs.push(avatars::person_avatar(person, &auth.gateway_url));
+        }
         for person in self.sidebar_state.people.online_people() {
             specs.push(avatars::person_avatar(&person.person, &auth.gateway_url));
         }

@@ -1,5 +1,46 @@
 use super::chat::Message;
 
+#[derive(Default)]
+pub struct GroupMetadata {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub cost: f64,
+    pub prompt: u64,
+    pub model: Option<String>,
+}
+
+impl GroupMetadata {
+    pub fn from_messages(messages: &[Message]) -> Self {
+        let mut meta = Self::default();
+        for message in messages
+            .iter()
+            .filter(|message| message.role == "assistant")
+        {
+            let usage = &message.usage;
+            meta.input += usage.input;
+            meta.output += usage.output;
+            meta.cache_read += usage.cache_read;
+            meta.cache_write += usage.cache_write;
+            meta.prompt = meta
+                .prompt
+                .max(usage.input + usage.cache_read + usage.cache_write);
+            meta.cost += usage
+                .cost
+                .get("total")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.);
+            if let Some(model) = &message.model
+                && model != "gateway-injected"
+            {
+                meta.model = Some(model.clone());
+            }
+        }
+        meta
+    }
+}
+
 /// Groups remain separate virtual rows; this flag removes only repeated chrome.
 pub fn starts_group(previous: Option<&Message>, message: &Message) -> bool {
     let Some(previous) = previous else {
@@ -20,6 +61,28 @@ pub fn starts_group(previous: Option<&Message>, message: &Message) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn group_metadata_sums_calls_but_uses_peak_prompt_for_context() {
+        let rows = [
+            serde_json::json!({"role":"assistant", "content":"a", "model":"provider/first", "usage":{"inputTokens":20,"outputTokens":5,"cache_read_input_tokens":70,"cache_creation_input_tokens":10,"cost":{"total":0.25}}}),
+            serde_json::json!({"role":"user", "content":"b", "usage":{"input":999}}),
+            serde_json::json!({"role":"assistant", "content":"c", "model":"provider/last", "usage":{"input":15,"output":8,"cacheRead":30,"cost":{"total":0.5}}}),
+        ].iter().filter_map(Message::from_value).collect::<Vec<_>>();
+        let meta = GroupMetadata::from_messages(&rows);
+        assert_eq!(
+            (
+                meta.input,
+                meta.output,
+                meta.cache_read,
+                meta.cache_write,
+                meta.prompt
+            ),
+            (35, 13, 100, 10, 100)
+        );
+        assert_eq!(meta.cost, 0.75);
+        assert_eq!(meta.model.as_deref(), Some("provider/last"));
+    }
+
     #[test]
     fn role_run_sender_phase_and_explicit_turn_split_groups() {
         let a = Message {

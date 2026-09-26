@@ -21,3 +21,8 @@ pub(super) use menu::{menu_surface, popover};
 pub(super) use section::setting_row;
 pub(super) use toggle::toggle;
 pub(super) use tooltip::ElementTooltip;
+pub(super) mod transcript_markdown;
+
+pub(super) mod transcript_background;
+
+pub(super) mod activity_mark;

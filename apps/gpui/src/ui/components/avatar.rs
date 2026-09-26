@@ -19,6 +19,8 @@ pub(in crate::ui) struct Avatar {
     assets: AvatarAssets,
     metrics: AvatarMetrics,
     border_color: Option<Hsla>,
+    initials_weight: FontWeight,
+    text_fallback_background: Hsla,
 }
 
 impl Avatar {
@@ -28,7 +30,19 @@ impl Avatar {
             assets: cache.assets(spec),
             metrics,
             border_color: None,
+            initials_weight: avatar::INITIALS_WEIGHT,
+            text_fallback_background: transparent_black(),
         }
+    }
+
+    pub fn initials_weight(mut self, weight: FontWeight) -> Self {
+        self.initials_weight = weight;
+        self
+    }
+
+    pub fn text_fallback_background(mut self, color: Hsla) -> Self {
+        self.text_fallback_background = color;
+        self
     }
 
     pub fn border_color(mut self, color: Hsla) -> Self {
@@ -52,10 +66,11 @@ impl RenderOnce for Avatar {
                 .text_color(colors::initials_foreground())
                 .text_size(metrics.text_size)
                 .line_height(metrics.text_size)
-                .font_weight(avatar::INITIALS_WEIGHT)
+                .font_weight(self.initials_weight)
                 .child(text)
                 .into_any_element(),
             AvatarFallback::Text(text) => div()
+                .bg(self.text_fallback_background)
                 .size_full()
                 .rounded_full()
                 .flex()

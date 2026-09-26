@@ -11,6 +11,7 @@ pub fn context_usage(total: Option<f64>, capacity: Option<f64>) -> Option<(f64, 
 pub struct Draft {
     pub text: String,
     pub attachments: Vec<Attachment>,
+    pub reply: Option<super::chat::ReplyTarget>,
 }
 
 #[derive(Default)]
@@ -60,7 +61,11 @@ impl Drafts {
                 session: session.to_owned(),
                 agent: agent.map(str::to_owned),
             })
-            .is_some_and(|draft| !draft.text.trim().is_empty() || !draft.attachments.is_empty())
+            .is_some_and(|draft| {
+                !draft.text.trim().is_empty()
+                    || !draft.attachments.is_empty()
+                    || draft.reply.is_some()
+            })
     }
 
     pub fn save(&mut self, draft: Draft) {
@@ -174,6 +179,11 @@ mod tests {
         drafts.save(Draft {
             text: "private draft".into(),
             attachments: vec![attachment.clone()],
+            reply: Some(super::super::chat::ReplyTarget {
+                id: Some("source-entry".into()),
+                text: "Earlier question".into(),
+                sender: "Assistant".into(),
+            }),
         });
         assert!(drafts.has_draft("main", Some("a")));
         assert!(!drafts.has_draft("main", Some("b")));
@@ -183,6 +193,7 @@ mod tests {
         drafts.save(Draft {
             text: String::new(),
             attachments: vec![attachment.clone()],
+            reply: None,
         });
         assert!(drafts.select("main", Some("a")).attachments.is_empty());
         drafts.bind_gateway("ws://one");
@@ -190,5 +201,6 @@ mod tests {
         let restored = drafts.select("main", Some("a"));
         assert_eq!(restored.text, "private draft");
         assert_eq!(restored.attachments, vec![attachment]);
+        assert_eq!(restored.reply.unwrap().id.as_deref(), Some("source-entry"));
     }
 }

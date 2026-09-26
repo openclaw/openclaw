@@ -485,3 +485,147 @@ fn reopened_history_only_shows_unfinished_tools_running_for_the_current_run() {
         "Interrupted"
     );
 }
+
+#[test]
+fn successful_turn_recap_survives_history_and_accepts_only_its_late_usage() {
+    let mut chat = chat();
+    chat.apply_event(
+        &json!({"sessionKey":"main","runId":"run","state":"delta","seq":1,"deltaText":"Answer"}),
+    );
+    chat.apply_agent_event(
+        &json!({"sessionKey":"main","runId":"run","stream":"usage","data":{"outputTokens":42}}),
+    );
+    chat.apply_event(&json!({"sessionKey":"main","runId":"run","state":"final","seq":2}));
+    assert_eq!(chat.turn_recap.as_ref().unwrap().output_tokens, Some(42));
+    let history = chat.begin_history().unwrap();
+    chat.apply_history(
+        &history,
+        &json!({"messages":[{"role":"assistant","runId":"run","content":"Answer"}]}),
+    );
+    assert_eq!(chat.turn_recap.as_ref().unwrap().run_id, "run");
+    assert!(chat.apply_agent_event(
+        &json!({"sessionKey":"main","runId":"run","stream":"usage","data":{"outputTokens":45}})
+    ));
+    assert_eq!(chat.turn_recap.as_ref().unwrap().output_tokens, Some(45));
+    chat.apply_event(
+        &json!({"sessionKey":"main","runId":"next","state":"delta","seq":1,"deltaText":"Next"}),
+    );
+    assert!(chat.turn_recap.is_none());
+    assert!(!chat.apply_agent_event(
+        &json!({"sessionKey":"main","runId":"run","stream":"usage","data":{"outputTokens":99}})
+    ));
+    assert_eq!(chat.output_tokens, 0);
+    chat.apply_agent_event(
+        &json!({"sessionKey":"main","runId":"next","stream":"compaction","data":{"phase":"start"}}),
+    );
+    assert!(chat.compacting);
+    chat.apply_event(&json!({"sessionKey":"main","runId":"next","state":"aborted","seq":2}));
+    assert!(!chat.compacting);
+    assert!(chat.turn_recap.is_none());
+}
+
+#[test]
+fn history_projects_compaction_and_collapsed_system_context_as_notices() {
+    let mut chat = chat();
+    let request = chat.begin_history().unwrap();
+    assert!(chat.apply_history(&request, &json!({"messages":[
+        {"role":"custom","customType":"openclaw.context-compaction","__openclaw":{"tokensBefore":1500,"tokensAfter":500}},
+        {"role":"user","content":"[System] **Context**\n\n- Preserve this list", "provenance":{"kind":"internal_system","sourceTool":"cli_harness_context"}}
+    ]})));
+    assert_eq!(chat.messages.len(), 2);
+    let compact = chat.messages[0].notice.as_ref().unwrap();
+    assert!(compact.compaction);
+    assert_eq!(compact.saved_tokens, Some(1000));
+    let injected = chat.messages[1].notice.as_ref().unwrap();
+    assert!(injected.collapsed);
+    assert_eq!(injected.label, "System · injected context");
+    assert!(chat.messages[1].text.contains("**Context**"));
+}
+
+#[test]
+fn manual_compaction_stays_scoped_and_ignores_superseded_operation_end() {
+    let mut chat = chat();
+    chat.select_context("main".into(), Some("qa".into()));
+    let operation = |id: &str, phase: &str, ts: u64, completed: bool| json!({"sessionKey":"main", "agentId":"qa", "operation":"compact", "operationId":id, "phase":phase, "ts":ts, "completed":completed});
+    for (field, value) in [
+        ("sessionKey", "other"),
+        ("agentId", "other"),
+        ("operation", "reset"),
+    ] {
+        let mut wrong_scope = operation("wrong", "start", 50, false);
+        wrong_scope[field] = json!(value);
+        assert!(!chat.apply_session_operation(&wrong_scope).changed);
+    }
+    assert!(
+        chat.apply_session_operation(&operation("first", "start", 100, false))
+            .changed
+    );
+    assert!(
+        chat.active_run.is_none(),
+        "manual compaction must be visible while idle"
+    );
+    let history = chat.begin_history().unwrap();
+    chat.apply_history(&history, &json!({"messages":[]}));
+    assert_eq!(
+        chat.manual_compaction.as_ref().unwrap().operation_id,
+        "first"
+    );
+
+    chat.apply_event(&json!({"sessionKey":"main","agentId":"qa","runId":"agent-run","state":"delta","seq":1,"deltaText":"Working"}));
+    chat.apply_agent_event(&json!({"sessionKey":"main","agentId":"qa","runId":"agent-run","stream":"compaction","data":{"phase":"start"}}));
+    chat.apply_event(
+        &json!({"sessionKey":"main","agentId":"qa","runId":"agent-run","state":"aborted","seq":2}),
+    );
+    assert!(!chat.compacting);
+    assert_eq!(
+        chat.manual_compaction.as_ref().unwrap().operation_id,
+        "first",
+        "agent lifecycle cannot settle a manual operation"
+    );
+
+    assert!(
+        chat.apply_session_operation(&operation("second", "start", 200, false))
+            .changed
+    );
+    assert!(
+        !chat
+            .apply_session_operation(&operation("first", "start", 100, false))
+            .changed
+    );
+    let stale = chat.apply_session_operation(&operation("first", "end", 300, true));
+    assert!(!stale.changed && !stale.terminal);
+    assert_eq!(
+        chat.manual_compaction.as_ref().unwrap().operation_id,
+        "second"
+    );
+    let cancelled = chat.apply_session_operation(&operation("second", "end", 400, false));
+    assert!(cancelled.changed && !cancelled.terminal);
+    assert!(chat.manual_compaction.is_none());
+
+    chat.apply_session_operation(&operation("third", "start", 500, false));
+    let completed = chat.apply_session_operation(&operation("third", "end", 600, true));
+    assert!(
+        completed.changed && completed.terminal,
+        "matching completion requests canonical history refresh"
+    );
+    assert!(chat.manual_compaction.is_none());
+    assert!(
+        !chat
+            .apply_session_operation(&operation("third", "end", 600, true))
+            .changed
+    );
+    chat.apply_session_operation(&operation("fourth", "start", 700, false));
+    chat.select_context("other".into(), Some("qa".into()));
+    assert!(chat.manual_compaction.is_none());
+    assert!(
+        !chat
+            .apply_session_operation(&operation("fourth", "end", 800, true))
+            .changed
+    );
+    chat.select_context("main".into(), Some("qa".into()));
+    let returned = chat.apply_session_operation(&operation("fourth", "end", 800, true));
+    assert!(
+        returned.terminal && !returned.changed,
+        "returning before completion must refresh history even when its start was cleared"
+    );
+}

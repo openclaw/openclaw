@@ -243,4 +243,6 @@ pub struct ChatSend {
     pub attachments: Vec<AttachmentPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_id: Option<String>,
 }

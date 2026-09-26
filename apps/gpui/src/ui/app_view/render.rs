@@ -60,6 +60,7 @@ impl Render for AppView {
             .v_flex()
             .relative()
             .bg(p.bg)
+            .child(crate::ui::components::transcript_background::transcript_background(cx))
             .text_color(p.text)
             .text_size(text::BODY.size)
             .on_action(cx.listener(|this, _: &crate::Refresh, _, cx| this.manual_refresh(cx)))

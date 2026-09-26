@@ -23,6 +23,7 @@ pub(super) struct ComposerUi {
     pub drafts: Drafts,
     pub restore_pending: bool,
     pub attachments: Vec<Attachment>,
+    pub reply: Option<crate::model::chat::ReplyTarget>,
     pub previews: HashMap<String, Arc<Image>>,
     pub recall: Recall,
     pub commands: Vec<Command>,

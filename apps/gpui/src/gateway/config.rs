@@ -134,7 +134,7 @@ fn profile_config(profile: &super::profiles::GatewayProfile, file: &Value) -> Co
 pub fn normalize_url(input: &str) -> Result<String, String> {
     let input = input.trim();
     if input.is_empty() || input.len() > 4096 {
-        return Err("Enter a Gateway address, such as https://team.openclaw.ai".into());
+        return Err("Enter a Gateway address, such as https://gateway.example".into());
     }
     let qualified = if input.contains("://") {
         input.to_owned()
@@ -340,11 +340,11 @@ mod tests {
     #[test]
     fn gateway_addresses_normalize_to_the_existing_websocket_path() {
         for input in [
-            "team.openclaw.ai",
-            "https://team.openclaw.ai",
-            "wss://TEAM.openclaw.ai:443",
+            "gateway.example",
+            "https://gateway.example",
+            "wss://GATEWAY.example:443",
         ] {
-            assert_eq!(normalize_url(input).unwrap(), "wss://team.openclaw.ai/");
+            assert_eq!(normalize_url(input).unwrap(), "wss://gateway.example/");
         }
         assert_eq!(
             normalize_url("https://gateway.example/control/").unwrap(),

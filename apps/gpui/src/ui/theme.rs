@@ -100,12 +100,9 @@ impl Palette {
                 ..accent
             }),
             user_bubble: if dark {
-                bg.blend(Hsla {
-                    a: 0.16,
-                    ..rgb(0x389f9d).into()
-                })
+                Hsla { a: 0.1, ..accent }
             } else {
-                rgb(0xe6faf9).into()
+                bg.blend(Hsla { a: 0.15, ..accent })
             },
             panel_strong: elevated,
             popover: elevated,
