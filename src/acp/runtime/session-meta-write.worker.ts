@@ -7,6 +7,7 @@ import {
   legacyAcpMigrationBindingMatches,
   recordLegacyAcpMigrationCompletion,
 } from "../../infra/legacy-acp-migration-source.js";
+import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -29,7 +30,16 @@ import type {
   AcpSessionWriteOperations,
 } from "./session-meta-write.types.js";
 
-export function prepareAcpSessionMutationInWorker(
+export function executeAcpSessionMutationInWorker(
+  database: OpenClawStateDatabase,
+  command: SqliteWorkerCommand<AcpSessionWriteOperations>,
+) {
+  return command.type === "acp.prepareMutation"
+    ? prepareAcpSessionMutationInWorker(database, command.input)
+    : commitAcpSessionMutationInWorker(database, command.input);
+}
+
+function prepareAcpSessionMutationInWorker(
   database: OpenClawStateDatabase,
   input: AcpSessionWriteOperations["acp.prepareMutation"]["input"],
 ): AcpSessionMutationPreparation {
@@ -124,7 +134,7 @@ function consumeSources(database: OpenClawStateDatabase, input: AcpSessionMutati
   }
 }
 
-export function commitAcpSessionMutationInWorker(
+function commitAcpSessionMutationInWorker(
   database: OpenClawStateDatabase,
   input: AcpSessionWriteOperations["acp.commitMutation"]["input"],
 ) {
