@@ -394,6 +394,44 @@ it("reads a sparse page in the transcript worker and shares equivalent queued re
   });
 });
 
+it("waits for a missing projection and serves the original history request", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "worker-history-rebuild",
+      sessionKey: "agent:main:worker-history-rebuild",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const entry = { sessionId: target.sessionId, updatedAt: 1 };
+    await replaceSessionEntry(target, entry);
+    await replaceTranscriptEvents(target, [
+      { type: "session", version: 3, id: target.sessionId },
+      { type: "message", id: "recovered", message: { role: "user", content: "Still here" } },
+    ]);
+    await waitForSessionTranscriptProjection(target);
+    openOpenClawAgentDatabase({ agentId: target.agentId, env: state.env })
+      .db.prepare(
+        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+      )
+      .run(target.sessionId);
+
+    const page = await readChatHistoryPage({
+      entry,
+      provider: undefined,
+      sessionId: target.sessionId,
+      storePath: target.storePath,
+      sessionAgentId: target.agentId,
+      canonicalKey: target.sessionKey,
+      max: 10,
+      maxHistoryBytes: 100_000,
+      effectiveMaxChars: 8000,
+      offset: undefined,
+      messageId: undefined,
+    });
+    expect(page.messages.map(readChatHistoryMessageId)).toEqual(["recovered"]);
+  });
+});
+
 it("reads a new branch and reset interval after earlier worker pages settle", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = {

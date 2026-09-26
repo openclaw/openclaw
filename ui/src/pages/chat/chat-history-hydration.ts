@@ -236,6 +236,7 @@ export async function hydrateChatHistory(
       ? res.sessionInfo?.activeLeafEntryId?.trim() || null
       : (previousDisplayedLeafEntryId ?? null);
     const retainsTranscriptIdentity =
+      res.windowReset !== true &&
       (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
       (previousDisplayedLeafEntryId === undefined ||
         previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);

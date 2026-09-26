@@ -22,7 +22,6 @@ import {
   resolveTranscriptBoundaryWindow,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
-import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
@@ -366,23 +365,20 @@ export function captureHistoryReadWindow(
   };
 }
 
-export function assertHistoryReadWindow(
+export function resolveHistoryReadWindowChange(
   projection: CurrentTranscriptProjection,
   history: VisibleHistoryProjection,
   expected: TranscriptReadWindow | undefined,
-): void {
+): { anchorSeq?: number } | undefined {
   if (!expected) {
-    return;
+    return undefined;
   }
-  if (
-    expected.source !== history.displaySource ||
-    expected.latestResetRawSeq !== history.latestResetRawSeq
-  ) {
-    throw new SessionTranscriptProjectionUnavailableError(projection.resolved.sessionId);
+  if (expected.source !== history.displaySource) {
+    return {};
   }
   const anchor = expected.anchor;
   if (!anchor) {
-    return;
+    return expected.latestResetRawSeq === history.latestResetRawSeq ? undefined : {};
   }
   const row = executeSqliteQueryTakeFirstSync(
     projection.database.db,
@@ -407,7 +403,7 @@ export function assertHistoryReadWindow(
             history,
             position,
           );
-  if (seq !== anchor.seq) {
-    throw new SessionTranscriptProjectionUnavailableError(projection.resolved.sessionId);
-  }
+  return seq === anchor.seq && expected.latestResetRawSeq === history.latestResetRawSeq
+    ? undefined
+    : { anchorSeq: seq };
 }

@@ -57,6 +57,7 @@ export type ReadRecentSessionMessagesResult = {
   deltaCursor?: string;
   displaySource?: string;
   readWindow?: TranscriptReadWindow;
+  windowReset?: boolean;
   messages: unknown[];
   transcriptEvents?: TranscriptEvent[];
   transcriptPath?: string;
@@ -125,6 +126,7 @@ function readRecentSqliteMessageRecords(
   deltaCursor?: string;
   displaySource?: string;
   readWindow?: TranscriptReadWindow;
+  windowReset?: boolean;
   messages: unknown[];
   totalMessages: number;
 } {
@@ -135,6 +137,7 @@ function readRecentSqliteMessageRecords(
     ...(page.deltaCursor ? { deltaCursor: page.deltaCursor } : {}),
     displaySource: page.displaySource,
     ...(page.readWindow ? { readWindow: page.readWindow } : {}),
+    ...(page.windowReset ? { windowReset: true } : {}),
     messages: projectSqliteHistoryEvents(page.events),
     totalMessages: page.totalMessages,
   };
@@ -281,6 +284,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       opts,
     )) ?? { messages: [], totalMessages: 0 };
     if (
+      !page.windowReset &&
       page.totalMessages === 0 &&
       page.messages.length === 0 &&
       opts.allowResetArchiveFallback === true
@@ -311,7 +315,10 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       (projection) => readSessionTranscriptHistoryEventPageFromProjection(projection, opts),
       opts,
     );
-    if ((!page || page.totalMessages === 0) && opts.allowResetArchiveFallback === true) {
+    if (
+      (!page || (page.totalMessages === 0 && !page.windowReset)) &&
+      opts.allowResetArchiveFallback === true
+    ) {
       return await archivedTranscriptReader(target).readPage(opts);
     }
     if (!page) {
@@ -332,6 +339,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       messages: projectSqliteHistoryEvents(page.events),
       displaySource: page.displaySource,
       ...(page.readWindow ? { readWindow: page.readWindow } : {}),
+      ...(page.windowReset ? { windowReset: true } : {}),
       totalMessages: page.totalMessages,
       transcriptPath: target.sessionFile,
       transcriptSource: "active",
@@ -374,6 +382,8 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     }
     return {
       found: true,
+      ...(page.windowReset ? { windowReset: true } : {}),
+      ...(page.readWindow ? { readWindow: page.readWindow } : {}),
       displaySource: page.displaySource,
       hasOverreadContext: page.hasOverreadContext,
       messages: page.events
