@@ -615,6 +615,29 @@ describe("projectProviderError", () => {
     );
   });
 
+  it.each([
+    "Cookie: JSESSIONID=0123456789abcdef; account=abcdefghijklmnop",
+    "Set-Cookie: PHPSESSID=0123456789abcdef; Path=/; HttpOnly",
+    "Cookie: sid=abc123",
+    "Set-Cookie: auth=x:y",
+  ])("redacts arbitrary credential names inside cookie headers", (header) => {
+    expect(projectProviderError(header).errorMessage).toMatch(/^(?:Set-)?Cookie: <redacted>$/u);
+  });
+
+  it.each([
+    "x-api-key: sk-0123456789012345",
+    "api-key: 0123456789abcdef",
+    "Authorization: ApiKey 0123456789abcdef",
+    "Error: x-api-key: sk-0123456789012345",
+    "headers: Authorization: ApiKey 0123456789abcdef",
+    'headers: {"x-api-key":"sk-0123456789012345"}',
+    "{'Authorization': 'ApiKey 0123456789abcdef'}",
+  ])("redacts credential header %s", (header) => {
+    expect(projectProviderError(header).errorMessage).not.toMatch(
+      /sk-0123456789012345|0123456789abcdef/u,
+    );
+  });
+
   it("preserves ordinary colon-delimited diagnostics", () => {
     expect(projectProviderError("status: healthy").errorMessage).toBe("status: healthy");
   });

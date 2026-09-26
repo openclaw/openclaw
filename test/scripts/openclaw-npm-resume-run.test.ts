@@ -277,6 +277,8 @@ describe("openclaw npm resume run identity", () => {
         publication: publicationEvidence(),
       }),
     ).toEqual({
+      runId: "456",
+      runAttempt: 1,
       tagObjectSha: TAG_OBJECT_SHA,
       url: URL,
       workflowRef: `refs/tags/${BRANCH}`,
@@ -319,6 +321,8 @@ describe("openclaw npm resume run identity", () => {
         publication: publicationEvidence(),
       }),
     ).toEqual({
+      runId: "456",
+      runAttempt: 1,
       tagObjectSha: SHA,
       url: URL,
       workflowRef: `refs/tags/${BRANCH}`,
