@@ -187,4 +187,42 @@ describe("newly authored blank agent workspace is still rejected", () => {
     const persisted = fs.readFileSync(path.join(root, "openclaw.json"), "utf-8");
     expect(persisted).not.toContain('"workspace"');
   });
+
+  it("a saved blank workspace re-authored via an explicit whole-list replacement is rejected (preserved)", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "proof-150929-saved-wholelist-"));
+    // The saved config carries a historically accepted blank workspace in the
+    // legacy list form.
+    fs.writeFileSync(
+      path.join(root, "openclaw.json"),
+      JSON.stringify({
+        agents: { list: [{ id: "alpha", model: "openai/gpt-5.6", workspace: " " }] },
+        gateway: { mode: "local", port: 18799, auth: { mode: "none" } },
+      }),
+    );
+    const ctx = makeContext(root);
+    const base = await readConfigFileSnapshotInternal(ctx, {});
+    const next = JSON.parse(JSON.stringify(base.snapshot.config)) as {
+      agents: { list?: unknown };
+    };
+    // Replacing the whole legacy list and re-authoring the blank is explicit
+    // authoring: the field error must surface, so the whole-list explicit path
+    // is remapped to the entries form and the migration preserves the blank.
+    next.agents = { list: [{ id: "alpha", model: "openai/gpt-5.6", workspace: " " }] };
+    let threw = false;
+    let message = "";
+    try {
+      await writeConfigFileFromContext(
+        ctx,
+        next,
+        { explicitSetPaths: [["agents", "list"]] },
+        async () => base,
+      );
+    } catch (e) {
+      threw = true;
+      message = (e as Error).message;
+    }
+    expect(threw).toBe(true);
+    expect(message).toContain("workspace");
+    expect(message).toContain("blank");
+  });
 });
