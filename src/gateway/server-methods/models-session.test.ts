@@ -180,8 +180,8 @@ describe("direct session model catalogs", () => {
         });
         expect(f.readPrepared).not.toHaveBeenCalled();
         expect(f.loadDeferred).not.toHaveBeenCalled();
-        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       });
+      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     },
   );
 
@@ -254,9 +254,9 @@ describe("direct session model catalogs", () => {
       const changed = await pending;
       const fresh = await f.request(params);
       expect(fresh.mock.calls).toEqual(control.mock.calls);
-      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       expect(changed.mock.calls).toEqual(control.mock.calls);
     });
+    expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
   });
 
   it.each([
@@ -317,8 +317,8 @@ describe("direct session model catalogs", () => {
           retryAfterMs: 0,
         }),
       );
-      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
+    expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
   });
 
   it.each([false, true])(
@@ -370,8 +370,8 @@ describe("direct session model catalogs", () => {
           await pending;
           expect(respond).toHaveBeenCalledWith(true, { swarmEnabled: false });
         }
-        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       });
+      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     },
   );
 

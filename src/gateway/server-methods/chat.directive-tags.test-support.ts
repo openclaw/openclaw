@@ -24,6 +24,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 
 type ChatDirectiveSessionState = {
@@ -53,6 +54,7 @@ export function createChatDirectiveSuiteResources() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-directive-suite-"));
   const databasePath = path.join(root, "openclaw-agent.sqlite");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  const environment = captureEnv(["OPENCLAW_STATE_DIR"]);
   let metadataOwner: GatewayPluginMetadataOwner | undefined;
   return {
     root,
@@ -60,6 +62,7 @@ export function createChatDirectiveSuiteResources() {
     env,
     // The caller retains cleanup ownership before opening can fail.
     open() {
+      setTestEnvValue("OPENCLAW_STATE_DIR", root);
       openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
       // Session cases share the installed inventory through per-case runtime resets.
       metadataOwner = retainGatewayPluginMetadata();
@@ -126,7 +129,11 @@ export function createChatDirectiveSuiteResources() {
         await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
         fs.rmSync(root, { recursive: true, force: true });
       } finally {
-        await metadataOwner?.close();
+        try {
+          await metadataOwner?.close();
+        } finally {
+          environment.restore();
+        }
       }
     },
   };
