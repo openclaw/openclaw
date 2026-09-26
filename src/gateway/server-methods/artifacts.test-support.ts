@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { readSessionArtifacts as readSessionArtifactsKernel } from "../session-artifact-read.js";
+import { selectSessionArtifacts } from "../session-artifact-read.js";
 import { expectRecordFields } from "../test-helpers.assertions.js";
 
 type ResponderCalls = Array<{ ok: boolean; payload?: unknown; error?: unknown }>;
@@ -13,10 +13,10 @@ export function withArtifactFixtureReader(
     ...actual,
     visitSessionMessagesAsync,
     readSessionArtifacts: (
-      scope: Parameters<typeof readSessionArtifactsKernel>[0],
-      query: Parameters<typeof readSessionArtifactsKernel>[1],
+      scope: Parameters<typeof selectSessionArtifacts>[0],
+      query: Parameters<typeof selectSessionArtifacts>[1],
     ) =>
-      readSessionArtifactsKernel(scope, query, {
+      selectSessionArtifacts(scope, query, {
         visitSessionMessagesAsync,
         readSessionMessagesPageWithStatsAsync: actual.readSessionMessagesPageWithStatsAsync,
       }),
