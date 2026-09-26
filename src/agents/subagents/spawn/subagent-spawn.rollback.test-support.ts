@@ -17,6 +17,7 @@ import { SubagentRegistryWriteError } from "../registry/subagent-registry-persis
 import { persistSubagentRunsToDiskAsyncOrThrow } from "../registry/subagent-registry-state.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRunsByRunIdsFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import {
   createBoundSpawnInvocation,
   createSpawnOperatorSource,
@@ -63,8 +64,18 @@ export function registerOperatorSpawnRollbackCases(options: {
       let rollbackRefused = false;
       let registrationUncertain = false;
       let retainedChildIdentity: { sessionId: string; lifecycleRevision?: string } | undefined;
+      const cleanupAttemptSettled = createDeferred();
+      const dispatchSessionMethod = runtime.recovery.dispatchSessionMethod;
       const cleanupDispatch = preserveSession
-        ? vi.spyOn(runtime.recovery, "dispatchSessionMethod")
+        ? vi
+            .spyOn(runtime.recovery, "dispatchSessionMethod")
+            .mockImplementation(async (...args) => {
+              try {
+                return await dispatchSessionMethod(...args);
+              } finally {
+                cleanupAttemptSettled.resolve();
+              }
+            })
         : undefined;
       const failures: unknown[] = [];
       if (phase === "preparation") {
@@ -211,7 +222,8 @@ export function registerOperatorSpawnRollbackCases(options: {
         })();
         invocation = pending;
         const completion = preserveSession
-          ? pending.then(async (result) => {
+          ? (async () => {
+              await Promise.race([cleanupAttemptSettled.promise, pending]);
               const childKey = expectDefined(childSessionKey, "registered child session");
               const runId = expectDefined(childRunId, "registered child run");
               const dispatch = expectDefined(cleanupDispatch, "bound cleanup dispatch observer");
@@ -224,9 +236,10 @@ export function registerOperatorSpawnRollbackCases(options: {
                 { sessionKey: childKey, runId },
                 expect.objectContaining({ assertCurrent: expect.any(Function) }),
               );
+              const result = await pending;
               await bound.execution.drain();
               return result;
-            })
+            })()
           : pending;
         const result = await withTimeout(completion, 60_000, {
           message: "ordinary spawn rollback cleanup did not settle",
@@ -298,6 +311,7 @@ export function registerOperatorSpawnRollbackCases(options: {
         }
         cleanupDispatch?.mockRestore();
         try {
+          resetSubagentRegistryForTests({ persist: false });
           expect(source.holds).toBe(0);
         } catch (error) {
           failures.push(error);

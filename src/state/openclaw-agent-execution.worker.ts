@@ -1,9 +1,8 @@
-import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_threads";
+import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
@@ -50,6 +49,7 @@ import type {
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
 import { createAgentDatabaseDomainOwner } from "./openclaw-agent-execution-domain.js";
+import { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
 import {
   requireOpenClawStateDatabaseIdentity,
   retainOpenClawStateDatabase,
@@ -153,22 +153,6 @@ function openAgentDatabaseBackend(
   let releaseBorrow: (() => void) | undefined;
   let identity: AgentDatabaseExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
-  const maintenancePreparations = new Map<
-    string,
-    {
-      plan: AgentDatabaseOperations["session.maintenance.prepare"]["input"];
-      prepared: ReturnType<
-        typeof import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js").prepareSessionMaintenanceInWorker
-      >;
-    }
-  >();
-  const releaseMaintenancePreparation = (id: string) => {
-    const preparation = maintenancePreparations.get(id);
-    if (preparation) {
-      preparation.prepared.release();
-      maintenancePreparations.delete(id);
-    }
-  };
   let startupJournalRequested = false;
   let publicationStartupJournal: boolean | undefined;
   const readRequestPreparation = () => {
@@ -342,10 +326,13 @@ function openAgentDatabaseBackend(
   let replacements:
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
-  let maintenance:
-    | typeof import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js")
-    | undefined;
   let trajectory: typeof import("../trajectory/runtime-store.sqlite.js") | undefined;
+  const maintenance = createAgentDatabaseMaintenanceOwner({
+    databaseOptions: options,
+    assertFileIdentity,
+    openWriter,
+    admit,
+  });
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
     assertCurrent() {
@@ -519,79 +506,12 @@ function openAgentDatabaseBackend(
         { operationLabel: "session.entry-replacements" },
       );
     }
-    if (command.type === "session.maintenance.release") {
-      releaseMaintenancePreparation(command.input.id);
-      return;
-    }
-    if (command.type === "session.maintenance.prepare" && maintenance) {
-      assertFileIdentity();
-      if (maintenancePreparations.has(command.input.id)) {
-        throw new Error("Session maintenance preparation is already retained");
-      }
-      // The coalesced planner may overlap one revoked predecessor awaiting cleanup.
-      if (maintenancePreparations.size >= 2) {
-        throw new Error("Session maintenance preparation capacity is occupied");
-      }
-      const prepared = maintenance.prepareSessionMaintenanceInWorker({
-        kind: "maintenance-plan",
-        input: command.input.input,
-        databaseOptions: options,
-      });
-      maintenancePreparations.set(command.input.id, { plan: command.input, prepared });
-      return;
-    }
-    if (command.type === "session.maintenance.metadata" && maintenance && replacements) {
-      const opened = openWriter();
-      const previous = new Map<string, SessionEntry>();
-      const current = new Map<string, SessionEntry>();
-      const preparePublication = replacements.prepareSessionEntryReplacementPublication;
-      let publication: ReturnType<typeof preparePublication> | undefined;
-      const preparation =
-        command.input.kind === "maintenance-plan"
-          ? expectDefined(
-              maintenancePreparations.get(command.input.preparationId),
-              "Session maintenance preparation",
-            )
-          : undefined;
-      const plan = preparation
-        ? { kind: "maintenance-plan" as const, input: preparation.plan.input }
-        : { kind: "maintenance-statistics" as const };
-      const value = maintenance.runSessionMaintenanceMetadataInTransaction(
-        { ...plan, databaseOptions: options },
-        {
-          beforeMutation(database) {
-            if (database.db !== opened.db) {
-              throw new Error("Session maintenance lost its canonical database owner");
-            }
-            admit("transaction");
-          },
-          onArchived(sessionKey, before, after) {
-            previous.set(sessionKey, before);
-            current.set(sessionKey, after);
-          },
-          beforeCommit(database) {
-            publication = preparePublication({
-              pendingArchiveRecovery: false,
-              previous,
-              current,
-              maintenancePlans: [],
-              membershipInvalidatedKeys: [],
-            });
-            deferSqliteWorkerCommitReceipt(database.db, publication);
-            admit("commit", publication);
-          },
-        },
-        preparation?.prepared,
-      );
-      return value.kind === "maintenance-preservation-required" ||
-        value.kind === "maintenance-plan-stale"
-        ? { kind: "not-committed", workerThreadId: threadId, value }
-        : {
-            kind: "committed",
-            workerThreadId: threadId,
-            value,
-            publication: expectDefined(publication, "Session maintenance commit receipt"),
-          };
+    if (
+      command.type === "session.maintenance.release" ||
+      command.type === "session.maintenance.prepare" ||
+      command.type === "session.maintenance.metadata"
+    ) {
+      return maintenance.execute(command);
     }
     if (command.type === "session.providerReview.compare" && providerReview) {
       return providerReview.compareSessionProviderReviewInWorker(
@@ -688,13 +608,7 @@ function openAgentDatabaseBackend(
         command.type === "session.maintenance.metadata" ||
         command.type === "session.maintenance.prepare"
       ) {
-        return Promise.all([
-          import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js"),
-          import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
-        ]).then(([metadata, replacement]) => {
-          maintenance = metadata;
-          replacements = replacement;
-        });
+        return maintenance.prepare();
       }
       if (command.type === "session.providerReview.compare") {
         return import("../config/sessions/provider-review-store.worker.js").then((module) => {
@@ -724,12 +638,7 @@ function openAgentDatabaseBackend(
       }
     },
     [SQLITE_WORKER_OPERATION_CLEANUP](command) {
-      if (
-        command.type === "session.maintenance.metadata" &&
-        command.input.kind === "maintenance-plan"
-      ) {
-        releaseMaintenancePreparation(command.input.preparationId);
-      }
+      maintenance.cleanup(command);
       if (command.type === "database.domain.publish") {
         startupJournalRequested = publicationStartupJournal ?? false;
         try {
@@ -778,9 +687,7 @@ function openAgentDatabaseBackend(
       closeReceipt = closeAgentDatabaseExecution({
         database,
         identity,
-        releasePreparations: [...maintenancePreparations.keys()].map(
-          (id) => () => releaseMaintenancePreparation(id),
-        ),
+        releasePreparations: maintenance.getPreparationReleases(),
         closeDomain: () => domain.close(),
         releaseBorrow,
         releaseSharedBorrow: () => sharedBorrow?.release(),
