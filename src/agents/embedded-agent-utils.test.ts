@@ -16,6 +16,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
   sanitizeAssistantVisibleStreamText,
+  stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
@@ -406,7 +407,7 @@ describe("extractAssistantVisibleText", () => {
   it.each(["Visible prefix <think>private reasoning tail", ""])(
     "captures legacy string content before it changes: %j",
     (content) => {
-      const message = makeAssistantMessage({ role: "assistant", content, timestamp: 0 });
+      const message = makeAssistantMessage({ content });
       const render = prepareAssistantVisibleText(message);
       message.content = [{ type: "text", text: "Replacement" }];
 
