@@ -1,6 +1,3 @@
-/**
- * Best-effort cleanup helpers for Codex app-server startup attempts and turns.
- */
 import {
   AgentHarnessPreflightError,
   embeddedAgentLog,
@@ -22,9 +19,7 @@ import {
 } from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
-/** Timeout for best-effort app-server turn interruption during cleanup. */
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
-/** Timeout for best-effort thread unsubscribe during cleanup. */
 export const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 const CODEX_NO_ACTIVE_TURN_ERROR_CODE = -32_600;
 const CODEX_NO_ACTIVE_TURN_ERROR_MESSAGE = "no active turn to interrupt";
@@ -52,7 +47,6 @@ export function isCodexAppServerUnsafeSubscriptionError(
   return error instanceof CodexAppServerUnsafeSubscriptionError;
 }
 
-/** Asserts Codex resumed the exact thread this attempt subscribed to. */
 export function assertCodexThreadResumeSubscription(
   requestedThreadId: string,
   returnedThreadId: string,
@@ -225,7 +219,6 @@ export async function terminateCodexBackgroundTerminals(
   }
 }
 
-/** Unsubscribes from a thread while swallowing cleanup-only failures. */
 export async function unsubscribeCodexThreadBestEffort(
   client: CodexAppServerClient,
   params: {

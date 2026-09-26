@@ -32,6 +32,7 @@ import { buildTurnStartParams } from "./thread-lifecycle.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import { buildCodexParentLocalInstructions } from "./turn-params.js";
+import type { CodexThreadRouteReservation } from "./turn-router.js";
 
 export type CodexStartedTurn = {
   turn: CodexTurnStartResponse;
@@ -41,7 +42,9 @@ export type CodexStartedTurn = {
 export async function prepareCodexAttemptTurnRequest(
   resources: CodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
-  ensureCurrentThreadRoute: () => Promise<unknown>,
+  ensureCurrentThreadRoute: () => Promise<
+    Pick<CodexThreadRouteReservation, "armTurn" | "cancelTurn">
+  >,
   waitForActiveNativeTurnCompletion: () => Promise<boolean>,
 ) {
   const { prompt, state: resourceState, releaseCurrentRoute } = resources;
@@ -73,22 +76,24 @@ export async function prepareCodexAttemptTurnRequest(
     signal: runAbortController.signal,
   });
   const buildCodexModelInputMessages = () => [
-    ...prompt.codexModelInputHistoryMessages,
     buildCodexUserPromptMessage({ ...runtimeParams, prompt: turnState.codexTurnPromptText }),
   ];
+  const buildModelCallIdentity = () => ({
+    runId: params.runId,
+    sessionId: params.sessionId,
+    provider: usesSupervisionConnection
+      ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
+      : params.provider,
+    model: usesSupervisionConnection
+      ? (resourceState.thread.model ?? effectiveRuntimeModelId)
+      : params.modelId,
+  });
   const codexModelCallDiagnostics = createCodexModelCallDiagnosticEmitter({
     baseFields: {
-      runId: params.runId,
+      ...buildModelCallIdentity(),
       agentId: sessionAgentId,
       callId: codexModelCallId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      sessionId: params.sessionId,
-      provider: usesSupervisionConnection
-        ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
-        : params.provider,
-      model: usesSupervisionConnection
-        ? (resourceState.thread.model ?? effectiveRuntimeModelId)
-        : params.modelId,
       api: usesSupervisionConnection ? runtimeParams.model.api : params.model.api,
       transport: appServer.start.transport,
       observationUnit: "turn",
@@ -131,10 +136,7 @@ export async function prepareCodexAttemptTurnRequest(
     return references;
   };
   const startCodexTurn = async (): Promise<CodexStartedTurn> => {
-    const activeTurnRoute = (await ensureCurrentThreadRoute()) as {
-      armTurn(): void;
-      cancelTurn(): Promise<void>;
-    };
+    const activeTurnRoute = await ensureCurrentThreadRoute();
     // Resume may observe a newer native tuple after host auth was prepared. Keep
     // that truthful binding, but never infer with credentials selected for the old tuple.
     assertCodexSessionRuntimeOwnership(
@@ -393,31 +395,17 @@ export async function prepareCodexAttemptTurnRequest(
   }
   prepareWorkspaceReferences();
   const buildLlmInputEvent = () => ({
-    runId: params.runId,
-    sessionId: params.sessionId,
-    provider: usesSupervisionConnection
-      ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
-      : params.provider,
-    model: usesSupervisionConnection
-      ? (resourceState.thread.model ?? effectiveRuntimeModelId)
-      : params.modelId,
+    ...buildModelCallIdentity(),
     systemPrompt: buildRenderedCodexDeveloperInstructions(),
     prompt: turnState.codexTurnPromptText,
-    historyMessages: prompt.codexModelInputHistoryMessages,
+    historyMessages: [],
     imagesCount:
       prompt.contextImageGroups.reduce((count, group) => count + group.images.length, 0) +
       (params.images?.length ?? 0),
     tools,
   });
   const buildLlmOutputEvent = () => ({
-    runId: params.runId,
-    sessionId: params.sessionId,
-    provider: usesSupervisionConnection
-      ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
-      : params.provider,
-    model: usesSupervisionConnection
-      ? (resourceState.thread.model ?? effectiveRuntimeModelId)
-      : params.modelId,
+    ...buildModelCallIdentity(),
     ...hookContextWindowFields,
     resolvedRef: usesSupervisionConnection
       ? `${resourceState.thread.modelProvider ?? effectiveRuntimeProviderId}/${resourceState.thread.model ?? effectiveRuntimeModelId}`

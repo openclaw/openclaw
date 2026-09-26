@@ -39,10 +39,7 @@ export function withCodexAppServerFastModeServiceTier(
   if (serviceTier === appServer.serviceTier) {
     return appServer;
   }
-  if (serviceTier) {
-    return { ...appServer, serviceTier };
-  }
-  return { ...appServer, serviceTier: null };
+  return { ...appServer, serviceTier: serviceTier || null };
 }
 
 export function estimateCodexAppServerProjectedTurnTokens(params: {

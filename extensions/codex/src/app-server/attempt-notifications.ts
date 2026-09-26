@@ -29,7 +29,6 @@ export function updateActiveTurnItemIds(
   activeItemIds.delete(itemId);
 }
 
-/** Reads an item id from supported notification envelope shapes. */
 export function readNotificationItemId(notification: CodexServerNotification): string | undefined {
   if (!isJsonObject(notification.params)) {
     return undefined;
@@ -42,7 +41,6 @@ export function readNotificationItemId(notification: CodexServerNotification): s
   );
 }
 
-/** Detects completion for an OpenClaw dynamic tool result still awaited by Codex. */
 export function isPendingOpenClawDynamicToolCompletionNotification(
   notification: CodexServerNotification,
   pendingOpenClawDynamicToolCompletionIds: ReadonlySet<string>,
@@ -69,7 +67,6 @@ export function isRawFunctionToolOutputCompletionNotification(
   return item ? readString(item, "type") === "function_call_output" : false;
 }
 
-/** Returns true for terminal app-server thread status strings. */
 export function isTerminalTurnStatus(status: string | undefined): boolean {
   return status === "completed" || status === "interrupted" || status === "failed";
 }
@@ -101,19 +98,9 @@ export function isCodexTurnAbortMarkerNotification(
   if (role === "user" && currentPromptTexts.includes(text)) {
     return false;
   }
-  return readCodexTurnAbortMarkerBody(text) !== undefined;
-}
-
-function readCodexTurnAbortMarkerBody(text: string): string | undefined {
-  if (
-    !text.startsWith(CODEX_TURN_ABORT_MARKER_START) ||
-    !text.endsWith(CODEX_TURN_ABORT_MARKER_END)
-  ) {
-    return undefined;
-  }
-  return text
-    .slice(CODEX_TURN_ABORT_MARKER_START.length, -CODEX_TURN_ABORT_MARKER_END.length)
-    .trim();
+  return (
+    text.startsWith(CODEX_TURN_ABORT_MARKER_START) && text.endsWith(CODEX_TURN_ABORT_MARKER_END)
+  );
 }
 
 function extractRawResponseItemText(item: JsonObject): string {
@@ -136,7 +123,6 @@ function extractRawResponseItemText(item: JsonObject): string {
     .join("");
 }
 
-/** Reads a typed Codex item from notification params when id/type are present. */
 export function readCodexNotificationItem(
   params: JsonValue | undefined,
 ): CodexThreadItem | undefined {

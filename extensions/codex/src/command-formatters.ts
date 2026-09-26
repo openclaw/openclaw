@@ -12,17 +12,10 @@ import {
   summarizeCodexRateLimits,
 } from "./app-server/rate-limits.js";
 import type { CodexAccountAuthOverview } from "./command-account.js";
-import type { SafeValue } from "./command-rpc.js";
+import type { readCodexStatusProbes, SafeValue } from "./command-rpc.js";
 
-type CodexStatusProbes = {
-  models: SafeValue<CodexAppServerModelListResult>;
-  account: SafeValue<JsonValue | undefined>;
-  limits: SafeValue<JsonValue | undefined>;
-  mcps: SafeValue<JsonValue | undefined>;
-  skills: SafeValue<JsonValue | undefined>;
-};
+type CodexStatusProbes = Awaited<ReturnType<typeof readCodexStatusProbes>>;
 
-/** Formats the combined `/codex status` probe result. */
 export function formatCodexStatus(probes: CodexStatusProbes): string {
   const connected =
     probes.models.ok || probes.account.ok || probes.limits.ok || probes.mcps.ok || probes.skills.ok;
@@ -40,37 +33,18 @@ export function formatCodexStatus(probes: CodexStatusProbes): string {
     lines.push(`Models: ${formatCodexDisplayText(probes.models.error)}`);
   }
   lines.push(
-    `Account: ${
-      probes.account.ok
-        ? formatCodexAccountSummary(probes.account.value)
-        : formatCodexDisplayText(probes.account.error)
-    }`,
-  );
-  lines.push(
-    `Rate limits: ${
-      probes.limits.ok
-        ? formatCodexRateLimitSummary(probes.limits.value)
-        : formatCodexDisplayText(probes.limits.error)
-    }`,
-  );
-  lines.push(
-    `MCP servers: ${
-      probes.mcps.ok
-        ? summarizeArrayLike(probes.mcps.value)
-        : formatCodexDisplayText(probes.mcps.error)
-    }`,
-  );
-  lines.push(
-    `Skills: ${
-      probes.skills.ok
-        ? summarizeCodexSkills(probes.skills.value)
-        : formatCodexDisplayText(probes.skills.error)
-    }`,
+    `Account: ${formatProbe(probes.account, formatCodexAccountSummary)}`,
+    `Rate limits: ${formatProbe(probes.limits, formatCodexRateLimitSummary)}`,
+    `MCP servers: ${formatProbe(probes.mcps, summarizeArrayLike)}`,
+    `Skills: ${formatProbe(probes.skills, summarizeCodexSkills)}`,
   );
   return lines.join("\n");
 }
 
-/** Formats Codex model-list results for `/codex models`. */
+function formatProbe<T>(probe: SafeValue<T>, format: (value: T) => string): string {
+  return probe.ok ? format(probe.value) : formatCodexDisplayText(probe.error);
+}
+
 export function formatModels(result: CodexAppServerModelListResult): string {
   if (result.models.length === 0) {
     return "No Codex app-server models returned.";
@@ -87,7 +61,6 @@ export function formatModels(result: CodexAppServerModelListResult): string {
   return lines.join("\n");
 }
 
-/** Formats Codex thread-list responses with safe resume hints. */
 export function formatThreads(response: JsonValue | undefined): string {
   const threads = extractArray(response);
   if (threads.length === 0) {
@@ -117,7 +90,6 @@ export function formatThreads(response: JsonValue | undefined): string {
   ].join("\n");
 }
 
-/** Formats account and rate-limit output for `/codex account`. */
 export function formatAccount(
   account: SafeValue<JsonValue | undefined>,
   limits: SafeValue<JsonValue | undefined>,
@@ -156,7 +128,9 @@ function formatAccountAuthOverview(overview: CodexAccountAuthOverview): string {
   if (overview.rows.length > 0) {
     lines.push(overview.orderTitle);
     for (const [index, row] of overview.rows.entries()) {
-      lines.push(`  ${index + 1}. ${row.label}   ${row.kind}   — ${formatAuthRowStatus(row)}`);
+      lines.push(
+        `  ${index + 1}. ${row.label}   ${row.kind}   — ${row.billingNote ? `${row.status} · ${row.billingNote}` : row.status}`,
+      );
     }
   }
   while (lines.at(-1) === "") {
@@ -165,32 +139,17 @@ function formatAccountAuthOverview(overview: CodexAccountAuthOverview): string {
   return lines.map(formatCodexAccountLine).join("\n");
 }
 
-function formatAuthRowStatus(row: CodexAccountAuthOverview["rows"][number]): string {
-  return row.billingNote ? `${row.status} · ${row.billingNote}` : row.status;
-}
-
-/** Formats Codex Computer Use readiness and plugin/MCP availability. */
 export function formatComputerUseStatus(status: CodexComputerUseStatus): string {
   const lines = [
     `Computer Use: ${status.ready ? "ready" : status.enabled ? "not ready" : "disabled"}`,
-  ];
-  lines.push(
     `Plugin: ${formatCodexDisplayText(status.pluginName)} (${computerUsePluginState(status)})`,
-  );
-  lines.push(
     `Installation: ${formatCodexDisplayText(status.installation.status)} (${status.installation.ok ? "ok" : "not ok"})`,
-  );
-  lines.push(
     `MCP server: ${formatCodexDisplayText(status.mcpServerName)}${
       status.mcpServerAvailable ? ` (${status.tools.length} tools)` : " (unavailable)"
     }`,
-  );
-  lines.push(
     `Exposure: ${formatCodexDisplayText(status.exposure.status)} (${status.exposure.ok ? "ok" : "not ok"})`,
-  );
-  lines.push(
     `Live test: ${formatCodexDisplayText(status.liveTest.status)} (${status.liveTest.attempted ? `${status.liveTest.attempts} attempt${status.liveTest.attempts === 1 ? "" : "s"}, ${status.liveTest.timeoutMs}ms` : "not run"})`,
-  );
+  ];
   if (status.liveTest.retried || status.liveTest.repaired) {
     lines.push(
       `Live test recovery: retried=${status.liveTest.retried ? "yes" : "no"}, repaired=${
@@ -218,7 +177,6 @@ function computerUsePluginState(status: CodexComputerUseStatus): string {
   return status.pluginEnabled ? "installed" : "installed, disabled";
 }
 
-/** Formats generic array-like Codex app-server responses. */
 export function formatList(response: JsonValue | undefined, label: string): string {
   const entries = extractArray(response);
   if (entries.length === 0) {
@@ -237,7 +195,6 @@ export function formatList(response: JsonValue | undefined, label: string): stri
   ].join("\n");
 }
 
-/** Formats Codex skills grouped by scope, omitting disabled entries. */
 export function formatSkills(response: JsonValue | undefined): string {
   const { skills, emptySummary } = readEnabledCodexSkills(response);
   return skills.length > 0
@@ -351,7 +308,6 @@ function isUnsafeDisplayCodePoint(codePoint: number): boolean {
   );
 }
 
-/** Builds the portable `/codex` command help text. */
 export function buildHelp(): string {
   return [
     "Codex commands:",

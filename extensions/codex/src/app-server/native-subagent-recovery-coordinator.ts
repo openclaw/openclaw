@@ -261,10 +261,7 @@ export class CodexNativeSubagentRecoveryCoordinator {
     ) {
       return;
     }
-    if (childState.recoveryTimer) {
-      clearTimeout(childState.recoveryTimer);
-      childState.recoveryTimer = undefined;
-    }
+    this.clearRecoveryTimers(childState);
     childState.recoveryAttempt = 0;
     childState.fallbackCompletion = { ...completion, completedAt: eventAt };
     this.scheduleRecoveryPoll(childState);

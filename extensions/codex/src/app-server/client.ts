@@ -239,7 +239,6 @@ export class CodexAppServerClient {
   private transportExited = false;
   private nativeExecutionObserved = false;
   private closeError: Error | undefined;
-  private serverVersion: string | undefined;
   private runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
   private threadSessionRequestGuard:
     | ((options: {
@@ -348,14 +347,14 @@ export class CodexAppServerClient {
     // which matters when callers override the binary or app-server args.
     const response = await this.request("initialize", buildCodexAppServerInitializeParams());
     this.child.startupFailure?.complete();
-    this.serverVersion = assertSupportedCodexAppServerVersion(response);
-    this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, this.serverVersion);
+    const serverVersion = assertSupportedCodexAppServerVersion(response);
+    this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, serverVersion);
     this.notify("initialized");
     this.initialized = true;
   }
 
   getServerVersion(): string | undefined {
-    return this.serverVersion;
+    return this.runtimeIdentity?.serverVersion;
   }
 
   getRuntimeIdentity(): CodexAppServerRuntimeIdentity | undefined {
@@ -774,10 +773,7 @@ export class CodexAppServerClient {
   }
 
   close(): void {
-    if (!this.markClosed(new Error("codex app-server client is closed"))) {
-      return;
-    }
-    closeCodexAppServerTransport(this.child);
+    this.closeWithError(new Error("codex app-server client is closed"));
   }
 
   async closeAndWait(options?: {
@@ -803,19 +799,10 @@ export class CodexAppServerClient {
 
   /** Closes this transport and runs cleanup only after physical process exit. */
   async closeAndRunAfterExit(onExit: () => void, operation: string): Promise<void> {
-    let settled = false;
-    const runOnExit = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      onExit();
-    };
+    this.addTransportExitHandler(onExit);
     if (this.transportExited) {
-      runOnExit();
       return;
     }
-    this.child.once("exit", runOnExit);
     try {
       await this.closeAndWait();
     } catch (closeError) {

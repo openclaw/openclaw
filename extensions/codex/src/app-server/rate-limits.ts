@@ -216,7 +216,13 @@ export function resolveCodexUsageLimitResetAtMs(
   value: JsonValue | undefined,
   nowMs = Date.now(),
 ): number | undefined {
-  return selectBlockingRateLimitReset(value, nowMs)?.resetsAtMs;
+  const blockingSnapshot = selectBlockingRateLimitSnapshot(
+    collectCodexRateLimitSnapshots(value),
+    readOrdinaryUsageAllowed(value),
+  );
+  return blockingSnapshot
+    ? selectSnapshotBlockingReset(blockingSnapshot, nowMs)?.resetsAtMs
+    : undefined;
 }
 
 export function summarizeCodexAccountUsage(
@@ -334,17 +340,6 @@ function selectNextRateLimitReset(
   );
   const candidates = exhaustedWindows.length > 0 ? exhaustedWindows : futureWindows;
   return candidates.toSorted((left, right) => left.resetsAtMs - right.resetsAtMs)[0];
-}
-
-function selectBlockingRateLimitReset(
-  value: JsonValue | undefined,
-  nowMs: number,
-): RateLimitReset | undefined {
-  const blockingSnapshot = selectBlockingRateLimitSnapshot(
-    collectCodexRateLimitSnapshots(value),
-    readOrdinaryUsageAllowed(value),
-  );
-  return blockingSnapshot ? selectSnapshotBlockingReset(blockingSnapshot, nowMs) : undefined;
 }
 
 function selectBlockingRateLimitSnapshot(

@@ -960,11 +960,8 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
   const request = createPolicyGuardedRequest(options, "enabled");
   const rawTranscriptRequest = createPolicyGuardedRequest(options, "raw-transcripts");
   const writeRequest = createPolicyGuardedRequest(options, "write-controls");
-  const current = () => {
-    // Keep the execute-time check beside factory filtering so direct/internal
-    // callers cannot construct a usable tool without explicit owner authorization.
-    return requireLiveToolPolicy(options, "enabled");
-  };
+  // Recheck owner authorization when directly constructed tools execute.
+  const current = () => requireLiveToolPolicy(options, "enabled");
 
   return [
     {

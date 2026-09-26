@@ -90,12 +90,7 @@ export class CodexNativeSubagentCompletionDelivery {
     request: CompletionAttemptRequest,
   ): Promise<void> {
     const completion = childState.pendingCompletion;
-    if (
-      !completion ||
-      !this.dependencies.isCurrentChild(childState) ||
-      !this.dependencies.isCurrentParent(state) ||
-      this.dependencies.isRetiredParent(state)
-    ) {
+    if (!completion || !this.isCurrent(state, childState)) {
       return;
     }
     if (
@@ -153,12 +148,7 @@ export class CodexNativeSubagentCompletionDelivery {
         }
         if (
           state.taskRuntime &&
-          !updated?.some(
-            (task) =>
-              task.runId === childState.runId &&
-              (!childState.expectedTask ||
-                matchesAgentHarnessTaskAssignment(task, childState.expectedTask)),
-          )
+          !updated?.some((task) => this.matchesAssignment(childState, task))
         ) {
           if (this.claim(state, childState, read)) {
             throw new Error("Codex native subagent failed delivery status was not persisted.");
@@ -188,10 +178,7 @@ export class CodexNativeSubagentCompletionDelivery {
             }
           : {}),
         isSourceSessionAdmissionAllowed: () =>
-          this.dependencies.isCurrentChild(childState) &&
-          this.dependencies.isCurrentParent(state) &&
-          !this.dependencies.isRetiredParent(state) &&
-          this.claim(state, childState, read),
+          this.isCurrent(state, childState) && this.claim(state, childState, read),
         childSessionKey: childState.runId,
         childSessionId: completion.childThreadId,
         announceId: `codex-native:${childState.nativeParentThreadId}:${readCodexNativeSubagentRunId(childState.runId)?.turnId ? childState.runId : completion.childThreadId}:${completion.status}`,
@@ -311,9 +298,7 @@ export class CodexNativeSubagentCompletionDelivery {
       if (
         !child ||
         !deliveryParent ||
-        !this.dependencies.isCurrentChild(child) ||
-        !this.dependencies.isCurrentParent(state) ||
-        this.dependencies.isRetiredParent(state) ||
+        !this.isCurrent(state, child) ||
         !this.dependencies.isCurrentParent(deliveryParent) ||
         this.dependencies.isRetiredParent(deliveryParent)
       ) {
@@ -333,10 +318,9 @@ export class CodexNativeSubagentCompletionDelivery {
           void this.deliverPending(deliveryParent, child, "receipt");
         }
         continue;
-      } else {
-        child.nativeCompletionDelivered = true;
       }
-      if (child.pendingCompletion && child.nativeCompletionDelivered) {
+      child.nativeCompletionDelivered = true;
+      if (child.pendingCompletion) {
         child.completionTaskPhase ??= "delivery";
       }
       if (child.pendingCompletion && !child.deliveringCompletion) {
@@ -373,6 +357,13 @@ export class CodexNativeSubagentCompletionDelivery {
       this.dependencies.isCurrentChild(child) &&
       this.dependencies.isCurrentParent(state) &&
       !this.dependencies.isRetiredParent(state)
+    );
+  }
+
+  private matchesAssignment(child: ChildState, task: AgentHarnessTaskRecord): boolean {
+    return (
+      task.runId === child.runId &&
+      (!child.expectedTask || matchesAgentHarnessTaskAssignment(task, child.expectedTask))
     );
   }
 
@@ -450,14 +441,7 @@ export class CodexNativeSubagentCompletionDelivery {
       if (!this.isCurrent(state, child)) {
         return false;
       }
-      if (
-        state.taskRuntime &&
-        !updated?.some(
-          (task) =>
-            task.runId === runId &&
-            (!child.expectedTask || matchesAgentHarnessTaskAssignment(task, child.expectedTask)),
-        )
-      ) {
+      if (state.taskRuntime && !updated?.some((task) => this.matchesAssignment(child, task))) {
         const current = read()[0];
         // Recovery can rewrite an already-terminal outcome still awaiting delivery.
         // Lost assignment ownership or a conflicting terminal decision retires this projection.
@@ -495,14 +479,7 @@ export class CodexNativeSubagentCompletionDelivery {
       if (!this.isCurrent(state, child)) {
         return false;
       }
-      if (
-        state.taskRuntime &&
-        !updated?.some(
-          (task) =>
-            task.runId === runId &&
-            (!child.expectedTask || matchesAgentHarnessTaskAssignment(task, child.expectedTask)),
-        )
-      ) {
+      if (state.taskRuntime && !updated?.some((task) => this.matchesAssignment(child, task))) {
         if (!this.claim(state, child, read)) {
           this.dependencies.unregisterChild(child);
           return false;

@@ -58,7 +58,6 @@ export function shouldUseFreshCodexThreadAfterContextEngineOverflow(params: {
   }
   const message = formatErrorMessage(params.error);
   return (
-    /ran out of room in the model'?s context window/iu.test(message) ||
     /context window/iu.test(message) ||
     /context length/iu.test(message) ||
     /maximum context/iu.test(message) ||

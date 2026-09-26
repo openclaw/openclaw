@@ -1,10 +1,10 @@
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog-paging";
 import { z } from "zod";
-import type { CodexThreadItem } from "./app-server/protocol.js";
 import {
   readCodexThreadHistoryPage,
   readLegacyCodexHistoryPage,
+  type CodexHistoryItemEntry,
 } from "./app-server/thread-history-page.js";
 import { MAX_TRANSCRIPT_PAGE_BYTES } from "./session-catalog-parsing.js";
 import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
@@ -31,10 +31,10 @@ export function parseCodexCatalogTranscriptPage(value: unknown): TranscriptPage 
 }
 
 function projectTranscriptPage(
-  items: CodexThreadItem[],
+  entries: CodexHistoryItemEntry[],
   limit: number,
 ): SessionCatalogTranscriptItem[] {
-  const projected = items.map(toGenericTranscriptItem);
+  const projected = entries.map(({ item }) => toGenericTranscriptItem(item));
   const page = sessionCatalogPaging.boundTranscriptPage(projected.toReversed(), limit, 0).items;
   for (const [index, item] of page.entries()) {
     if (item.text !== projected[index]?.text && projected[index]?.text) {
@@ -59,11 +59,7 @@ export async function readLegacyCodexTranscriptPage(
   request: TranscriptRequest,
 ): Promise<TranscriptPage> {
   return readLegacyCodexHistoryPage(readTurns, request, {
-    project: (entries, limit) =>
-      projectTranscriptPage(
-        entries.map(({ item }) => item),
-        limit,
-      ),
+    project: projectTranscriptPage,
     fits: pageFitsNodeTransport,
   });
 }
@@ -75,11 +71,7 @@ export async function readCodexCatalogTranscriptPage(
 ): Promise<TranscriptPage> {
   const thread = await control.requireEligibleThread(request.threadId);
   return readCodexThreadHistoryPage(control, thread, request, {
-    project: (entries, limit) =>
-      projectTranscriptPage(
-        entries.map(({ item }) => item),
-        limit,
-      ),
+    project: projectTranscriptPage,
     fits: pageFitsNodeTransport,
   });
 }

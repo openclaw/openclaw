@@ -55,9 +55,7 @@ function createCodexPluginThreadAppInventoryRequest(
   return async (method, requestParams) =>
     (await params.request(
       method,
-      (method === "app/installed" || method === "app/read") && params.threadId
-        ? { ...requestParams, threadId: params.threadId }
-        : requestParams,
+      params.threadId ? { ...requestParams, threadId: params.threadId } : requestParams,
     )) as CodexAppServerRequestResult<typeof method>;
 }
 
