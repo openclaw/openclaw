@@ -63,7 +63,7 @@ describe("codex detach command", () => {
     const sharedClientRuntime = await import("./app-server/shared-client.js");
     const retainClient = vi
       .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
-      .mockReturnValue({ client: harness.client, release: vi.fn() });
+      .mockResolvedValue({ client: harness.client, release: vi.fn() });
 
     try {
       await expect(
@@ -238,7 +238,7 @@ describe("codex detach command", () => {
       const sharedClientRuntime = await import("./app-server/shared-client.js");
       const retainClient = vi
         .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
-        .mockReturnValue({
+        .mockResolvedValue({
           client: { request } as unknown as CodexAppServerClient,
           release: releaseClient,
         });
@@ -320,7 +320,7 @@ describe("codex detach command", () => {
     const sharedClientRuntime = await import("./app-server/shared-client.js");
     const retainClient = vi
       .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
-      .mockReturnValue({ client: harness.client, release: vi.fn() });
+      .mockResolvedValue({ client: harness.client, release: vi.fn() });
 
     try {
       const result = await handleCodexCommand(
@@ -405,7 +405,7 @@ describe("codex detach command", () => {
       const sharedClientRuntime = await import("./app-server/shared-client.js");
       const retainClient = vi
         .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
-        .mockReturnValue({ client: harness.client, release: vi.fn() });
+        .mockResolvedValue({ client: harness.client, release: vi.fn() });
 
       try {
         const result = await handleCodexCommand(
@@ -529,7 +529,7 @@ describe("codex detach command", () => {
     const sharedClientRuntime = await import("./app-server/shared-client.js");
     const retainClient = vi
       .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
-      .mockReturnValue({ client: harness.client, release: vi.fn() });
+      .mockResolvedValue({ client: harness.client, release: vi.fn() });
     const acquireClient = vi
       .spyOn(sharedClientRuntime, "getLeasedSharedCodexAppServerClient")
       .mockResolvedValue(harness.client);
@@ -635,7 +635,7 @@ describe("codex detach command", () => {
     const sharedClientRuntime = await import("./app-server/shared-client.js");
     const retainClient = vi
       .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
-      .mockReturnValue({ client: harness.client, release: vi.fn() });
+      .mockResolvedValue({ client: harness.client, release: vi.fn() });
 
     try {
       const result = await handleCodexCommand(
