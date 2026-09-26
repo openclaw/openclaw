@@ -1,8 +1,3 @@
-/**
- * Session transcript guard for tool-call/result consistency.
- *
- * Caps large tool results, repairs missing results, applies redaction, and emits transcript update events.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
@@ -68,10 +63,6 @@ type AppendRequest = {
   sourceAppend?: CodeModeSourceAppend;
 };
 
-function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage {
-  return message.role === "user";
-}
-
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolean {
   if (!message || message.role !== "assistant") {
     return false;
@@ -130,20 +121,11 @@ function clearsPendingToolCalls(
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
-    /** Optional session key for transcript update broadcasts. */
     sessionKey?: string;
-    /** Optional agent id for selected-global transcript update broadcasts. */
     agentId?: string;
     /** Exact run that owns terminal assistant transcript updates. */
     runId?: string;
-    /**
-     * Optional transform applied to any message before persistence.
-     */
     transformMessageForPersistence?: (message: AgentMessage) => AgentMessage;
-    /**
-     * Optional, synchronous transform applied to toolResult messages *before* they are
-     * persisted to the session transcript.
-     */
     transformToolResultForPersistence?: (
       message: AgentMessage,
       meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
@@ -452,10 +434,6 @@ export function installSessionToolResultGuard(
   }
   const flushPendingToolResults = () => runSync(flushPendingToolResultsOperation());
 
-  const clearPendingToolResults = () => {
-    pending.clear();
-  };
-
   function* guardedAppend(
     message: AgentMessage,
     callerOptions?: AppendMessageOptions,
@@ -545,7 +523,7 @@ export function installSessionToolResultGuard(
     const transformedMessage = persistMessage(nextMessage, sourceAppend);
     const finalWrite = applyBeforeWriteHook(transformedMessage, sourceAppend);
     if (!finalWrite) {
-      if (isUserAgentMessage(transformedMessage)) {
+      if (transformedMessage.role === "user") {
         opts?.onUserMessageBlocked?.(transformedMessage);
       }
       return undefined;
@@ -573,7 +551,7 @@ export function installSessionToolResultGuard(
         finalMessage = replayMessage;
       }
     }
-    if (isUserAgentMessage(finalMessage) && suppressNextUserMessagePersistence) {
+    if (finalMessage.role === "user" && suppressNextUserMessagePersistence) {
       suppressNextUserMessagePersistence = false;
       void opts?.onUserMessagePersistenceSuppressed?.(finalMessage);
       return undefined;
@@ -609,7 +587,7 @@ export function installSessionToolResultGuard(
       });
     }
 
-    if (isUserAgentMessage(finalMessage) && isUserAgentMessage(persistedMessage)) {
+    if (finalMessage.role === "user" && persistedMessage.role === "user") {
       void opts?.onUserMessagePersisted?.(finalMessage, {
         ...(anchor ? { anchor } : {}),
         appended,
@@ -622,7 +600,6 @@ export function installSessionToolResultGuard(
     return result;
   }
 
-  // Monkey-patch appendMessage with our guarded version.
   sessionManager.appendMessage = ((message, options) =>
     withCodeModeSourceAppend(message, options, (sourceAppend) =>
       runSync(guardedAppend(message, options, sourceAppend)),
@@ -638,7 +615,7 @@ export function installSessionToolResultGuard(
   return {
     hasPendingToolResults: () => pending.size > 0,
     flushPendingToolResults,
-    clearPendingToolResults,
+    clearPendingToolResults: () => pending.clear(),
     clearNextUserMessagePersistenceSuppression: () => {
       suppressNextUserMessagePersistence = false;
     },

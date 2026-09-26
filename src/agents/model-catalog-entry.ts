@@ -1,6 +1,6 @@
 import { MODEL_APIS } from "../config/types.models.js";
-import { normalizeCatalogRouteBaseUrl } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 
 function isCatalogModelApi(

@@ -295,8 +295,6 @@ export async function ensureOpenClawModelsJson(
   }
 
   const pending = MODELS_JSON_STATE.writeQueue.enqueue(targetPath, async () => {
-    // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
-    // are available to provider discovery without mutating process.env.
     const existingModelsFile = await readExistingModelsFile(targetPath);
     const plan = await planOpenClawModelsJson({
       context,
@@ -305,20 +303,14 @@ export async function ensureOpenClawModelsJson(
       pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(agentDir),
     });
 
-    if (plan.action === "skip") {
+    if (plan.action !== "write") {
       const wrotePluginCatalog = writePluginCatalogsForModelsJson({
         agentDir,
         pluginCatalogWrites: plan.pluginCatalogWrites,
       });
-      return { agentDir, wrote: wrotePluginCatalog };
-    }
-
-    if (plan.action === "noop") {
-      const wrotePluginCatalog = writePluginCatalogsForModelsJson({
-        agentDir,
-        pluginCatalogWrites: plan.pluginCatalogWrites,
-      });
-      await ensureModelsFileModeForModelsJson(targetPath);
+      if (plan.action === "noop") {
+        await ensureModelsFileModeForModelsJson(targetPath);
+      }
       return { agentDir, wrote: wrotePluginCatalog };
     }
 

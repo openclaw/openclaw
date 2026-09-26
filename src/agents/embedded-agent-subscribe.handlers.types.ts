@@ -16,7 +16,7 @@ import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { StreamDirectiveCodePrefix } from "../utils/directive-tags.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
-import type { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import type { BlockChunkMetadata, EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -275,8 +275,7 @@ export type EmbeddedAgentSubscribeContext = {
   stripBlockTags: (text: string, state: StreamBlockState, options?: { final?: boolean }) => string;
   emitBlockChunk: (
     text: string,
-    options?: {
-      sourceText?: string;
+    options?: Partial<BlockChunkMetadata> & {
       assistantMessageIndex?: number;
       final?: boolean;
       finalReply?: ReplyDirectiveParseResult;

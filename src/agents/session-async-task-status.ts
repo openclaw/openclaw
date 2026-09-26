@@ -1,7 +1,3 @@
-/**
- * Session async-task lookup helpers for avoiding duplicate long-running work
- * and reporting the active task back through tool/status metadata.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import type { TaskRecord, TaskRuntime, TaskStatus } from "../tasks/task-registry.types.js";
@@ -54,9 +50,6 @@ export function findActiveSessionTask(params: {
     }
     return true;
   });
-  if (matches.length === 0) {
-    return undefined;
-  }
   // Prefer the task already running over queued duplicates for user-facing status.
   return matches.find((task) => task.status === "running") ?? matches[0];
 }

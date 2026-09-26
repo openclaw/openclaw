@@ -1435,7 +1435,7 @@ src/agents/agent-tool-definition-adapter.ts	4
 src/agents/agent-tool-metadata.ts	2
 src/agents/agent-tools.abort.ts	1
 src/agents/agent-tools.before-tool-call.diagnostics.ts	1
-src/agents/agent-tools.before-tool-call.wrapper.ts	4
+src/agents/agent-tools.before-tool-call.wrapper.ts	3
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
@@ -1474,7 +1474,6 @@ src/agents/btw-transcript.ts	5
 src/agents/btw.ts	8
 src/agents/bundle-mcp-config.ts	5
 src/agents/cache-trace.ts	3
-src/agents/channel-tools.ts	3
 src/agents/cli-auth-epoch.ts	1
 src/agents/cli-backends.ts	1
 src/agents/cli-credentials.ts	9
@@ -1493,7 +1492,6 @@ src/agents/cli-runner/execute-node-claude.ts	5
 src/agents/cli-runner/execute.ts	3
 src/agents/cli-runner/prepare.ts	5
 src/agents/cli-runner/session-history.ts	3
-src/agents/code-mode-namespaces.ts	5
 src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
 src/agents/code-mode.ts	2
@@ -1507,10 +1505,8 @@ src/agents/compaction-real-conversation.ts	9
 src/agents/compaction-usage.ts	3
 src/agents/compaction.ts	4
 src/agents/content-blocks.ts	1
-src/agents/context-cache-projection.ts	1
 src/agents/context-cache.ts	1
 src/agents/context-runtime-state.ts	4
-src/agents/context.ts	2
 src/agents/cron-creator-authority-context.ts	1
 src/agents/custom-api-registry.ts	2
 src/agents/delegation-capability.ts	1
@@ -1685,13 +1681,12 @@ src/agents/prepared-model-runtime.ts	1
 src/agents/provider-attribution.ts	6
 src/agents/provider-auth-aliases.ts	1
 src/agents/provider-http-errors.ts	1
-src/agents/provider-local-service.ts	3
+src/agents/provider-local-service.ts	1
 src/agents/provider-model-route.ts	1
-src/agents/provider-request-config.ts	6
-src/agents/provider-secret-egress.ts	3
+src/agents/provider-request-config.ts	5
+src/agents/provider-secret-egress.ts	1
 src/agents/provider-tool-policy.ts	1
 src/agents/provider-transport-fetch.ts	2
-src/agents/run-wait.ts	2
 src/agents/runtime-plan/build.ts	4
 src/agents/runtime-plan/tools.ts	3
 src/agents/runtime/proxy.ts	7
@@ -1710,7 +1705,7 @@ src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	3
-src/agents/session-transcript-repair.ts	4
+src/agents/session-transcript-repair.ts	2
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
 src/agents/sessions/agent-session-models.ts	2
@@ -1763,7 +1758,6 @@ src/agents/tool-call-id.ts	8
 src/agents/tool-catalog.ts	1
 src/agents/tool-display-common.ts	1
 src/agents/tool-images.ts	3
-src/agents/tool-mutation-names.ts	2
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
@@ -1829,7 +1823,7 @@ src/agents/tools/web-search-provider-common.ts	1
 src/agents/tools/web-search-provider-config.ts	1
 src/agents/tools/web-shared.ts	4
 src/agents/tools/web-tool-runtime-context.ts	1
-src/agents/transcript-policy.ts	2
+src/agents/transcript-policy.ts	1
 src/agents/transcript-redact-replay.ts	1
 src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2

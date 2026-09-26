@@ -101,30 +101,16 @@ function resolvePluginMetadataProviderOwners(
     return undefined;
   }
   const owners = new Set<string>();
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.providers ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.modelCatalogProviders ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.setupProviders ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.cliBackends ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
+  for (const ownerMap of [
+    pluginMetadataSnapshot.owners.providers,
+    pluginMetadataSnapshot.owners.modelCatalogProviders,
+    pluginMetadataSnapshot.owners.setupProviders,
+    pluginMetadataSnapshot.owners.cliBackends,
+  ]) {
+    if (ownerMap) {
+      appendNormalizedPluginMetadataOwners(owners, ownerMap, provider, normalizedProvider);
+    }
+  }
   return owners.size > 0
     ? [...owners].toSorted((left, right) => left.localeCompare(right))
     : undefined;

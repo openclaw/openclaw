@@ -74,14 +74,9 @@ export function beginContextWindowCacheRefresh(): void {
   CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
 }
 
-/** Reset prepared context-window state after model config or plugin metadata changes. */
-function resetContextWindowCache(): void {
+/** Reset context-window runtime state and token cache for isolated tests. */
+export function resetContextWindowCacheForTest(): void {
   beginContextWindowCacheRefresh();
   CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.clear();
   clearContextWindowCaches();
-}
-
-/** Reset context-window runtime state and token cache for isolated tests. */
-export function resetContextWindowCacheForTest(): void {
-  resetContextWindowCache();
 }

@@ -100,13 +100,6 @@ function rebindCatalogExecutors(
     : undefined;
 }
 
-// Counter scopes ride inside model-visible telemetry and persisted tool results.
-// Lowercase hex can never form a credential-shaped substring (hf_/sk-/ghp_/…),
-// so tool-payload redaction leaves persisted results embedding the scope intact.
-function generateCounterScope(): string {
-  return generateSecureHex(12);
-}
-
 function classifyTool(tool: CatalogTool): {
   source: CatalogSource;
   sourceName?: string;
@@ -121,15 +114,7 @@ function classifyTool(tool: CatalogTool): {
   if (pluginId === "bundle-mcp") {
     return { source: "mcp", sourceName: pluginId };
   }
-  if (pluginId) {
-    return { source: "openclaw", sourceName: pluginId };
-  }
-  return { source: "openclaw", sourceName: "core" };
-}
-
-function makeCatalogId(tool: CatalogTool, source: CatalogSource, sourceName?: string): string {
-  const owner = sourceName?.trim() || "core";
-  return `${source}:${owner}:${tool.name}`;
+  return { source: "openclaw", sourceName: pluginId || "core" };
 }
 
 function wrapCatalogTool(tool: AnyAgentTool, hookContext?: HookContext): AnyAgentTool {
@@ -175,7 +160,7 @@ function toCatalogEntry(
   const catalogTool =
     source === "client" ? tool : wrapCatalogTool(tool as AnyAgentTool, hookContext);
   return {
-    id: makeCatalogId(tool, source, sourceName),
+    id: `${source}:${sourceName?.trim() || "core"}:${tool.name}`,
     source,
     sourceName,
     ...(source === "mcp" && classified.mcp ? { mcp: classified.mcp } : {}),
@@ -218,15 +203,13 @@ export function registerHeadlessToolSearchCatalog(params: {
   hookContext?: HookContext;
 }): void {
   const { catalogRef, tools, hookContext } = params;
-  const entries = tools
-    .filter((tool) => shouldCatalogTool(tool))
-    .map((tool) => {
-      const scopedTool =
-        hookContext && isToolWrappedWithBeforeToolCallHook(tool)
-          ? rewrapToolWithBeforeToolCallHook(tool, hookContext)
-          : tool;
-      return toCatalogEntry(scopedTool, undefined, hookContext);
-    });
+  const entries = tools.filter(shouldCatalogTool).map((tool) => {
+    const scopedTool =
+      hookContext && isToolWrappedWithBeforeToolCallHook(tool)
+        ? rewrapToolWithBeforeToolCallHook(tool, hookContext)
+        : tool;
+    return toCatalogEntry(scopedTool, undefined, hookContext);
+  });
   registerToolSearchCatalog({ catalogRef, entries });
 }
 
@@ -289,7 +272,8 @@ function registerToolSearchCatalog(params: {
     entries: finalizeCatalogAvailability(Array.from(byId.values()), toolExecutionAllow),
     // Appended client tools extend the same counter lifetime. A replacement
     // gets a new scope so telemetry consumers never infer resets from values.
-    counterScope: prior?.counterScope ?? generateCounterScope(),
+    // Hex avoids credential-shaped substrings that transcript redaction would alter.
+    counterScope: prior?.counterScope ?? generateSecureHex(12),
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,
@@ -474,8 +458,6 @@ export function applyToolCatalogCompaction(
 
   const visible: AnyAgentTool[] = [];
   let catalog: ToolSearchCatalogEntry[] = [];
-  const shouldCatalog = (tool: AnyAgentTool) =>
-    shouldCatalogTool(tool) && (params.shouldCatalogTool?.(tool) ?? true);
   for (const tool of params.tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(tool);
@@ -484,7 +466,7 @@ export function applyToolCatalogCompaction(
     if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
       continue;
     }
-    if (shouldCatalog(tool)) {
+    if (shouldCatalogTool(tool) && (params.shouldCatalogTool?.(tool) ?? true)) {
       const directVisible = params.isVisibleCatalogTool?.(tool) === true;
       catalog.push({ ...toCatalogEntry(tool, undefined, params.toolHookContext), directVisible });
       if (!directVisible) {

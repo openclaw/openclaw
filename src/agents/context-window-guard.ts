@@ -1,9 +1,3 @@
-/**
- * Resolves effective model context windows and formats guard warnings/blocks.
- *
- * Configured model values can cap provider metadata, and local endpoints get
- * more actionable remediation text.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredContextTokenLimits } from "./context-resolution.js";
 import { isLocalProviderEndpoint } from "./provider-attribution.js";
@@ -50,10 +44,10 @@ export function resolveContextWindowInfo(params: {
   const defaultTokens =
     normalizePositiveInt(params.defaultTokens) ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS;
   return fromModelsConfig
-    ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
+    ? { tokens: fromModelsConfig, source: "modelsConfig" }
     : fromModel
-      ? { tokens: fromModel, source: "model" as const }
-      : { tokens: defaultTokens, source: "default" as const };
+      ? { tokens: fromModel, source: "model" }
+      : { tokens: defaultTokens, source: "default" };
 }
 
 type ContextWindowGuardResult = ContextWindowInfo & {
@@ -63,27 +57,8 @@ type ContextWindowGuardResult = ContextWindowInfo & {
   shouldBlock: boolean;
 };
 
-type ContextWindowGuardThresholds = {
-  hardMinTokens: number;
-  warnBelowTokens: number;
-};
-
-type ContextWindowGuardHint = {
-  likelySelfHosted: boolean;
-};
-
-function resolveContextWindowGuardHint(params: {
-  runtimeBaseUrl?: string | null;
-}): ContextWindowGuardHint {
-  return {
-    likelySelfHosted: isLocalProviderEndpoint(params.runtimeBaseUrl),
-  };
-}
-
 /** Derive warning/block floors from the resolved model context window. */
-function resolveContextWindowGuardThresholds(
-  contextWindowTokens: number,
-): ContextWindowGuardThresholds {
+function resolveContextWindowGuardThresholds(contextWindowTokens: number) {
   const tokens = normalizePositiveInt(contextWindowTokens) ?? 0;
   return {
     hardMinTokens: Math.max(
@@ -105,8 +80,7 @@ export function formatContextWindowWarningMessage(params: {
   runtimeBaseUrl?: string | null;
 }): string {
   const base = `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} (warn<${params.guard.warnBelowTokens}) source=${params.guard.source}`;
-  const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
-  if (!hint.likelySelfHosted) {
+  if (!isLocalProviderEndpoint(params.runtimeBaseUrl)) {
     return base;
   }
   if (params.guard.source === "modelsConfig") {
@@ -129,8 +103,7 @@ export function formatContextWindowBlockMessage(params: {
   const base =
     `Model context window too small (${params.guard.tokens} tokens; ` +
     `source=${params.guard.source}). Minimum is ${params.guard.hardMinTokens}.`;
-  const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
-  if (!hint.likelySelfHosted) {
+  if (!isLocalProviderEndpoint(params.runtimeBaseUrl)) {
     return base;
   }
   if (params.guard.source === "modelsConfig") {

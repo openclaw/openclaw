@@ -11,7 +11,6 @@ import {
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import {
   TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
-  TOOL_SEARCH_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type CatalogVisibilityOptions,
   type ToolSearchCatalogEntry,
@@ -39,23 +38,12 @@ export function applyToolSchemaDirectoryCatalog(params: {
   directToolNames?: Iterable<string>;
 }) {
   const config = resolveToolSearchConfig(params.config);
-  if (!config.enabled) {
-    return {
-      tools: params.tools,
-      compacted: false,
-      catalogToolCount: 0,
-      catalogRegistered: false,
-      catalogReused: false,
-    };
-  }
-  if (!params.tools.some((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME)) {
-    return {
-      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
-      compacted: false,
-      catalogToolCount: 0,
-      catalogRegistered: false,
-      catalogReused: false,
-    };
+  if (!config.enabled || !params.tools.some((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME)) {
+    return applyToolCatalogCompaction({
+      ...params,
+      enabled: config.enabled,
+      isVisibleControlTool: () => false,
+    });
   }
   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
   const uniqueCatalogToolNames = collectUniqueCatalogToolNames(params.tools);

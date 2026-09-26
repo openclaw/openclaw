@@ -21,9 +21,6 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
 
-// Builds concise auth labels for UI/status surfaces without exposing credential
-// values. Resolution follows profile override, provider profiles, env, CLI, then
-// custom provider config.
 /** Resolve the display label that describes how a provider is authenticated. */
 export function resolveModelAuthLabel(params: {
   provider?: string;
@@ -101,10 +98,8 @@ export function resolveModelAuthLabel(params: {
       store,
       profileId: providerEntryProfileRef.profileId,
     });
-    if (providerEntryProfileRef.mode === "token") {
-      return `token${label ? ` (${label})` : ""}`;
-    }
-    return `api-key${label ? ` (${label})` : ""}`;
+    const mode = providerEntryProfileRef.mode === "token" ? "token" : "api-key";
+    return `${mode}${label ? ` (${label})` : ""}`;
   }
   if (providerEntryProfileRef.kind === "profile-incompatible") {
     // Preserve the fact that config pointed at a profile while avoiding a
@@ -129,10 +124,8 @@ export function resolveModelAuthLabel(params: {
     workspaceDir: params.workspaceDir,
   });
   if (envKey?.apiKey) {
-    if (envKey.source.includes("OAUTH_TOKEN")) {
-      return `oauth (${envKey.source})`;
-    }
-    return `api-key (${envKey.source})`;
+    const mode = envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+    return `${mode} (${envKey.source})`;
   }
 
   if (

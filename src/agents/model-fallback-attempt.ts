@@ -99,13 +99,13 @@ export type ModelFallbackRunFn<T> = (
   options?: ModelFallbackRunOptions,
 ) => Promise<T>;
 
-export type ModelFallbackErrorHandler = (attempt: {
-  provider: string;
-  model: string;
-  error: unknown;
-  attempt: number;
-  total: number;
-}) => void | Promise<void>;
+export type ModelFallbackErrorHandler = (
+  attempt: ModelCandidate & {
+    error: unknown;
+    attempt: number;
+    total: number;
+  },
+) => void | Promise<void>;
 
 export type ModelFallbackStepHandler = (step: ModelFallbackStepFields) => void | Promise<void>;
 
@@ -534,27 +534,19 @@ export function recordFailedCandidateAttempt(params: {
   requestedModelMatched: boolean;
   fallbackConfigured: boolean;
 }): ModelFallbackStepFields | undefined {
-  const described = describeFailoverError(params.error);
+  const { attempts, error, ...observation } = params;
+  const described = describeFailoverError(error);
   const attempt = buildFailedCandidateAttempt(params.candidate, described);
-  params.attempts.push(attempt);
+  attempts.push(attempt);
   return logModelFallbackDecision({
+    ...observation,
     decision: "candidate_failed",
-    runId: params.runId,
-    sessionId: params.sessionId,
-    lane: params.lane,
     requestedProvider: params.requestedProvider ?? params.candidate.provider,
     requestedModel: params.requestedModel ?? params.candidate.model,
-    candidate: params.candidate,
-    attempt: params.attempt,
-    total: params.total,
     reason: described.reason,
     status: described.status,
     code: described.code,
     error: attempt.error,
-    nextCandidate: params.nextCandidate,
-    isPrimary: params.isPrimary,
-    requestedModelMatched: params.requestedModelMatched,
-    fallbackConfigured: params.fallbackConfigured,
   });
 }
 

@@ -463,8 +463,8 @@ export function selectProviderModelRouteAuth(params: {
   } else if (effectiveSourcePlan !== params.sourcePlan && params.sourcePlan.kind === "automatic") {
     rejectedProfile = params.sourcePlan.orderedProfiles[0];
   }
-  const hasCompatibleAuthWinner = Boolean(winner || (directSource && directRoute));
-  if (!hasCompatibleAuthWinner) {
+  const selectedRoute = winner?.route ?? directRoute;
+  if (!selectedRoute) {
     const routeSupport = resolveDeferredRouteSupport(params.resolution);
     const normalizedRuntimeAuthOwner = params.runtimeAuthOwner?.id.trim().toLowerCase();
     const runtimeAuthOwnerIsCompatible =
@@ -500,14 +500,6 @@ export function selectProviderModelRouteAuth(params: {
       },
     );
   }
-  const selectedRoute = winner?.route ?? directRoute;
-  if (!selectedRoute) {
-    return reject(
-      "configured-auth",
-      `No route-compatible authentication source is configured for ${params.provider}.`,
-    );
-  }
-
   const sameRouteAttempts = winner
     ? routeProfileAttempts.filter(
         (attempt) => attempt.route.authRequirement === winner.route.authRequirement,

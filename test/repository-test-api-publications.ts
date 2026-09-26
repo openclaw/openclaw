@@ -8,9 +8,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/agent-hooks/compaction-safeguard.ts": Symbol.for(
     "openclaw.compactionSafeguardTestApi",
   ),
-  "src/agents/agent-tools.before-tool-call.wrapper.ts": Symbol.for(
-    "openclaw.beforeToolCallBlockedErrorTestApi",
-  ),
   "src/agents/apply-patch.ts": Symbol.for("openclaw.applyPatchTestApi"),
   "src/agents/auth-profiles/external-auth.ts": Symbol.for("openclaw.externalAuthTestApi"),
   "src/agents/auth-profiles/oauth.ts": Symbol.for("openclaw.oauthTestApi"),

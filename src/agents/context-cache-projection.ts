@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { providerContextTokenCacheKey } from "./context-cache.js";
+import { type ContextWindowCacheState, providerContextTokenCacheKey } from "./context-cache.js";
 import { type ModelsConfig, resolveAnthropicFixedContextWindow } from "./context-resolution.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -16,12 +16,6 @@ type ContextWindowModelEntry = {
 export type ContextWindowCatalog = {
   entries: ContextWindowModelEntry[];
   staticEntries?: ContextWindowModelEntry[];
-};
-
-type PreparedContextWindowCaches = {
-  configuredTokenCache: Map<string, number>;
-  discoveredTokenCache: Map<string, number>;
-  contextWindowCache: Map<string, number>;
 };
 
 type ConfiguredProvider = NonNullable<ModelsConfig["providers"]>[string];
@@ -183,14 +177,14 @@ export async function prepareContextWindowCaches(params: {
   config: OpenClawConfig;
   modelCatalog: ContextWindowCatalog;
   assertCurrent?: () => void;
-}): Promise<PreparedContextWindowCaches> {
-  const caches: PreparedContextWindowCaches = {
+}): Promise<ContextWindowCacheState> {
+  const caches: ContextWindowCacheState = {
     configuredTokenCache: new Map(),
     discoveredTokenCache: new Map(),
     contextWindowCache: new Map(),
   };
   const processed = { count: 0 };
-  const providers = (params.config.models as ModelsConfig | undefined)?.providers;
+  const providers = params.config.models?.providers;
   if (providers && typeof providers === "object") {
     for (const [providerId, provider] of Object.entries(providers)) {
       if (!Array.isArray(provider?.models)) {

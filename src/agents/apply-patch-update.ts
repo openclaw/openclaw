@@ -11,7 +11,7 @@ const SINGLE_QUOTE_PUNCTUATION = /[\u2018-\u201B]/g;
 const DOUBLE_QUOTE_PUNCTUATION = /[\u201C-\u201F]/g;
 const SPACE_PUNCTUATION = /[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g;
 
-type UpdateFileChunk = {
+export type UpdateFileChunk = {
   changeContext?: string;
   oldLines: string[];
   newLines: string[];
@@ -222,7 +222,7 @@ function applyReplacements(lines: SourceLine[], replacements: Replacement[]): So
   const result = [...lines];
   // Apply from the end of the file backward so earlier replacement indexes stay
   // stable while later replacements mutate the array.
-  for (const [startIndex, oldLen, newLines] of [...replacements].toReversed()) {
+  for (const [startIndex, oldLen, newLines] of replacements.toReversed()) {
     result.splice(startIndex, oldLen, ...newLines);
   }
   return result;

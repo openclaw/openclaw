@@ -136,12 +136,10 @@ const defaultCliCompactionDeps: CliCompactionDeps = {
 
 const cliCompactionDeps = { ...defaultCliCompactionDeps };
 
-/** Overrides CLI compaction dependencies for focused tests. */
 export function setCliCompactionTestDeps(overrides: Partial<typeof cliCompactionDeps>): void {
   Object.assign(cliCompactionDeps, overrides);
 }
 
-/** Restores production CLI compaction dependencies after tests. */
 export function resetCliCompactionTestDeps(): void {
   Object.assign(cliCompactionDeps, defaultCliCompactionDeps);
 }

@@ -406,7 +406,6 @@ vi.mock("../infra/system-run-approval-context.js", () => ({
 }));
 
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
-  buildExecApprovalRequesterContext: vi.fn(() => ({})),
   buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
   isExecApprovalRunAbortedError: (error: unknown) => error === runAbortedApprovalError,
   registerExecApprovalRequestForHostOrThrow: registerExecApprovalRequestForHostOrThrowMock,

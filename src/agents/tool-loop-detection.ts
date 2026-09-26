@@ -466,48 +466,32 @@ function getPingPongStreak(
     return { count: 0, noProgressEvidence: false };
   }
 
-  const expectedCurrentSignature = otherSignature;
-  if (currentSignature !== expectedCurrentSignature) {
+  if (currentSignature !== otherSignature) {
     return { count: 0, noProgressEvidence: false };
   }
 
   const tailStart = Math.max(0, history.length - alternatingTailCount);
-  let firstHashA: string | undefined;
-  let firstHashB: string | undefined;
+  const resultHashes = new Map<string, string>();
   let noProgressEvidence = true;
   for (let i = tailStart; i < history.length; i += 1) {
     const call = history[i];
     if (!call) {
       continue;
     }
-    if (!call.resultHash) {
+    if (!call.resultHash || (call.argsHash !== last.argsHash && call.argsHash !== otherSignature)) {
       noProgressEvidence = false;
       break;
     }
-    if (call.argsHash === last.argsHash) {
-      if (!firstHashA) {
-        firstHashA = call.resultHash;
-      } else if (firstHashA !== call.resultHash) {
-        noProgressEvidence = false;
-        break;
-      }
-      continue;
+    const previousHash = resultHashes.get(call.argsHash);
+    if (previousHash && previousHash !== call.resultHash) {
+      noProgressEvidence = false;
+      break;
     }
-    if (call.argsHash === otherSignature) {
-      if (!firstHashB) {
-        firstHashB = call.resultHash;
-      } else if (firstHashB !== call.resultHash) {
-        noProgressEvidence = false;
-        break;
-      }
-      continue;
-    }
-    noProgressEvidence = false;
-    break;
+    resultHashes.set(call.argsHash, call.resultHash);
   }
 
   // Need repeated stable outcomes on both sides before treating ping-pong as no-progress.
-  if (!firstHashA || !firstHashB) {
+  if (resultHashes.size !== 2) {
     noProgressEvidence = false;
   }
 
@@ -729,7 +713,6 @@ export function recordToolCallOutcome(
   }
 
   const argsHash = hashToolCall(params.toolName, params.toolParams);
-  let matched = false;
   let recordedOutcome: ToolCallRecord | undefined;
   for (let i = state.toolCallHistory.length - 1; i >= 0; i -= 1) {
     const call = state.toolCallHistory[i];
@@ -757,12 +740,11 @@ export function recordToolCallOutcome(
       delete call.noProgress;
     }
     call.unknownToolName = outcome.unknownToolName;
-    matched = true;
     recordedOutcome = call;
     break;
   }
 
-  if (!matched) {
+  if (!recordedOutcome) {
     const record: ToolCallRecord = {
       toolName: params.toolName,
       argsHash,

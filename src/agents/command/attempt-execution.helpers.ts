@@ -1,7 +1,3 @@
-/**
- * Helper functions for agent attempt execution, Claude CLI transcript probing,
- * fallback prompts, and ACP visible-text accumulation.
- */
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
@@ -121,7 +117,6 @@ export async function sessionTranscriptHasContent(
   );
 }
 
-/** Resolves the expected Claude CLI transcript JSONL path for a session. */
 function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
@@ -147,7 +142,6 @@ function claudeCliSessionTranscriptPath(params: {
 const CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS = 250;
 const CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES = 1024 * 1024;
 
-/** Checks whether Claude CLI has flushed assistant content for a session. */
 export async function claudeCliSessionTranscriptHasContent(
   params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
 ): Promise<boolean> {
@@ -251,7 +245,6 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
   });
 }
 
-/** Checks whether the latest Claude CLI transcript tail has unanswered tool use. */
 export async function claudeCliSessionTranscriptHasOrphanedToolUse(
   params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
 ): Promise<boolean> {
@@ -262,7 +255,6 @@ export async function claudeCliSessionTranscriptHasOrphanedToolUse(
   return await jsonlFileHasOrphanedTrailingToolUse(expectedPath);
 }
 
-/** Builds the retry prompt sent to fallback models after a failed attempt. */
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;

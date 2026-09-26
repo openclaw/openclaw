@@ -35,19 +35,18 @@ type ParagraphBreak = {
   length: number;
 };
 
+export type BlockChunkMetadata = {
+  sourceText: string;
+  sourceGeneration: number;
+  reconciledSourceBreak?: true;
+  sourceStart: number;
+  sourceEnd: number;
+  startsAtLineStart: boolean;
+};
+
 type BlockChunkDrain = {
   force: boolean;
-  emit: (
-    chunk: string,
-    options?: {
-      sourceText: string;
-      sourceGeneration: number;
-      reconciledSourceBreak?: true;
-      sourceStart: number;
-      sourceEnd: number;
-      startsAtLineStart: boolean;
-    },
-  ) => void;
+  emit: (chunk: string, options?: BlockChunkMetadata) => void;
 };
 
 function findSafeSentenceBreakIndex(

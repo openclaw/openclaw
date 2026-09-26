@@ -27,10 +27,6 @@ function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> 
   return isRecord(toolSearch) ? toolSearch : {};
 }
 
-function resolveBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
 function readInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
@@ -50,32 +46,27 @@ export function isToolSearchCodeModeSupported(): boolean {
   );
 }
 
-function resolveMinCodeTimeoutMs(): number {
-  return toolSearchMinCodeTimeoutMsForTest ?? 1000;
-}
-
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
   const raw = readToolSearchConfig(config);
-  const rawMode = typeof raw.mode === "string" ? raw.mode : "code";
   const requestedMode: ToolSearchMode =
-    rawMode === "tools" || rawMode === "directory" || rawMode === "code" ? rawMode : "code";
+    raw.mode === "tools" || raw.mode === "directory" ? raw.mode : "code";
   const mode: ToolSearchMode =
     requestedMode === "code" && !isToolSearchCodeModeSupported() ? "tools" : requestedMode;
   const configured = Object.keys(raw).some((key) => key !== "enabled");
-  const maxSearchLimit = Math.max(
-    1,
-    Math.min(MAX_TOOL_SEARCH_RESULTS, readInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT)),
+  const maxSearchLimit = Math.min(
+    MAX_TOOL_SEARCH_RESULTS,
+    readInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT),
   );
   return {
-    enabled: resolveBoolean(raw.enabled, configured),
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : configured,
     mode,
     codeTimeoutMs: Math.max(
-      resolveMinCodeTimeoutMs(),
+      toolSearchMinCodeTimeoutMsForTest ?? 1000,
       Math.min(60_000, readInteger(raw.codeTimeoutMs, DEFAULT_CODE_TIMEOUT_MS)),
     ),
-    searchDefaultLimit: Math.max(
-      1,
-      Math.min(maxSearchLimit, readInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT)),
+    searchDefaultLimit: Math.min(
+      maxSearchLimit,
+      readInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT),
     ),
     maxSearchLimit,
   };

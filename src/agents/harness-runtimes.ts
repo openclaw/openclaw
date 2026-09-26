@@ -20,10 +20,6 @@ import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 
 // Harness runtime discovery feeds plugin preloading/setup. Only plugin runtimes
 // are selectable here; built-in OpenClaw/default runtime ids are excluded.
-function normalizeConfiguredRuntimeId(value: unknown): string | undefined {
-  return normalizeOptionalAgentRuntimeId(value);
-}
-
 function isSelectablePluginRuntime(runtime: string | undefined): runtime is string {
   return (
     Boolean(runtime) &&
@@ -74,18 +70,18 @@ export function resolveConfiguredModelHarnessRuntime(params: {
   if (!params.includeImplicitRuntimePreferences && policy.runtimeSource === "implicit") {
     return undefined;
   }
-  const runtime = normalizeConfiguredRuntimeId(policy.runtime);
+  const runtime = normalizeOptionalAgentRuntimeId(policy.runtime);
   return isSelectablePluginRuntime(runtime) ? runtime : undefined;
 }
 
 function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<string>): void {
   for (const providerConfig of Object.values(config.models?.providers ?? {})) {
-    const providerRuntime = normalizeConfiguredRuntimeId(providerConfig?.agentRuntime?.id);
+    const providerRuntime = normalizeOptionalAgentRuntimeId(providerConfig?.agentRuntime?.id);
     if (isSelectablePluginRuntime(providerRuntime)) {
       runtimes.add(providerRuntime);
     }
     for (const modelConfig of providerConfig?.models ?? []) {
-      const modelRuntime = normalizeConfiguredRuntimeId(modelConfig?.agentRuntime?.id);
+      const modelRuntime = normalizeOptionalAgentRuntimeId(modelConfig?.agentRuntime?.id);
       if (isSelectablePluginRuntime(modelRuntime)) {
         runtimes.add(modelRuntime);
       }
@@ -99,14 +95,14 @@ function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<str
       if (!isRecord(entry)) {
         continue;
       }
-      const runtime = normalizeConfiguredRuntimeId(
+      const runtime = normalizeOptionalAgentRuntimeId(
         isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined,
       );
       if (isSelectablePluginRuntime(runtime)) {
         runtimes.add(runtime);
       }
       for (const value of Array.isArray(entry.pickerRuntimes) ? entry.pickerRuntimes : []) {
-        const pickerRuntime = normalizeConfiguredRuntimeId(value);
+        const pickerRuntime = normalizeOptionalAgentRuntimeId(value);
         if (isSelectablePluginRuntime(pickerRuntime)) {
           runtimes.add(pickerRuntime);
         }

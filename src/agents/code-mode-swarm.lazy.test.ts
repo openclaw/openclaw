@@ -73,7 +73,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       bridgeCalls.push(call);
       return call;
     });
-    const { createCodeModeRunOwner, createPendingBridgeStates, createCodeModeBridgeDispatchState } =
+    const { createCodeModeRunOwner, createPendingBridgeStates } =
       await import("./code-mode-state.js");
     const spawn = vi.fn(async () => ({
       content: [],
@@ -153,7 +153,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
             codeModeRunId: "replay",
             remainingMs: 10_000,
             signal: owner.signal,
-            bridgeDispatch: createCodeModeBridgeDispatchState(),
+            bridgeDispatch: { started: false },
           }),
       };
     }

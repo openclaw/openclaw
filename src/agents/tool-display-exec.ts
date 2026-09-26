@@ -63,15 +63,6 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
         sub = firstPositional(words, i + 1);
         break;
       }
-      if (token.startsWith("--")) {
-        if (token.includes("=")) {
-          continue;
-        }
-        if (globalWithValue.has(token)) {
-          i += 1;
-        }
-        continue;
-      }
       if (token.startsWith("-")) {
         if (globalWithValue.has(token)) {
           i += 1;
@@ -504,31 +495,19 @@ type ExecSummary = {
   allGeneric?: boolean;
 };
 
-function normalizePathForDisplay(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/g, "");
-}
-
 function classifyWorkspacePath(
   path: string,
 ): "agent" | "repo" | "sandbox" | "workspace" | undefined {
-  const normalized = normalizePathForDisplay(path);
-  const segments = normalized.split("/").filter(Boolean);
-  if (segments.length === 0) {
-    return undefined;
-  }
+  const segments = path.split(/[\\/]/).filter(Boolean);
 
-  for (let index = 0; index < segments.length; index += 1) {
-    const segment = segments[index];
-    if (!segment) {
-      continue;
-    }
+  for (const [index, segment] of segments.entries()) {
     if (segment === ".openclaw" && segments[index + 1] === "workspace") {
       return "agent";
     }
     if (segment === ".openclaw" && segments[index + 1] === "sandboxes") {
       return "sandbox";
     }
-    if (/[-_]workspace$/i.test(segment) && segment.toLowerCase() !== "workspace") {
+    if (/[-_]workspace$/i.test(segment)) {
       return "agent";
     }
     if (/^workspace[-_]/i.test(segment)) {

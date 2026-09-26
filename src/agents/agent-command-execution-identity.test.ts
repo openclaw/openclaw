@@ -42,6 +42,7 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
     const opts = {
       prompt: "create an automation",
       cronCreatorAuthorityCapability: forgedCapability,
+      skillLibraryAuthoring: { target: "personal", invoke: async () => ({}) },
       pinnedWidgetAuthoring: true,
       clientCaps: ["ui-commands", "task-suggestions"],
       gatewayUiCommandTarget: { connId: "forged-browser", profileId: "forged-profile" },
@@ -59,6 +60,7 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
     expect(sanitizePublicAgentCommandIngressOpts(opts)).toMatchObject({
       prompt: "create an automation",
       cronCreatorAuthorityCapability: undefined,
+      skillLibraryAuthoring: undefined,
       pinnedWidgetAuthoring: undefined,
       clientCaps: undefined,
       gatewayUiCommandTarget: undefined,

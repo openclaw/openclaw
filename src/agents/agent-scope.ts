@@ -16,6 +16,7 @@ import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   classifySessionKeyShape,
@@ -24,7 +25,6 @@ import {
   normalizeAgentIdStrict,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import {
   AgentSelectionRequiredError,
   hasAgentRosterProperty,
@@ -39,6 +39,7 @@ import {
 } from "./agent-scope-config.js";
 import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+export { resolveEffectiveAgentSkillFilter as resolveAgentSkillsFilter } from "../skills/discovery/agent-filter.js";
 export {
   listAgentEntries,
   listAgentEntriesWithSource,
@@ -94,18 +95,7 @@ function pruneAutoFallbackPrimaryProbeState(params: {
       params.state.delete(key);
     }
   }
-  if (params.state.size <= maxKeys) {
-    return;
-  }
-  const removeCount = params.state.size - maxKeys;
-  let removed = 0;
-  for (const key of params.state.keys()) {
-    params.state.delete(key);
-    removed += 1;
-    if (removed >= removeCount) {
-      break;
-    }
-  }
+  pruneMapToMaxSize(params.state, maxKeys || 0);
 }
 
 /** Primary model probe metadata used to validate auto-fallback recovery. */
@@ -118,11 +108,20 @@ export type AutoFallbackPrimaryProbe = {
   fallbackAuthProfileIdSource?: "auto" | "user";
 };
 
+type AutoFallbackSessionEntry = Pick<
+  SessionEntry,
+  | "providerOverride"
+  | "modelOverride"
+  | "modelOverrideSource"
+  | "modelOverrideFallbackOriginProvider"
+  | "modelOverrideFallbackOriginModel"
+>;
+
 /** Detects old auto-fallback session entries that lack primary-origin metadata. */
 export function hasLegacyAutoFallbackWithoutOrigin(
   entry:
     | Pick<
-        SessionEntry,
+        AutoFallbackSessionEntry,
         | "modelOverrideSource"
         | "modelOverrideFallbackOriginProvider"
         | "modelOverrideFallbackOriginModel"
@@ -139,17 +138,11 @@ export function hasLegacyAutoFallbackWithoutOrigin(
 
 export function resolveAutoFallbackPrimaryProbe(params: {
   entry:
-    | Pick<
-        SessionEntry,
-        | "providerOverride"
-        | "modelOverride"
-        | "modelOverrideSource"
-        | "modelOverrideFallbackOriginProvider"
-        | "modelOverrideFallbackOriginModel"
-        | "authProfileOverride"
-        | "authProfileOverrideSource"
-        | "authProfileOverrideCompactionCount"
-      >
+    | (AutoFallbackSessionEntry &
+        Pick<
+          SessionEntry,
+          "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+        >)
     | null
     | undefined;
   sessionKey?: string | null;
@@ -259,17 +252,7 @@ export function markAutoFallbackPrimaryProbe(params: {
 }
 
 export function entryMatchesAutoFallbackPrimaryProbe(
-  entry:
-    | Pick<
-        SessionEntry,
-        | "providerOverride"
-        | "modelOverride"
-        | "modelOverrideSource"
-        | "modelOverrideFallbackOriginProvider"
-        | "modelOverrideFallbackOriginModel"
-      >
-    | null
-    | undefined,
+  entry: AutoFallbackSessionEntry | null | undefined,
   probe: AutoFallbackPrimaryProbe,
 ): boolean {
   if (!entry) {
@@ -410,13 +393,6 @@ export function resolveAgentExecutionContract(
   return agentContract ?? defaultContract;
 }
 
-export function resolveAgentSkillsFilter(
-  cfg: OpenClawConfig,
-  agentId: string,
-): string[] | undefined {
-  return resolveEffectiveAgentSkillFilter(cfg, agentId);
-}
-
 export function resolveAgentExplicitModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
@@ -546,21 +522,17 @@ export function resolveSubagentModelConfigSelectionResult(params: {
   const agentModel = resolveAgentModelConfigForRuntime(agentConfig);
   // Keep cron and fallback routing aligned with native spawn: per-agent subagent,
   // then the global subagent default, then agent-primary inheritance.
-  const candidates: SubagentModelConfigSelectionResult[] = [
-    ...(agentConfig?.subagents?.model
-      ? [{ raw: agentConfig.subagents.model, source: "subagent" as const }]
-      : []),
-    ...(params.cfg.agents?.defaults?.subagents?.model
-      ? [
-          {
-            raw: params.cfg.agents.defaults.subagents.model,
-            source: "default-subagent" as const,
-          },
-        ]
-      : []),
-    ...(agentModel ? [{ raw: agentModel, source: "agent" as const }] : []),
-  ];
-  return candidates.find((candidate) => resolvePrimaryStringValue(candidate.raw));
+  const candidates = [
+    [agentConfig?.subagents?.model, "subagent"],
+    [params.cfg.agents?.defaults?.subagents?.model, "default-subagent"],
+    [agentModel, "agent"],
+  ] as const;
+  for (const [raw, source] of candidates) {
+    if (raw && resolvePrimaryStringValue(raw)) {
+      return { raw, source };
+    }
+  }
+  return undefined;
 }
 
 export function resolveSubagentModelFallbacksOverride(

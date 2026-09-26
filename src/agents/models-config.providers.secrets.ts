@@ -8,7 +8,6 @@ import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
-import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
@@ -45,11 +44,7 @@ export {
 } from "./models-config.providers.secret-helpers.js";
 
 type AuthProfileStoreInput = AuthProfileStore | (() => AuthProfileStore);
-type ProviderAuthLookupCaches = {
-  aliasMap: Readonly<Record<string, string>>;
-  candidateMap: Readonly<Record<string, readonly string[]>>;
-  authEvidenceMap: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
-};
+type ProviderAuthLookupCaches = ReturnType<typeof resolveProviderEnvAuthLookupMaps>;
 
 function resolveAuthProfileStoreInput(input: AuthProfileStoreInput) {
   return typeof input === "function" ? input() : input;
@@ -145,19 +140,7 @@ function createProviderAuthLookupCaches(
   config?: OpenClawConfig,
 ): () => ProviderAuthLookupCaches {
   let caches: ProviderAuthLookupCaches | undefined;
-  return () => {
-    if (!caches) {
-      // Env auth lookup maps are process-stable for a resolver instance, so one
-      // cached normalization pass avoids repeating alias/candidate expansion.
-      const lookupMaps = resolveProviderEnvAuthLookupMaps({ config, env });
-      caches = {
-        aliasMap: lookupMaps.aliasMap,
-        candidateMap: lookupMaps.envCandidateMap,
-        authEvidenceMap: lookupMaps.authEvidenceMap,
-      };
-    }
-    return caches;
-  };
+  return () => (caches ??= resolveProviderEnvAuthLookupMaps({ config, env }));
 }
 
 function resolveProviderIdForAuthFromCaches(
@@ -186,7 +169,7 @@ export function createProviderApiKeyResolver(
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
     const envVar = resolveEnvApiKeyVarName(authProvider, env, {
       aliasMap: lookupCaches.aliasMap,
-      candidateMap: lookupCaches.candidateMap,
+      candidateMap: lookupCaches.envCandidateMap,
       authEvidenceMap: lookupCaches.authEvidenceMap,
     });
     if (envVar) {
@@ -293,7 +276,7 @@ export function createProviderAuthResolver(
 
     const envVar = resolveEnvApiKeyVarName(authProvider, env, {
       aliasMap: lookupCaches.aliasMap,
-      candidateMap: lookupCaches.candidateMap,
+      candidateMap: lookupCaches.envCandidateMap,
       authEvidenceMap: lookupCaches.authEvidenceMap,
     });
     if (envVar) {

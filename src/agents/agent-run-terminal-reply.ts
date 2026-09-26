@@ -78,19 +78,14 @@ export function mergeAgentRunTerminalReplySnapshot(
   existing: AgentRunTerminalReplySnapshot | undefined,
   incoming: AgentRunTerminalReplySnapshot | undefined,
 ): AgentRunTerminalReplySnapshot | undefined {
-  if (!incoming) {
+  if (!incoming || isMessageToolNotCalledTerminalReply(existing)) {
     return existing;
   }
-  if (!existing) {
-    return incoming;
-  }
-  if (isMessageToolNotCalledTerminalReply(existing)) {
-    return existing;
-  }
-  if (isMessageToolNotCalledTerminalReply(incoming)) {
-    return incoming;
-  }
-  if (existing.disposition === "empty") {
+  if (
+    !existing ||
+    isMessageToolNotCalledTerminalReply(incoming) ||
+    existing.disposition === "empty"
+  ) {
     return incoming;
   }
   return incoming.disposition === "empty" ? existing : incoming;

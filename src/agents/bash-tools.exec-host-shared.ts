@@ -251,49 +251,6 @@ export function buildExecApprovalFollowupTarget(
   };
 }
 
-/** Builds mutable approval decision state from a raw decision. */
-function createExecApprovalDecisionState(params: {
-  decision: string | null | undefined;
-  askFallback: ExecApprovalsResolved["agent"]["askFallback"];
-}) {
-  const baseDecision = resolveBaseExecApprovalDecision({
-    decision: params.decision ?? null,
-    askFallback: params.askFallback,
-  });
-  return {
-    baseDecision,
-    approvedByAsk: baseDecision.approvedByAsk,
-    deniedReason: baseDecision.deniedReason,
-  };
-}
-
-/** Prevents fallback approval from satisfying strict inline-eval/human-review paths. */
-function enforceStrictInlineEvalApprovalBoundary(params: {
-  baseDecision: {
-    timedOut: boolean;
-  };
-  approvedByAsk: boolean;
-  deniedReason: string | null;
-  requiresInlineEvalApproval: boolean;
-  requiresAutoReviewHumanApproval?: boolean;
-}): {
-  approvedByAsk: boolean;
-  deniedReason: string | null;
-} {
-  const requiresRealApproval =
-    params.requiresInlineEvalApproval || params.requiresAutoReviewHumanApproval === true;
-  if (!params.baseDecision.timedOut || !requiresRealApproval || !params.approvedByAsk) {
-    return {
-      approvedByAsk: params.approvedByAsk,
-      deniedReason: params.deniedReason,
-    };
-  }
-  return {
-    approvedByAsk: false,
-    deniedReason: params.deniedReason ?? "approval-timeout",
-  };
-}
-
 type ExecApprovalDecisionParams<TTimeoutContext> = {
   decision: string | null;
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
@@ -316,24 +273,26 @@ type ExecApprovalDecisionParams<TTimeoutContext> = {
   requiresAutoReviewHumanApproval?: boolean;
 };
 
-type ExecApprovalDecisionState<TTimeoutContext> = ReturnType<
-  typeof createExecApprovalDecisionState
-> & { timeoutContext: TTimeoutContext | undefined };
+type ExecApprovalDecisionState<TTimeoutContext> = {
+  baseDecision: ReturnType<typeof resolveBaseExecApprovalDecision>;
+  approvedByAsk: boolean;
+  deniedReason: string | null;
+  timeoutContext: TTimeoutContext | undefined;
+};
 
 /** Resolves explicit, timeout-fallback, and strict-human approval policy in one owner. */
 async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(
   params: ExecApprovalDecisionParams<TTimeoutContext>,
 ): Promise<ExecApprovalDecisionState<TTimeoutContext>> {
-  const initial = createExecApprovalDecisionState({
+  const baseDecision = resolveBaseExecApprovalDecision({
     decision: params.decision,
     askFallback: params.askFallback,
   });
-  let approvedByAsk = initial.approvedByAsk;
-  let deniedReason = initial.deniedReason;
+  let { approvedByAsk, deniedReason } = baseDecision;
   let timeoutContext: TTimeoutContext | undefined;
 
-  if (initial.baseDecision.timedOut && params.resolveTimedOut) {
-    const timedOut = await params.resolveTimedOut(initial);
+  if (baseDecision.timedOut && params.resolveTimedOut) {
+    const timedOut = await params.resolveTimedOut({ baseDecision, approvedByAsk, deniedReason });
     approvedByAsk = timedOut.approvedByAsk;
     deniedReason = timedOut.deniedReason;
     timeoutContext = timedOut.context;
@@ -345,19 +304,16 @@ async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(
     typeof params.requiresExplicitApproval === "function"
       ? params.requiresExplicitApproval(timeoutContext)
       : params.requiresExplicitApproval;
-  const strictDecision = enforceStrictInlineEvalApprovalBoundary({
-    baseDecision: initial.baseDecision,
-    approvedByAsk,
-    deniedReason,
-    requiresInlineEvalApproval: requiresExplicitApproval,
-    requiresAutoReviewHumanApproval: params.requiresAutoReviewHumanApproval,
-  });
-  return {
-    baseDecision: initial.baseDecision,
-    approvedByAsk: strictDecision.approvedByAsk,
-    deniedReason: strictDecision.deniedReason,
-    timeoutContext,
-  };
+  // Timeout fallback cannot satisfy an explicit-human approval boundary.
+  if (
+    baseDecision.timedOut &&
+    approvedByAsk &&
+    (requiresExplicitApproval || params.requiresAutoReviewHumanApproval === true)
+  ) {
+    approvedByAsk = false;
+    deniedReason ??= "approval-timeout";
+  }
+  return { baseDecision, approvedByAsk, deniedReason, timeoutContext };
 }
 
 type ExecApprovalRequestRoute<TTimeoutContext> =

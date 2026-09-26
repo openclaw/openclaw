@@ -13,10 +13,6 @@ import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import type { ApiKeyCredential, AuthStorageData } from "./sessions/auth-storage.js";
 
-// Converts auth-profile credentials into the compact credential map consumed by
-// agent runtimes. Secret refs can be represented by markers without reading
-// secret values.
-type AgentApiKeyCredential = ApiKeyCredential;
 type AgentOAuthCredential = {
   type: "oauth";
   access: string;
@@ -25,7 +21,7 @@ type AgentOAuthCredential = {
 };
 
 /** Credential value shape consumed by agent runtimes after auth-profile normalization. */
-type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
+type AgentCredential = ApiKeyCredential | AgentOAuthCredential;
 export type AgentCredentialMap = Record<string, AgentCredential>;
 
 type ResolveAgentCredentialMapOptions = {
@@ -78,10 +74,6 @@ export function resolveUsableAgentCredentialModes(
   return Object.freeze(modes);
 }
 
-function hasConfiguredSecretRef(value: unknown): boolean {
-  return coerceSecretRef(value) !== null;
-}
-
 function secretRefPlaceholder(
   options: ResolveAgentCredentialMapOptions | undefined,
 ): AgentCredential | null {
@@ -100,7 +92,7 @@ function convertAuthProfileCredentialToAgent(
     if (!key) {
       // A configured secret ref proves the credential exists, but this converter
       // must not resolve or leak the actual secret value.
-      return hasConfiguredSecretRef(cred.keyRef) ? secretRefPlaceholder(options) : null;
+      return coerceSecretRef(cred.keyRef) !== null ? secretRefPlaceholder(options) : null;
     }
     return { type: "api_key", key };
   }
@@ -114,7 +106,7 @@ function convertAuthProfileCredentialToAgent(
     }
     const token = normalizeOptionalString(cred.token) ?? "";
     if (!token) {
-      return hasConfiguredSecretRef(cred.tokenRef) ? secretRefPlaceholder(options) : null;
+      return coerceSecretRef(cred.tokenRef) !== null ? secretRefPlaceholder(options) : null;
     }
     return { type: "api_key", key: token };
   }

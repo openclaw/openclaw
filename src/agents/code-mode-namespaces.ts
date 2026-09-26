@@ -1,8 +1,4 @@
-/**
- * Registry and runtime projection for code-mode namespaces. Plugins register
- * namespaced tool scopes here; code mode receives descriptors, virtual API
- * files, and a guarded invocation runtime.
- */
+/** MCP namespace descriptors, API files, and their catalog-bound invocation runtime. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tokTypes } from "acorn";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
@@ -23,7 +19,6 @@ export type { CodeModeApiVirtualFile } from "./code-mode-mcp-api.js";
 
 const FORBIDDEN_NAMESPACE_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
 const NAMESPACE_PATH_KEY_SEPARATOR = "\u0000";
-const CODE_MODE_NAMESPACE_TOOL_CALL = Symbol.for("openclaw.codeMode.namespaceToolCall");
 const RESERVED_NAMESPACE_GLOBALS = new Set([
   "ALL_TOOLS",
   "agents",
@@ -62,19 +57,14 @@ const RESERVED_NAMESPACE_FUNCTION_IDENTIFIERS = new Set([
   "enum",
 ]);
 
-/** Object installed into a code-mode namespace global. */
-type CodeModeNamespaceScope = Record<string, unknown>;
+type McpNamespaceScope = Map<
+  string,
+  string | McpNamespaceScope | { kind: "function"; path: string[] }
+>;
 
-/** Maps JavaScript namespace function arguments into a tool input payload. */
-type CodeModeNamespaceToolInputMapper = (args: unknown[]) => unknown;
-
-/** Marker object used inside namespace scopes to represent a tool invocation. */
-type CodeModeNamespaceToolCall = {
-  readonly [CODE_MODE_NAMESPACE_TOOL_CALL]: true;
-  readonly toolName: string;
-  readonly catalogId?: string;
-  readonly local?: boolean;
-  readonly input?: CodeModeNamespaceToolInputMapper;
+type McpNamespaceCall = {
+  input: (args: unknown[]) => unknown;
+  tool?: { catalogId: string; toolName: string };
 };
 
 /** JSON-serializable descriptor value emitted to the code-mode runtime. */
@@ -90,13 +80,6 @@ export type CodeModeNamespaceDescriptor = {
   globalName: string;
   description?: string;
   scope: SerializedCodeModeNamespaceValue;
-};
-
-type CodeModeNamespaceRuntimeEntry = {
-  pluginId: string;
-  callablePaths: Set<string>;
-  scope: CodeModeNamespaceScope;
-  descriptor: CodeModeNamespaceDescriptor;
 };
 
 type CodeModeNamespaceCatalogEntry = {
@@ -136,47 +119,6 @@ export type CodeModeNamespaceRuntime = {
     }) => Promise<unknown>,
   ): Promise<unknown>;
 };
-
-function createCodeModeNamespaceCatalogTool(
-  catalogId: string,
-  toolName: string,
-  input?: CodeModeNamespaceToolInputMapper,
-): CodeModeNamespaceToolCall {
-  const normalizedCatalogId = catalogId.trim();
-  const normalizedToolName = toolName.trim();
-  if (!normalizedCatalogId) {
-    throw new Error("Code mode namespace catalogId must be non-empty.");
-  }
-  if (!normalizedToolName) {
-    throw new Error("Code mode namespace toolName must be non-empty.");
-  }
-  return {
-    [CODE_MODE_NAMESPACE_TOOL_CALL]: true,
-    catalogId: normalizedCatalogId,
-    toolName: normalizedToolName,
-    ...(input ? { input } : {}),
-  };
-}
-
-function createCodeModeNamespaceApi(
-  input: CodeModeNamespaceToolInputMapper,
-): CodeModeNamespaceToolCall {
-  return {
-    [CODE_MODE_NAMESPACE_TOOL_CALL]: true,
-    toolName: "$api",
-    local: true,
-    input,
-  };
-}
-
-function isCodeModeNamespaceToolCall(value: unknown): value is CodeModeNamespaceToolCall {
-  const record = isRecord(value) ? (value as Record<PropertyKey, unknown>) : undefined;
-  return (
-    record?.[CODE_MODE_NAMESPACE_TOOL_CALL] === true &&
-    typeof record.toolName === "string" &&
-    record.toolName.trim().length > 0
-  );
-}
 
 function toIdentifier(value: string, fallback: string): string {
   const words = value
@@ -251,19 +193,12 @@ function mapMcpNamespaceInput(schema: unknown, args: unknown[]): unknown {
   return input;
 }
 
-function scopeAtPath(
-  root: CodeModeNamespaceScope,
-  path: readonly string[],
-): CodeModeNamespaceScope {
-  let current: CodeModeNamespaceScope = root;
+function scopeAtPath(root: McpNamespaceScope, path: readonly string[]): McpNamespaceScope {
+  let current = root;
   for (const segment of path) {
-    const next = current[segment];
-    if (!isRecord(next)) {
-      const object = Object.create(null) as CodeModeNamespaceScope;
-      current[segment] = object;
-      current = object;
-      continue;
-    }
+    const existing = current.get(segment);
+    const next: McpNamespaceScope = existing instanceof Map ? existing : new Map();
+    current.set(segment, next);
     current = next;
   }
   return current;
@@ -283,7 +218,8 @@ function toolIdentifiersForServer(
 }
 
 type McpNamespaceModel = {
-  root: CodeModeNamespaceScope;
+  root: McpNamespaceScope;
+  calls: Map<string, McpNamespaceCall>;
   docs: McpApiServerDoc[];
   bindings: Map<string, CodeModeMcpCatalogBinding>;
 };
@@ -389,7 +325,12 @@ function createMcpNamespaceModel(
     return undefined;
   }
   const usedToolIdentifiers = new Map<string, Set<string>>();
-  const root = Object.create(null) as CodeModeNamespaceScope;
+  const root: McpNamespaceScope = new Map();
+  const calls = new Map<string, McpNamespaceCall>();
+  const addCall = (path: string[], call: McpNamespaceCall) => {
+    scopeAtPath(root, path.slice(0, -1)).set(path.at(-1)!, { kind: "function", path });
+    calls.set(namespacePathKey(path), call);
+  };
   const serverDocs = new Map<string, McpApiServerDoc>();
   const bindings = new Map<string, CodeModeMcpCatalogBinding>();
   for (const entry of plan.entries) {
@@ -402,7 +343,7 @@ function createMcpNamespaceModel(
       plan.servers.get(serverKey)?.identifier ??
       uniqueIdentifier("server", plan.usedServerIdentifiers);
     const serverScope = scopeAtPath(root, [serverIdentifier]);
-    serverScope.$serverName = mcp.serverName;
+    serverScope.set("$serverName", mcp.serverName);
     let serverDoc = serverDocs.get(serverIdentifier);
     if (!serverDoc) {
       serverDoc = {
@@ -434,12 +375,18 @@ function createMcpNamespaceModel(
       path: [serverIdentifier, ...path],
       apiPath: `mcp/${serverIdentifier}.d.ts`,
     });
-    const parent = scopeAtPath(serverScope, path.slice(0, -1));
-    parent[path.at(-1) ?? "tool"] = createCodeModeNamespaceCatalogTool(
-      entry.id,
-      entry.name,
-      (args) => mapMcpNamespaceInput(entry.parameters, args),
-    );
+    const catalogId = entry.id.trim();
+    const toolName = entry.name.trim();
+    if (!catalogId) {
+      throw new Error("Code mode namespace catalogId must be non-empty.");
+    }
+    if (!toolName) {
+      throw new Error("Code mode namespace toolName must be non-empty.");
+    }
+    addCall([serverIdentifier, ...path], {
+      tool: { toolName, catalogId },
+      input: (args) => mapMcpNamespaceInput(entry.parameters, args),
+    });
     serverDoc.tools.push({
       method: path.join("."),
       path,
@@ -455,14 +402,13 @@ function createMcpNamespaceModel(
     server.tools = server.tools.toSorted((a, b) => a.method.localeCompare(b.method));
     return server;
   }).toSorted((a, b) => a.identifier.localeCompare(b.identifier));
-  root.$api = createCodeModeNamespaceApi((args) => buildMcpApiResponse({ servers: docs, args }));
+  addCall(["$api"], { input: (args) => buildMcpApiResponse({ servers: docs, args }) });
   for (const server of docs) {
-    const serverScope = scopeAtPath(root, [server.identifier]);
-    serverScope.$api = createCodeModeNamespaceApi((args) =>
-      buildMcpApiResponse({ servers: docs, server, args }),
-    );
+    addCall([server.identifier, "$api"], {
+      input: (args) => buildMcpApiResponse({ servers: docs, server, args }),
+    });
   }
-  return { root, docs, bindings };
+  return { root, calls, docs, bindings };
 }
 
 const SWARM_AGENTS_API_CONTENT = `type AgentJsonSchema = Record<string, unknown>;
@@ -497,22 +443,6 @@ declare function log(message: string): void;
 // Cycle: for (let pass = 0; pass < 3; pass++) draft = await agents.run("Improve: " + draft);
 // Schema: const fact = await agents.run<{ answer: string }>("Research", { schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } });
 `;
-
-function createMcpNamespaceEntry(model: McpNamespaceModel): CodeModeNamespaceRuntimeEntry {
-  const { root: scope } = model;
-  const callablePaths = new Set<string>();
-  return {
-    pluginId: "bundle-mcp",
-    callablePaths,
-    scope,
-    descriptor: {
-      id: "mcp",
-      globalName: "MCP",
-      description: "MCP server tools grouped by server.",
-      scope: serializeNamespaceScopeValue(scope, [], new WeakSet<object>(), callablePaths),
-    },
-  };
-}
 
 function describeMcpNamespaceForPrompt(
   catalog: readonly CodeModeNamespaceCatalogEntry[],
@@ -569,61 +499,18 @@ function namespacePathKey(path: readonly string[]): string {
   return path.join(NAMESPACE_PATH_KEY_SEPARATOR);
 }
 
-function serializeNamespaceScopeValue(
-  value: unknown,
-  path: string[] = [],
-  stack = new WeakSet<object>(),
-  callablePaths = new Set<string>(),
-): SerializedCodeModeNamespaceValue {
-  if (isCodeModeNamespaceToolCall(value)) {
-    callablePaths.add(namespacePathKey(path));
-    return { kind: "function", path };
-  }
-  if (typeof value === "function") {
-    throw new Error(
-      `Code mode namespace function at ${path.join(".") || "(root)"} is not serializable.`,
-    );
-  }
-  if (value === null || typeof value !== "object") {
-    return { kind: "value", value: toCodeModeJsonSafe(value) };
-  }
-  if (stack.has(value)) {
-    throw new Error(`Circular code mode namespace scope at ${path.join(".") || "(root)"}.`);
-  }
-  stack.add(value);
-  try {
-    if (Array.isArray(value)) {
-      return {
-        kind: "array",
-        items: value.map((item, index) =>
-          serializeNamespaceScopeValue(item, [...path, String(index)], stack, callablePaths),
-        ),
-      };
-    }
-    const entries: Array<[string, SerializedCodeModeNamespaceValue]> = [];
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      assertNamespacePathSegment(key);
-      entries.push([
-        key,
-        serializeNamespaceScopeValue(child, [...path, key], stack, callablePaths),
-      ]);
-    }
-    return { kind: "object", entries };
-  } finally {
-    stack.delete(value);
-  }
-}
-
-function resolveNamespacePath(scope: CodeModeNamespaceScope, path: readonly string[]): unknown {
-  let current: unknown = scope;
-  for (const segment of path) {
-    assertNamespacePathSegment(segment);
-    if (!isRecord(current) && !Array.isArray(current)) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return current;
+function serializeMcpNamespaceScope(scope: McpNamespaceScope): SerializedCodeModeNamespaceValue {
+  return {
+    kind: "object",
+    entries: Array.from(scope, ([key, value]) => [
+      key,
+      value instanceof Map
+        ? serializeMcpNamespaceScope(value)
+        : typeof value === "string"
+          ? { kind: "value", value }
+          : value,
+    ]),
+  };
 }
 
 /** Creates the runtime descriptor/invocation layer for visible namespaces. */
@@ -631,11 +518,17 @@ export function createCodeModeNamespaceRuntime(
   catalog: readonly CodeModeNamespaceCatalogEntry[] = [],
 ): CodeModeNamespaceRuntime {
   const model = createMcpNamespaceModel(catalog);
-  const entry = model ? createMcpNamespaceEntry(model) : undefined;
-  // Registration stays stable if a consumer mutates the exposed descriptor.
-  const registeredId = entry?.descriptor.id;
   return {
-    descriptors: entry ? [entry.descriptor] : [],
+    descriptors: model
+      ? [
+          {
+            id: "mcp",
+            globalName: "MCP",
+            description: "MCP server tools grouped by server.",
+            scope: serializeMcpNamespaceScope(model.root),
+          },
+        ]
+      : [],
     mcpBindings: model?.bindings ?? new Map(),
     apiFiles: [
       {
@@ -647,31 +540,24 @@ export function createCodeModeNamespaceRuntime(
       ...createMcpApiVirtualFiles(model?.docs ?? []),
     ],
     async invoke(namespaceId, path, args, executeTool) {
-      if (!entry || namespaceId !== registeredId) {
+      if (!model || namespaceId !== "mcp") {
         throw new Error(`Unknown code mode namespace: ${namespaceId}`);
       }
       for (const segment of path) {
         assertNamespacePathSegment(segment);
       }
-      if (!entry.callablePaths.has(namespacePathKey(path))) {
+      const target = model.calls.get(namespacePathKey(path));
+      if (!target) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }
-      const target = resolveNamespacePath(entry.scope, path);
-      if (!isCodeModeNamespaceToolCall(target)) {
-        throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
-      }
-      const input = target.input ? await target.input(args) : (args[0] ?? {});
-      if (target.local) {
+      const input = await target.input(args);
+      if (!target.tool) {
         return toCodeModeJsonSafe(input);
-      }
-      if (!target.catalogId) {
-        throw new Error(`Code mode namespace path has no catalog tool: ${path.join(".")}`);
       }
       return toCodeModeJsonSafe(
         await executeTool({
-          pluginId: entry.pluginId,
-          toolName: target.toolName,
-          catalogId: target.catalogId,
+          pluginId: "bundle-mcp",
+          ...target.tool,
           input,
           namespaceId,
           path: [...path],

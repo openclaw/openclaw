@@ -95,18 +95,12 @@ export function retireMissingWorktreeInWorker(
           .where("repo_fingerprint", "=", observed.repoFingerprint)
           .returning(WORKTREE_RECORD_COLUMNS),
       ).rows[0];
-      const current =
-        retired ??
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<Pick<DB, "worktrees">>(db)
-            .selectFrom("worktrees")
-            .select(WORKTREE_RECORD_COLUMNS)
-            .where("id", "=", observed.id),
-        ).rows[0];
+      const record = retired
+        ? rowToRecord(retired)
+        : getRegistryWorktreeInDatabase(db, observed.id);
 
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      return { record: current ? rowToRecord(current) : undefined };
+      return { record };
     },
     options,
     { operationLabel: "worktrees.retireMissing" },

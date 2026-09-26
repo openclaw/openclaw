@@ -34,7 +34,6 @@ import {
 import {
   cancelPendingBridgeStates,
   cancelPendingBridgeStatesById,
-  createCodeModeBridgeDispatchState,
   createCodeModeRunOwner,
   createPendingBridgeStates,
   pendingBridgeStatesForSettlement,
@@ -259,7 +258,7 @@ export async function runCodeModeScriptHeadless(params: {
       prepareInput: true,
       validateInput: true,
     });
-    const bridgeDispatch = createCodeModeBridgeDispatchState();
+    const bridgeDispatch = { started: false };
     const namespaceCatalog = runtime.namespaceEntries();
     const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
     const namespaces = mergeHeadlessNamespaces(

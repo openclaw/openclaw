@@ -11,6 +11,7 @@ import { isRecord } from "../utils.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   buildSourceModelFields,
+  isWritableProviderConfig,
   mergeProviders,
   mergeWithExistingProviderSecrets,
   type ExistingProviderConfig,
@@ -207,14 +208,6 @@ function resolveProvidersForMode(params: {
   });
 }
 
-function isWritableProviderConfig(provider: ProviderConfig): boolean {
-  if (!Array.isArray(provider.models) || provider.models.length === 0) {
-    return true;
-  }
-  // AuthStorage can supply omitted keys; an explicitly empty key still violates the schema.
-  return Boolean(provider.baseUrl?.trim() && (provider.apiKey === undefined || provider.apiKey));
-}
-
 function filterWritableProviders(
   providers: Record<string, ProviderConfig>,
 ): Record<string, ProviderConfig> {
@@ -309,17 +302,19 @@ export async function planOpenClawModelsJson(params: {
     providers: normalizedProviders,
     secretRefManagedProviders,
   });
-  const normalizedMergedProviders =
-    normalizeProviderCatalogModelsForConfig(mergedProviders) ?? mergedProviders;
-  const secretEnforcedProviders =
-    enforceSourceManagedProviderSecrets({
-      providers: normalizedMergedProviders,
-      sourceConfigForSecrets: context.sourceConfigForSecrets,
-      secretRefManagedProviders,
-    }) ?? normalizedMergedProviders;
-  const finalProviders = filterWritableProviders(secretEnforcedProviders);
+  const finalizeProviders = (candidateProviders: Record<string, ProviderConfig>) => {
+    const normalized =
+      normalizeProviderCatalogModelsForConfig(candidateProviders) ?? candidateProviders;
+    return filterWritableProviders(
+      enforceSourceManagedProviderSecrets({
+        providers: normalized,
+        sourceConfigForSecrets: context.sourceConfigForSecrets,
+        secretRefManagedProviders,
+      }) ?? normalized,
+    );
+  };
   const splitProviders = splitProvidersByPluginOwner({
-    providers: finalProviders,
+    providers: finalizeProviders(mergedProviders),
     pluginMetadataSnapshot: context.pluginMetadataSnapshot,
   });
   const pluginCatalogWrites = buildPluginCatalogWrites(splitProviders.pluginProviders);
@@ -330,17 +325,9 @@ export async function planOpenClawModelsJson(params: {
     providers: splitProviders.rootProviders,
     secretRefManagedProviders,
   });
-  const normalizedRootProviders =
-    normalizeProviderCatalogModelsForConfig(rootProviders) ?? rootProviders;
-  const rootWithManagedSecrets =
-    enforceSourceManagedProviderSecrets({
-      providers: normalizedRootProviders,
-      sourceConfigForSecrets: context.sourceConfigForSecrets,
-      secretRefManagedProviders,
-    }) ?? normalizedRootProviders;
   const nextContents = `${JSON.stringify(
     {
-      providers: filterWritableProviders(rootWithManagedSecrets),
+      providers: finalizeProviders(rootProviders),
     },
     null,
     2,

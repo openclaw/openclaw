@@ -1,6 +1,3 @@
-/**
- * Updates persisted session metadata after agent command runs.
- */
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -33,7 +30,6 @@ export function normalizeSessionTokenCount(value: number | undefined): number | 
   return Math.floor(value);
 }
 
-/** Applies run result metadata and usage to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   agentId: string;
   cfg: OpenClawConfig;

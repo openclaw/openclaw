@@ -44,8 +44,8 @@ import {
   MAX_TOOL_SEARCH_RESULTS,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  TOOL_SEARCH_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
   type ToolSearchMode,
@@ -203,17 +203,9 @@ function formatToolSearchBatchResponse(
 }
 
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
-  if (name === TOOL_SEARCH_CODE_MODE_TOOL_NAME) {
-    return mode === "code";
-  }
-  if (
-    name === TOOL_SEARCH_RAW_TOOL_NAME ||
-    name === TOOL_DESCRIBE_RAW_TOOL_NAME ||
-    name === TOOL_CALL_RAW_TOOL_NAME
-  ) {
-    return mode === "tools";
-  }
-  return false;
+  return mode === "code"
+    ? name === TOOL_SEARCH_CODE_MODE_TOOL_NAME
+    : mode === "tools" && TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(name);
 }
 
 /** Replace visible tools with Tool Search controls and register hidden catalog entries. */
@@ -234,9 +226,7 @@ export function applyToolSearchCatalog(params: {
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
-    isVisibleControlTool: (tool) =>
-      TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
-      shouldExposeControlTool(tool.name, config.mode),
+    isVisibleControlTool: (tool) => shouldExposeControlTool(tool.name, config.mode),
     isVisibleCatalogTool: (tool) => isDirectVisibleCatalogTool(tool, directToolNames),
   });
 }
