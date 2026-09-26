@@ -154,26 +154,15 @@ export async function resumeExistingCodexThread(
     );
     const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
       buildThreadResumeParams(params.params, {
+        ...params,
         threadId: resumeBinding.threadId,
-        cwd: params.cwd,
         authProfileId,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
         preserveNativeModel: resumeBinding.preserveNativeModel === true,
-        appServer: params.appServer,
-        dynamicTools: params.dynamicTools,
-        developerInstructions: params.developerInstructions,
-        skillsInstructions: params.skillsInstructions,
         config: resumeConfig,
-        nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-        nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
-        nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-        webSearchAllowed: params.webSearchAllowed,
         hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames,
-        shellEnvironment: params.shellEnvironment,
-        shellPathPrepend: params.shellPathPrepend,
-        disableLoginShell: params.disableLoginShell,
       }),
     );
     const requestModelProvider =
@@ -499,24 +488,12 @@ export async function startFreshCodexThread(
   );
   const startParams = lifecycleTiming.measureSync("thread-start-params", () =>
     buildThreadStartParams(params.params, {
-      cwd: params.cwd,
-      dynamicTools: params.dynamicTools,
-      appServer: params.appServer,
-      developerInstructions: params.developerInstructions,
-      skillsInstructions: params.skillsInstructions,
+      ...params,
       config,
-      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
-      nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-      webSearchAllowed: params.webSearchAllowed,
-      environmentSelection: params.environmentSelection,
       model: startModelSelection.model,
       modelProvider: startModelProvider,
       hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames,
-      shellEnvironment: params.shellEnvironment,
-      shellPathPrepend: params.shellPathPrepend,
-      disableLoginShell: params.disableLoginShell,
     }),
   );
   const requestModelProvider =

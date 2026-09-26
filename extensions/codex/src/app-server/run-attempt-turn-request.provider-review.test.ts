@@ -163,7 +163,6 @@ async function prepare(
     prompt: {
       turnState,
       systemPromptReport: { injectedWorkspaceFiles: [] },
-      codexModelInputHistoryMessages: [],
       contextImageGroups: [],
       buildRenderedCodexDeveloperInstructions: () => "developer instructions",
       refreshWorkspaceReferences: (include: boolean) => {

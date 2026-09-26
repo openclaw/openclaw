@@ -579,16 +579,12 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     sandboxExecServerEnabled?: boolean;
   } = {},
 ): boolean {
-  if (isCodexResponsesOAuthRun(params)) {
-    return false;
-  }
-  if (params.pluginHarnessToolPolicyRestricted === true) {
-    return false;
-  }
-  if (isCodexMemoryFlushRun(params)) {
-    return false;
-  }
-  if (params.disableTools) {
+  if (
+    isCodexResponsesOAuthRun(params) ||
+    params.pluginHarnessToolPolicyRestricted === true ||
+    isCodexMemoryFlushRun(params) ||
+    params.disableTools
+  ) {
     return false;
   }
   if (
@@ -622,7 +618,11 @@ function resolveCodexNativeExecutionPolicyForRun(
 ): CodexNativeExecutionPolicy {
   return resolveCodexNativeExecutionPolicy({
     config: params.config,
-    sessionKey: resolveCodexRuntimePolicySessionKey(params, options.runtimeSessionKey),
+    sessionKey:
+      options.runtimeSessionKey?.trim() ||
+      params.sandboxSessionKey?.trim() ||
+      params.sessionKey?.trim() ||
+      params.sessionId,
     sessionId: params.sessionId,
     agentId: options.agentId,
     execOverrides: params.execOverrides,
@@ -630,17 +630,6 @@ function resolveCodexNativeExecutionPolicyForRun(
     sandboxAvailable: options.sandbox === null ? false : options.sandbox?.enabled,
     readRuntimeSessionEntry: true,
   });
-}
-function resolveCodexRuntimePolicySessionKey(
-  params: EmbeddedRunAttemptParams,
-  runtimeSessionKey?: string,
-): string | undefined {
-  return (
-    runtimeSessionKey?.trim() ||
-    params.sandboxSessionKey?.trim() ||
-    params.sessionKey?.trim() ||
-    params.sessionId
-  );
 }
 function canCodexAppServerNativeToolSurfaceHonorSandbox(
   sandbox: OpenClawSandboxContext | undefined,
@@ -759,7 +748,12 @@ function addSandboxShellDynamicToolsIfAvailable(
     !input.sandbox?.enabled ||
     !input.sandbox.backendId.trim() ||
     input.nativeToolSurfaceEnabled !== false ||
-    isSandboxShellDynamicToolExcluded(input.pluginConfig)
+    isCodexDynamicToolExcluded(input.pluginConfig, [
+      "exec",
+      "sandbox_exec",
+      "process",
+      "sandbox_process",
+    ])
   ) {
     return filteredTools;
   }
@@ -775,9 +769,6 @@ function addSandboxShellDynamicToolsIfAvailable(
   return processTool
     ? [...sandboxTools, createSandboxProcessProjection(processTool)]
     : sandboxTools;
-}
-function isSandboxShellDynamicToolExcluded(config: CodexPluginConfig): boolean {
-  return isCodexDynamicToolExcluded(config, ["exec", "sandbox_exec", "process", "sandbox_process"]);
 }
 async function addNodeShellDynamicToolsIfNeeded(
   filteredTools: OpenClawDynamicTool[],

@@ -185,6 +185,19 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     `.service-app.backup-${process.pid}-${Date.now()}`,
   );
   let backupCreated = false;
+  const restoreBackup = async () => {
+    await assertOwnedServiceParentStable(ownedParent);
+    await fs.rename(backupPath, operationTargetPath);
+    await assertOwnedServiceParentStable(ownedParent);
+    backupCreated = false;
+  };
+  const removeBackup = async () => {
+    await assertOwnedServiceParentStable(ownedParent);
+    await assertNotSymlink(backupPath, "Computer Use service backup");
+    await fs.rm(backupPath, { recursive: true, force: true });
+    await assertOwnedServiceParentStable(ownedParent);
+    backupCreated = false;
+  };
   try {
     await (params.copyServiceApp ?? copyServiceAppWithDitto)(sourcePath, stagedPath);
     await assertOwnedServiceParentStable(ownedParent);
@@ -223,10 +236,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
       if (movedTarget.identity && identitiesMatch(movedTarget.identity, sourceIdentity)) {
         // Another runtime installed the selected signed generation while this
         // process was staging. Keep that winner rather than replacing it.
-        await assertOwnedServiceParentStable(ownedParent);
-        await fs.rename(backupPath, operationTargetPath);
-        await assertOwnedServiceParentStable(ownedParent);
-        backupCreated = false;
+        await restoreBackup();
         return {
           status: "already_current",
           changed: false,
@@ -236,10 +246,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
         };
       }
       if (!snapshotsMatch(initialTarget, movedTarget)) {
-        await assertOwnedServiceParentStable(ownedParent);
-        await fs.rename(backupPath, operationTargetPath);
-        await assertOwnedServiceParentStable(ownedParent);
-        backupCreated = false;
+        await restoreBackup();
         throw new Error(
           "Computer Use service target changed to an unexpected generation during refresh.",
         );
@@ -255,23 +262,14 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
       await assertNotSymlink(operationTargetPath, "Computer Use service target");
       const winnerIdentity = await inspectServiceApp(operationTargetPath);
       if (!winnerIdentity || !identitiesMatch(winnerIdentity, sourceIdentity)) {
-        if (backupCreated) {
-          if (!(await pathExists(operationTargetPath))) {
-            await assertOwnedServiceParentStable(ownedParent);
-            await fs.rename(backupPath, operationTargetPath);
-            await assertOwnedServiceParentStable(ownedParent);
-            backupCreated = false;
-          }
+        if (backupCreated && !(await pathExists(operationTargetPath))) {
+          await restoreBackup();
         }
         throw error;
       }
       // A concurrent installer won with the same selected signed generation.
       if (backupCreated) {
-        await assertOwnedServiceParentStable(ownedParent);
-        await assertNotSymlink(backupPath, "Computer Use service backup");
-        await fs.rm(backupPath, { recursive: true, force: true });
-        await assertOwnedServiceParentStable(ownedParent);
-        backupCreated = false;
+        await removeBackup();
       }
       return {
         status: "already_current",
@@ -302,11 +300,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
       );
     }
     if (backupCreated) {
-      await assertOwnedServiceParentStable(ownedParent);
-      await assertNotSymlink(backupPath, "Computer Use service backup");
-      await fs.rm(backupPath, { recursive: true, force: true });
-      await assertOwnedServiceParentStable(ownedParent);
-      backupCreated = false;
+      await removeBackup();
     }
     return {
       status: initialTarget.exists ? "refreshed" : "installed",

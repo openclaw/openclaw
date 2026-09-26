@@ -34,7 +34,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     connection,
     runtimeParams,
     preparedAuthBinding,
-    buildActiveRunAttemptParams,
     startupAuthAccountCacheKey,
     startupEnvApiKeyCacheKey,
     bundleMcpThreadConfig,
@@ -102,7 +101,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       shellEnvironment: connection.shellEnvironment,
       shellPathPrepend: connection.shellPathPrepend,
       disableLoginShell: connection.disableLoginShell,
-      buildAttemptParams: buildActiveRunAttemptParams,
+      buildAttemptParams: () => ({ ...runtimeParams }),
       ...(effectiveRuntimeModelId !== runtimeParams.modelId
         ? { runtimeModelId: effectiveRuntimeModelId }
         : {}),

@@ -1,6 +1,3 @@
-/**
- * Dynamic tool profile rules for Codex app-server tool loading and filtering.
- */
 import type {
   CodexAppServerConnectionClass,
   CodexDynamicToolsLoading,
@@ -41,7 +38,6 @@ type CodexDynamicToolProfileEnv = {
   OPENCLAW_QA_FORCE_RUNTIME?: string;
 };
 
-/** Normalizes OpenClaw/Codex tool names before filtering and allowlist checks. */
 export function normalizeCodexDynamicToolName(name: string): string {
   const normalized = name.trim().toLowerCase();
   return DYNAMIC_TOOL_NAME_ALIASES[normalized] ?? normalized;
@@ -68,7 +64,6 @@ export function isMessageOnlyCodexSourceReply(params: {
   );
 }
 
-/** Returns true for private QA runs that force the Codex runtime profile. */
 export function isForcedPrivateQaCodexRuntime(
   env: CodexDynamicToolProfileEnv = process.env,
 ): boolean {
@@ -78,7 +73,6 @@ export function isForcedPrivateQaCodexRuntime(
   );
 }
 
-/** Resolves whether dynamic tools load directly or through Codex tool search. */
 export function resolveCodexDynamicToolsLoading(
   config: Pick<CodexPluginConfig, "codexDynamicToolsLoading">,
   env: CodexDynamicToolProfileEnv = process.env,
@@ -88,17 +82,9 @@ export function resolveCodexDynamicToolsLoading(
     : (config.codexDynamicToolsLoading ?? "searchable");
 }
 
-function normalizeCodexModelId(modelId: string | undefined): string {
-  const normalized = modelId?.trim().toLowerCase();
-  if (!normalized) {
-    return "";
-  }
-  return normalized.includes("/") ? normalized.split("/").at(-1)! : normalized;
-}
-
 /** Returns true for models whose tool-search path is unsupported or inefficient. */
 export function shouldDisableCodexToolSearchForModel(modelId: string | undefined): boolean {
-  return normalizeCodexModelId(modelId) === "gpt-5.4-nano";
+  return modelId?.trim().toLowerCase().split("/").at(-1) === "gpt-5.4-nano";
 }
 
 /** Resolves dynamic-tool loading for the app-server connection that will execute the turn. */

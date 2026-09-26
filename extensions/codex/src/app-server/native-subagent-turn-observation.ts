@@ -111,6 +111,16 @@ export class CodexNativeSubagentTurnObservation {
     });
   }
 
+  private emitActivityEvent(
+    child: ChildState,
+    event: Parameters<NativeSubagentTurnObservationCallbacks["emitTaskEvent"]>[1],
+  ): void {
+    if (!child.activityObserved) {
+      this.observeActivity(child, "running");
+    }
+    this.callbacks.emitTaskEvent(child, event);
+  }
+
   emitChildTaskActivity(notification: CodexServerNotification, childState: ChildState): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
@@ -179,10 +189,7 @@ export class CodexNativeSubagentTurnObservation {
     ) {
       const delta = readString(params, "delta");
       if (delta) {
-        if (!childState.activityObserved) {
-          observe("running");
-        }
-        this.callbacks.emitTaskEvent(childState, {
+        this.emitActivityEvent(childState, {
           stream: notification.method === "item/agentMessage/delta" ? "assistant" : "thinking",
           data: { delta },
         });
@@ -224,20 +231,14 @@ export class CodexNativeSubagentTurnObservation {
       return;
     }
     if (item?.type === "agentMessage" && notification.method === "item/completed" && item.text) {
-      if (!childState.activityObserved) {
-        observe("running");
-      }
-      this.callbacks.emitTaskEvent(childState, { stream: "assistant", data: { text: item.text } });
+      this.emitActivityEvent(childState, { stream: "assistant", data: { text: item.text } });
     }
     const projection = projectNormalizedToolItem({
       phase: notification.method === "item/started" ? "start" : "result",
       item,
     });
     if (projection?.event) {
-      if (!childState.activityObserved) {
-        observe("running");
-      }
-      this.callbacks.emitTaskEvent(childState, projection.event);
+      this.emitActivityEvent(childState, projection.event);
     }
   }
 }

@@ -606,18 +606,16 @@ async function acquireSharedCodexAppServerClient(
   const { context, lifetime, abandonSignal, startedAt, assertCurrent } =
     await prepareCodexAppServerClient(options);
   assertCurrent();
+  const { usesNativeAuth, ...startContext } = context;
   const {
     agentDir,
-    usesNativeAuth,
     authProfileId,
     authProfileStore,
     preparedAuth,
     authRequirement,
-    requestedStartOptions,
     startOptions,
     desktopGeneration,
-    pluginConfig,
-  } = context;
+  } = startContext;
   const remainingTimeoutMs = resolveRemainingAcquireTimeout(timeoutMs, startedAt);
   const authIdentityCacheKey =
     preparedAuth?.kind === "api-key"
@@ -694,17 +692,10 @@ async function acquireSharedCodexAppServerClient(
   const startup =
     entry.startup ??
     (entry.startup = createSharedCodexAppServerClientStartup({
+      ...startContext,
       lifetime,
       entry,
-      requestedStartOptions,
-      startOptions,
-      desktopGeneration,
-      ...(pluginConfig !== undefined ? { pluginConfig } : {}),
-      agentDir,
       authProfileId: usesNativeAuth || preparedAuth?.kind === "api-key" ? null : authProfileId,
-      authProfileStore,
-      preparedAuth,
-      authRequirement,
       runtimeArtifactMode,
       ...(options?.expectedRuntimeArtifact
         ? { expectedRuntimeArtifact: options.expectedRuntimeArtifact }
@@ -879,31 +870,14 @@ export async function createIsolatedCodexAppServerClient(
     await prepareCodexAppServerClient(options);
   assertCurrent();
   const timeoutMs = options?.timeoutMs ?? 0;
-  const {
-    agentDir,
-    usesNativeAuth,
-    authProfileId,
-    authProfileStore,
-    preparedAuth,
-    authRequirement,
-    requestedStartOptions,
-    startOptions,
-    desktopGeneration,
-    pluginConfig,
-  } = context;
+  const { usesNativeAuth, ...startContext } = context;
   return await ownCodexStartup(
     lifetime,
     startInitializedCodexAppServerClient({
+      ...startContext,
       lifetime,
-      requestedStartOptions,
-      startOptions,
-      ...(desktopGeneration ? { desktopGeneration } : {}),
-      ...(pluginConfig !== undefined ? { pluginConfig } : {}),
-      agentDir,
-      authProfileId: usesNativeAuth || preparedAuth?.kind === "api-key" ? null : authProfileId,
-      authProfileStore,
-      preparedAuth,
-      authRequirement,
+      authProfileId:
+        usesNativeAuth || context.preparedAuth?.kind === "api-key" ? null : context.authProfileId,
       runtimeArtifactMode:
         options?.runtimeArtifactMode ?? (options?.expectedRuntimeArtifact ? "capture" : undefined),
       ...(options?.expectedRuntimeArtifact
@@ -1264,10 +1238,7 @@ export function resetSharedCodexAppServerClientForTests(): void {
   state.liveClients.clear();
   state.isolatedClients.clear();
   state.entriesByClient = new WeakMap();
-  for (const client of clients) {
-    client.close();
-  }
-  for (const client of isolatedClients) {
+  for (const client of [...clients, ...isolatedClients]) {
     client.close();
   }
   notifyDesktopGenerationDrainChecks(state);
@@ -1367,10 +1338,7 @@ function createOlderDesktopGenerationDrainWait(params: {
   }
   const state = getSharedCodexAppServerClientState();
   let settled = false;
-  let resolveWait!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    resolveWait = resolve;
-  });
+  const { promise, resolve: resolveWait } = createDeferred<void>();
   const cancel = () => {
     if (settled) {
       return;
@@ -1400,14 +1368,11 @@ function hasLiveOlderDesktopGenerationClient(params: {
   generation: CodexDesktopGeneration;
   targetHome: string;
 }): boolean {
-  for (const client of params.state.liveClients) {
-    if (isOlderDesktopGenerationClientForHome(client, params.generation, params.targetHome)) {
-      return true;
-    }
-  }
-  for (const client of params.state.isolatedClients) {
-    if (isOlderDesktopGenerationClientForHome(client, params.generation, params.targetHome)) {
-      return true;
+  for (const clients of [params.state.liveClients, params.state.isolatedClients]) {
+    for (const client of clients) {
+      if (isOlderDesktopGenerationClientForHome(client, params.generation, params.targetHome)) {
+        return true;
+      }
     }
   }
   return false;

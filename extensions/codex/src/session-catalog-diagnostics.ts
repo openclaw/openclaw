@@ -256,6 +256,22 @@ export function currentCodexCatalogListDiagnostics(): CodexCatalogListDiagnostic
   return observation?.closed ? undefined : observation;
 }
 
+export function startCodexCatalogListTiming(
+  field: Extract<keyof ListFields, `${string}Ms`>,
+  counter?: "adoptionCalls" | "exclusionMarkCalls" | "controlPageCalls",
+): () => void {
+  const observation = currentCodexCatalogListDiagnostics();
+  const started = observation ? performance.now() : 0;
+  if (observation && counter) {
+    observation.fields[counter]++;
+  }
+  return () => {
+    if (observation && !observation.closed) {
+      observation.fields[field] = (observation.fields[field] ?? 0) + performance.now() - started;
+    }
+  };
+}
+
 /** One logical list scope survives admission pauses; finishing drops its captured context. */
 export function createCodexCatalogListScope() {
   const observation = start<ListFields>("list phases", {

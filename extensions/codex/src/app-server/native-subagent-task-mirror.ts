@@ -406,7 +406,7 @@ export class CodexNativeSubagentTaskMirror {
   private applyCollabAgentStatus(
     threadId: string,
     status: string | undefined,
-    message: string | null | undefined,
+    message: string | undefined,
   ): void {
     if (this.mirrorStateByThreadId.get(threadId) === "failed") {
       return;
@@ -465,8 +465,8 @@ export class CodexNativeSubagentTaskMirror {
 
 function readAgentsStates(
   value: JsonValue | undefined,
-): Map<string, { status?: string; message?: string | null }> {
-  const states = new Map<string, { status?: string; message?: string | null }>();
+): Map<string, { status?: string; message?: string }> {
+  const states = new Map<string, { status?: string; message?: string }>();
   if (!isJsonObject(value)) {
     return states;
   }
@@ -475,15 +475,10 @@ function readAgentsStates(
       continue;
     }
     const status = readString(rawState, "status");
-    const message = readNullableString(rawState, "message");
+    const message = readString(rawState, "message");
     states.set(threadId, { status, message });
   }
   return states;
-}
-
-function readNullableString(value: JsonObject, key: string): string | null | undefined {
-  const entry = value[key];
-  return typeof entry === "string" || entry === null ? entry : undefined;
 }
 
 function normalizeSubagentActivityKind(value: string | undefined) {

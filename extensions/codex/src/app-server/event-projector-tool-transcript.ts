@@ -78,10 +78,8 @@ function toolApprovalReviewOutcome(state: ToolApprovalReviewState): ToolApproval
 
 export class CodexToolTranscriptProjection {
   private readonly messages: AgentMessage[] = [];
-  private readonly callIds = new Set<string>();
   private readonly resultIds = new Set<string>();
   private readonly namesById = new Map<string, string>();
-  private readonly trajectoryCallIds = new Set<string>();
   private readonly trajectoryResultIds = new Set<string>();
   private readonly trajectoryNamesById = new Map<string, string>();
   private readonly trajectoryItemsById = new Map<string, CodexThreadItem>();
@@ -335,7 +333,7 @@ export class CodexToolTranscriptProjection {
         message.role === "toolResult" && message.toolCallId === callId,
     );
     if (!result) {
-      if (!this.callIds.has(callId) && rawCall) {
+      if (!this.namesById.has(callId) && rawCall) {
         // Code-mode calls can have no matching command item. Keep the outer
         // response under its own call ID, never under a nested process ID.
         this.recordToolCall(rawCall);
@@ -438,7 +436,6 @@ export class CodexToolTranscriptProjection {
     status: ReturnType<typeof itemStatus>;
   }): void {
     if (params.phase === "start") {
-      this.trajectoryCallIds.add(params.item.id);
       this.trajectoryNamesById.set(params.item.id, params.name);
       this.trajectoryItemsById.set(params.item.id, params.item);
       this.options.trajectoryRecorder?.recordEvent("tool.call", {
@@ -452,7 +449,7 @@ export class CodexToolTranscriptProjection {
       return;
     }
     this.trajectoryResultIds.add(params.item.id);
-    const toolResult = itemToolResult(params.item).result;
+    const toolResult = itemToolResult(params.item);
     const output =
       this.progress.approvalTimeoutExplanation(params.item.id, params.status) ??
       itemOutputText(params.item, this.progress.outputTextByItem);
@@ -479,7 +476,7 @@ export class CodexToolTranscriptProjection {
       return;
     }
     this.afterToolCallObservedItemIds.add(item.id);
-    const result = itemToolResult(item).result;
+    const result = itemToolResult(item);
     const error =
       this.progress.approvalTimeoutExplanation(item.id, status) ??
       itemToolError(item, status, this.progress.outputTextByItem);
@@ -509,8 +506,8 @@ export class CodexToolTranscriptProjection {
     if (!params.synthesize) {
       return undefined;
     }
-    const missingTranscriptIds = [...this.callIds].filter((id) => !this.resultIds.has(id));
-    const missingTrajectoryIds = [...this.trajectoryCallIds].filter(
+    const missingTranscriptIds = [...this.namesById.keys()].filter((id) => !this.resultIds.has(id));
+    const missingTrajectoryIds = [...this.trajectoryNamesById.keys()].filter(
       (id) => !this.trajectoryResultIds.has(id),
     );
     if (missingTranscriptIds.length === 0 && missingTrajectoryIds.length === 0) {
@@ -587,10 +584,9 @@ export class CodexToolTranscriptProjection {
   }
 
   recordToolCall(params: ToolTranscriptCallInput): void {
-    if (!params.id || !params.name || this.callIds.has(params.id)) {
+    if (!params.id || !params.name || this.namesById.has(params.id)) {
       return;
     }
-    this.callIds.add(params.id);
     this.namesById.set(params.id, params.name);
     this.progress.recordTranscriptCall(params);
     const message = attachCodexMirrorIdentity(

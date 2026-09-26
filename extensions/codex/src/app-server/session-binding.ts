@@ -34,6 +34,7 @@ import {
 import {
   bindingStoreKey,
   matchesCodexNativeSubagentSubmissionBinding,
+  matchesPendingSupervisionBranch,
   ownsStoredSessionGeneration,
   preserveCodexNativeSubagentSubmissions,
   readCodexAppServerThreadBinding,
@@ -492,10 +493,7 @@ export function createCodexAppServerBindingStore(
           key === currentKey &&
           (currentIdentity.kind === "conversation" ||
             stored.sessionId === currentIdentity.sessionId.trim());
-        if (stored.state !== "active" || stored.binding.threadId !== threadId || isCurrentOwner) {
-          return false;
-        }
-        return true;
+        return stored.state === "active" && stored.binding.threadId === threadId && !isCurrentOwner;
       });
     },
 
@@ -807,29 +805,6 @@ function codexSessionGenerationOperations(
         assertCurrent,
       ),
   };
-}
-
-function matchesPendingSupervisionBranch(
-  binding: CodexAppServerThreadBinding | undefined,
-  expected: CodexAppServerPendingSupervisionBranch,
-): boolean {
-  const pending = binding?.pendingSupervisionBranch;
-  if (!pending || binding?.threadId !== expected.sourceThreadId) {
-    return false;
-  }
-  if (
-    pending.sourceThreadId !== expected.sourceThreadId ||
-    pending.connectionFingerprint !== expected.connectionFingerprint ||
-    pending.lastTurnId !== expected.lastTurnId
-  ) {
-    return false;
-  }
-  const currentCleanup = pending.cleanupThreadIds ?? [];
-  const expectedCleanup = expected.cleanupThreadIds ?? [];
-  return (
-    currentCleanup.length === expectedCleanup.length &&
-    currentCleanup.every((threadId, index) => threadId === expectedCleanup[index])
-  );
 }
 
 function isSameSupervisionOwner(

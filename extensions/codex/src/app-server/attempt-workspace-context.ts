@@ -1,4 +1,3 @@
-/** Workspace snapshots, per-turn workspace context, and memory-tool routing for Codex. */
 import path from "node:path";
 import {
   buildAgentWorkspaceInstructionSnapshot,
@@ -66,7 +65,6 @@ export async function prepareCodexWorkspaceDeveloperInstructions(params: {
   return buildAgentWorkspaceInstructionSnapshot(contextFiles, params.workspaceDir).instructions;
 }
 
-/** Loads and partitions workspace snapshots, turn instructions, and memory references. */
 export async function buildCodexWorkspaceBootstrapContext(params: {
   params: EmbeddedRunAttemptParams;
   agentWorkspaceDeveloperInstructions?: string;
@@ -204,8 +202,7 @@ export function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemp
 function renderCodexWorkspaceBootstrapPromptContext(
   contextFiles: EmbeddedContextFile[],
 ): string | undefined {
-  const files = contextFiles;
-  if (files.length === 0) {
+  if (contextFiles.length === 0) {
     return undefined;
   }
   const lines = [
@@ -214,18 +211,14 @@ function renderCodexWorkspaceBootstrapPromptContext(
     "# Project Context",
     "",
     "The following project context files have been loaded:",
+    "",
   ];
-  lines.push("");
-  for (const file of files) {
+  for (const file of contextFiles) {
     lines.push(`## ${file.path}`, "", file.content, "");
   }
   return lines.join("\n").trim();
 }
 
-/**
- * Renders a memory-file reference that points Codex at memory tools instead of
- * embedding MEMORY.md contents.
- */
 function renderCodexWorkspaceMemoryReference(params: {
   files: EmbeddedContextFile[];
   toolNames?: readonly string[];

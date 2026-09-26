@@ -720,10 +720,14 @@ export async function applyCodexAppServerAuthProfile(params: {
       ? params.preparedAuth.snapshot.loginParams
       : params.preparedAuth?.kind === "api-key"
         ? { type: "apiKey", apiKey: params.preparedAuth.apiKey }
-        : await resolveCodexAppServerAuthProfileLoginParams({
+        : await resolveCodexAppServerAuthProfileLoginParamsInternal({
             agentDir,
             authProfileId: params.authProfileId ?? undefined,
-            authProfileStore: params.authProfileStore,
+            authProfileStore: resolveCodexAppServerAuthProfileStore({
+              ...params,
+              agentDir,
+              authProfileId: params.authProfileId ?? undefined,
+            }),
             config: params.config,
           });
   if (params.authRequirement === "subscription" && loginParams?.type !== "chatgptAuthTokens") {
@@ -801,19 +805,6 @@ function createCodexAppServerAuthError(message: string, cause?: unknown): Error 
   return Object.assign(error, { status: 401 as const });
 }
 
-async function resolveCodexAppServerAuthProfileLoginParams(params: {
-  agentDir: string;
-  authProfileId?: string;
-  authProfileStore?: AuthProfileStore;
-  config?: AuthProfileOrderConfig;
-}): Promise<CodexLoginAccountParams | undefined> {
-  const store = resolveCodexAppServerAuthProfileStore(params);
-  return await resolveCodexAppServerAuthProfileLoginParamsInternal({
-    ...params,
-    authProfileStore: store,
-  });
-}
-
 export async function refreshCodexAppServerAuthTokens(params: {
   agentDir: string;
   authProfileId?: string;
@@ -858,12 +849,10 @@ export async function refreshCodexAppServerAuthTokens(params: {
       "Codex app-server ChatGPT token refresh requires an OAuth auth profile. Sign in with `openclaw models auth login --provider openai`, select that profile, then retry.",
     );
   }
-  if (previousAccountId && loginParams.chatgptAccountId !== previousAccountId) {
-    throw new Error(
-      "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
-    );
-  }
-  if (params.authHandoff && loginParams.chatgptAccountId !== params.authHandoff.chatgptAccountId) {
+  if (
+    (previousAccountId && loginParams.chatgptAccountId !== previousAccountId) ||
+    (params.authHandoff && loginParams.chatgptAccountId !== params.authHandoff.chatgptAccountId)
+  ) {
     throw new Error(
       "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
     );

@@ -1,7 +1,3 @@
-/**
- * Computer Use plugin/MCP readiness checks and optional install flow for Codex
- * app-server sessions.
- */
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -90,7 +86,6 @@ type CodexComputerUseStatusSection = {
   message: string;
 };
 
-/** Readiness status for Codex Computer Use plugin and MCP server wiring. */
 export type CodexComputerUseStatus = {
   enabled: boolean;
   ready: boolean;
@@ -125,7 +120,6 @@ class CodexComputerUseSetupError extends Error {
   }
 }
 
-/** Inputs for checking, ensuring, or installing Codex Computer Use support. */
 export type CodexComputerUseSetupParams = {
   pluginConfig?: unknown;
   config?: Parameters<typeof requestCodexAppServerClientJson>[0]["config"];
@@ -390,25 +384,23 @@ async function inspectCodexComputerUse(
     });
     let releaseFenceOnReturn = true;
     try {
-      try {
-        return await inspectCodexComputerUseWithoutFence({
-          ...inspectionParams,
-          releaseNativeConfigFence: release,
-        });
-      } catch (error) {
-        if (
-          client &&
-          (isCodexAppServerIndeterminateRequestCancellationError(error) ||
-            isCodexAppServerIndeterminateTransportError(error) ||
-            isCodexAppServerConnectionClosedError(error))
-        ) {
-          // Codex may still commit a config mutation after local cancellation.
-          // Transfer fence ownership to physical process exit before surfacing it.
-          releaseFenceOnReturn = false;
-          await client.closeAndRunAfterExit(release, "Computer Use config mutation");
-        }
-        throw error;
+      return await inspectCodexComputerUseWithoutFence({
+        ...inspectionParams,
+        releaseNativeConfigFence: release,
+      });
+    } catch (error) {
+      if (
+        client &&
+        (isCodexAppServerIndeterminateRequestCancellationError(error) ||
+          isCodexAppServerIndeterminateTransportError(error) ||
+          isCodexAppServerConnectionClosedError(error))
+      ) {
+        // Codex may still commit a config mutation after local cancellation.
+        // Transfer fence ownership to physical process exit before surfacing it.
+        releaseFenceOnReturn = false;
+        await client.closeAndRunAfterExit(release, "Computer Use config mutation");
       }
+      throw error;
     } finally {
       if (releaseFenceOnReturn) {
         release();
@@ -593,8 +585,10 @@ async function ensureComputerUsePlugin(params: {
         config: params.config,
         plugin,
         tools: [],
-        reason: pluginSetupReason(plugin),
-        message: pluginSetupMessage(params.config, plugin),
+        reason: plugin.summary.installed ? "plugin_disabled" : "plugin_not_installed",
+        message: plugin.summary.installed
+          ? `Computer Use is installed, but the ${params.config.pluginName} plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.`
+          : "Computer Use is available but not installed. Run /codex computer-use install or enable computerUse.autoInstall.",
       }),
     };
   }
@@ -1003,20 +997,6 @@ function pluginRequestParams(marketplace: MarketplaceRef, pluginName: string) {
       };
 }
 
-function pluginSetupReason(plugin: CodexPluginDetail): CodexComputerUseStatusReason {
-  return plugin.summary.installed ? "plugin_disabled" : "plugin_not_installed";
-}
-
-function pluginSetupMessage(
-  config: ResolvedCodexComputerUseConfig,
-  plugin: CodexPluginDetail,
-): string {
-  if (!plugin.summary.installed) {
-    return "Computer Use is available but not installed. Run /codex computer-use install or enable computerUse.autoInstall.";
-  }
-  return `Computer Use is installed, but the ${config.pluginName} plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.`;
-}
-
 function statusFromPlugin(params: {
   config: ResolvedCodexComputerUseConfig;
   plugin: CodexPluginDetail;
@@ -1040,7 +1020,12 @@ function statusFromPlugin(params: {
     installation: installationStatusFromPlugin(params.plugin, params.message),
     exposure: exposureStatusFromTools(params.config, params.tools),
     liveTest: skippedLiveTestStatus(params.config, "Computer Use live test was not run."),
-    warnings: pluginWarnings(params.plugin),
+    warnings:
+      params.plugin.summary.source?.type === "remote"
+        ? [
+            "Computer Use plugin is resolved from a remote marketplace; live local bundles are preferred.",
+          ]
+        : [],
     message: params.message,
   };
 }
@@ -1118,17 +1103,6 @@ function exposureStatusFromTools(
       ? `Computer Use MCP server ${config.mcpServerName} exposes ${tools.length} tools.`
       : `Computer Use MCP server ${config.mcpServerName} is not exposed.`,
   };
-}
-
-function pluginWarnings(plugin: CodexPluginDetail): string[] {
-  const warnings: string[] = [];
-  const source = plugin.summary.source;
-  if (source && typeof source === "object" && "type" in source && source.type === "remote") {
-    warnings.push(
-      "Computer Use plugin is resolved from a remote marketplace; live local bundles are preferred.",
-    );
-  }
-  return warnings;
 }
 
 function resolveComputerUseConfig(

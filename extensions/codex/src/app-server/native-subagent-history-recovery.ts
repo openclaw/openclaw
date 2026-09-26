@@ -311,7 +311,6 @@ export class CodexNativeSubagentHistoryRecovery {
       return false;
     }
     return (
-      current &&
       current.taskId === task.taskId &&
       this.acceptsTask(current, candidate.parentState) &&
       this.shouldReconcileTask(current, now) &&
