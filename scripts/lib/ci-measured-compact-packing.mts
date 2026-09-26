@@ -111,11 +111,11 @@ const SERIAL_TAIL_PAIRS: SerialTailPair[] = [
 
 function serialTwoWorkerJob(
   job: CompactNodeTestShard,
-  runner: string,
+  runners: readonly string[],
   allowBuild = false,
 ): boolean {
   return (
-    job.runner === runner &&
+    runners.includes(job.runner) &&
     job.planConcurrency === 1 &&
     !job.requiresDist &&
     (!job.pretestBuildMode || allowBuild) &&
@@ -176,17 +176,19 @@ function isNumberedToolingGroup(group: NodeTestShardGroup): boolean {
 export function rebalanceMeasuredSerialJobs(
   jobs: CompactNodeTestShard[],
   options: {
-    runner: string;
+    // Compatible classes are ordered from strongest to weakest anchor.
+    runner: string | readonly string[];
     useNativeObservations?: boolean;
     estimateGroup: (group: NodeTestShardGroup) => { seconds: number; complete: boolean };
     canShare: (groups: NodeTestShardGroup[]) => boolean;
   },
 ): CompactNodeTestShard[] {
+  const runners = typeof options.runner === "string" ? [options.runner] : options.runner;
   const split = jobs.flatMap((job) => {
     if (
       options.useNativeObservations === false ||
       job.groups.length < 2 ||
-      !serialTwoWorkerJob(job, options.runner, true) ||
+      !serialTwoWorkerJob(job, runners, true) ||
       job.pretestBuildMode !==
         mergeVitestPretestBuildModes(job.groups.map((group) => group.pretestBuildMode))
     ) {
@@ -259,7 +261,7 @@ export function rebalanceMeasuredSerialJobs(
   const measured = split.flatMap((job) => {
     if (
       !originalJobs.has(job) ||
-      !serialTwoWorkerJob(job, options.runner) ||
+      !serialTwoWorkerJob(job, runners) ||
       !job.groups.every(isNumberedToolingGroup)
     ) {
       return [];
@@ -337,13 +339,17 @@ export function rebalanceMeasuredSerialJobs(
     const retired = new Set(candidates.map(({ job }) => job));
     const packed = bins
       .filter((bin) => bin.jobs.length > 0)
-      .map(({ jobs: originals, seconds }) =>
-        Object.assign({}, originals[0]!, {
+      .map(({ jobs: originals, seconds }) => {
+        // Compatible hosted classes share a physical runner; retain their strongest anchor.
+        const anchor = originals.reduce((strongest, job) =>
+          runners.indexOf(job.runner) < runners.indexOf(strongest.runner) ? job : strongest,
+        );
+        return Object.assign({}, anchor, {
           groups: originals.flatMap((job) => job.groups),
-          env: { ...originals[0]!.env, OPENCLAW_VITEST_MAX_WORKERS: "2" },
+          env: { ...anchor.env, OPENCLAW_VITEST_MAX_WORKERS: "2" },
           predictedSeconds: Math.ceil(seconds + FIXED_JOB_SECONDS),
-        }),
-      );
+        });
+      });
     return [
       ...split.filter((job) => !retired.has(job)).map((job) => priced.get(job) ?? job),
       ...packed,

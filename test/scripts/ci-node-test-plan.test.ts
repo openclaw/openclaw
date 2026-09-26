@@ -804,6 +804,46 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(packed.every((job) => job.timeoutMinutes === 20)).toBe(true);
   });
 
+  it.each([
+    { tailSeconds: 460, expectedJobs: 1 },
+    { tailSeconds: 461, expectedJobs: 2 },
+  ])(
+    "preserves hosted runner anchors and the serial budget with a $tailSeconds-second tail",
+    ({ tailSeconds, expectedJobs }) => {
+      const before = measuredToolingFixture().slice(0, 2);
+      const anchor = before[0]!;
+      const tail = before[1]!;
+      anchor.predictedSeconds = 200;
+      tail.runner = BUNDLED_NODE_TEST_RUNNER;
+      tail.groups[0]!.runner = BUNDLED_NODE_TEST_RUNNER;
+      tail.predictedSeconds = tailSeconds;
+      const after = rebalanceMeasuredSerialJobs(before, {
+        ...measuredPackingOptions,
+        runner: [DEFAULT_NODE_TEST_RUNNER, BUNDLED_NODE_TEST_RUNNER],
+        useNativeObservations: false,
+        estimateGroup: (group) => ({
+          seconds: group === anchor.groups[0] ? 200 : tailSeconds,
+          complete: true,
+        }),
+      });
+
+      expect(after).toHaveLength(expectedJobs);
+      expect(sortedMeasuredGroups(after)).toEqual(sortedMeasuredGroups(before));
+      expect(Math.max(...after.map((job) => job.predictedSeconds!))).toBeLessThanOrEqual(720);
+      expect(after.every((job) => job.planConcurrency === 1 && job.timeoutMinutes === 20)).toBe(
+        true,
+      );
+      if (expectedJobs === 1) {
+        expect(after[0]).toMatchObject({
+          checkName: anchor.checkName,
+          runner: DEFAULT_NODE_TEST_RUNNER,
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+          predictedSeconds: 720,
+        });
+      }
+    },
+  );
+
   it("splits the observed CLI pair with its measured wall floors and complete child contracts", () => {
     const before = structuredClone(measuredCompactFixture.cliTailJob);
     const after = rebalanceMeasuredSerialJobs([before], measuredPackingOptions);

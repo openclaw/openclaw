@@ -47,7 +47,7 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
     includePrExemptRuntimeTests: false,
     includeReleaseOnlyToolingShards: true,
   });
-  const extensionPr = createChangedExtensionFallbackShards(["tsconfig.json"], {
+  const extensionPr = createChangedExtensionFallbackShards([".npmrc"], {
     includePrExemptRuntimeTests: false,
   });
   const retainedExtensions = createPrExemptExtensionTestShards();

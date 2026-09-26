@@ -4234,7 +4234,7 @@ function createCompactNodeTestShardBundles(
     isPrExemptRuntimeTestFile(file) &&
     isRuntimeTestFileIncluded(file, options);
   const isBlacksmithProfile = (options.runnerBackend ?? "blacksmith") === "blacksmith";
-  const packsHostedTooling = compactMode === "pull-request" && options.runnerBackend === "github";
+  const packsHostedTooling = options.runnerBackend === "github";
   let bestTailDonation: HostedToolingTailDonation | undefined;
   const collectTailDonation =
     packsHostedTooling && splitHostedToolingTails && !hostedToolingTailDonation
@@ -4915,30 +4915,25 @@ function createCompactNodeTestShardBundles(
       : undefined;
   const measuredJobs =
     (options.runnerBackend === "hybrid" || hostedHourly) && options.compactMode !== undefined
-      ? (hostedHourly
-          ? [DEFAULT_NODE_TEST_RUNNER, BUNDLED_NODE_TEST_RUNNER]
-          : [DEFAULT_NODE_TEST_RUNNER]
-        ).reduce(
-          (jobs, runner) =>
-            rebalanceMeasuredSerialJobs(jobs, {
-              runner,
-              useNativeObservations: !hostedHourly,
-              estimateGroup: (group) => ({
-                seconds: estimateParallelToolingSeconds(
-                  group,
-                  group.includePatterns ?? [],
-                  hostedHourly ? "github" : "blacksmith",
-                  toolingFileTimings,
-                ),
-                complete: Boolean(
-                  group.includePatterns?.every((file) => toolingFileTimings?.[file] !== undefined),
-                ),
-              }),
-              canShare: (groups) =>
-                groups.length <= COMPACT_NODE_TEST_JOB_GROUPS && hasDistinctStripeFamilies(groups),
-            }),
-          finalJobs,
-        )
+      ? rebalanceMeasuredSerialJobs(finalJobs, {
+          runner: hostedHourly
+            ? [DEFAULT_NODE_TEST_RUNNER, BUNDLED_NODE_TEST_RUNNER]
+            : DEFAULT_NODE_TEST_RUNNER,
+          useNativeObservations: !hostedHourly,
+          estimateGroup: (group) => ({
+            seconds: estimateParallelToolingSeconds(
+              group,
+              group.includePatterns ?? [],
+              hostedHourly ? "github" : "blacksmith",
+              toolingFileTimings,
+            ),
+            complete: Boolean(
+              group.includePatterns?.every((file) => toolingFileTimings?.[file] !== undefined),
+            ),
+          }),
+          canShare: (groups) =>
+            groups.length <= COMPACT_NODE_TEST_JOB_GROUPS && hasDistinctStripeFamilies(groups),
+        })
       : finalJobs;
   if (measuredJobs.length > compactJobCap) {
     throw new Error(

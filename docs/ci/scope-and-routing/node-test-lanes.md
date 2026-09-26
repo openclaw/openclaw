@@ -70,11 +70,16 @@ unresolved inputs alone do not enable the inventory. Reduced groups retain
 distinct timing identities and the original configs, prerequisites, process
 isolation, worker limits, cases, and assertions. This tier is separate from the
 older release-only inventories, whose decisions remain unchanged.
+Choose complete integration, process, corpus, or migration suites from measured
+PR runs, while retaining their focused owner tests on PRs. Check recent product
+fixes, including regressions moved by test splits, before adding an exemption.
 Hourly GitHub-hosted plans reuse the measured serial tooling packer for the
 retained subset. Complete file estimates use the hosted cost scale; Blacksmith
 process observations stay with Blacksmith. Packing preserves each child group,
 its two-worker limit, and its timeout while keeping the complete Node matrix
-within the existing 70-row cap. Explicit source watches live in
+within the existing 70-row cap. Tooling groups that execute on the same hosted
+runner may share a row while retaining the strongest original capacity owner.
+Explicit source watches live in
 `scripts/lib/ci-policy-test-watch.mts`, including dynamically launched workers
 and scripts that the import graph cannot discover.
 

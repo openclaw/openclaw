@@ -12,6 +12,115 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches = [
+  // Native maintainer fixtures copy and launch their shell owner instead of importing it.
+  ...[
+    "test/scripts/pr-correction-preparation.test.ts",
+    "test/scripts/pr-host-tools.test.ts",
+    "test/scripts/pr-main-refresh.test.ts",
+    "test/scripts/pr-merge-auto-recovery.test.ts",
+    "test/scripts/pr-merge-body-provenance.test.ts",
+    "test/scripts/pr-merge-completion.test.ts",
+    "test/scripts/pr-merge-hosted.test.ts",
+    "test/scripts/pr-merge-legacy-recovery.test.ts",
+    "test/scripts/pr-merge-qualified-refusal.test.ts",
+    "test/scripts/pr-publication.test.ts",
+    "test/scripts/pr-wrappers.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: [
+      "scripts/pr",
+      "scripts/pr-{merge,prepare,review}",
+      "scripts/pr-lib/**",
+      "scripts/lib/plain-gh.{sh,mjs}",
+      "scripts/lib/tsx-cli-shim.mjs",
+      "scripts/tsx.mjs",
+      "scripts/verify-pr-hosted-gates.{mjs,mts}",
+    ],
+  })),
+  {
+    testFile: "extensions/browser/chrome-extension/background.fetch-continuation.test.ts",
+    watchGlobs: [
+      "extensions/browser/chrome-extension/background.js",
+      "extensions/browser/chrome-extension/modules/relay-command-handler.js",
+    ],
+  },
+  {
+    testFile: "extensions/crabbox/src/crabbox-worker-desktop-windows.test.ts",
+    watchGlobs: ["extensions/crabbox/src/crabbox-worker-provider.ts"],
+  },
+  {
+    testFile: "extensions/imessage/src/send.sqlite.test.ts",
+    watchGlobs: ["extensions/imessage/src/chat-db.worker.ts"],
+  },
+  {
+    testFile: "extensions/logbook/src/store-batch-images.test.ts",
+    watchGlobs: ["extensions/logbook/src/store.worker.ts"],
+  },
+  {
+    testFile: "extensions/qa-lab/src/profile-evidence-sharding.test.ts",
+    watchGlobs: ["qa/scenarios/**", "taxonomy.yaml"],
+  },
+  {
+    testFile: "extensions/qa-lab/src/scenario-catalog.delegation.test.ts",
+    watchGlobs: ["qa/scenarios/channels/system-agent-delegation-generation.yaml"],
+  },
+  {
+    testFile: "extensions/qa-lab/src/scenario-flow-runner.test.ts",
+    watchGlobs: ["qa/scenarios/**"],
+  },
+  {
+    testFile: "extensions/qa-lab/src/test-file-scenario-runner.child-bundle.test.ts",
+    watchGlobs: ["extensions/qa-lab/test-api.ts"],
+  },
+  {
+    testFile: "src/commands/doctor-config-flow.canvas-migration.test.ts",
+    watchGlobs: ["extensions/canvas/src/config-migration.ts"],
+  },
+  {
+    testFile: "src/gateway/gateway-active-memory.test.ts",
+    watchGlobs: ["extensions/active-memory/recall.ts"],
+  },
+  {
+    testFile: "src/gateway/worker-environments/store-runtime-refresh.test.ts",
+    watchGlobs: [
+      "src/gateway/worker-environments/store-transitions.ts",
+      "src/gateway/worker-environments/store.kernel.ts",
+    ],
+  },
+  {
+    testFile: "test/scripts/bench-gateway-installed.test.ts",
+    watchGlobs: [
+      "scripts/bench-gateway-startup.ts",
+      "scripts/lib/gateway-bench-child.ts",
+      "scripts/lib/gateway-bench-installed.ts",
+      "scripts/lib/gateway-bench-probes.ts",
+      "scripts/lib/gateway-bench-runtime.ts",
+      "scripts/lib/gateway-bench-stop-preload.mjs",
+      "scripts/lib/gateway-ws-client.ts",
+    ],
+  },
+  {
+    testFile: "test/scripts/full-release-publication-admission.test.ts",
+    watchGlobs: [
+      "scripts/full-release-validation-state.mjs",
+      "scripts/lib/plugin-npm-release.ts",
+      "scripts/lib/release-publish-children.sh",
+      "scripts/release-plan-producer.mts",
+    ],
+  },
+  {
+    testFile: "test/scripts/managed-child-process.test.ts",
+    watchGlobs: ["scripts/lib/bounded-command.mts"],
+  },
+  {
+    testFile: "test/scripts/vitest-report-owner.test.ts",
+    watchGlobs: [
+      "scripts/lib/vitest-report-capture.mts",
+      "scripts/run-vitest.mts",
+      "scripts/test-extension-batch.mts",
+      "scripts/test-projects-run.mts",
+    ],
+  },
   {
     testFile: "src/gateway/server.models-native-retirement.test.ts",
     watchGlobs: ["extensions/xai/openclaw.plugin.json"],
@@ -67,6 +176,10 @@ const policyTestWatches = [
   },
   ...[
     "extensions/memory-core/src/memory/index.test.ts",
+    "extensions/memory-core/src/memory/manager-search-provenance.test.ts",
+    "extensions/memory-core/src/memory/manager-temporal-ranking.test.ts",
+    "extensions/memory-core/src/memory/manager.watcher-filesystem.test.ts",
+    "extensions/memory-core/src/tools.index-upgrade.test.ts",
     "extensions/memory-core/src/memory/manager-candidate-repair.test.ts",
     "extensions/memory-core/src/memory/manager-keyword-retrieval.test.ts",
     "extensions/memory-core/src/memory/manager-search-orchestration.test.ts",
