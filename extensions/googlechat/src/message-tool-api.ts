@@ -3,7 +3,7 @@ import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-co
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { inspectGoogleChatAccount, listGoogleChatAccountIds } from "./accounts.js";
 
-export function describeGoogleChatMessageTool({
+function describeGoogleChatMessageTool({
   cfg,
   accountId,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0]) {

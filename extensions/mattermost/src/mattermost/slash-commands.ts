@@ -145,7 +145,7 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
     autoCompleteHint:
       "[steer|followup|collect|interrupt] [debounce:2s] [cap:N] [drop:old|new|summarize]",
   },
-].map((spec) => ({ ...spec, trigger: `oc_${spec.originalName}`, autoComplete: true }));
+].map((spec) => Object.assign(spec, { trigger: `oc_${spec.originalName}`, autoComplete: true }));
 
 export async function listMattermostCommands(
   client: MattermostClient,
