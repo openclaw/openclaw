@@ -332,13 +332,40 @@ export function classifyFailoverSignalCore(
     signal.provider,
     { preserveProviderSignalClassification: providerPluginReason !== null },
   );
-  if (statusClassification) {
-    return statusClassification;
+  const classification =
+    statusClassification ??
+    (codeReason ? toReasonClassification(codeReason) : effectiveMessageClassification);
+  if (
+    !providerPluginReason &&
+    inferredStatus !== undefined &&
+    inferredStatus >= 400 &&
+    inferredStatus < 500 &&
+    inferredStatus !== 408 &&
+    inferredStatus !== 409 &&
+    inferredStatus !== 410 &&
+    inferredStatus !== 429 &&
+    inferredStatus !== 499 &&
+    classification?.kind === "reason" &&
+    classification.reason === codeReason &&
+    (codeReason === "rate_limit" || codeReason === "overloaded" || codeReason === "timeout")
+  ) {
+    // Inspect prose, not the JSON code that supplied the presentation reason.
+    // Bedrock throttling text and provider-owned decisions remain retryable.
+    const info = parseApiErrorInfo(signal.message);
+    const prose = info ? info.message : signal.message;
+    const proseReason = prose
+      ? failoverReasonFromClassification(
+          classifyFailoverClassificationFromMessage(prose, signal.provider),
+        )
+      : null;
+    if (
+      proseReason !== codeReason &&
+      !/^throttling_?exception$/i.test(signal.code ?? info?.code ?? "")
+    ) {
+      return { ...classification, sameModelRetry: false };
+    }
   }
-  if (codeReason) {
-    return toReasonClassification(codeReason);
-  }
-  return effectiveMessageClassification;
+  return classification;
 }
 export function isCloudCodeAssistFormatError(raw: string): boolean {
   return !isImageDimensionErrorMessage(raw) && matchesFormatErrorPattern(raw);
