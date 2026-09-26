@@ -3,6 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { spawnWindowsJobChild } from "../../scripts/lib/managed-windows-job.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,7 +13,11 @@ import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { quoteCmdScriptArg } from "./cmd-argv.js";
 import { renderCmdSetAssignment } from "./cmd-set.js";
-import { buildTaskScript, encodeWindowsLauncherScript } from "./schtasks-layout.js";
+import {
+  buildStartupLauncherScript,
+  buildTaskScript,
+  encodeWindowsLauncherScript,
+} from "./schtasks-layout.js";
 import { findInstalledProcessPid, readWindowsProcessSnapshot } from "./schtasks-process.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -206,4 +211,109 @@ it
       }
     });
   },
+);
+
+it.skipIf(process.platform !== "win32")(
+  "runs the generated Startup wrapper without expanding a literal environment-token path",
+  async (context) => {
+    const lifetime = createFixtureLifetime();
+    context.onTestFinished(() => lifetime.cleanup());
+    return lifetime.run(async () => {
+      const directory = lifetime.createTempDir("openclaw-startup-percent-");
+      const root = await fs.realpath(directory);
+      expect(root, "Startup percent proof requires an ASCII fixture root").toMatch(
+        /^[\x20-\x7e]+$/u,
+      );
+      expect(root, "Only the target directory should contain CMD syntax").not.toMatch(
+        /[&|<>^%!()"]/u,
+      );
+      const markerPath = path.join(root, "target-marker.txt");
+      const literalTarget = path.join(root, "%OPENCLAW_STARTUP_PROBE%", "target.cmd");
+      const expandedTarget = path.join(root, "expanded", "target.cmd");
+      for (const [target, marker] of [
+        [literalTarget, "literal"],
+        [expandedTarget, "expanded"],
+      ] as const) {
+        await fs.mkdir(path.dirname(target));
+        await fs.writeFile(target, `@echo off\r\n> "${markerPath}" echo ${marker}\r\n`, "ascii");
+      }
+      const wrapperPath = path.join(root, "startup-entry.cmd");
+      const wrapper = encodeWindowsLauncherScript({
+        format: "cmd",
+        content: buildStartupLauncherScript({ scriptPath: literalTarget }),
+      });
+      await fs.writeFile(wrapperPath, wrapper);
+      context.signal.throwIfAborted();
+      const owned = spawnWindowsJobChild(
+        getWindowsCmdExePath(),
+        ["/d", "/s", "/v:off", "/c", '""%OPENCLAW_STARTUP_WRAPPER%""'],
+        {
+          cwd: root,
+          env: {
+            ...resolveDiagnosticProcessEnv(),
+            OPENCLAW_STARTUP_PROBE: "expanded",
+            OPENCLAW_STARTUP_WRAPPER: wrapperPath,
+          },
+          stdio: ["ignore", "ignore", "ignore"],
+          // Avoid libuv killing START descendants when its short-lived launcher exits.
+          detached: true,
+          windowsHide: true,
+          windowsVerbatimArguments: true,
+        },
+      );
+      if (!owned) {
+        throw new Error("Generated Startup wrapper proof requires the native Windows Job owner");
+      }
+      const { child, job } = owned;
+      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => {
+          child.once("close", (code, signal) => resolve({ code, signal }));
+        },
+      );
+      const stopErrors: unknown[] = [];
+      const stop = () => {
+        try {
+          job.stop();
+        } catch (error) {
+          stopErrors.push(error);
+        }
+      };
+      context.signal.addEventListener("abort", stop, { once: true });
+      if (context.signal.aborted) {
+        stop();
+      }
+      try {
+        await lifetime.track(job.ready);
+        const exit = await lifetime.track(closed);
+        // START returns before its nested CMD; retain the Job until every member exits.
+        const extinction = await lifetime.track(job.certify());
+        expect(exit).toEqual({ code: 0, signal: null });
+        expect(extinction).toEqual({ status: "confirmed" });
+        const marker = (await fs.readFile(markerPath, "ascii")).trim();
+        console.info(
+          "[windows-startup-wrapper-percent]",
+          JSON.stringify({
+            sentinel: "expanded",
+            marker,
+            wrapperBase64: wrapper.toString("base64"),
+            exit,
+            extinction,
+          }),
+        );
+        expect(marker, "Startup must execute the literal target, not the expanded decoy").toBe(
+          "literal",
+        );
+      } finally {
+        context.signal.removeEventListener("abort", stop);
+        await lifetime.verifyCleanup(async () => {
+          stop();
+          const extinction = await job.certify();
+          await closed;
+          expect(extinction).toEqual({ status: "confirmed" });
+          expect(stopErrors).toEqual([]);
+        });
+      }
+    });
+  },
+  30_000,
 );
