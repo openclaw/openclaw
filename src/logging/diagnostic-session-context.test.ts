@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   appendTranscriptMessageSync,
   readLatestTranscriptAssistantText,
@@ -182,8 +183,8 @@ describe("diagnostic session context", () => {
       sessionId: "previous",
       messages: [{ role: "assistant", content: "previous private reply" }],
     });
-    const ready = Promise.withResolvers<void>();
-    const resume = Promise.withResolvers<void>();
+    const ready = createDeferred();
+    const resume = createDeferred();
     const read = sessionReads.withSessionDiagnosticTextInWorker;
     vi.spyOn(sessionReads, "withSessionDiagnosticTextInWorker").mockImplementation(
       async (...args) => {

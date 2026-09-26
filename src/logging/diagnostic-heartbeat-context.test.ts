@@ -1,6 +1,7 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { appendTranscriptMessageSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -32,7 +33,7 @@ beforeAll(async () => {
       sessionKey: incognito ? incognitoKey : `agent:heartbeat:${label}`,
       sessionId: `heartbeat-${label}`,
     };
-    await replaceSessionEntry(scope, {
+    replaceSessionEntrySync(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
       ...(incognito ? { incognito: true } : {}),
@@ -68,9 +69,11 @@ it.each([true, false])(
     const label = enabled ? "enabled" : "disabled";
     const sessionId = `heartbeat-${label}`;
     const sessionKey = `agent:heartbeat:${label}`;
-    const logged = Promise.withResolvers<void>();
+    const logged = createDeferred();
     const warn = vi.spyOn(diagnosticLogger, "warn").mockImplementation((message) => {
-      if (message.startsWith(`stuck session: sessionId=${sessionId} `)) logged.resolve();
+      if (message.startsWith(`stuck session: sessionId=${sessionId} `)) {
+        logged.resolve();
+      }
     });
     const recover = vi.fn();
     startDiagnosticHeartbeat(
@@ -99,9 +102,13 @@ it.each([true, false])(
       } else {
         expect(warn).not.toHaveBeenCalled();
       }
-      for (const query of queries) expect(query).not.toHaveBeenCalled();
+      for (const query of queries) {
+        expect(query).not.toHaveBeenCalled();
+      }
     } finally {
-      for (const query of queries) query.mockRestore();
+      for (const query of queries) {
+        query.mockRestore();
+      }
     }
   },
 );

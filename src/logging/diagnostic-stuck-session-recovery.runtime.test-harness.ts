@@ -1,5 +1,6 @@
 // Shared mock harness for the stuck session recovery runtime suites.
 import { expect, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 
 export const mocks = {
   abortEmbeddedAgentRun: vi.fn(),
@@ -110,7 +111,7 @@ export async function resetMocks(): Promise<void> {
 }
 
 export function observeRecoveryContextLog(sessionId: string): Promise<void> {
-  const logged = Promise.withResolvers<void>();
+  const logged = createDeferred();
   mocks.diag.warn.mockImplementation((message: string) => {
     if (message.startsWith(`stuck session recovery: sessionId=${sessionId} `)) {
       logged.resolve();
