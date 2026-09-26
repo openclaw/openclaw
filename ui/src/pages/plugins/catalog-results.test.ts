@@ -4,7 +4,11 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
-import { renderPluginCatalogResults, type PluginCatalogResultsProps } from "./catalog-results.ts";
+import {
+  formatCompactCount,
+  renderPluginCatalogResults,
+  type PluginCatalogResultsProps,
+} from "./catalog-results.ts";
 
 function plugin(id: string, overrides: Partial<PluginDiscoveryEntry> = {}): PluginDiscoveryEntry {
   return {
@@ -525,5 +529,23 @@ describe("renderPluginCatalogResults", () => {
     render(renderPluginCatalogResults(props), container);
     expect(container.querySelector("openclaw-plugin-install-action")).toBeNull();
     expect(container.querySelector('[aria-label="Enabled"]')).not.toBeNull();
+  });
+});
+
+describe("formatCompactCount", () => {
+  it.each([
+    [999, "999"],
+    [1_500, "1.5k"],
+    [99_960, "100k"],
+    [150_400, "150k"],
+    [999_499, "999k"],
+    [999_500, "1m"],
+    [999_999, "1m"],
+    [2_500_000, "2.5m"],
+    [999_499_999, "999m"],
+    [999_500_000, "1b"],
+    [2_500_000_000, "2.5b"],
+  ])("formats %s as %s", (value, expected) => {
+    expect(formatCompactCount(value)).toBe(expected);
   });
 });
