@@ -559,6 +559,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/registry/subagent-registry-task-replacement.test.ts",
   "src/agents/subagents/registry/subagent-registry-read.prepared.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.authority.test.ts",
+  "src/agents/subagents/spawn/subagent-spawn.requester-incarnation.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts",
   "src/agents/tools/swarm-tools.integration.test.ts",
   "src/tasks/task-registry-session-index.test.ts",
