@@ -62,7 +62,9 @@ The operator must connect an executor to each native session separately; this
 plugin does not launch, provision, or authenticate an executor. Session connection
 events remain visible while it connects. Hosted environments support input
 attachments and output file transfers. Self-hosted environments do not support
-file transfers. Apps, connectors, and image generation remain unavailable.
+file transfers. Gateway function availability follows the configured OpenClaw
+tool policy. Native Agents API apps and connectors are not configured by this
+plugin, and the Gateway image-generation tool is not exposed.
 
 Changing the environment or a self-hosted workspace requires resetting the
 OpenClaw session. Existing hosted bindings remain valid with the setting omitted

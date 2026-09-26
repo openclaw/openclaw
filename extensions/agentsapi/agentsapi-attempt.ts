@@ -257,7 +257,7 @@ export async function runAgentsApiAttempt(
     const reasoningEffort = resolveAgentsApiReasoningEffort(params);
     const creatingSession = !remoteSessionId;
     const instructions = creatingSession
-      ? await buildAgentsApiInstructions(params, surface.declarations)
+      ? await buildAgentsApiInstructions(params, surface.declarations, environment)
       : "";
     assertCurrent();
     const admittedMessage =
