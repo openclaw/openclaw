@@ -168,10 +168,12 @@ function runAssertClawhubInstalled({
   contextEngineIds = [],
   installPathRelative,
   recordOverrides = {},
+  wrongPeerTarget = false,
 }: {
   contextEngineIds?: string[];
   installPathRelative?: string;
   recordOverrides?: Record<string, unknown>;
+  wrongPeerTarget?: boolean;
 } = {}) {
   const label = `clawhub-context-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const pluginId = "openclaw-kitchen-sink-fixture";
@@ -205,8 +207,12 @@ function runAssertClawhubInstalled({
     mkdirSync(installPath, { recursive: true });
     if (record.artifactKind === "npm-pack") {
       mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
+      const peerTarget = wrongPeerTarget ? path.join(home, "other-host") : process.cwd();
+      if (wrongPeerTarget) {
+        mkdirSync(peerTarget);
+      }
       symlinkSync(
-        process.cwd(),
+        peerTarget,
         path.join(installPath, "node_modules", "openclaw"),
         process.platform === "win32" ? "junction" : "dir",
       );
@@ -658,6 +664,20 @@ describe("kitchen-sink plugin assertions", () => {
       errorPrefix: null,
     },
     {
+      name: "rejects an npm peer linked to a different host",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: 0,
+        npmIntegrity: "integrity",
+        npmShasum: "shasum",
+        npmTarballName: "package.tgz",
+      },
+      wrongPeerTarget: true,
+      errorPrefix: null,
+    },
+    {
       name: "rejects metadata before an empty install path",
       recordOverrides: { artifactFormat: "tgz", installPath: "" },
       errorPrefix: "missing kitchen-sink legacy ZIP artifact metadata",
@@ -667,20 +687,28 @@ describe("kitchen-sink plugin assertions", () => {
       recordOverrides: { artifactFormat: "tgz", installPath: 42 },
       errorPrefix: "missing kitchen-sink legacy ZIP artifact metadata",
     },
-  ])("ClawHub kitchen-sink metadata: $name", ({ recordOverrides, errorPrefix }) => {
-    const result = runAssertClawhubInstalled({
-      contextEngineIds: ["openclaw-kitchen-sink-fixture"],
-      recordOverrides,
-    });
-    if (errorPrefix === null) {
-      expect(result.status, result.stderr).toBe(0);
-    } else {
-      expect(result.status).toBe(1);
-      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
-        `${errorPrefix}: ${JSON.stringify(result.record)}`,
-      );
-    }
-  });
+  ])(
+    "ClawHub kitchen-sink metadata: $name",
+    ({ recordOverrides, errorPrefix, wrongPeerTarget }) => {
+      const result = runAssertClawhubInstalled({
+        contextEngineIds: ["openclaw-kitchen-sink-fixture"],
+        recordOverrides,
+        wrongPeerTarget,
+      });
+      if (wrongPeerTarget) {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("expected kitchen-sink openclaw peer ");
+        expect(result.stderr).toContain(" to target ");
+      } else if (errorPrefix === null) {
+        expect(result.status, result.stderr).toBe(0);
+      } else {
+        expect(result.status).toBe(1);
+        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+          `${errorPrefix}: ${JSON.stringify(result.record)}`,
+        );
+      }
+    },
+  );
 
   it("rejects ClawHub kitchen-sink install paths that resolve outside managed extensions", () => {
     const result = runAssertClawhubInstalled({
