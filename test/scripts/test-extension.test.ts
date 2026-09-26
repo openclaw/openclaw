@@ -511,6 +511,8 @@ describe("scripts/test-extension.mts", () => {
           "browser",
           "diffs",
           "feishu",
+          "irc",
+          "line",
           "matrix",
           "mattermost",
           "memory-core",
@@ -524,6 +526,7 @@ describe("scripts/test-extension.mts", () => {
         ],
         roots: [
           ...[
+            "line",
             "matrix",
             "telegram",
             "mattermost",
@@ -537,10 +540,11 @@ describe("scripts/test-extension.mts", () => {
             ),
           ),
           bundledPluginRoot("memory-core"),
-          ...["msteams", "feishu", "acpx", "diffs", "browser", "qa-lab"].flatMap((extensionId) =>
-            databaseWorkerExtensionTestFiles.filter((file) =>
-              file.startsWith(`extensions/${extensionId}/`),
-            ),
+          ...["msteams", "feishu", "irc", "acpx", "diffs", "browser", "qa-lab"].flatMap(
+            (extensionId) =>
+              databaseWorkerExtensionTestFiles.filter((file) =>
+                file.startsWith(`extensions/${extensionId}/`),
+              ),
           ),
         ],
       },
