@@ -215,7 +215,7 @@ export class CodexAppInventoryCache {
       return existing.promise;
     }
 
-    const refreshToken = Symbol();
+    const refreshToken = Symbol("app-inventory-refresh");
     this.refreshTokens.set(params.key, refreshToken);
     const previousRefresh = params.forceRefetch ? undefined : existing?.promise;
     const promise = this.refreshUncoalesced(params, refreshToken, previousRefresh);
