@@ -232,10 +232,7 @@ describe("Zalouser durable ingress", () => {
     await withZalouserIngressTestQueue(async (queue) => {
       const deferred = Promise.withResolvers<ZalouserIngressLifecycle>();
       const released = observeChannelIngressQueueWrite(queue, "release");
-      const ingress = createZalouserIngressMonitor({
-        accountId: "default",
-        ownUserId: "owner-1",
-        runtime: runtime(),
+      const ingress = createIngress({
         queue,
         dispatch: async (_message, lifecycle) => {
           lifecycle.onDeferred();
