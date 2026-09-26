@@ -1,8 +1,8 @@
 /** Covers cloud-worker provider manifest ownership, uniqueness, and lookup ordering. */
 import { describe, expect, it } from "vitest";
+import type { WorkerProvider } from "./capability-provider.types.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createTestPluginRegistry as createTestRegistry } from "./registry-runtime.test-helpers.js";
-import type { WorkerProvider } from "./types.js";
 import { resolveDurableWorkerProviderAutoEnabledReasons } from "./worker-provider-manifest.js";
 
 function createWorkerProvider(id: string): WorkerProvider {
@@ -30,6 +30,30 @@ function createOwner(id: string, workerProviders: string[] = []) {
 }
 
 describe("worker provider registry", () => {
+  it.each([undefined, 1] as const)("accepts invocation version %s", (liveAuthorityVersion) => {
+    const registry = createTestRegistry();
+    const provider =
+      liveAuthorityVersion === 1
+        ? { ...createWorkerProvider("worker"), liveAuthorityVersion: 1 as const }
+        : createWorkerProvider("worker");
+    registry.registerWorkerProvider(createOwner("owner", ["worker"]), provider);
+    expect(registry.registry.workerProviders.get("worker")?.provider).toBe(provider);
+    expect(registry.registry.diagnostics).toEqual([]);
+  });
+
+  it("rejects an unknown invocation version", () => {
+    const registry = createTestRegistry();
+    const provider = createWorkerProvider("worker");
+    Object.assign(provider, { liveAuthorityVersion: 2 });
+    registry.registerWorkerProvider(createOwner("owner", ["worker"]), provider);
+    expect(registry.registry.workerProviders.size).toBe(0);
+    expect(registry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message: "worker provider registration has an unsupported liveAuthorityVersion",
+      }),
+    );
+  });
+
   it("rejects registrations missing manifest ownership", () => {
     const pluginRegistry = createTestRegistry();
 

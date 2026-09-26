@@ -6,7 +6,7 @@ import {
   type WorkerLease,
   type WorkerMachineOption,
   type WorkerProfile,
-  type WorkerProvider,
+  type WorkerProviderV1,
 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -28,7 +28,7 @@ describe("worker environment service", () => {
       expect(support.testState.store.list()[0]).toMatchObject({ state: "provisioning" });
       return { leaseId: "lease-prepared", ssh: support.SSH_ENDPOINT };
     });
-    const prepareProvision = vi.fn<NonNullable<WorkerProvider["prepareProvision"]>>(
+    const prepareProvision = vi.fn<NonNullable<WorkerProviderV1["prepareProvision"]>>(
       async (profile, operationId, options) => {
         expect(support.testState.store.list()[0]).toMatchObject({
           state: "requested",

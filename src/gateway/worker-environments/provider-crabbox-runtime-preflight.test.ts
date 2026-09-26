@@ -41,8 +41,8 @@ describe("Crabbox runtime preflight cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
   const pluginServices: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   let scheduler: ReturnType<typeof createTestPluginServiceScheduler>;
-  async function registerProvider(): Promise<WorkerProvider> {
-    let registered: WorkerProvider | undefined;
+  async function registerProvider(): Promise<WorkerProvider<0 | 1>> {
+    let registered: WorkerProvider<0 | 1> | undefined;
     const { register } = resolvePluginModuleExport(
       await importFreshModule<unknown>(import.meta.url, "../../../extensions/crabbox/index.ts"),
     );
@@ -380,7 +380,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       });
     });
     const prepareNodeEnrollment = vi.fn();
-    const makeProvider = async (): Promise<WorkerProvider> => {
+    const makeProvider = async (): Promise<WorkerProvider<0 | 1>> => {
       const provider = await registerProvider();
       if (changed && scenario.kind === "modes") {
         provider.supportedExecutionModes = ["remote-exec"];

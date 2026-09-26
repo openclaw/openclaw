@@ -28,6 +28,7 @@ it.each(["utf8", "utf16le"] as const)(
       binary: "crabbox",
       provider: "aws",
       id: "cbx_evidence",
+      assertCurrent() {},
       runCommand: async (_argv, options) => {
         let stdout = "";
         const script = String(options.input).split("\n").slice(2, -1).join("\n");

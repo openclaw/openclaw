@@ -107,7 +107,7 @@ function providerWithRawRunner(
   runCommand: CrabboxCommandRunner,
   warn?: (message: string) => void,
   sleep: (milliseconds: number) => Promise<void> = async () => {},
-): WorkerProvider {
+) {
   const provider = createProvider({
     runCommand,
     sleep,
@@ -115,7 +115,11 @@ function providerWithRawRunner(
   });
   return {
     ...provider,
-    provision: (profile, operationId, options) =>
+    provision: (
+      profile: WorkerProfile,
+      operationId: string,
+      options?: Partial<Parameters<WorkerProvider<1>["provision"]>[2]>,
+    ) =>
       provider.provision(profile, operationId, {
         assertCurrent: () => {},
         nodeRuntimeIdentity: {
@@ -147,9 +151,7 @@ function providerWithRunner(
   );
 }
 
-function failedNodeEnrollment(
-  error: Error,
-): NonNullable<Parameters<WorkerProvider["provision"]>[2]> {
+function failedNodeEnrollment(error: Error) {
   return {
     beginNodeEnrollment: async () =>
       nodeEnrollmentFixture("secret-setup-value", "Cloud worker test", async () => {

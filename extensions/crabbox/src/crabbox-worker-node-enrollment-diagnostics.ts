@@ -19,10 +19,12 @@ export async function collectCrabboxNodeEnrollmentEvidence(params: {
   target?: CrabboxOperatingSystem;
   runCommand: CrabboxCommandRunner;
   signal?: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<string> {
   let label = "box evidence";
   let detail: string;
   try {
+    params.assertCurrent();
     const result = await runCrabboxCommand({
       action: "enrollment diagnostics",
       args: leaseRunArgs(params),
@@ -72,6 +74,7 @@ process.stdout.write("node-runtime=" + runtime + " node-pid=" + (alive ? "alive"
     label = "box evidence unavailable";
     detail = error instanceof Error ? error.message : "diagnostic command failed";
   }
+  params.assertCurrent();
   let prefix = `${label}: `;
   const safeDetail = redactToolPayloadText(detail).replace(/\s+/gu, " ").trim();
   const evidence =

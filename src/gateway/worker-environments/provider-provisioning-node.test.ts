@@ -12,7 +12,7 @@ import { decodePairingSetupCode } from "../../pairing/setup-code.js";
 import type {
   WorkerNodeEnrollment,
   WorkerNodeRuntimePreparation,
-  WorkerProvider,
+  WorkerProviderV1,
 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db.js";
@@ -287,7 +287,7 @@ describe("node worker provider provisioning", () => {
     const retireNodeEnrollment = vi.fn(async () => {});
     let begin: (() => Promise<WorkerNodeEnrollment>) | undefined;
     let declaredTimeoutMs: number | undefined;
-    const provision = vi.fn<WorkerProvider["provision"]>(
+    const provision = vi.fn<WorkerProviderV1["provision"]>(
       async (_profile, _operationId, options) => {
         expect(options?.nodeBootstrapTimeoutMs).toBe(declaredTimeoutMs);
         begin = options?.beginNodeEnrollment;

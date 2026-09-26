@@ -7,12 +7,13 @@ import {
 } from "./crabbox-worker-command.js";
 
 type ProjectPreparation = NonNullable<
-  NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]
+  NonNullable<Parameters<WorkerProvider<1>["provision"]>[2]>["project"]
 >;
 
 /** Core owns Git contents; this adapter owns only the existing lease's transport. */
 export async function prepareCrabboxProjectFiles(params: {
   project: ProjectPreparation;
+  assertCurrent: () => void;
   binary: string;
   provider: string;
   id: string;
@@ -26,6 +27,7 @@ export async function prepareCrabboxProjectFiles(params: {
     signal: AbortSignal,
     createScript?: (timeoutMs: number) => string,
   ) => {
+    params.assertCurrent();
     params.project.assertCurrent();
     const timeoutMs = params.timeoutMs();
     const result = await runCrabboxCommand({
@@ -37,6 +39,7 @@ export async function prepareCrabboxProjectFiles(params: {
       input: createScript?.(timeoutMs),
       timeoutMs,
     });
+    params.assertCurrent();
     params.project.assertCurrent();
     return crabboxCommandOutput("project preparation", result);
   };

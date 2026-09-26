@@ -234,6 +234,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/crabbox/src/doctor.test.ts",
   "extensions/crabbox/index.test.ts",
   "extensions/crabbox/src/crabbox-gateway-methods.test.ts",
+  "extensions/crabbox/src/crabbox-worker-allocation-authority.test.ts",
   "extensions/crabbox/src/crabbox-worker-enrollment-overlap.test.ts",
   "extensions/crabbox/src/crabbox-worker-node-enrollment.test.ts",
   "extensions/crabbox/src/crabbox-worker-prepared-image.test.ts",

@@ -11,6 +11,12 @@ export function validateWorkerProviderContract(
   provider: WorkerProvider,
   declaredIds: readonly string[],
 ): WorkerProviderValidation {
+  if (provider.liveAuthorityVersion !== undefined && provider.liveAuthorityVersion !== 1) {
+    return {
+      ok: false,
+      message: "worker provider registration has an unsupported liveAuthorityVersion",
+    };
+  }
   const missingMethod = (["resolveAllocation", "provision", "inspect", "destroy"] as const).find(
     (method) => typeof provider[method] !== "function",
   );
