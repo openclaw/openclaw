@@ -447,10 +447,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         !onboardingSeen
     }
 
+    /// `connectionMode` alone is not proof onboarding finished: the connection page sets it as
+    /// soon as a Gateway is picked, pages before the CLI-install/AI-setup steps run, so quitting
+    /// mid-wizard must still resume onboarding on relaunch. Only `onboardingSeen`, or a
+    /// previously recorded `onboardingVersion` (both written solely at/after
+    /// `OnboardingController.markComplete()`), prove a full pass through the wizard actually
+    /// completed — the version check covers `onboardingSeen` itself being lost, e.g. across an
+    /// in-place app update, while a completed run's version marker survives.
+    static func shouldSkipFirstRunOnboarding(
+        connectionMode: AppState.ConnectionMode,
+        onboardingSeen: Bool,
+        seenOnboardingVersion: Int) -> Bool
+    {
+        connectionMode != .unconfigured && (onboardingSeen || seenOnboardingVersion > 0)
+    }
+
     private func scheduleFirstRunOnboardingIfNeeded() async {
         let connectionMode = AppStateStore.shared.connectionMode
         let onboardingSeen = AppStateStore.shared.onboardingSeen
-        if connectionMode != .unconfigured, onboardingSeen {
+        let seenOnboardingVersion = AppDefaults.standard.integer(forKey: onboardingVersionKey)
+        if Self.shouldSkipFirstRunOnboarding(
+            connectionMode: connectionMode,
+            onboardingSeen: onboardingSeen,
+            seenOnboardingVersion: seenOnboardingVersion)
+        {
             OnboardingController.markComplete()
             return
         }
