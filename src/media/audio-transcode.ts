@@ -145,7 +145,7 @@ export async function transcodeAudioBuffer(params: {
   if (source === target) {
     return { ok: false, reason: "noop-same-container" };
   }
-  const recipe = pickAfconvertRecipe(source, target);
+  const recipe = pickAfconvertRecipe(target);
   if (!recipe) {
     return { ok: false, reason: "no-recipe" };
   }
@@ -181,7 +181,7 @@ function normalizeContainerExt(ext: string): string | undefined {
   return /^[a-z0-9]{1,12}$/.test(trimmed) ? trimmed : undefined;
 }
 
-function pickAfconvertRecipe(_source: string, target: string): string[] | undefined {
+function pickAfconvertRecipe(target: string): string[] | undefined {
   if (target === "caf") {
     // Opus-in-CAF matches native Messages voice memo attachments.
     return ["-f", "caff", "-d", "opus@24000", "-c", "1"];
